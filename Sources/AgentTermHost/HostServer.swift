@@ -1029,9 +1029,10 @@ public final class HostServer {
         said.split(whereSeparator: \.isNewline).first.map(String.init) ?? said
     }
 
-    /// The last line a command printed, which says why it failed.
+    /// The last line a command printed, which says why it failed: not the
+    /// "logout" bash says last as a login shell, which it is run in.
     static func lastLine(of said: String) -> String? {
-        said.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
+        said.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty && $0 != "logout" }
     }
 
     /// Starts a run's agent in its folder, or in the worktree made for it.

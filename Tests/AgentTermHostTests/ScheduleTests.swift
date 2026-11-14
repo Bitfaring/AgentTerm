@@ -530,7 +530,10 @@ final class SchedulerHostTests: XCTestCase {
         // Changed and not committed before the run: not something the run did.
         try "there before\n".write(to: project.appendingPathComponent("before.txt"), atomically: true, encoding: .utf8)
         try "one\nmine, not committed\n".write(to: project.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
-        client.connection.send(.saveSchedule(morning()))
+        // Not one of nine: three minutes on the clock pass nine, and the
+        // run of nine, coming due as the stopped one ended, started a
+        // session of its own on CI while the test waited for none.
+        client.connection.send(.saveSchedule(evening()))
         waitUntil("saved") { self.client.schedules.count == 1 }
         // Not on a whole second: a run is named by when it came due, and
         // that moment comes back from a device a hair off what it was.
@@ -958,6 +961,9 @@ final class SchedulerHostTests: XCTestCase {
         XCTAssertFalse(run.started)
         XCTAssertTrue(run.note.hasPrefix("Not started: the setup command failed in its worktree."), run.note)
         XCTAssertTrue(run.note.contains("the setup broke"), run.note)
+        // Where the user's shell is bash, as on the machines that run CI, it
+        // says more as a login shell, and "logout" last: not why it failed.
+        XCTAssertEqual(HostServer.lastLine(of: "bash: no job control in this shell\nthe setup broke\nlogout\n"), "the setup broke")
         let worktree = try XCTUnwrap(run.worktree)
         XCTAssertTrue(FileManager.default.fileExists(atPath: worktree))
         pause()
