@@ -25,9 +25,10 @@ extension GitActions {
     /// older ones still. None for a repository without a commit.
     public static func log(in directory: String, branch: String? = nil, skip: Int = 0, limit: Int = 50) -> (commits: [CommitInfo], more: Bool) {
         // One more than asked for says whether there are more.
-        var arguments = ["-C", directory, "log", "--format=" + commitFormat + "%x01", "--skip=\(max(skip, 0))", "--max-count=\(max(limit, 1) + 1)"]
+        // The branch a device names is not taken for an option
+        // (`--end-of-options`), and nothing after `--` for a path.
+        var arguments = ["-C", directory, "log", "--format=" + commitFormat + "%x01", "--skip=\(max(skip, 0))", "--max-count=\(max(limit, 1) + 1)", "--end-of-options"]
         if let branch, !branch.isEmpty { arguments.append(branch) }
-        // After `--`, nothing is taken for a path or an option.
         arguments.append("--")
         guard let result = Subprocess.run("/usr/bin/git", arguments, timeout: 30), result.status == 0 else { return ([], false) }
         let found = String(decoding: result.output, as: UTF8.self).components(separatedBy: "\u{1}").compactMap {
@@ -46,7 +47,10 @@ extension GitActions {
         guard
             let result = Subprocess.run(
                 "/usr/bin/git",
-                ["-C", directory, "show", "--first-parent", "-m", "--format=" + commitFormat + "%x00%b%x01", "--patch", "--no-color", "--no-ext-diff", hash, "--"],
+                [
+                    "-C", directory, "show", "--first-parent", "-m", "--format=" + commitFormat + "%x00%b%x01", "--patch", "--no-color", "--no-ext-diff",
+                    "--end-of-options", hash, "--",
+                ],
                 timeout: 30),
             result.status == 0
         else { return nil }
@@ -122,7 +126,7 @@ extension GitActions {
         let marker = what == "revert" ? "REVERT_HEAD" : "CHERRY_PICK_HEAD"
         let before = marks(marker, in: directory)
         return findingTools { () -> String? in
-            guard let problem = run(command + [hash], in: directory, timeout: 120, environment: actionEnvironment) else { return nil }
+            guard let problem = run(command + ["--end-of-options", hash], in: directory, timeout: 120, environment: actionEnvironment) else { return nil }
             guard !before, marks(marker, in: directory) else { return problem }
             // Left as it is, to be resolved and continued, or aborted (#42).
             return stoppedOnConflicts("\(what == "revert" ? "Reverting" : "Picking") \(details.commit.short)", as: what, said: problem)

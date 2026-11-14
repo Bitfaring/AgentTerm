@@ -501,6 +501,9 @@ final class AppModel: ObservableObject {
     struct ForcePush: Identifiable {
         let folder: String
         let question: ForcePushQuestion
+        /// The commit the upstream was at when it was looked at: the push
+        /// is made only while it is still there.
+        let lease: String
         var id: String { folder }
     }
 
@@ -551,23 +554,24 @@ final class AppModel: ObservableObject {
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let found = GitActions.forcePushLoses(in: directory)
-            DispatchQueue.main.async { self?.forcePushPreview(directory, branch: branch, upstream: found?.upstream, loses: found?.commits ?? []) }
+            DispatchQueue.main.async { self?.forcePushPreview(directory, branch: branch, upstream: found?.upstream, loses: found?.commits ?? [], at: found?.at) }
         }
     }
 
-    private func forcePushPreview(_ directory: String, branch: String?, upstream: String?, loses: [String]) {
+    private func forcePushPreview(_ directory: String, branch: String?, upstream: String?, loses: [String], at: String?) {
         guard askingForcePush == directory else { return }
         askingForcePush = nil
-        guard let upstream, let branch = branch ?? diff?.branch else {
-            notice = "The remote could not be asked what a forced push would overwrite, so nothing was pushed."
+        guard let upstream, let at, let branch = branch ?? diff?.branch else {
+            notice = ForcePushQuestion.couldNotAsk
             return
         }
-        pendingForcePush = ForcePush(folder: directory, question: ForcePushQuestion(branch: branch, upstream: upstream, loses: loses))
+        pendingForcePush = ForcePush(folder: directory, question: ForcePushQuestion(branch: branch, upstream: upstream, loses: loses), lease: at)
         if !isRemote { refreshDiff() }
     }
 
     func forcePushConfirmed(_ push: ForcePush) {
-        sync("push", in: push.folder, .gitPush(path: push.folder, force: true)) { GitActions.push(in: $0, force: true) }
+        let lease = push.lease
+        sync("push", in: push.folder, .gitPush(path: push.folder, force: true, lease: lease)) { GitActions.push(in: $0, force: true, lease: lease) }
     }
 
     private func sync(_ what: String, in directory: String, _ message: ClientMessage, _ action: @escaping (String) -> String?) {
@@ -1459,7 +1463,7 @@ final class AppModel: ObservableObject {
         case .gitLastCommit(let path, let last):
             guard path == panelFolder, let wanted = lastCommitWanted else { break }
             lastCommitWanted = nil
-            if let last { wanted(last) } else { notice = "There is no commit here yet." }
+            if let last { wanted(last) } else { notice = LastCommit.noneYet }
         case .gitStashes(let path, let list):
             if path == panelFolder { stashes = list }
         case .gitStashShow(_, let hash, let files):
@@ -1470,8 +1474,8 @@ final class AppModel: ObservableObject {
             if let details { commitDetails[hash] = details } else if let commit = commits.first(where: { $0.hash == hash }) { commitDetails[hash] = CommitDetails(commit: commit) }
         case .gitFetched(let path, let problem, let automatic):
             fetched(path, problem: problem, automatic: automatic)
-        case .gitForcePushPreview(let path, let upstream, let loses):
-            forcePushPreview(path, branch: nil, upstream: upstream, loses: loses)
+        case .gitForcePushPreview(let path, let upstream, let loses, let at):
+            forcePushPreview(path, branch: nil, upstream: upstream, loses: loses, at: at)
         case .diff(let path, let snapshot):
             // Only asked for on another Mac: this Mac's changes are read
             // from its own disk.
@@ -2413,9 +2417,10 @@ final class AppModel: ObservableObject {
     func discardConfirmed() {
         guard let asked = discarding else { return }
         discarding = nil
-        // Every change is asked for as such, so that one made since is not left out.
+        // By name, also when it is every change: only what the user was
+        // asked about, not one made since, nor a file past those listed (#50).
         let submodule = discardingIn
-        let paths = asked.count == unstaged(in: submodule).count && asked.count > 1 ? [] : asked.map(\.path)
+        let paths = asked.map(\.path)
         if isRemote, let directory = directory(of: submodule) {
             sendForDiff(.gitDiscard(path: directory, files: paths), in: directory)
             return
@@ -2525,7 +2530,7 @@ final class AppModel: ObservableObject {
             let last = GitActions.lastCommit(in: directory)
             DispatchQueue.main.async {
                 guard let self, self.panelFolder == directory else { return }
-                if let last { then(last) } else { self.notice = "There is no commit here yet." }
+                if let last { then(last) } else { self.notice = LastCommit.noneYet }
             }
         }
     }

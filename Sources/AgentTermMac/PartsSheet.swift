@@ -141,7 +141,13 @@ private struct HunkCard: View {
                     .truncationMode(.tail)
                 DiffCount(added: hunk.added, deleted: hunk.removed)
                 Spacer(minLength: 8)
-                if staged {
+                if hunk.isCut {
+                    Text(PatchHunk.cutNote)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .accessibilityIdentifier("part-cut-\(hunk.id)")
+                } else if staged {
                     Button("Unstage \(what)") { apply(.unstage) }
                         .accessibilityIdentifier("part-unstage-\(hunk.id)")
                 } else {
@@ -158,7 +164,7 @@ private struct HunkCard: View {
             ScrollView(.horizontal) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(hunk.lines.enumerated()), id: \.offset) { index, line in
-                        PartLine(line: line, ticked: ticked.contains(index)) { toggle(index) }
+                        PartLine(line: line, ticked: ticked.contains(index), canTick: !hunk.isCut) { toggle(index) }
                             .accessibilityIdentifier("part-line-\(hunk.id)-\(index)")
                     }
                 }
@@ -176,9 +182,11 @@ private struct HunkCard: View {
 private struct PartLine: View {
     let line: String
     let ticked: Bool
+    /// Not in a hunk the diff was cut off in.
+    var canTick = true
     let toggle: () -> Void
 
-    private var isChange: Bool { line.hasPrefix("+") || line.hasPrefix("-") }
+    private var isChange: Bool { canTick && (line.hasPrefix("+") || line.hasPrefix("-")) }
 
     private var color: Color {
         if line.hasPrefix("+") { return Theme.added }

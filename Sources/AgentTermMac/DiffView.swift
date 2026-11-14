@@ -935,7 +935,8 @@ struct DiffDocumentView: View {
     /// Whether the change can be taken apart: one that is not committed,
     /// with a diff to take apart.
     /// A submodule's commit is taken whole: it has no lines to pick.
-    private var hasParts: Bool { model.diffTabLabel == nil && !file.isSubmodule && !PatchParts.hunks(of: file.patch).isEmpty }
+    /// The hunk a long diff was cut off in is not one.
+    private var hasParts: Bool { model.diffTabLabel == nil && !file.isSubmodule && PatchParts.hunks(of: file.patch).contains { !$0.isCut } }
 
     var body: some View {
         VStack(spacing: 0) {

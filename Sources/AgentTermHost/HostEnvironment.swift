@@ -220,6 +220,8 @@ enum Subprocess {
         let pid: pid_t
         private let lock = NSLock()
         private var status: Int32?
+        /// The programs seen in its session once it was asked to end.
+        private var seen: [pid_t] = []
 
         fileprivate init(pid: pid_t) { self.pid = pid }
 
@@ -242,22 +244,45 @@ enum Subprocess {
         /// stays the parent of the program it runs, that program would
         /// otherwise go on to its own end. A shell that is still there a
         /// moment later is told its terminal is gone, which it does heed,
-        /// and what is there after three seconds is killed.
+        /// and what is there after three seconds is killed: also when the
+        /// shell itself ended at once, since what it started may not have.
         func stop() {
             lock.lock()
             defer { lock.unlock() }
             guard status == nil else { return }
-            for member in Subprocess.session(of: pid) where member != pid { Subprocess.end(member) }
+            seen = Subprocess.session(of: pid)
+            for member in seen where member != pid { Subprocess.end(member) }
             Subprocess.end(pid)
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [self] in
-                guard isRunning else { return }
+                lock.lock()
+                defer { lock.unlock() }
+                // Not waited for here: its number stays its own until `wait`.
+                guard status == nil else { return }
+                seen += Subprocess.session(of: pid).filter { !seen.contains($0) }
+                guard !hasExited else { return }
                 kill(pid, SIGHUP)
                 kill(pid, SIGCONT)
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + 3) { [self] in
-                guard isRunning else { return }
-                for member in Subprocess.session(of: pid) { kill(member, SIGKILL) }
+                lock.lock()
+                defer { lock.unlock() }
+                if status == nil {
+                    // Not waited for yet, so the session is still its own:
+                    // everything in it, what was started since too.
+                    for member in Subprocess.session(of: pid) { kill(member, SIGKILL) }
+                } else {
+                    // Waited for: its number may be another program's now.
+                    // What was seen in its session and is there still.
+                    for member in seen where member != pid && getsid(member) == pid { kill(member, SIGKILL) }
+                }
             }
+        }
+
+        /// Whether it ended, without waiting for it: its number stays its
+        /// own. Called with the lock held.
+        private var hasExited: Bool {
+            var info = siginfo_t()
+            return waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 && info.si_pid == pid
         }
 
         /// Waits for it to end, and says how it did.
@@ -309,10 +334,13 @@ enum Subprocess {
     /// Runs a command and hands over what it prints as it prints it, a
     /// piece at a time, on the calling thread (#45): a search gives its
     /// first results while it goes on. `taken` returns false to have the
-    /// command ended there. Nil when it could not be started.
+    /// command ended there, and so does `isCancelled` returning true,
+    /// asked also while the command prints nothing (#50). Nil when it
+    /// could not be started.
     @discardableResult
     static func stream(
-        _ executable: String, _ arguments: [String], cwd: String? = nil, environment: [String: String]? = nil, taken: (Data) -> Bool
+        _ executable: String, _ arguments: [String], cwd: String? = nil, environment: [String: String]? = nil, isCancelled: (() -> Bool)? = nil,
+        taken: (Data) -> Bool
     ) -> Ending? {
         var pipe: [Int32] = [0, 0]
         guard Darwin.pipe(&pipe) == 0 else { return nil }
@@ -345,6 +373,19 @@ enum Subprocess {
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         var ended = false
         while true {
+            // Looked at between reads, and every tenth of a second while it
+            // prints nothing: not wanted any more, it is ended there.
+            if let isCancelled {
+                var ready = pollfd(fd: pipe[0], events: Int16(POLLIN), revents: 0)
+                let polled = poll(&ready, 1, 100)
+                if polled < 0, errno == EINTR { continue }
+                if isCancelled() {
+                    end(pid)
+                    ended = true
+                    break
+                }
+                if polled == 0 { continue }
+            }
             let count = read(pipe[0], &buffer, buffer.count)
             if count < 0, errno == EINTR { continue }
             guard count > 0 else { break }

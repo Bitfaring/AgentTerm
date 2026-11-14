@@ -46,6 +46,11 @@ final class EndToEndTests: XCTestCase {
             messages.compactMap { if case .paired(_, let token) = $0 { return token } else { return nil } }.last
         }
 
+        /// The last list of sessions the host sent.
+        var sessions: [SessionInfo]? {
+            messages.compactMap { if case .sessions(let list) = $0 { return list } else { return nil } }.last
+        }
+
         var welcomed: Bool { messages.contains { if case .welcome = $0 { return true } else { return false } } }
         var isClosed: Bool { if case .closed = state { return true } else { return false } }
 
@@ -94,8 +99,19 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(server.sessionCount, 0)
     }
 
-    func testCommandOutputAndExit() {
+    /// TEST-8: a session's output and how it ended, and the list of
+    /// sessions emptied after it.
+    func testCommandOutputAndExit() throws {
+        // The Mac's figures come every few seconds, between any two other
+        // messages: here as often as they can, so that one comes right after
+        // the session list, as it does now and then on a slow machine (CI).
+        server.stop()
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] })
+        configuration.refreshInterval = 0.05
+        server = HostServer(configuration: configuration)
+        port = try server.start()
         let client = connect()
+        waitUntil("the Mac's figures") { client.messages.contains { if case .systemStats = $0 { return true } else { return false } } }
         client.connection.send(.create(CreateRequest(command: "echo hello-$((40+2)); exit 3", cwd: "/tmp", title: "demo")))
         waitUntil("attached") { client.attached != nil }
         let id = client.attached!.id
@@ -103,7 +119,8 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(client.attached?.cwd, "/tmp")
         waitUntil("output") { client.text(id).contains("hello-42") }
         waitUntil("exit") { client.messages.contains(.exited(session: id, status: 3)) }
-        waitUntil("session list emptied") { client.messages.last == .sessions([]) }
+        // The last list of sessions, whatever came after it.
+        waitUntil("session list emptied") { client.sessions == [] }
     }
 
     func testInteractiveShellWithVietnameseInput() {
@@ -748,6 +765,49 @@ final class EndToEndTests: XCTestCase {
         phone.connection.send(.stopSearch(search: 6))
         phone.connection.send(.stopSearch(search: 99))
         waitUntil("said to be over") { ended(6) }
+    }
+
+    /// FIND-13 (#50): a device's search of a folder's text and its search
+    /// of the history are apart. The two are numbered each by itself, so a
+    /// search for text of the same number, and its stop, leave a search of
+    /// the history going.
+    func testSearchesForTextAndOfTheHistoryDoNotStopEachOther() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-searches-\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: home) }
+        let folder = home.appendingPathComponent(".claude/projects/-Users-me-Dev-app")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Enough of them that the search is still going when the stop comes.
+        for number in 0..<400 {
+            let said = number == 399 ? "the tokenizer" : "something else, number \(number)"
+            try #"{"type":"user","timestamp":"2026-11-14T08:00:00.000Z","cwd":"/Users/me/Dev/app","message":{"role":"user","content":"\#(said)"}}"#
+                .write(to: folder.appendingPathComponent("c-\(number).jsonl"), atomically: true, encoding: .utf8)
+        }
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, home: home.path)
+        configuration.foldersFile = home.appendingPathComponent("state/folders.json")
+        let host = HostServer(configuration: configuration)
+        let hostPort = try host.start()
+        defer { host.stop() }
+        let phone = TestClient(port: hostPort, token: token, name: "phone")
+        waitUntil("welcome") { phone.welcomed }
+
+        phone.connection.send(.searchHistory(search: 3, path: nil, query: "TOKENIZER"))
+        phone.connection.send(.stopSearch(search: 3))
+        phone.connection.send(.findText(search: 4, path: folder.path, query: "nothing at all", caseSensitive: false))
+        waitUntil("the search of the history over") { phone.messages.contains(.historySearchEnded(search: 3)) }
+        func hits(_ search: Int) -> [String] {
+            phone.messages.flatMap { message -> [HistoryHit] in
+                if case .historyFound(search, let hits) = message { return hits } else { return [] }
+            }.map(\.conversation.sessionID)
+        }
+        XCTAssertEqual(hits(3), ["c-399"], "stopped by a search of another kind")
+
+        // One of everywhere and one of a folder, the two lists the Mac
+        // shows side by side: neither stops the other.
+        phone.connection.send(.searchHistory(search: 5, path: nil, query: "TOKENIZER"))
+        phone.connection.send(.searchHistory(search: 6, path: "/Users/me/Dev/app", query: "TOKENIZER"))
+        waitUntil("both over") { phone.messages.contains(.historySearchEnded(search: 5)) && phone.messages.contains(.historySearchEnded(search: 6)) }
+        XCTAssertEqual(hits(5), ["c-399"], "everywhere's, stopped by the folder's")
+        XCTAssertEqual(hits(6), ["c-399"])
     }
 
     /// GIT-63 (#44): what a device does inside a submodule is answered

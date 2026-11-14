@@ -39,10 +39,16 @@ final class HistoryStore: ObservableObject {
     /// A conversation was deleted.
     var deleted: ((String) -> Void)?
 
-    private var number = 0
-    /// Which list the search that is going on is for: the folder's, or all.
-    private var searchOfFolder: Bool?
-    private var pending: DispatchWorkItem?
+    /// Numbers the searches, of both lists.
+    private var counter = 0
+    /// The number of the search going on for each list, the folder's (true)
+    /// or all (false): each list has its own, and the host keeps one of each.
+    private var numbers: [Bool: Int] = [:]
+    /// The search each list waits a moment to start, after the last key.
+    private var pending: [Bool: DispatchWorkItem] = [:]
+
+    /// The list a search's answer is for: none when it is no longer wanted.
+    private func list(of search: Int) -> Bool? { numbers.first { $0.value == search }?.key }
 
     subscript(ofFolder ofFolder: Bool) -> Scope {
         get { ofFolder ? folder : all }
@@ -51,7 +57,9 @@ final class HistoryStore: ObservableObject {
 
     /// Everything known of another Mac is forgotten; the filters stay.
     func reset() {
-        pending?.cancel()
+        pending.values.forEach { $0.cancel() }
+        pending = [:]
+        numbers = [:]
         all.hits = nil
         all.isSearching = false
         all.older = []
@@ -64,6 +72,8 @@ final class HistoryStore: ObservableObject {
 
     /// The side panel shows another folder: its own conversations.
     func folderChanged() {
+        pending[true]?.cancel()
+        numbers[true] = nil
         folder.hits = nil
         folder.isSearching = false
         folder.older = []
@@ -76,23 +86,24 @@ final class HistoryStore: ObservableObject {
     /// Searches for what is typed in one of the lists, a moment after the
     /// last key. An empty field shows the list again.
     func search(ofFolder: Bool, path: String?) {
-        pending?.cancel()
+        // This list's only: the other's search goes on.
+        pending[ofFolder]?.cancel()
         let query = self[ofFolder: ofFolder].query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
-            number += 1
+            numbers[ofFolder] = nil
             self[ofFolder: ofFolder].hits = nil
             self[ofFolder: ofFolder].isSearching = false
             return
         }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.number += 1
-            self.searchOfFolder = ofFolder
+            self.counter += 1
+            self.numbers[ofFolder] = self.counter
             self[ofFolder: ofFolder].hits = []
             self[ofFolder: ofFolder].isSearching = true
-            self.send?(.searchHistory(search: self.number, path: ofFolder ? path : nil, query: query))
+            self.send?(.searchHistory(search: self.counter, path: ofFolder ? path : nil, query: query))
         }
-        pending = work
+        pending[ofFolder] = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
@@ -141,10 +152,11 @@ final class HistoryStore: ObservableObject {
             // The last few are kept: each may be megabytes.
             if details.count > 8, let other = details.keys.first(where: { $0 != id }) { details[other] = nil }
         case .historyFound(let search, let hits):
-            guard search == number, let ofFolder = searchOfFolder else { return }
+            guard let ofFolder = list(of: search) else { return }
             self[ofFolder: ofFolder].hits = (self[ofFolder: ofFolder].hits ?? []) + hits
         case .historySearchEnded(let search):
-            guard search == number, let ofFolder = searchOfFolder else { return }
+            guard let ofFolder = list(of: search) else { return }
+            numbers[ofFolder] = nil
             self[ofFolder: ofFolder].isSearching = false
         case .historyOlder(let path, let conversations, let more):
             let ofFolder = path != nil

@@ -189,16 +189,21 @@ itself.
 - **Being told.** A run is a session, so the iPhone says when its agent is
   done or needs an answer as for any agent. A run that was not started
   when it should have been (its folder gone, its agent not found, its
-  pull or its worktree failed) or was stopped for taking too long is said
-  in the top banner of both apps. A run skipped as its schedule says
+  pull failed or stopped on conflicts, its worktree could not be made or
+  made ready) or was stopped for taking too long is said
+  in the top banner of both apps. A pull that stops on conflicts before a
+  run is undone, since nobody is there to resolve them, and a worktree
+  whose submodules or setup command failed is kept, to be looked at, with
+  no agent started in it. A run skipped as its schedule says
   (nothing changed, nothing pulled, the run before still going) is in the
   list of runs only.
 - **When a run starts.** Every time it comes due; only when the folder
   has changes that are not committed; or only after a pull, done first,
   brought new commits. A run that comes due while the one before it is
   still going is skipped, or waits for it, as the schedule says. A
-  schedule may name the longest a run may take, after which it is
-  stopped.
+  schedule may name the longest a run may take, from when it started,
+  after which it is stopped; how long a run took is counted from then
+  too. A run going when the host stops, or dies, ends with it.
 - **A worktree of its own.** A schedule may have each run in a new
   worktree of the folder, on a branch named after the schedule and the
   time, with its submodules checked out and the folder's setup command
@@ -528,7 +533,11 @@ panel.
     git tracks goes back to what is staged of it, or to the last commit,
     and a new file is moved to the Trash of the Mac, where it can be put
     back from. It is asked first, saying which of the two will happen and
-    that the first cannot be undone. What is staged is never discarded: it
+    that the first cannot be undone, and only what was asked about goes:
+    not a change made since, nor a new file past those listed. A worktree
+    of the repository inside the folder, as Claude Code keeps in
+    `.claude/worktrees`, is not a change and is never thrown away. What is
+    staged is never discarded: it
     is unstaged first. Above the lists is the commit message and the **Commit**
     button, which commits what is staged, with the identity and the hooks
     the repository is set up with. What git says when it refuses is shown.
@@ -620,7 +629,9 @@ panel.
     not staged can also be discarded, whole or by its ticked lines, asked
     first. What was taken is gone from the list at once, which is read from
     the file again. A part that no longer fits the file, because the file
-    changed since, is refused in words. It is the same in both layouts of
+    changed since, is refused in words. The hunk a long diff was cut off
+    in is shown and not taken apart, which it says: what is left of it may
+    end in the middle of a line. It is the same in both layouts of
     the diff, and on the Mac only: the iPhone stages and discards whole
     files.
     When a merge, a rebase, a cherry-pick or a revert **stops on

@@ -71,6 +71,34 @@ final class GitTests: MacUITestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: trash.appendingPathComponent("docs/guide.md").path), "its folder went whole")
     }
 
+    /// GIT-68 (#50): Discard All throws away what it named and nothing
+    /// else: not the new files past the fifty that are listed, nor a
+    /// worktree of the repository inside the folder, as Claude Code keeps
+    /// in `.claude/worktrees`.
+    func testDiscardingAllTakesOnlyWhatIsListed() throws {
+        git("worktree", "add", "-q", "-b", "agent", ".claude/worktrees/agent", in: project)
+        try "the agent's work\n".write(to: project.appendingPathComponent(".claude/worktrees/agent/work.txt"), atomically: true, encoding: .utf8)
+        let more = project.appendingPathComponent("more")
+        try FileManager.default.createDirectory(at: more, withIntermediateDirectories: true)
+        for number in 1...53 { try "\(number)\n".write(to: more.appendingPathComponent(String(format: "f%02d.txt", number)), atomically: true, encoding: .utf8) }
+        // The files, without the worktree, which git lists as a folder.
+        func untracked() -> [String] { git("ls-files", "--others", "--exclude-standard", in: project).split(separator: "\n").map(String.init).filter { !$0.hasSuffix("/") } }
+        XCTAssertEqual(untracked().count, 55, "new.txt, docs/guide.md and 53 more")
+
+        app.press(.button("Git"))
+        app.wait(for: .button("Stage notes.txt"))
+        app.press(.button("Discard all"))
+        // notes.txt and the fifty new files that are listed.
+        app.wait(for: .containing("Discard all 51 changes?"))
+        app.press(.button("Discard All"))
+        wait("the fifty to be gone") { untracked().count == 5 }
+        // Nothing more goes after them.
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(untracked(), ["more/f50.txt", "more/f51.txt", "more/f52.txt", "more/f53.txt", "new.txt"], "what was not listed is left")
+        XCTAssertEqual(try String(contentsOf: project.appendingPathComponent(".claude/worktrees/agent/work.txt"), encoding: .utf8), "the agent's work\n")
+        app.wait(for: .button("Stage new.txt"))
+    }
+
     /// GIT-28 (#35): the header's branch opens the branches; one is made
     /// and checked out, the first is switched back to, and the new one is
     /// deleted after being asked.
@@ -275,6 +303,31 @@ final class GitTests: MacUITestCase {
         app.press(.button("Discard"))
         wait("nothing left that is not staged") { self.git("diff", "--", "notes.txt", in: self.project).isEmpty }
         XCTAssertTrue(read("notes.txt").contains("line 2\nLINE 2\n"))
+        app.press(.id("parts-done"))
+        app.waitGone(.id("parts-done"))
+    }
+
+    /// GIT-69 (#50): the hunk a long diff was cut off in is shown and is
+    /// not offered as a part, which it says where its buttons would be.
+    func testTheHunkALongDiffWasCutOffInIsNotOffered() throws {
+        // Line 2 changed, and two hundred long lines further on: the diff
+        // passes what is sent of it in its second hunk, a hundred lines in.
+        let long = String(repeating: "x", count: 4_000)
+        let lines = (1...300).map { "line \($0) \(long)\n" }
+        try write(lines.joined(), to: "big.txt")
+        git("add", "big.txt", in: project)
+        git("commit", "-q", "-m", "a large file", in: project)
+        try write(lines.enumerated().map { index, line in index == 1 ? "LINE 2\n" : index >= 100 ? line.uppercased() : line }.joined(), to: "big.txt")
+
+        app.press(.button("Git"))
+        app.wait(for: .id("change-big.txt"), timeout: 20)
+        app.press(.id("change-big.txt"))
+        app.press(.id("pick-parts"), timeout: 20)
+        app.wait(for: .id("part-cut-1"), timeout: 20)
+        XCTAssertTrue(app.exists(.id("part-stage-0")), "the hunk before it is a part")
+        XCTAssertFalse(app.exists(.id("part-stage-1")))
+        XCTAssertFalse(app.exists(.id("part-discard-1")))
+        shot("cut")
         app.press(.id("parts-done"))
         app.waitGone(.id("parts-done"))
     }

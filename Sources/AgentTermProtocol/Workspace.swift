@@ -172,6 +172,9 @@ public struct LastCommit: Codable, Equatable, Sendable {
     /// two apart, and the next push needs force.
     public var isPushed: Bool
 
+    /// Said when the last commit was asked for and there is none.
+    public static let noneYet = "There is no commit here yet."
+
     public init(commit: CommitInfo, message: String, isPushed: Bool = false) {
         self.commit = commit
         self.message = message
@@ -406,6 +409,9 @@ public struct ForcePushQuestion: Equatable, Sendable {
 
     /// How many of the commits are named before the rest are counted.
     public static let shown = 8
+
+    /// Said when the remote could not be asked, and nothing was pushed.
+    public static let couldNotAsk = "The remote could not be asked what a forced push would overwrite, so nothing was pushed."
 
     public init(branch: String, upstream: String, loses: [String]) {
         isNeeded = !loses.isEmpty

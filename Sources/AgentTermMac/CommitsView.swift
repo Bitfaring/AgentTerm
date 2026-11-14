@@ -69,7 +69,13 @@ struct CommitsList: View {
         .onChange(of: model.diff?.behind) { _ in model.loadCommits() }
         .onChange(of: model.panelFolder) { _ in model.loadCommits() }
         .onChange(of: model.isCommitting) { committing in if !committing { model.loadCommits() } }
-        .onChange(of: model.syncing) { _ in model.loadCommits() }
+        // A pull or a push that ended: the remote's branches the list names
+        // may be elsewhere now. Not a fetch, as one is made every few
+        // minutes: the list would start again from its first page under
+        // the user's eyes (#50), and what a fetch brings in moves `behind`.
+        .onChange(of: model.panelFolder.flatMap { model.syncing[$0] }) { before, now in
+            if now == nil, before == "pull" || before == "push" { model.loadCommits() }
+        }
     }
 
     private var list: some View {

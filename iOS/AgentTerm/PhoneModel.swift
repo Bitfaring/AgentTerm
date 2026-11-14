@@ -224,6 +224,9 @@ final class PhoneModel: ObservableObject {
     struct ForcePush: Identifiable {
         let folder: String
         let question: ForcePushQuestion
+        /// The commit the upstream was at when it was looked at: the push
+        /// is made only while it is still there.
+        let lease: String
         var id: String { folder }
     }
 
@@ -254,7 +257,7 @@ final class PhoneModel: ObservableObject {
     func forcePushConfirmed(_ push: ForcePush) {
         guard status == .connected, syncing[push.folder] == nil else { return }
         syncing[push.folder] = "push"
-        connection?.send(.gitPush(path: push.folder, force: true))
+        connection?.send(.gitPush(path: push.folder, force: true, lease: push.lease))
     }
 
     /// How the Mac is doing: processor, memory, network, heat, battery, uptime.
@@ -1246,7 +1249,7 @@ final class PhoneModel: ObservableObject {
             branches[folder] = list
         case .gitLastCommit(let folder, let last):
             guard let wanted = lastCommitWanted.removeValue(forKey: folder) else { break }
-            if let last { wanted(last) } else { self.message = "There is no commit here yet." }
+            if let last { wanted(last) } else { self.message = LastCommit.noneYet }
         case .gitStashes(let folder, let list):
             stashes[folder] = list
         case .gitStashShow(_, let hash, let files):
@@ -1283,13 +1286,13 @@ final class PhoneModel: ObservableObject {
             } else {
                 fetchProblems[folder] = nil
             }
-        case .gitForcePushPreview(let folder, let upstream, let loses):
+        case .gitForcePushPreview(let folder, let upstream, let loses, let at):
             guard askingForcePush == folder else { break }
             askingForcePush = nil
-            if let upstream, let branch = diffs[folder]?.branch {
-                pendingForcePush = ForcePush(folder: folder, question: ForcePushQuestion(branch: branch, upstream: upstream, loses: loses))
+            if let upstream, let at, let branch = diffs[folder]?.branch {
+                pendingForcePush = ForcePush(folder: folder, question: ForcePushQuestion(branch: branch, upstream: upstream, loses: loses), lease: at)
             } else {
-                self.message = "The remote could not be asked what a forced push would overwrite, so nothing was pushed."
+                self.message = ForcePushQuestion.couldNotAsk
             }
         case .gitSynced(let folder):
             // Not at the `diff` before it: one asked for while git was still

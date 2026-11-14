@@ -185,12 +185,20 @@ final class SchedulerHostTests: XCTestCase {
         fi
         # Codex prints nothing either: a run of it is known only by its silence.
         [ "$agent" = claude ] && echo "the stand-in $agent is at work"
+        # One that takes no notice of being hung up, as an agent may not.
+        [ -e ignore-hangup ] && trap '' HUP TERM
         exec sleep 600
         """.write(to: agents.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agents.appendingPathComponent("claude").path)
         try FileManager.default.copyItem(at: agents.appendingPathComponent("claude"), to: agents.appendingPathComponent("copilot"))
         try FileManager.default.copyItem(at: agents.appendingPathComponent("claude"), to: agents.appendingPathComponent("codex"))
+        try startServer()
+    }
 
+    /// A host on the test's own folder, and a client of it: again after
+    /// `server.stop()`, as the host is started again.
+    private func startServer() throws {
+        let agents = root.appendingPathComponent("agents")
         var configuration = HostServer.Configuration(
             port: 0, token: token, listenOnTailscale: false, detectAgents: { AgentDetector.detect(in: agents.path) },
             // The agents are given hooks; the stand-ins run none of them.
@@ -753,5 +761,208 @@ final class SchedulerHostTests: XCTestCase {
         XCTAssertEqual(client.sessions.count, 0)
         set(nine.addingTimeInterval(2 * 3600 + 5))
         waitUntil("the run of eleven") { self.client.sessions.count == 1 }
+    }
+
+    /// A schedule that never comes due by itself in these tests: its runs
+    /// are run now.
+    private func evening() -> Schedule {
+        var schedule = morning()
+        schedule.when = .daily(hour: 20, minute: 0)
+        return schedule
+    }
+
+    /// SCHED-31: a run whose agent takes no notice of being hung up is
+    /// stopped all the same, by the user and when it ran too long.
+    func testARunWhoseAgentIgnoresTheHangUpIsStoppedAllTheSame() throws {
+        try "".write(to: project.appendingPathComponent("ignore-hangup"), atomically: true, encoding: .utf8)
+        let start = clock
+        var schedule = evening()
+        schedule.maxMinutes = 30
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        client.connection.send(.runSchedule(id: "s-claude"))
+        waitUntil("the run's session") { self.client.sessions.count == 1 }
+        waitUntil("recorded") { self.runs.count == 1 }
+        waitUntil("the agent at work") { self.startedLines.count == 1 }
+        pause(0.3)
+        client.connection.send(.stopScheduleRun(id: "s-claude", at: try XCTUnwrap(runs.first).at))
+        waitUntil("the session ended") { self.client.sessions.isEmpty }
+        waitUntil("how it ended") { self.runs.first?.outcome == "Stopped by you" }
+
+        // Its time up: the same.
+        client.connection.send(.runSchedule(id: "s-claude"))
+        waitUntil("the second run") { self.client.sessions.count == 1 }
+        waitUntil("its agent at work") { self.startedLines.count == 2 }
+        pause(0.3)
+        set(start.addingTimeInterval(31 * 60))
+        waitUntil("stopped") { self.client.sessions.isEmpty }
+        waitUntil("said to be") { self.runs.last?.outcome == "Stopped: it ran longer than 30 min" }
+    }
+
+    private var schedulesFile: URL { root.appendingPathComponent("state/schedules.json") }
+
+    /// SCHED-32: the session numbers of a host that stopped, or died, are
+    /// not the next one's: its runs are over when it is, and the user's
+    /// sessions on the next host are neither stopped nor listed for them.
+    func testARunOfAHostBeforeLeavesTheNextHostsSessionsAlone() throws {
+        let start = clock
+        var schedule = evening()
+        schedule.maxMinutes = 30
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        client.connection.send(.runSchedule(id: "s-claude"))
+        waitUntil("the run's session") { self.client.sessions.count == 1 }
+        let old = try XCTUnwrap(client.sessions.first?.id)
+        waitUntil("recorded") { self.runs.first?.session == old }
+
+        // The host stops: the run is over with it.
+        client.connection.close()
+        server.stop()
+        var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: schedulesFile)) as? [String: Any])
+        var list = try XCTUnwrap(saved["schedules"] as? [[String: Any]])
+        var records = try XCTUnwrap(list[0]["runs"] as? [[String: Any]])
+        XCTAssertNotNil(records[0]["ended"])
+        XCTAssertEqual(records[0]["outcome"] as? String, "Its session ended with the host")
+        XCTAssertNil(records[0]["session"])
+        // As a host that was killed leaves it: still going, with its session's number.
+        records[0]["ended"] = nil
+        records[0]["outcome"] = nil
+        records[0]["session"] = Int(old)
+        list[0]["runs"] = records
+        saved["schedules"] = list
+        try JSONSerialization.data(withJSONObject: saved).write(to: schedulesFile)
+
+        try startServer()
+        waitUntil("the run over") { self.runs.first?.ended != nil }
+        XCTAssertEqual(runs.first?.outcome, "Its session ended with the host")
+        XCTAssertNil(runs.first?.session)
+        client.connection.send(.create(CreateRequest(command: "sleep 600", cwd: project.path, title: "mine")))
+        waitUntil("the user's session") { self.client.sessions.count == 1 }
+        XCTAssertEqual(client.sessions.first?.id, old, "the number the run's session had")
+        XCTAssertEqual(ScheduleOverview(schedules: client.schedules, liveSessions: Set(client.sessions.map(\.id))).running.count, 0)
+        // Long past the run's time: the user's session is not taken for it.
+        set(start.addingTimeInterval(45 * 60))
+        pause(0.6)
+        XCTAssertEqual(client.sessions.count, 1, "the user's session was stopped for the run")
+        client.connection.send(.stopScheduleRun(id: "s-claude", at: try XCTUnwrap(runs.first).at))
+        waitUntil("not going") { self.client.errors.contains("That run is not going on any more.") }
+        pause(0.3)
+        XCTAssertEqual(client.sessions.count, 1)
+    }
+
+    /// SCHED-33: a run that waited for the one before it has its whole time
+    /// from when it started, and its length is counted from then.
+    func testARunThatWaitedHasItsWholeTime() throws {
+        let start = clock
+        var schedule = evening()
+        schedule.waitsForPrevious = true
+        schedule.maxMinutes = 30
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        client.connection.send(.runSchedule(id: "s-claude"))
+        waitUntil("the first run") { self.client.sessions.count == 1 }
+        let first = try XCTUnwrap(client.sessions.first?.id)
+        waitUntil("its agent at work") { self.client.sessions.first?.state?.isWorking == true }
+        client.connection.send(.runSchedule(id: "s-claude"))
+        pause(0.6)
+        XCTAssertEqual(runs.count, 1, "the second waits")
+
+        // Twenty minutes on, the first is ended: the second starts then.
+        set(start.addingTimeInterval(20 * 60))
+        pause(0.3)
+        client.connection.send(.kill(session: first))
+        waitUntil("the second") { self.client.sessions.first.map { $0.id != first } == true }
+        waitUntil("recorded") { self.runs.count == 2 }
+        // Forty-five minutes after it came due, twenty-five after it started.
+        set(start.addingTimeInterval(45 * 60))
+        pause(0.6)
+        XCTAssertEqual(client.sessions.count, 1, "stopped for the time it waited")
+        set(start.addingTimeInterval(51 * 60))
+        waitUntil("stopped once its own time is up") { self.client.sessions.isEmpty }
+        waitUntil("said to be") { self.runs.last?.outcome == "Stopped: it ran longer than 30 min" }
+        XCTAssertEqual(runs.last?.duration, 31 * 60)
+    }
+
+    /// SCHED-34: a pull before a run that stops on conflicts is undone, with
+    /// nobody there to resolve them: the folder is as it was, and the run
+    /// is not started, which the banner says.
+    func testAPullThatConflictsBeforeARunIsUndone() throws {
+        try repository()
+        // Merged, whatever the person running the tests has set up.
+        git("config", "pull.rebase", "false")
+        let remote = root.appendingPathComponent("remote.git")
+        git("init", "-q", "--bare", "-b", "main", remote.path)
+        git("remote", "add", "origin", remote.path)
+        git("push", "-q", "-u", "origin", "main")
+        // Someone else changes the line this folder changes too.
+        let other = root.appendingPathComponent("other")
+        git("clone", "-q", remote.path, other.path)
+        git("config", "user.name", "Other", in: other)
+        git("config", "user.email", "other@example.com", in: other)
+        try "theirs\n".write(to: other.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("commit", "-q", "-am", "theirs", in: other)
+        git("push", "-q", in: other)
+        try "mine\n".write(to: project.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("commit", "-q", "-am", "mine")
+
+        var schedule = evening()
+        schedule.condition = .afterPull
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        client.connection.send(.runSchedule(id: "s-claude"))
+        waitUntil("not started") { self.runs.first?.started == false }
+        XCTAssertTrue(runs.first?.note.hasPrefix("Not started: the pull stopped on conflicts, and was undone.") == true, runs.first?.note ?? "")
+        XCTAssertEqual(client.sessions.count, 0)
+        XCTAssertEqual(git("status", "--porcelain"), "", "nothing is left half merged")
+        XCTAssertEqual(try String(contentsOf: project.appendingPathComponent("a.txt"), encoding: .utf8), "mine\n")
+        waitUntil("the banner told") { self.client.failures.last?.part == .schedule }
+    }
+
+    /// SCHED-35: a limit that starts over while the schedules are paused is
+    /// not run once they are let go again: nothing is caught up.
+    func testALimitResetWhilePausedIsNotCaughtUp() throws {
+        var schedule = morning()
+        schedule.when = .limitReset
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("its time known") { self.client.schedules.first?.nextRun == self.reset.addingTimeInterval(120) }
+        client.connection.send(.pauseSchedules(true))
+        waitUntil("paused") { self.client.paused == true }
+        for seconds in [0.0, 60, 125, 600] {
+            set(reset.addingTimeInterval(seconds))
+            pause(0.3)
+        }
+        client.connection.send(.pauseSchedules(false))
+        waitUntil("let go") { self.client.paused == false }
+        for seconds in [660.0, 720] {
+            set(reset.addingTimeInterval(seconds))
+            pause(0.3)
+        }
+        pause()
+        XCTAssertEqual(client.sessions.filter { $0.schedule != nil }, [])
+        XCTAssertEqual(runs, [])
+    }
+
+    /// SCHED-36: a run in a worktree of its own is not started when the
+    /// folder's setup command fails there, and says why, in the list and in
+    /// the banner; the worktree is kept, to be looked at.
+    func testARunWhoseWorktreeSetupFailsIsNotStarted() throws {
+        try repository()
+        client.connection.send(.setWorktreeSetup(folder: project.path, command: "echo the setup broke; exit 7"))
+        var schedule = evening()
+        schedule.inWorktree = true
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        client.connection.send(.runSchedule(id: "s-claude"))
+        waitUntil("recorded") { self.runs.count == 1 }
+        let run = try XCTUnwrap(runs.first)
+        XCTAssertFalse(run.started)
+        XCTAssertTrue(run.note.hasPrefix("Not started: the setup command failed in its worktree."), run.note)
+        XCTAssertTrue(run.note.contains("the setup broke"), run.note)
+        let worktree = try XCTUnwrap(run.worktree)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: worktree))
+        pause()
+        XCTAssertEqual(client.sessions, [])
+        XCTAssertEqual(startedLines, [])
+        waitUntil("the banner told") { self.client.failures.last?.part == .schedule }
     }
 }

@@ -206,7 +206,8 @@ public enum FileSearch {
         let sizes = Sizes()
         var pending = Data()
         var given = left
-        let ended = Subprocess.stream("/usr/bin/git", arguments) { data in
+        // Ended once it is not wanted, also while it finds nothing (#50).
+        let ended = Subprocess.stream("/usr/bin/git", arguments, isCancelled: isCancelled) { data in
             if isCancelled() { return false }
             pending.append(data)
             // Whole lines only: the last piece may be cut anywhere.

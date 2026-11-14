@@ -310,10 +310,15 @@ final class WorktreeHostTests: XCTestCase {
         waitUntil("sent to one that connects") { second.setups == [self.project.path: "touch set-up"] }
         second.connection.close()
 
-        _ = Subprocess.run("/usr/bin/git", ["-C", project.path, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "second"], timeout: 30)
-        _ = Subprocess.run("/usr/bin/git", ["-C", project.path, "branch", "older", "HEAD~1"], timeout: 30)
+        // Each step says why, should it fail: a lock the host took once
+        // made the commit fail here, and the test only timed out (#50).
+        for arguments in [["-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "second"], ["branch", "older", "HEAD~1"]] {
+            let ran = Subprocess.run("/usr/bin/git", ["-C", project.path] + arguments, timeout: 30, mergeErrors: true)
+            XCTAssertEqual(ran?.status, 0, "git \(arguments.joined(separator: " ")): \(String(decoding: ran?.output ?? Data(), as: UTF8.self))")
+        }
         client.connection.send(.createInWorktree(request: CreateRequest(command: nil, cwd: project.path), branch: "from-older", from: "older"))
-        waitUntil("the session") { self.client.sessions.first?.branch == "from-older" }
+        waitUntil("the session") { self.client.sessions.first?.branch == "from-older" || !self.client.errors.isEmpty }
+        XCTAssertEqual(client.errors, [], "the worktree was refused")
         let cwd = try XCTUnwrap(client.sessions.first?.cwd)
         func head(_ arguments: String...) -> String {
             String(decoding: Subprocess.run("/usr/bin/git", ["-C", cwd, "rev-parse"] + arguments, timeout: 30)?.output ?? Data(), as: UTF8.self)

@@ -89,6 +89,43 @@ enum Highlighting {
         highlighted.language = FileLanguage.forFile(path)
         return highlighted
     }
+
+    /// Gives a layout the storage that fits the text it is about to show,
+    /// when the one it has does not (#50): the text came after the editor
+    /// was made, as on the iPhone, or another file was opened in it, and
+    /// is too large to color, or is small enough now. Called before the
+    /// text is set, which the new storage then holds.
+    static func fit(_ layout: NSLayoutManager, path: String, fontSize: CGFloat, length: Int) {
+        guard let current = layout.textStorage else { return }
+        let wanted = colors(path, length: length) ? FileLanguage.forFile(path) : nil
+        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        guard (current is CodeAttributedString) != (wanted != nil && shared != nil) else {
+            // Told again only when it changed: each time it is told, all of it is colored again.
+            if let coloring = current as? CodeAttributedString, coloring.language != wanted { coloring.language = wanted }
+            return
+        }
+        layout.replaceTextStorage(storage(for: path, fontSize: fontSize, length: length))
+        #else
+        // UIKit's layout manager cannot be given another storage: the
+        // editor's colors when it has a language, and does nothing more
+        // than a plain one without (`editableStorage`).
+        if let coloring = current as? CodeAttributedString, coloring.language != wanted { coloring.language = wanted }
+        #endif
+    }
+
+    #if !(canImport(AppKit) && !targetEnvironment(macCatalyst))
+    /// The iPhone's editor's storage: one that colors, with no language for
+    /// a text that is not colored, so that `fit` can turn its colors on
+    /// and off as the text that comes changes; a plain one if the
+    /// highlighter could not be loaded.
+    static func editableStorage(for path: String, fontSize: CGFloat, length: Int) -> NSTextStorage {
+        guard let highlightr = shared else { return NSTextStorage() }
+        highlightr.theme.setCodeFont(font(size: fontSize))
+        let highlighted = CodeAttributedString(highlightr: highlightr)
+        highlighted.language = colors(path, length: length) ? FileLanguage.forFile(path) : nil
+        return highlighted
+    }
+    #endif
 }
 
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
@@ -164,19 +201,22 @@ public struct CodeEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = context.coordinator.textView else { return }
         if context.coordinator.path != path {
-            // Another file: its own language, and no undo into the last one.
+            // Another file: its own language, colored or not by its own
+            // size, and no undo into the last one.
             context.coordinator.path = path
-            (textView.textStorage as? CodeAttributedString)?.language = FileLanguage.forFile(path)
+            if let layout = textView.layoutManager { Highlighting.fit(layout, path: path, fontSize: fontSize, length: text.utf16.count) }
             textView.string = text
             context.coordinator.held = text
             textView.undoManager?.removeAllActions()
             textView.scrollToBeginningOfDocument(nil)
         } else if context.coordinator.held != text {
-            // Changed from outside the editor, such as discarding edits. Told
-            // by what the editor last gave or was given, which is the same
-            // text in memory when nothing changed: asking the view for all
-            // of its text at each key is what made typing in a large file slow.
+            // Changed from outside the editor, such as discarding edits, or
+            // the file read after the editor was made. Told by what the
+            // editor last gave or was given, which is the same text in
+            // memory when nothing changed: asking the view for all of its
+            // text at each key is what made typing in a large file slow.
             context.coordinator.held = text
+            if let layout = textView.layoutManager { Highlighting.fit(layout, path: path, fontSize: fontSize, length: text.utf16.count) }
             if textView.string != text { textView.string = text }
         }
         context.coordinator.go(to: target)
@@ -240,7 +280,8 @@ public struct CodeEditor: UIViewRepresentable {
     public func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     public func makeUIView(context: Context) -> UITextView {
-        let storage = Highlighting.storage(for: path, fontSize: fontSize, length: text.utf16.count)
+        // Made before the file's text is here: colored or not once it is (`Highlighting.fit`).
+        let storage = Highlighting.editableStorage(for: path, fontSize: fontSize, length: text.utf16.count)
         let layout = NSLayoutManager()
         storage.addLayoutManager(layout)
         // Lines wrap: a phone is too narrow to scroll code sideways while typing.
@@ -286,14 +327,18 @@ public struct CodeEditor: UIViewRepresentable {
     public func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.parent = self
         if context.coordinator.path != path {
+            // Another file: colored or not by its own size.
             context.coordinator.path = path
-            (textView.textStorage as? CodeAttributedString)?.language = FileLanguage.forFile(path)
+            Highlighting.fit(textView.layoutManager, path: path, fontSize: fontSize, length: text.utf16.count)
             textView.text = text
             textView.undoManager?.removeAllActions()
             textView.setContentOffset(.zero, animated: false)
         } else if textView.text != text, textView.markedTextRange == nil {
-            // Changed from outside the editor, such as discarding edits. Not
-            // while a character is being composed, which this would break.
+            // Changed from outside the editor, such as discarding edits, or
+            // the file, which is read after the editor is shown: colored or
+            // not by its size (#50). Not while a character is being
+            // composed, which this would break.
+            Highlighting.fit(textView.layoutManager, path: path, fontSize: fontSize, length: text.utf16.count)
             textView.text = text
         }
         context.coordinator.go(to: target, in: textView)

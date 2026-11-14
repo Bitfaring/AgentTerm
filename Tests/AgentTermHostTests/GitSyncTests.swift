@@ -170,13 +170,43 @@ final class GitSyncTests: XCTestCase {
         XCTAssertEqual(loses.upstream, "origin/main")
         XCTAssertEqual(loses.commits.map { String($0.split(separator: " ", maxSplits: 1).last ?? "") }, ["theirs: one more", "theirs: a line"])
 
-        XCTAssertNil(GitActions.push(in: mine.path, force: true))
+        XCTAssertEqual(loses.at, run("rev-parse", "origin/main", in: mine), "where the upstream is, as it was looked at")
+        XCTAssertNil(GitActions.push(in: mine.path, force: true, lease: loses.at))
         XCTAssertEqual(run("log", "--format=%s", "main", in: remote), "mine\ninit")
         XCTAssertEqual(GitActions.forcePushLoses(in: mine.path)?.commits, [], "nothing left to overwrite")
 
         // A branch that follows none has nothing to be told about.
         run("checkout", "-q", "-b", "alone", in: mine)
         XCTAssertNil(GitActions.forcePushLoses(in: mine.path))
+    }
+
+    /// GIT-71 (#50): a forced push overwrites only what the user was told
+    /// it would. A commit pushed since, even one the fetch of every few
+    /// minutes brought in meanwhile, is not overwritten: the push is refused.
+    func testAForcedPushDoesNotOverwriteWhatWasPushedSinceItWasLookedAt() throws {
+        try commit("b.txt", "theirs\n", "theirs: a line", in: theirs)
+        run("push", "-q", in: theirs)
+        try commit("a.txt", "one\nmine\n", "mine", in: mine)
+        let loses = try XCTUnwrap(GitActions.forcePushLoses(in: mine.path))
+        XCTAssertEqual(loses.commits.count, 1)
+
+        // While the user reads it, someone pushes, and a fetch brings it in.
+        try commit("b.txt", "theirs\nlater\n", "theirs: later", in: theirs)
+        run("push", "-q", in: theirs)
+        XCTAssertNil(GitActions.fetch(in: mine.path))
+        let refused = try XCTUnwrap(GitActions.push(in: mine.path, force: true, lease: loses.at), "it overwrote a commit nobody was told about")
+        XCTAssertTrue(refused.hasPrefix("The remote changed since it was looked at, so the forced push was refused and nothing was overwritten."), refused)
+        XCTAssertEqual(run("log", "-1", "--format=%s", "main", in: remote), "theirs: later")
+        // Without knowing where it was, nothing is forced.
+        XCTAssertEqual(
+            GitActions.push(in: mine.path, force: true),
+            "A forced push is made only over what it was said to overwrite, and that is not known here. Ask for the forced push again.")
+        XCTAssertEqual(run("log", "-1", "--format=%s", "main", in: remote), "theirs: later")
+        // Looked at again: the push goes, over what was said this time.
+        let again = try XCTUnwrap(GitActions.forcePushLoses(in: mine.path))
+        XCTAssertEqual(again.commits.count, 2)
+        XCTAssertNil(GitActions.push(in: mine.path, force: true, lease: again.at))
+        XCTAssertEqual(run("log", "-1", "--format=%s", "main", in: remote), "mine")
     }
 
     /// GIT-57 (#42): a pull that conflicts is left to be resolved: the file

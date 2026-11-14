@@ -103,14 +103,12 @@ private struct ChangesList: View {
         discarding = files
     }
 
-    /// Discards what was asked about. Every change is asked for as such,
-    /// so that one made since is not left out.
+    /// Discards what was asked about, by name, also when it is every
+    /// change: not one made since, nor a file past those listed (#50).
     private func discardConfirmed() {
         guard let asked = discarding else { return }
         discarding = nil
-        let directory = discardingIn ?? folder
-        let all = asked.count > 1 && asked.count == (model.diffs[directory]?.unstaged.count ?? -1)
-        model.discard(all ? [] : asked.map(\.path), in: directory)
+        model.discard(asked.map(\.path), in: discardingIn ?? folder)
     }
 
     /// The submodules with changes inside them (#44), each a list of its

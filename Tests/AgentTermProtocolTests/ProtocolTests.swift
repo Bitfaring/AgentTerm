@@ -33,6 +33,7 @@ final class ProtocolTests: XCTestCase {
             .gitFetch(path: "/Users/me/app", automatic: true),
             .gitPull(path: "/Users/me/app", mode: "rebase"),
             .gitPush(path: "/Users/me/app", force: true),
+            .gitPush(path: "/Users/me/app", force: true, lease: "0123456789abcdef"),
             .gitForcePushPreview(path: "/Users/me/app"),
             .gitLog(path: "/Users/me/app", branch: nil, skip: 50, limit: 50),
             .gitShow(path: "/Users/me/app", hash: "abc1234"),
@@ -581,7 +582,10 @@ final class ProtocolTests: XCTestCase {
         var off = DisplaySettings()
         off.fetchAutomatically = false
         XCTAssertFalse(try JSONDecoder().decode(DisplaySettings.self, from: JSONEncoder().encode(off.checked)).fetchAutomatically)
-        for message in [ServerMessage.gitFetched(path: "/p", problem: "no route", automatic: true), .gitForcePushPreview(path: "/p", upstream: nil, loses: [])] {
+        for message in [
+            ServerMessage.gitFetched(path: "/p", problem: "no route", automatic: true), .gitForcePushPreview(path: "/p", upstream: nil, loses: []),
+            .gitForcePushPreview(path: "/p", upstream: "origin/main", loses: ["abc1234 theirs"], at: "abc1234def"),
+        ] {
             XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
         }
     }
@@ -696,5 +700,19 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(PatchParts.patch(path: "a", hunk: hunks[0], picked: [], use: .stage), "nothing picked is no patch")
         XCTAssertTrue(PatchParts.Use.unstage.reversed && PatchParts.Use.discard.reversed && !PatchParts.Use.stage.reversed)
         XCTAssertEqual(PatchParts.hunks(of: "@@ -1 +1 @@\n-a\n+b\n… diff truncated …").first?.lines, ["-a", "+b"])
+    }
+
+    /// GIT-69 (#50): the hunk a diff was cut off in is shown, and is not
+    /// offered as a part: what is left of it may end in the middle of a
+    /// line, and a patch of it would stage text the file does not have.
+    func testTheHunkADiffWasCutOffInIsNotAPart() throws {
+        let cut = "@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n@@ -40,2 +40,3 @@\n forty\n+let value = compu\n… diff truncated …"
+        let hunks = PatchParts.hunks(of: cut)
+        XCTAssertEqual(hunks.count, 2)
+        XCTAssertEqual(hunks[1].lines, [" forty", "+let value = compu"], "shown as far as it goes")
+        XCTAssertEqual(hunks.map(\.isCut), [false, true])
+        XCTAssertNotNil(PatchParts.patch(path: "a", hunk: hunks[0], use: .stage), "a hunk before the cut is whole")
+        XCTAssertNil(PatchParts.patch(path: "a", hunk: hunks[1], use: .stage))
+        XCTAssertNil(PatchParts.patch(path: "a", hunk: hunks[1], picked: [0], use: .discard))
     }
 }

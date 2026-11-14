@@ -139,6 +139,10 @@ public final class HostServer {
         var nextMessage: UInt32 = 0
         /// The searches for text this client has going (#45), by its number.
         var searches: [Int: SearchFlag] = [:]
+        /// Its searches of the history (#46), by their number, with whether
+        /// each is of everywhere: apart from those for text, which a client
+        /// numbers by themselves (#50).
+        var historySearches: [Int: (flag: SearchFlag, everywhere: Bool)] = [:]
 
         var authenticated: Bool { identity != nil }
         /// The Mac's own apps may pair and revoke devices.
@@ -568,6 +572,13 @@ public final class HostServer {
                 $0.process.hangUp()
             }
             sessions.removeAll()
+            // Their runs end with them. Not before the schedules were read:
+            // a host that could not start would save none over them.
+            if schedulesLoaded {
+                endRunsOfTheHostBefore(at: configuration.now())
+                runStarts.removeAll()
+                saveSchedules()
+            }
             commitRuns.values.forEach { $0.cancel() }
             commitRuns.removeAll()
             sleepGuard.set(held: false)
@@ -685,7 +696,11 @@ public final class HostServer {
 
     private var schedulesFile: URL? { configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("schedules.json") }
 
+    /// Whether this host read its schedules, and so may save them.
+    private var schedulesLoaded = false
+
     private func loadSchedules() {
+        schedulesLoaded = true
         guard let file = schedulesFile, let data = FileManager.default.contents(atPath: file.path),
             let saved = MessageCoding.decode(SchedulesFile.self, from: data)
         else { return }
@@ -694,6 +709,29 @@ public final class HostServer {
         resetsRun = saved.resetsRun ?? [:]
         schedulesFrom = saved.from ?? [:]
         schedulesPaused = saved.paused ?? false
+        // A host that died left its runs going: they ended with it, about
+        // when it last looked at its schedules.
+        endRunsOfTheHostBefore(at: saved.checked)
+    }
+
+    static let endedWithTheHost = "Its session ended with the host"
+
+    /// The runs whose session was this host's, or the host's before, are
+    /// over: no session outlives the host that started it. The number of
+    /// their session is forgotten, since the next host gives its own
+    /// sessions the same numbers from 1.
+    private func endRunsOfTheHostBefore(at end: Date?) {
+        for index in schedules.indices {
+            for place in schedules[index].runs.indices {
+                var run = schedules[index].runs[place]
+                if run.started && run.ended == nil {
+                    run.ended = max(end ?? run.at, run.startedAt ?? run.at)
+                    run.outcome = Self.endedWithTheHost
+                }
+                run.session = nil
+                schedules[index].runs[place] = run
+            }
+        }
     }
 
     private func saveSchedules() {
@@ -778,7 +816,12 @@ public final class HostServer {
             let due: Date?
             if case .limitReset = schedule.when {
                 let done = resetsRun[schedule.agent] ?? .distantPast
-                let passed = resets(of: schedule.agent).filter { $0 > done && $0.addingTimeInterval(Self.afterLimitReset) <= now }
+                // Since the last look too, as any other time: not one that
+                // passed while the schedules were paused, or before this
+                // one was saved or turned on.
+                let passed = resets(of: schedule.agent).filter {
+                    $0 > done && $0.addingTimeInterval(Self.afterLimitReset) > since && $0.addingTimeInterval(Self.afterLimitReset) <= now
+                }
                 due = passed.max()?.addingTimeInterval(Self.afterLimitReset)
                 if let latest = passed.max() { ranFor[schedule.agent] = max(latest, ranFor[schedule.agent] ?? latest) }
             } else {
@@ -896,10 +939,21 @@ public final class HostServer {
                 }
             case .afterPull:
                 let before = GitActions.head(in: schedule.folder)
+                let unfinished = GitActions.unfinished(in: schedule.folder)
                 if before == nil {
                     failed = "Not started: its folder is not a git repository with a commit, so there is nothing to pull"
                 } else if let problem = GitActions.pull(in: schedule.folder) {
-                    failed = "Not started: the pull failed. \(problem.split(separator: "\n").first.map(String.init) ?? problem)"
+                    if unfinished == nil, GitActions.unfinished(in: schedule.folder) != nil {
+                        // Nobody is there to resolve them: the folder is put
+                        // back as it was, rather than left half merged.
+                        let undone = GitActions.abortOperation(in: schedule.folder)
+                        failed =
+                            undone == nil
+                            ? "Not started: the pull stopped on conflicts, and was undone. Pull by hand to resolve them"
+                            : "Not started: the pull stopped on conflicts, and could not be undone: \(Self.firstLine(of: undone ?? "")). Resolve them, or abort it, in the folder"
+                    } else {
+                        failed = "Not started: the pull failed. \(Self.firstLine(of: problem))"
+                    }
                 } else if GitActions.head(in: schedule.folder) == before {
                     skipped = "Skipped: the pull brought nothing new"
                 }
@@ -916,16 +970,28 @@ public final class HostServer {
                     let made = try GitWorktrees.create(in: schedule.folder, agent: schedule.agent, branch: "schedule/\(name.isEmpty ? "run" : name)-\(stamp.string(from: at))")
                     directory = made.directory
                     worktree = made.directory
-                    _ = GitWorktrees.checkOutSubmodules(in: made.directory)
-                    if let setup {
-                        _ = Subprocess.run(
+                    // A worktree that is not ready is not started in, with
+                    // nobody there to see what the agent would make of it.
+                    // It is kept, to be looked at.
+                    if let problem = GitWorktrees.checkOutSubmodules(in: made.directory) {
+                        failed = "Not started: the submodules could not be checked out in its worktree. \(Self.firstLine(of: problem))"
+                    } else if let setup {
+                        let ran = Subprocess.run(
                             HostEnvironment.shell, ["-l", "-i", "-c", setup], cwd: made.directory, timeout: 600, mergeErrors: true,
                             environment: HostEnvironment.loginShellCommandEnvironment)
+                        if ran?.status != 0 {
+                            let said = String(decoding: ran?.output ?? Data(), as: UTF8.self)
+                            failed = "Not started: the setup command failed in its worktree. \(Self.lastLine(of: said) ?? "It could not be run.")"
+                        }
                     }
-                    // The agent would ask whether the new folder is trusted, with nobody there.
-                    var there = schedule
-                    there.folder = made.directory
-                    try? ScheduleRunner.trustFolder(of: there, home: home)
+                    if failed == nil {
+                        // The agent would ask whether the new folder is trusted, with nobody there.
+                        var there = schedule
+                        there.folder = made.directory
+                        do { try ScheduleRunner.trustFolder(of: there, home: home) } catch {
+                            failed = "Not started: its worktree could not be trusted for \(schedule.agent). \(error.localizedDescription)"
+                        }
+                    }
                 } catch {
                     failed = "Not started: its worktree could not be made. \(error.localizedDescription)"
                 }
@@ -937,7 +1003,7 @@ public final class HostServer {
                 self.waitingRuns.removeAll { $0.schedule == schedule.id && $0.at == at }
                 guard let index = self.schedules.firstIndex(where: { $0.id == schedule.id }) else { return }
                 if let failed {
-                    self.notStarted(at, in: index, failed)
+                    self.notStarted(at, in: index, failed, worktree: worktree)
                 } else if let skipped {
                     self.record(ScheduleRun(at: at, started: false, note: skipped), in: index)
                 } else {
@@ -951,9 +1017,21 @@ public final class HostServer {
 
     /// A run that should have started and did not: recorded, and said in
     /// the banner of both apps, since nobody is watching a schedule.
-    private func notStarted(_ at: Date, in index: Int, _ why: String) {
-        record(ScheduleRun(at: at, started: false, note: why), in: index)
+    private func notStarted(_ at: Date, in index: Int, _ why: String, worktree: String? = nil) {
+        var run = ScheduleRun(at: at, started: false, note: why)
+        run.worktree = worktree
+        record(run, in: index)
         report(PartFailure(part: .schedule, name: schedules[index].name, at: configuration.now(), restarted: false, reason: why + "."))
+    }
+
+    /// What git or a command said, in a line for a run's note.
+    static func firstLine(of said: String) -> String {
+        said.split(whereSeparator: \.isNewline).first.map(String.init) ?? said
+    }
+
+    /// The last line a command printed, which says why it failed.
+    static func lastLine(of said: String) -> String? {
+        said.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
     }
 
     /// Starts a run's agent in its folder, or in the worktree made for it.
@@ -968,6 +1046,7 @@ public final class HostServer {
             return
         }
         var run = ScheduleRun(at: at, started: true, session: id, note: note)
+        run.startedAt = configuration.now()
         run.worktree = worktree
         record(run, in: index)
         runStarts[id] = (schedule.id, at, directory, before)
@@ -985,12 +1064,15 @@ public final class HostServer {
         for schedule in schedules {
             guard let most = schedule.maxMinutes else { continue }
             for run in schedule.runs where run.started && run.ended == nil {
-                guard let id = run.session, let session = sessions[id], now.timeIntervalSince(run.at) > Double(most) * 60 else { continue }
+                // Its own session, and its time from when that started: not
+                // the time it waited before.
+                guard let id = run.session, let session = sessions[id], runStarts[id]?.schedule == schedule.id, runStops[id] == nil,
+                    now.timeIntervalSince(run.startedAt ?? run.at) > Double(most) * 60
+                else { continue }
                 let why = "Stopped: it ran longer than \(most) min"
                 runStops[id] = why
                 report(PartFailure(part: .schedule, name: schedule.name, at: now, restarted: false, reason: why + "."))
-                session.endAsked = true
-                session.process.hangUp()
+                end(session)
             }
         }
     }
@@ -1015,24 +1097,29 @@ public final class HostServer {
         saveSchedules()
         let file = runOutputFile(start.schedule, start.at)
         let mirror = session.mirror
+        let workQueue = workQueue
         session.mirrorQueue.async { [weak self] in
-            // The screen and what scrolled by, as text.
+            // The screen and what scrolled by, as text: read where the
+            // session's screen is kept, and nothing more there.
             let text = mirror.text(linesAbove: 5000)
-            var kept = false
-            if let file, !text.isEmpty {
-                try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-                kept = (try? text.write(to: file, atomically: true, encoding: .utf8)) != nil
-            }
-            let changes = start.before.flatMap { GitActions.changes(since: $0, in: start.directory) }
-            self?.queue.async {
-                guard let self, let index = self.schedules.firstIndex(where: { $0.id == start.schedule }),
-                    let place = self.schedules[index].runs.firstIndex(where: { $0.session == id && $0.at == start.at })
-                else { return }
-                self.schedules[index].runs[place].hasOutput = kept
-                self.schedules[index].runs[place].changes = changes
-                self.saveSchedules()
-                self.broadcastSchedules()
-                self.forgetOldRunOutput()
+            // Writing it out and asking git are not the session's to wait for.
+            workQueue.async {
+                var kept = false
+                if let file, !text.isEmpty {
+                    try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    kept = (try? text.write(to: file, atomically: true, encoding: .utf8)) != nil
+                }
+                let changes = start.before.flatMap { GitActions.changes(since: $0, in: start.directory) }
+                self?.queue.async {
+                    guard let self, let index = self.schedules.firstIndex(where: { $0.id == start.schedule }),
+                        let place = self.schedules[index].runs.firstIndex(where: { $0.at == start.at && $0.started })
+                    else { return }
+                    self.schedules[index].runs[place].hasOutput = kept
+                    self.schedules[index].runs[place].changes = changes
+                    self.saveSchedules()
+                    self.broadcastSchedules()
+                    self.forgetOldRunOutput()
+                }
             }
         }
     }
@@ -1078,8 +1165,7 @@ public final class HostServer {
             return
         }
         runStops[session.info.id] = "Stopped by you"
-        session.endAsked = true
-        session.process.hangUp()
+        end(session)
     }
 
     private func sendRunOutput(of id: String, at: Date, to client: Client) {
@@ -1130,8 +1216,7 @@ public final class HostServer {
             runDoneAt[session.info.id] = since
             guard now.timeIntervalSince(since) >= Self.keepRunFor else { continue }
             runDoneAt[session.info.id] = nil
-            session.endAsked = true
-            session.process.hangUp()
+            end(session)
         }
     }
 
@@ -1166,9 +1251,12 @@ public final class HostServer {
     }
 
     private func searchHistory(search: Int, in path: String?, query: String, for client: Client) {
-        client.searches.values.forEach { $0.stop() }
+        // One at a time for each list, everywhere's and a folder's, which
+        // the Mac shows side by side; a search for text is another's.
+        let everywhere = path == nil
+        client.historySearches.values.filter { $0.everywhere == everywhere }.forEach { $0.flag.stop() }
         let flag = SearchFlag()
-        client.searches[search] = flag
+        client.historySearches[search] = (flag, everywhere)
         let id = client.id
         let home = configuration.home
         workQueue.async { [weak self] in
@@ -1182,7 +1270,7 @@ public final class HostServer {
             }
             self?.queue.async {
                 guard let self, let client = self.clients[id] else { return }
-                if client.searches[search] === flag { client.searches[search] = nil }
+                if client.historySearches[search]?.flag === flag { client.historySearches[search] = nil }
                 self.send(.historySearchEnded(search: search), to: client)
             }
         }
@@ -1598,6 +1686,7 @@ public final class HostServer {
         client.connection.cancel()
         // Nobody is left to send what its searches find.
         client.searches.values.forEach { $0.stop() }
+        client.historySearches.values.forEach { $0.flag.stop() }
         if client.inFront { updateMacInUse() }
         for id in client.attached {
             guard let session = sessions[id] else { continue }
@@ -1768,9 +1857,7 @@ public final class HostServer {
             used(by: client)
         case .kill(let id):
             guard let session = sessions[id] else { return }
-            session.endAsked = true
-            session.process.hangUp()
-            queue.asyncAfter(deadline: .now() + 3) { [weak session] in session?.process.forceKill() }
+            end(session)
         case .setStartAtLogin(let wanted):
             guard let item = configuration.loginItem else { return }
             startAtLoginChosen = true
@@ -2017,8 +2104,8 @@ public final class HostServer {
             git(for: client, in: path, branches: true) { GitActions.deleteBranch(name, force: force, in: path) }
         case .gitCommit(let path, let message):
             git(for: client, in: path) { GitActions.commit(message: message, in: path) }
-        case .gitPush(let path, let force):
-            git(for: client, in: path, sync: true) { GitActions.push(in: path, force: force ?? false) }
+        case .gitPush(let path, let force, let lease):
+            git(for: client, in: path, sync: true) { GitActions.push(in: path, force: force ?? false, lease: lease) }
         case .gitPull(let path, let mode):
             git(for: client, in: path, sync: true) { GitActions.pull(in: path, mode: mode.flatMap(GitActions.PullMode.init(rawValue:)) ?? .asSetUp) }
         case .gitFetch(let path, let automatic):
@@ -2035,7 +2122,7 @@ public final class HostServer {
             }
         case .gitForcePushPreview(let path):
             work(for: client, { GitActions.forcePushLoses(in: path) }) { server, client, found in
-                server.send(.gitForcePushPreview(path: path, upstream: found?.upstream, loses: found?.commits ?? []), to: client)
+                server.send(.gitForcePushPreview(path: path, upstream: found?.upstream, loses: found?.commits ?? [], at: found?.at), to: client)
             }
         case .history(let path):
             let home = configuration.home
@@ -2906,6 +2993,14 @@ public final class HostServer {
             guard let client = clients[id] else { continue }
             send(.resized(session: session.info.id, size: session.info.size, driver: session.arbiter.driver == id), to: client)
         }
+    }
+
+    /// Ends a session as closing its window does, and kills what is left of
+    /// it three seconds on: a program may take no notice of the hang-up.
+    private func end(_ session: Session) {
+        session.endAsked = true
+        session.process.hangUp()
+        queue.asyncAfter(deadline: .now() + 3) { [weak session] in session?.process.forceKill() }
     }
 
     private func sessionExited(_ id: SessionID, status: Int32) {

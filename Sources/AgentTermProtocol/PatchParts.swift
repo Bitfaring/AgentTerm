@@ -16,6 +16,12 @@ public struct PatchHunk: Equatable, Identifiable, Sendable {
     /// same on both sides, "-" for one taken out, "+" for one put in, and
     /// "\" for git's note that a file does not end with a newline.
     public var lines: [String]
+    /// The diff was cut off in it (`maxPatchBytes`): what is left of it may
+    /// end in the middle of a line, so it is shown and not taken as a part.
+    public var isCut = false
+
+    /// Said of a hunk that is cut, where its buttons would be.
+    public static let cutNote = "The diff is cut short in this hunk, so it is not taken apart: stage, unstage or discard the whole file instead."
 
     /// The lines that are a change, by their place in `lines`.
     public var changed: [Int] { lines.indices.filter { lines[$0].hasPrefix("+") || lines[$0].hasPrefix("-") } }
@@ -36,8 +42,12 @@ public enum PatchParts {
                 guard let (old, new, section) = header(String(line)) else { continue }
                 hunks.append(PatchHunk(id: hunks.count, header: String(line), oldStart: old, newStart: new, section: section, lines: []))
             } else if !hunks.isEmpty {
-                // What the diff was cut off with is not part of it.
-                if line.hasPrefix("…") { break }
+                // What the diff was cut off with is not part of it, and the
+                // hunk it was cut off in is not whole.
+                if line.hasPrefix("…") {
+                    hunks[hunks.count - 1].isCut = true
+                    break
+                }
                 hunks[hunks.count - 1].lines.append(String(line))
             }
         }
@@ -87,8 +97,10 @@ public enum PatchParts {
     /// - Parameters:
     ///   - picked: The changed lines to keep, by their place in the hunk's
     ///     lines; nil for all of them.
-    /// - Returns: Nil when nothing of the hunk is picked.
+    /// - Returns: Nil when nothing of the hunk is picked, and for a hunk
+    ///   the diff was cut off in.
     public static func patch(path: String, hunk: PatchHunk, picked: Set<Int>? = nil, use: Use) -> String? {
+        guard !hunk.isCut else { return nil }
         var lines: [String] = []
         var anything = false
         // Whether the line before is in the patch: git's note that a file

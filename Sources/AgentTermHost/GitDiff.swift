@@ -383,6 +383,12 @@ public enum GitActions {
         var arguments = ["apply", "--whitespace=nowarn"]
         if use != .discard { arguments.append("--cached") }
         if use.reversed { arguments.append("--reverse") }
+        // The patch names the file from this folder, and git reads the names
+        // of a patch from the top of the repository: from a folder inside
+        // it, it would skip the file, and say nothing went wrong.
+        if let prefix = list(["rev-parse", "--show-prefix"], in: directory)?.first?.trimmingCharacters(in: .whitespacesAndNewlines), !prefix.isEmpty {
+            arguments.append("--directory=" + (prefix.hasSuffix("/") ? String(prefix.dropLast()) : prefix))
+        }
         guard let problem = run(arguments + [scratch.path], in: directory) else { return nil }
         if problem.contains("does not apply") || problem.contains("patch failed") {
             return "That part no longer fits the file: it changed since its diff was shown. Look at the diff again.\n\n\(problem)"
@@ -390,12 +396,6 @@ public enum GitActions {
         return problem
     }
 
-    /// Throws away changes that are not staged (#39). A file git tracks
-    /// goes back to what is staged of it, or to the last commit; one git
-    /// does not track yet is moved to the Trash, where it can be put back
-    /// from, since nothing else keeps it. No files means every change that
-    /// is not staged. What is staged is left as it is: it is taken out of
-    /// the next commit first, by whoever means to lose it.
     /// Which of some paths are submodules: entries of the index that are a
     /// commit of another repository.
     static func submodules(among paths: [String], in directory: String) -> [String] {
@@ -407,16 +407,25 @@ public enum GitActions {
         }
     }
 
+    /// Throws away changes that are not staged (#39). A file git tracks
+    /// goes back to what is staged of it, or to the last commit; one git
+    /// does not track yet is moved to the Trash, where it can be put back
+    /// from, since nothing else keeps it. No files means every change that
+    /// is not staged. What is staged is left as it is: it is taken out of
+    /// the next commit first, by whoever means to lose it.
+    ///
+    /// Only what is a change goes (#50): a worktree of the repository
+    /// inside the folder, as Claude Code's `.claude/worktrees`, is none,
+    /// and stays with the folder it is in.
     public static func discard(_ files: [String], in directory: String) -> String? {
-        let all = files.isEmpty
-        let named = all ? ["."] : files
-        // Every change at once takes a folder git does not track whole,
-        // rather than leave it behind empty.
+        let named = files.isEmpty ? ["."] : files
         // A submodule is among them only when its commit moved: what is
         // changed inside it is discarded there.
         guard var changed = list(["diff", "--name-only", "--relative", "--ignore-submodules=dirty", "-z", "--"] + named, in: directory),
-            let untracked = list(["ls-files", "--others", "--exclude-standard", "-z"] + (all ? ["--directory", "--no-empty-directory"] : []) + ["--"] + named, in: directory)
+            let asked = list(["ls-files", "--others", "--exclude-standard", "-z", "--"] + named, in: directory)
         else { return "git could not be started." }
+        let gitDirectory = list(["rev-parse", "--absolute-git-dir"], in: directory)?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let untracked = trashed(asked.filter { !($0.hasSuffix("/") && GitDiff.isOwnWorktree($0, in: directory, gitDirectory: gitDirectory)) }, in: directory)
         guard !changed.isEmpty || !untracked.isEmpty else { return "There is no change to discard." }
         // A submodule goes back to the commit the folder records for it (#44).
         let moved = changed.isEmpty ? [] : submodules(among: changed, in: directory)
@@ -437,6 +446,47 @@ public enum GitActions {
             }
         }
         return nil
+    }
+
+    /// What goes to the Trash for some of the files git does not track: a
+    /// folder git tracks nothing of goes whole when everything in it is
+    /// among them, rather than be left behind empty; anything else goes by
+    /// itself.
+    static func trashed(_ entries: [String], in directory: String) -> [String] {
+        guard !entries.isEmpty,
+            let everything = list(["ls-files", "--others", "--exclude-standard", "-z", "--", "."], in: directory),
+            let roots = list(["ls-files", "--others", "--exclude-standard", "-z", "--directory", "--no-empty-directory", "--", "."], in: directory)
+        else { return entries }
+        // How many of all the files nobody tracks are in each folder, and
+        // how many of those to throw away: a folder goes whole when the two are one.
+        func folders(of path: String) -> [String] {
+            var found: [String] = []
+            var index = path.startIndex
+            while let slash = path[index...].firstIndex(of: "/"), path.index(after: slash) < path.endIndex {
+                found.append(String(path[...slash]))
+                index = path.index(after: slash)
+            }
+            return found
+        }
+        var inFolder: [String: Int] = [:]
+        var wantedInFolder: [String: Int] = [:]
+        for path in everything { for folder in folders(of: path) { inFolder[folder, default: 0] += 1 } }
+        for path in Set(entries) { for folder in folders(of: path) { wantedInFolder[folder, default: 0] += 1 } }
+        // Only inside a folder git tracks nothing of, as the listing by folders names them.
+        let untrackedRoots = roots.filter { $0.hasSuffix("/") }
+        var result: [String] = []
+        var taken: Set<String> = []
+        for entry in entries {
+            let whole = folders(of: entry).first { folder in
+                untrackedRoots.contains { folder.hasPrefix($0) } && inFolder[folder] == wantedInFolder[folder]
+            }
+            guard let whole else {
+                result.append(entry)
+                continue
+            }
+            if taken.insert(whole).inserted { result.append(whole) }
+        }
+        return result
     }
 
     /// The paths a git command prints, separated by NUL. Nil when git
@@ -460,24 +510,41 @@ public enum GitActions {
     /// and follows it from then on.
     ///
     /// With `force`, what the upstream has and the branch has not is
-    /// overwritten, but only as long as the upstream is still where it was
-    /// last seen (`--force-with-lease`): commits someone pushed since are
-    /// not lost to it. The apps ask first, saying what would be overwritten
-    /// (`forcePushLoses`).
-    public static func push(in directory: String, force: Bool = false) -> String? {
+    /// overwritten, but only while the upstream is at `lease`, the commit
+    /// it was at when the user was told what would be overwritten
+    /// (`forcePushLoses`): commits someone pushed since are not lost to
+    /// it, also when a fetch brought them in meanwhile. A forced push
+    /// without one is refused.
+    public static func push(in directory: String, force: Bool = false, lease: String? = nil) -> String? {
         guard let branch = currentBranch(in: directory) else { return "Check out a branch to push: this is a detached HEAD." }
         let arguments: [String]
         if GitDiff.tracking(of: branch, in: directory).upstream != nil {
-            arguments = force ? ["push", "--force-with-lease"] : ["push"]
+            if force {
+                func setting(_ name: String) -> String? {
+                    list(["config", "--get", "branch.\(branch).\(name)"], in: directory)?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                guard let lease, !lease.isEmpty, let remote = setting("remote"), let merge = setting("merge") else {
+                    return "A forced push is made only over what it was said to overwrite, and that is not known here. Ask for the forced push again."
+                }
+                // To the upstream that was looked at, while it is where it was.
+                arguments = ["push", "--force-with-lease=\(merge):\(lease)", remote, "HEAD:\(merge)"]
+            } else {
+                arguments = ["push"]
+            }
         } else {
             guard let remote = GitDiff.pushRemote(in: directory) else { return "This repository has no remote to push to." }
             arguments = ["push", "--set-upstream", remote, branch]
         }
         let problem = findingTools { run(arguments, in: directory, timeout: remoteTimeout, environment: actionEnvironment) }
         return problem.map(explainingSignIn).map { said in
+            if force {
+                guard said.contains("stale info") else { return said }
+                return
+                    "The remote changed since it was looked at, so the forced push was refused and nothing was overwritten. Ask for the forced push again to see what it would overwrite now.\n\n\(said)"
+            }
             // Refused because the remote has commits the branch has not:
             // said in words, with what there is to do about it.
-            guard !force, said.contains("non-fast-forward") || said.contains("fetch first") else { return said }
+            guard said.contains("non-fast-forward") || said.contains("fetch first") else { return said }
             return "The remote has commits this branch does not have, so the push was refused. Pull first, or force the push to overwrite them.\n\n\(said)"
         }
     }
@@ -493,13 +560,16 @@ public enum GitActions {
 
     /// What a forced push would overwrite: the commits the upstream has and
     /// the checked out branch has not, newest first, as "hash subject",
-    /// after asking the remote, so that it is as of now. Nil when the
-    /// branch follows none, or the remote could not be asked.
-    public static func forcePushLoses(in directory: String) -> (upstream: String, commits: [String])? {
+    /// after asking the remote, so that it is as of now; and the commit the
+    /// upstream is at, which the push is then made over (`push`'s `lease`).
+    /// Nil when the branch follows none, or the remote could not be asked.
+    public static func forcePushLoses(in directory: String) -> (upstream: String, commits: [String], at: String)? {
         guard let branch = currentBranch(in: directory), let upstream = GitDiff.tracking(of: branch, in: directory).upstream else { return nil }
         guard fetch(in: directory) == nil else { return nil }
-        guard let lines = list(["log", "--format=%h %s", "HEAD..@{upstream}"], in: directory) else { return nil }
-        return (upstream, lines.flatMap { $0.split(separator: "\n").map(String.init) })
+        guard let lines = list(["log", "--format=%h %s", "HEAD..@{upstream}"], in: directory),
+            let at = list(["rev-parse", "--verify", "@{upstream}"], in: directory)?.first?.trimmingCharacters(in: .whitespacesAndNewlines), !at.isEmpty
+        else { return nil }
+        return (upstream, lines.flatMap { $0.split(separator: "\n").map(String.init) }, at)
     }
 
     /// How a pull brings in what the upstream has.

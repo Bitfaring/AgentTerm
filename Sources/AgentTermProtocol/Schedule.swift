@@ -286,6 +286,11 @@ public struct ScheduleRun: Codable, Equatable, Sendable {
     public var at: Date
     /// A session was started for it.
     public var started: Bool
+    /// When its session started: later than `at` for a run that waited, for
+    /// the one before it, for two others to end, or for the Mac to wake.
+    public var startedAt: Date?
+    /// Its session, while the host that started it runs: the next host
+    /// numbers its sessions from 1 again.
     public var session: SessionID?
     /// What came of it, in words: "Started", "Skipped: the run before it is
     /// still going", "Missed while the Mac was asleep".
@@ -315,6 +320,7 @@ public struct ScheduleRun: Codable, Equatable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         at = try values.decode(Date.self, forKey: .at)
         started = try values.decode(Bool.self, forKey: .started)
+        startedAt = try values.decodeIfPresent(Date.self, forKey: .startedAt)
         session = try values.decodeIfPresent(SessionID.self, forKey: .session)
         note = try values.decode(String.self, forKey: .note)
         ended = try values.decodeIfPresent(Date.self, forKey: .ended)
@@ -324,8 +330,9 @@ public struct ScheduleRun: Codable, Equatable, Sendable {
         hasOutput = try values.decodeIfPresent(Bool.self, forKey: .hasOutput) ?? false
     }
 
-    /// How long it took, once it is over.
-    public var duration: TimeInterval? { ended.map { max($0.timeIntervalSince(at), 0) } }
+    /// How long it took, once it is over: from when its session started,
+    /// not from when it came due.
+    public var duration: TimeInterval? { ended.map { max($0.timeIntervalSince(startedAt ?? at), 0) } }
 
     /// Whether this is the run that came due at a moment a device names:
     /// the same to the millisecond, since a moment that went through a

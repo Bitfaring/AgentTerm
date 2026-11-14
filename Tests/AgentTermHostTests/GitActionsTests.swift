@@ -119,6 +119,36 @@ final class GitActionsTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "something else entirely\n")
     }
 
+    /// GIT-70 (#50): a part of a file's change is staged, unstaged and
+    /// discarded from a folder that is inside its repository. The patch
+    /// names the file from that folder, and git reads names from the top of
+    /// the repository: told nothing, it skipped the file and said it worked.
+    func testPartsFromAFolderInsideItsRepository() throws {
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("pkg"), withIntermediateDirectories: true)
+        try write("pkg/f.txt", "one\ntwo\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        try write("pkg/f.txt", "one\nTWO\n")
+        let folder = root.appendingPathComponent("pkg").path
+        func part(_ use: PatchParts.Use, of name: String = "f.txt") throws -> String? {
+            let snapshot = GitDiff.snapshot(directory: folder)
+            let file = try XCTUnwrap((use == .unstage ? snapshot.staged : snapshot.unstaged).first { $0.path == name })
+            let hunk = try XCTUnwrap(PatchParts.hunks(of: file.patch).first)
+            return GitActions.applyPart(try XCTUnwrap(PatchParts.patch(path: file.path, hunk: hunk, use: use)), use: use, file: file.path, in: folder)
+        }
+
+        XCTAssertNil(try part(.stage))
+        XCTAssertEqual(git("diff", "--cached", "--name-only"), "pkg/f.txt", "staged")
+        XCTAssertNil(try part(.unstage))
+        XCTAssertEqual(git("diff", "--cached", "--name-only"), "", "unstaged")
+        XCTAssertNil(try part(.discard))
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("pkg/f.txt"), encoding: .utf8), "one\ntwo\n", "discarded")
+        // A file git does not track yet, there too.
+        try write("pkg/new.txt", "a\nb\n")
+        XCTAssertNil(try part(.stage, of: "new.txt"))
+        XCTAssertEqual(git("diff", "--cached", "--name-only"), "pkg/new.txt")
+    }
+
     /// GIT-53: a part of a file git does not track yet, and of one that
     /// does not end with a newline.
     func testPartsOfANewFileAndOfOneWithoutAFinalNewline() throws {
@@ -570,6 +600,76 @@ final class GitActionsTests: XCTestCase {
         // Nothing left to discard is said, not done silently.
         XCTAssertEqual(GitActions.discard([], in: root.path), "There is no change to discard.")
         XCTAssertEqual(GitActions.discard(["b.txt"], in: root.path), "There is no change to discard.")
+    }
+
+    /// GIT-67 (#50): discarding takes only what was listed. A worktree of
+    /// the repository inside the folder, as Claude Code's
+    /// `.claude/worktrees`, is not a change and stays, with the folder it
+    /// is in; a folder git does not track goes whole only when all of it
+    /// was asked for.
+    func testDiscardingLeavesAWorktreeInsideTheFolderAndWhatWasNotAskedFor() throws {
+        let trash = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-trash-\(UUID().uuidString)")
+        setenv(FileBrowser.trashVariable, trash.path, 1)
+        defer {
+            unsetenv(FileBrowser.trashVariable)
+            try? FileManager.default.removeItem(at: trash)
+        }
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        git("worktree", "add", "-q", "-b", "w", ".claude/worktrees/w")
+        try write(".claude/worktrees/w/work.txt", "the agent's work\n")
+        try write(".claude/mine.txt", "{}\n")
+        try write("a.txt", "changed\n")
+        try write("new.txt", "new\n")
+        XCTAssertEqual(Set(entries(snapshot.unstaged)), ["M a.txt", "U .claude/mine.txt", "U new.txt"], "the worktree is not listed")
+
+        XCTAssertNil(GitActions.discard([], in: root.path))
+        XCTAssertEqual(try? String(contentsOf: root.appendingPathComponent(".claude/worktrees/w/work.txt"), encoding: .utf8), "the agent's work\n")
+        XCTAssertTrue(git("worktree", "list").contains(".claude/worktrees/w"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".claude/mine.txt").path))
+        XCTAssertEqual(entries(snapshot.unstaged), [])
+
+        // One file of a new folder's two: the other stays, and the folder.
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("made"), withIntermediateDirectories: true)
+        try write("made/x.txt", "x\n")
+        try write("made/y.txt", "y\n")
+        XCTAssertNil(GitActions.discard(["made/x.txt"], in: root.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("made/x.txt").path))
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("made/y.txt"), encoding: .utf8), "y\n")
+        // All of it, named file by file: the folder goes whole.
+        try write("made/x.txt", "x again\n")
+        XCTAssertNil(GitActions.discard(["made/x.txt", "made/y.txt"], in: root.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("made").path), "no empty folder is left behind")
+        XCTAssertEqual(try String(contentsOf: trash.appendingPathComponent("made/y.txt"), encoding: .utf8), "y\n")
+    }
+
+    /// GIT-72 (#50): a branch or a commit a device names is never taken for
+    /// one of git's options: `--output=<file>` makes git write a file.
+    func testANameADeviceSendsIsNeverAnOption() throws {
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        let file = root.appendingPathComponent("written-by-git")
+        let option = "--output=" + file.path
+        XCTAssertEqual(GitActions.log(in: root.path, branch: option).commits, [])
+        XCTAssertNil(GitActions.show(option, in: root.path))
+        XCTAssertNotNil(GitActions.revert(option, in: root.path))
+        XCTAssertNotNil(GitActions.cherryPick(option, in: root.path))
+        XCTAssertNotNil(GitActions.createBranch("x", from: option, checkout: false, in: root.path))
+        XCTAssertNotNil(GitActions.createBranch("y", from: option, checkout: true, in: root.path))
+        XCTAssertNotNil(GitActions.switchTo(option, in: root.path))
+        XCTAssertNotNil(GitActions.renameBranch(option, to: "z", in: root.path))
+        XCTAssertNotNil(GitActions.deleteBranch(option, force: true, in: root.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "git took a name for an option")
+        XCTAssertEqual(git("branch", "--format=%(refname:short)"), "main")
+        // Names that are names still work.
+        XCTAssertNil(GitActions.createBranch("feature", from: "main", checkout: false, in: root.path))
+        XCTAssertEqual(GitActions.log(in: root.path, branch: "feature").commits.count, 1)
+        XCTAssertNil(GitActions.renameBranch("feature", to: "feature-2", in: root.path))
+        XCTAssertNil(GitActions.switchTo("feature-2", in: root.path))
+        XCTAssertNil(GitActions.switchTo("main", in: root.path))
+        XCTAssertNil(GitActions.deleteBranch("feature-2", force: false, in: root.path))
     }
 
     /// GIT-20: a name that is a pattern to git is taken as the file it names.

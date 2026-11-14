@@ -78,4 +78,47 @@ final class SubprocessTests: XCTestCase {
         let left = Subprocess.run("/usr/bin/pgrep", ["-g", String(started.pid)], timeout: 5)
         XCTAssertEqual(String(decoding: left?.output ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines), "")
     }
+
+    /// FIND-14 (#50): a command whose output is streamed is ended once it
+    /// is no longer wanted, also while it prints nothing: a search for text
+    /// that finds nothing went on through the whole repository after it
+    /// was stopped, and the next one beside it.
+    func testAStreamThatPrintsNothingIsEndedWhenItIsNoLongerWanted() throws {
+        let asked = Date().addingTimeInterval(0.3)
+        let started = Date()
+        let ending = Subprocess.stream("/bin/sleep", ["20"], isCancelled: { Date() >= asked }) { _ in true }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3, "it went on until it ended by itself")
+        XCTAssertEqual(ending, .signalled(SIGTERM))
+    }
+
+    /// TEST-7: what a started command started is killed three seconds after
+    /// it was asked to end, also when the command itself ended at once: an
+    /// agent that takes no notice of being asked outlives the shell that
+    /// started it, which ends at the first request.
+    func testWhatOutlivesItsShellIsKilled() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-subprocess-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let child = folder.appendingPathComponent("child")
+        // The shell waits for a program that ignores both requests to end.
+        let started = try XCTUnwrap(
+            Subprocess.start("/bin/sh", ["-c", "(trap '' TERM HUP; exec /bin/sleep 60) & echo $! > '\(child.path)'; wait"]))
+        let deadline = Date().addingTimeInterval(10)
+        var pid: pid_t?
+        while pid == nil, Date() < deadline {
+            pid = (try? String(contentsOf: child, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            if pid == nil { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        let program = try XCTUnwrap(pid, "the program did not start")
+        Thread.sleep(forTimeInterval: 0.3)
+
+        started.stop()
+        started.wait()
+        XCTAssertEqual(kill(program, 0), 0, "the program ignores being asked, so it is still there for now")
+        let gone = Date().addingTimeInterval(6)
+        while kill(program, 0) == 0, Date() < gone { Thread.sleep(forTimeInterval: 0.1) }
+        let alive = kill(program, 0) == 0
+        if alive { kill(program, SIGKILL) }
+        XCTAssertFalse(alive, "what outlived the shell was left running")
+    }
 }

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 12
+public let agenttermProtocolVersion = 13
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -265,10 +265,12 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Asks for a commit's message and what it changed. Answered with `gitShow`.
     case gitShow(path: String, hash: String)
     /// Makes a commit on the checked out branch that takes back what the
-    /// named one changed. One that conflicts is undone, and says so.
+    /// named one changed. One that conflicts is left to be resolved and
+    /// continued, or aborted (#42), and says so.
     case gitRevert(path: String, hash: String)
     /// Makes the change of the named commit on the checked out branch too.
-    /// One that conflicts is undone, and says so.
+    /// One that conflicts is left to be resolved and continued, or aborted
+    /// (#42), and says so.
     case gitCherryPick(path: String, hash: String)
     /// Commits what is staged.
     case gitCommit(path: String, message: String)
@@ -278,12 +280,16 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// with the folder's changes, as `diff` is.
     ///
     /// With `force` true, what the upstream has and the branch has not is
-    /// overwritten (`--force-with-lease`): sent only after the user was
-    /// told what that is (`gitForcePushPreview`).
-    case gitPush(path: String, force: Bool? = nil)
+    /// overwritten: sent only after the user was told what that is
+    /// (`gitForcePushPreview`), with `lease`, the commit the upstream was
+    /// at then. The push is refused if it is anywhere else now, whatever a
+    /// fetch learned since (`--force-with-lease=<ref>:<lease>`), and a
+    /// forced push without one is refused.
+    case gitPush(path: String, force: Bool? = nil, lease: String? = nil)
     /// Brings in what the upstream has: the way the repository is set up
     /// to (`mode` nil or "default"), by "merge" or by "rebase" (#37). A
-    /// pull that conflicts is undone.
+    /// pull that conflicts is left to be resolved and continued, or
+    /// aborted (#42), and says so.
     case gitPull(path: String, mode: String? = nil)
     /// Asks the remotes for what is new, without changing the branch or the
     /// files (#37). `automatic` when no one asked: the app does it every
@@ -351,7 +357,10 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// The conversations of a folder, or of the host when `path` is nil,
     /// whose title or what was said in them holds `query`. Answered with
     /// any number of `historyFound` and one `historySearchEnded`. A
-    /// client's search ends the one before it.
+    /// client's search ends the one before it of the same list, every
+    /// folder's (`path` nil) or a folder's, and no search for text: the
+    /// Mac shows the two lists side by side, and a client numbers its
+    /// searches of each kind by themselves.
     case searchHistory(search: Int, path: String?, query: String)
     /// Pins a conversation or takes its pin away, hides it or shows it
     /// again; what is nil is left as it is. `id` is `Conversation.id`. The
@@ -496,8 +505,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// What a forced push of the checked out branch would overwrite on
     /// `upstream`: the commits it has and the branch has not, newest
     /// first, as of now. `upstream` nil when there is nothing to push to,
-    /// or the remote could not be asked.
-    case gitForcePushPreview(path: String, upstream: String?, loses: [String])
+    /// or the remote could not be asked. `at` is the commit `upstream` was
+    /// at then, which the push is sent with (`gitPush`'s `lease`).
+    case gitForcePushPreview(path: String, upstream: String?, loses: [String], at: String? = nil)
     /// The repository's branches: its own, the checked out one first, then
     /// its remotes'. None for a folder that is not a repository.
     case gitBranches(path: String, branches: [BranchInfo])

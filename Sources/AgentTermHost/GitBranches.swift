@@ -55,11 +55,12 @@ extension GitActions {
     /// or a new one.
     public static func switchTo(_ branch: String, in directory: String) -> String? {
         let all = branches(in: directory)
-        var arguments = ["switch", "--no-guess", branch]
+        // The name a device sends is not taken for an option.
+        var arguments = ["switch", "--no-guess", "--end-of-options", branch]
         if let remote = all.first(where: { $0.isRemote && $0.name == branch }), !all.contains(where: { !$0.isRemote && $0.name == branch }) {
             arguments =
                 all.contains { !$0.isRemote && $0.name == remote.localName }
-                ? ["switch", "--no-guess", remote.localName] : ["switch", "--no-guess", "--track", branch]
+                ? ["switch", "--no-guess", "--end-of-options", remote.localName] : ["switch", "--no-guess", "--track", "--end-of-options", branch]
         }
         guard let problem = run(arguments, in: directory) else { return nil }
         if problem.contains("would be overwritten") {
@@ -78,7 +79,8 @@ extension GitActions {
             return "“\(name)” cannot be the name of a branch: no spaces, no “..”, and none of ~ ^ : ? * [ \\."
         }
         let from = (start?.isEmpty == false) ? [start!] : []
-        return run((checkout ? ["switch", "--no-track", "-c", name] : ["branch", "--no-track", name]) + from, in: directory)
+        // What it starts from, a device's to name, is not taken for an option.
+        return run((checkout ? ["switch", "--no-track", "-c", name, "--end-of-options"] : ["branch", "--no-track", "--end-of-options", name]) + from, in: directory)
     }
 
     public static func renameBranch(_ branch: String, to name: String, in directory: String) -> String? {
@@ -87,14 +89,14 @@ extension GitActions {
         guard list(["check-ref-format", "--branch", name], in: directory) != nil else {
             return "“\(name)” cannot be the name of a branch: no spaces, no “..”, and none of ~ ^ : ? * [ \\."
         }
-        return run(["branch", "--move", branch, name], in: directory)
+        return run(["branch", "--move", "--end-of-options", branch, name], in: directory)
     }
 
     /// Deletes a branch of the repository's own. One whose commits are on
     /// no other branch is deleted only with `force`: without it git
     /// refuses, and its words are returned.
     public static func deleteBranch(_ branch: String, force: Bool, in directory: String) -> String? {
-        run(["branch", force ? "-D" : "-d", branch], in: directory)
+        run(["branch", force ? "-D" : "-d", "--end-of-options", branch], in: directory)
     }
 }
 #endif
