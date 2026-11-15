@@ -6,17 +6,47 @@ final class SessionTests: MacUITestCase {
     func testTheWindowShowsTheFolderTheAgentsAndTheMac() throws {
         // WIN-1: the folder of the host's list.
         app.wait(for: .text("project, folder"))
-        // LAUNCH-1: a button for each agent that is installed, and none for the others.
+        // LAUNCH-1: a button for each agent in the header; one that is not
+        // installed is there too, said to be not installed (#50).
         app.wait(for: .button("Claude Code"))
         XCTAssertTrue(app.exists(.button("Codex")))
         XCTAssertTrue(app.exists(.button("Shell")))
-        XCTAssertFalse(app.exists(.button("Antigravity")), "an agent that is not installed has a launch button")
-        XCTAssertFalse(app.exists(.button("Copilot CLI")))
+        XCTAssertTrue(app.exists(.button("Antigravity, not installed")), "an agent that is not installed has no button in the header")
+        XCTAssertTrue(app.exists(.button("Copilot CLI, not installed")))
+        XCTAssertFalse(app.exists(.button("Antigravity")))
         // SYS-2: how the Mac is doing.
         for figure in ["system-cpu", "system-memory", "system-down", "system-up", "system-temperature", "system-battery", "system-uptime"] {
             app.wait(for: .id(figure), timeout: 15)
         }
         XCTAssertTrue(app.first(.id("system-cpu"))?.label.hasPrefix("CPU ") ?? false)
+    }
+
+    /// LAUNCH-6 (#50): an agent that is not installed, pressed in the
+    /// header, says how to install it: its maker's command; looked for
+    /// again, it is still missing and says why that may be; Install in a
+    /// New Shell opens a shell with the command typed in and not run.
+    /// Nothing is ever run here: Return is not pressed, and the shell is ended.
+    func testAnAgentThatIsNotInstalledSaysHowToInstallIt() throws {
+        let phone = try device()
+        app.press(.button("Antigravity, not installed"))
+        app.wait(for: .text("Install Antigravity"))
+        XCTAssertTrue(app.exists(.text("curl -fsSL https://antigravity.google/cli/install.sh | bash")), "the maker's command is not shown")
+        XCTAssertTrue(app.exists(.id("install-docs")))
+        app.press(.button("Look Again"))
+        app.wait(for: .id("install-still-missing"), timeout: 20)
+        shot("install-guide")
+        XCTAssertEqual(phone.sessions, [], "a session was started before it was asked for")
+
+        app.press(.button("Install in a New Shell"))
+        // The sheet goes; the shell's tab has its name.
+        app.waitGone(.button("Install in a New Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first)
+        XCTAssertNil(shell.agent)
+        phone.send(.attach(session: shell.id, size: .default, have: nil, history: nil))
+        wait("the command typed at its prompt") { phone.text(shell.id).contains("antigravity.google/cli/install.sh") }
+        phone.send(.kill(session: shell.id))
+        wait("the shell ended, the command not run") { phone.sessions.isEmpty }
     }
 
     /// TEST-1: the host and the app a test starts, and the login shells they
@@ -87,6 +117,101 @@ final class SessionTests: MacUITestCase {
         app.waitGone(.containing("needs permission"))
         app.wait(for: .text("FOLDERS"))
         app.wait(for: .id("session-\(agent)"))
+    }
+
+    /// A shell in front and a stand-in agent in another session that comes
+    /// to ask for permission, with the banner that says so on screen.
+    private func aBannerForAnAgentBehindAShell(
+        _ phone: Device, hook: String = "PermissionRequest",
+        event: String = #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make deploy"}}"#, says: String = "needs permission"
+    ) throws -> (shell: SessionID, agent: SessionID) {
+        app.press(.button("Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        let folder = root.appendingPathComponent("stand-in")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let script = folder.appendingPathComponent("claude")
+        try "#!/bin/sh\nsleep 2\nprintf '%s' '\(event)' | '\(hostExecutable.path)' hook claude \(hook)\nexec sleep 600\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "deploy")))
+        wait("the agent's session") { phone.sessions.count == 2 }
+        let agent = try XCTUnwrap(phone.sessions.first { $0.id != shell }?.id)
+        app.press(.id("session-\(shell)"))
+        app.wait(for: .containing(says), timeout: 15)
+        return (shell, agent)
+    }
+
+    /// NOTE-13 (#62): a banner tells the end of what an agent said, and
+    /// opens out to all of it.
+    func testABannerOpensOutToAllOfWhatTheAgentSaid() throws {
+        let phone = try device()
+        let said = "The beginning of it all. " + String(repeating: "Then one more thing was done and checked. ", count: 30) + "And that is the end of it."
+        _ = try aBannerForAnAgentBehindAShell(
+            phone, hook: "Stop", event: #"{"hook_event_name":"Stop","last_assistant_message":"\#(said)"}"#, says: "is done")
+        app.wait(for: .containing("And that is the end of it."))
+        XCTAssertNil(app.first(.containing("The beginning of it all.")), "the end of it, until it is opened out")
+        shot("short")
+        app.press(.id("agent-notice-more"))
+        app.wait(for: .containing("The beginning of it all."))
+        shot("all")
+        app.press(.id("agent-notice-more"))
+        app.waitGone(.containing("The beginning of it all."))
+    }
+
+    /// Whether the app is the one in front of every other.
+    private var appIsInFront: Bool { NSRunningApplication(processIdentifier: app.pid)?.isActive == true }
+
+    /// Through accessibility, as the rest is done: macOS does not let a
+    /// program that is not in front itself put another one there.
+    private func bringAppToFront() {
+        if !appIsInFront {
+            NSRunningApplication(processIdentifier: app.pid)?.activate(options: [.activateAllWindows])
+            AXUIElementSetAttributeValue(AXUIElementCreateApplication(app.pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        }
+        wait("the app in front") { appIsInFront }
+    }
+
+    /// NOTE-9 (#60): a banner hides by itself once its session is the one
+    /// in front, however the user got there, and does not come back; the
+    /// other devices are told that it was seen.
+    func testABannerHidesWhenItsSessionIsOpenedFromTheList() throws {
+        let phone = try device()
+        let (shell, agent) = try aBannerForAnAgentBehindAShell(phone)
+        bringAppToFront()
+
+        // Not the banner's Open: the session's own row.
+        app.press(.id("session-\(agent)"))
+        app.waitGone(.containing("needs permission"))
+        shot("gone")
+        wait("the phone to be told that it was seen") {
+            phone.last { if case .noticeSeen(let session, _) = $0 { return session } else { return nil } } == agent
+        }
+        // Leaving the session does not bring it back: it was seen.
+        app.press(.id("session-\(shell)"))
+        Thread.sleep(forTimeInterval: 1)
+        app.waitGone(.containing("needs permission"))
+    }
+
+    /// NOTE-11 (#60): a session chosen in a window that is behind another
+    /// app's is not before the user's eyes: its banner stays until the app
+    /// is used again.
+    func testABannerStaysWhileTheAppIsBehindAnother() throws {
+        let phone = try device()
+        let (_, agent) = try aBannerForAnAgentBehindAShell(phone)
+        // Finder in front, as when the user works in another app.
+        NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?.activate(options: [])
+        let deadline = Date().addingTimeInterval(5)
+        while appIsInFront && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        try XCTSkipIf(appIsInFront, "the app could not be put behind another: macOS did not let the tests bring Finder to the front")
+
+        app.press(.id("session-\(agent)"))
+        Thread.sleep(forTimeInterval: 1)
+        app.wait(for: .containing("needs permission"))
+        XCTAssertNil(phone.last { if case .noticeSeen(let session, _) = $0 { return session } else { return nil } }, "not seen yet")
+
+        bringAppToFront()
+        app.waitGone(.containing("needs permission"))
     }
 
     func testStartingSessionsAndFindingThemAgainAfterReopeningTheApp() throws {

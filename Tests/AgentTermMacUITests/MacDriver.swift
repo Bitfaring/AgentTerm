@@ -220,6 +220,15 @@ final class MacDriver {
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
     }
 
+    /// Whether an element offers one of its own named actions, without doing
+    /// it: Copy, which would write to the user's pasteboard, say.
+    func offers(_ action: String, on query: Query, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        guard let node = wait(for: query, timeout: timeout, file: file, line: line) else { return false }
+        var names: CFArray?
+        AXUIElementCopyActionNames(node.element, &names)
+        return ((names as? [String]) ?? []).contains { $0 == action || $0.contains("Name:\(action)\n") }
+    }
+
     /// Picks an item of the app's menu bar, such as ["File", "New Shell"].
     func menu(_ path: [String], file: StaticString = #filePath, line: UInt = #line) {
         var current = nodes(menus: true).first { $0.role == kAXMenuBarRole }?.element

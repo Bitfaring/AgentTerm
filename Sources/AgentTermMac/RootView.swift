@@ -7,32 +7,6 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
 
-    private var closeQuestion: String {
-        guard let request = model.pendingCloseRequest else { return "" }
-        let count = model.sessionsEnded(by: request).count
-        let kept = request.keepSession != nil || request.keepFile != nil || request.keepDiff
-        return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
-    }
-
-    // The questions are worked out here rather than where they are asked:
-    // inside the long chain of the window's sheets and dialogs each of them
-    // is one more thing the compiler has to work out at once, and on a slow
-    // machine it gives up.
-    private var saveQuestion: String {
-        let name = files.pendingClose.map { ($0 as NSString).lastPathComponent } ?? ""
-        return "Save changes to \"\(name)\"?"
-    }
-
-    private var endQuestion: String {
-        let name = model.pendingEnd?.displayName ?? "this session"
-        return "End \(name)?"
-    }
-
-    private var pushQuestion: String {
-        guard let push = model.pendingFirstPush else { return "" }
-        return "Push “\(push.branch)” to \(push.remote)?"
-    }
-
     var body: some View {
         HStack(spacing: 0) {
             ActivityBar()
@@ -45,8 +19,11 @@ struct RootView: View {
     private var panes: some View {
         HSplitView {
             if model.showSidebar {
+                // History's list of conversations is the place's own and
+                // reads better wide (#50); the others' lists are narrow.
+                let wide = model.place == .history
                 PlaceList()
-                    .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
+                    .frame(minWidth: wide ? 340 : 210, idealWidth: wide ? 420 : 250, maxWidth: wide ? 640 : 380)
             }
             // In parts of their own: in one expression, the compiler of a
             // slower machine (CodeQL's) gave up on it.
@@ -98,83 +75,144 @@ struct RootView: View {
                 }
             }
         }
-        .sheet(isPresented: $model.showPairing) {
-            PairingView(port: model.hostPort)
-        }
-        .sheet(isPresented: $model.showPairMac) {
-            PairMacSheet()
-        }
-        .sheet(isPresented: $model.showBrowseFolders) {
-            BrowseFoldersSheet()
-        }
-        .confirmationDialog(
-            saveQuestion,
-            isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
-            titleVisibility: .visible, presenting: files.pendingClose
-        ) { path in
-            Button("Save") { files.saveAndClose(path) }
-            Button("Don't Save", role: .destructive) { files.close(path) }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog(
-            endQuestion,
-            isPresented: Binding(get: { model.pendingEnd != nil }, set: { if !$0 { model.pendingEnd = nil } }),
-            titleVisibility: .visible, presenting: model.pendingEnd
-        ) { session in
-            Button("End Session", role: .destructive) { model.close(session.id) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("The program running in it is stopped.")
-        }
-        .confirmationDialog(
-            closeQuestion,
-            isPresented: Binding(get: { model.pendingCloseRequest != nil }, set: { if !$0 { model.pendingCloseRequest = nil } }),
-            titleVisibility: .visible, presenting: model.pendingCloseRequest
-        ) { request in
-            Button("End Sessions and Close", role: .destructive) { model.closeTabsConfirmed(request) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("What is running in the terminals stops. Files with unsaved changes stay open.")
-        }
-        .confirmationDialog(
-            pushQuestion,
-            isPresented: Binding(get: { model.pendingFirstPush != nil }, set: { if !$0 { model.pendingFirstPush = nil } }),
-            titleVisibility: .visible, presenting: model.pendingFirstPush
-        ) { push in
-            Button("Push") { model.pushConfirmed(push) }
-            Button("Cancel", role: .cancel) {}
-        } message: { push in
-            Text("The branch does not follow a branch on a remote yet. It is pushed as \(push.remote)/\(push.branch), which it follows from then on.")
-        }
-        .sheet(item: $model.pendingHandoff) { conversation in
-            HandoffSheet(conversation: conversation)
-        }
-        .sheet(item: $model.panelConversation) { conversation in
-            ConversationSheet(conversation: conversation)
-        }
-        .alert("AgentTerm", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(model.notice ?? "")
-        }
-        // The new worktree starts from the last commit (#23).
-        .alert("The folder has changes that are not committed", isPresented: Binding(get: { model.worktreeQuestion != nil }, set: { if !$0 { model.worktreeQuestion = nil } })) {
-            Button("Start in a New Worktree") {
-                let question = model.worktreeQuestion
-                model.worktreeQuestion = nil
-                if case .agent(let agent)? = question { model.launchInWorktree(agent, confirmed: true) } else { model.launchInWorktree(nil, confirmed: true) }
+        .modifier(WindowSheets())
+        .modifier(WindowQuestions())
+        .modifier(WindowAlerts())
+    }
+}
+
+// The window's sheets, questions and alerts, each a chain of its own: in
+// one with the toolbar, the compiler of a slower machine (CodeQL's) gave up.
+
+private struct WindowSheets: ViewModifier {
+    @EnvironmentObject private var model: AppModel
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $model.showPairing) {
+                PairingView(port: model.hostPort)
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(
-                "A new worktree starts from the last commit, without them: the agent there will not see them. Nothing git ignores is brought along either, such as .env or node_modules; a setup command for the folder can bring what is needed."
-            )
-        }
-        .alert("Worktree", isPresented: Binding(get: { model.worktreeSaid != nil }, set: { if !$0 { model.worktreeSaid = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(model.worktreeSaid ?? "")
-        }
+            .sheet(isPresented: $model.showPairMac) {
+                PairMacSheet()
+            }
+            .sheet(isPresented: $model.showBrowseFolders) {
+                BrowseFoldersSheet()
+            }
+            .sheet(item: $model.installGuide) { guide in
+                AgentInstallSheet(guide: guide)
+            }
+            .sheet(item: $model.pendingHandoff) { conversation in
+                HandoffSheet(conversation: conversation)
+            }
+            .sheet(item: $model.panelConversation) { conversation in
+                ConversationSheet(conversation: conversation)
+            }
+    }
+}
+
+private struct WindowQuestions: ViewModifier {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var files: FilesModel
+
+    private var closeQuestion: String {
+        guard let request = model.pendingCloseRequest else { return "" }
+        let count = model.sessionsEnded(by: request).count
+        let kept = request.keepSession != nil || request.keepFile != nil || request.keepDiff
+        return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
+    }
+
+    // The questions are worked out here rather than where they are asked:
+    // inside the long chain of the window's sheets and dialogs each of them
+    // is one more thing the compiler has to work out at once, and on a slow
+    // machine it gives up.
+    private var saveQuestion: String {
+        let name = files.pendingClose.map { ($0 as NSString).lastPathComponent } ?? ""
+        return "Save changes to \"\(name)\"?"
+    }
+
+    private var endQuestion: String {
+        let name = model.pendingEnd?.displayName ?? "this session"
+        return "End \(name)?"
+    }
+
+    private var pushQuestion: String {
+        guard let push = model.pendingFirstPush else { return "" }
+        return "Push “\(push.branch)” to \(push.remote)?"
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                saveQuestion,
+                isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
+                titleVisibility: .visible, presenting: files.pendingClose
+            ) { path in
+                Button("Save") { files.saveAndClose(path) }
+                Button("Don't Save", role: .destructive) { files.close(path) }
+                Button("Cancel", role: .cancel) {}
+            }
+            .confirmationDialog(
+                endQuestion,
+                isPresented: Binding(get: { model.pendingEnd != nil }, set: { if !$0 { model.pendingEnd = nil } }),
+                titleVisibility: .visible, presenting: model.pendingEnd
+            ) { session in
+                Button("End Session", role: .destructive) { model.close(session.id) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("The program running in it is stopped.")
+            }
+            .confirmationDialog(
+                closeQuestion,
+                isPresented: Binding(get: { model.pendingCloseRequest != nil }, set: { if !$0 { model.pendingCloseRequest = nil } }),
+                titleVisibility: .visible, presenting: model.pendingCloseRequest
+            ) { request in
+                Button("End Sessions and Close", role: .destructive) { model.closeTabsConfirmed(request) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("What is running in the terminals stops. Files with unsaved changes stay open.")
+            }
+            .confirmationDialog(
+                pushQuestion,
+                isPresented: Binding(get: { model.pendingFirstPush != nil }, set: { if !$0 { model.pendingFirstPush = nil } }),
+                titleVisibility: .visible, presenting: model.pendingFirstPush
+            ) { push in
+                Button("Push") { model.pushConfirmed(push) }
+                Button("Cancel", role: .cancel) {}
+            } message: { push in
+                Text("The branch does not follow a branch on a remote yet. It is pushed as \(push.remote)/\(push.branch), which it follows from then on.")
+            }
+            .modifier(DeleteConversationQuestions(store: model.historyStore))
+    }
+}
+
+private struct WindowAlerts: ViewModifier {
+    @EnvironmentObject private var model: AppModel
+
+    func body(content: Content) -> some View {
+        content
+            .alert("AgentTerm", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.notice ?? "")
+            }
+            // The new worktree starts from the last commit (#23).
+            .alert("The folder has changes that are not committed", isPresented: Binding(get: { model.worktreeQuestion != nil }, set: { if !$0 { model.worktreeQuestion = nil } })) {
+                Button("Start in a New Worktree") {
+                    let question = model.worktreeQuestion
+                    model.worktreeQuestion = nil
+                    if case .agent(let agent)? = question { model.launchInWorktree(agent, confirmed: true) } else { model.launchInWorktree(nil, confirmed: true) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(
+                    "A new worktree starts from the last commit, without them: the agent there will not see them. Nothing git ignores is brought along either, such as .env or node_modules; a setup command for the folder can bring what is needed."
+                )
+            }
+            .alert("Worktree", isPresented: Binding(get: { model.worktreeSaid != nil }, set: { if !$0 { model.worktreeSaid = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.worktreeSaid ?? "")
+            }
     }
 }
 
@@ -189,16 +227,24 @@ private struct WorktreeLaunchItem: View {
     }
 }
 
-/// Quick launch buttons for the agents that are installed, plus a plain shell.
+/// Quick launch buttons for every agent AgentTerm knows, plus a plain
+/// shell. One that is not installed on the Mac is there all the same,
+/// dimmed, and says how to install it (#50): here only, as the owner
+/// decided; everywhere else lists the agents that are installed.
 struct LaunchBar: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         HStack(spacing: 6) {
-            ForEach(model.installedAgents) { agent in
-                LaunchButton(title: agent.name, id: agent.id) { model.launch(agent) }
-                    .help("Start \(agent.name) in \(model.workingDirectory). Its menu starts it in a new worktree.")
-                    .contextMenu { WorktreeLaunchItem(agent: agent) }
+            ForEach(model.agents) { agent in
+                if agent.isInstalled {
+                    LaunchButton(title: agent.name, id: agent.id) { model.launch(agent) }
+                        .help("Start \(agent.name) in \(model.workingDirectory). Its menu starts it in a new worktree.")
+                        .contextMenu { WorktreeLaunchItem(agent: agent) }
+                } else {
+                    LaunchButton(title: agent.name, id: agent.id, notInstalled: true) { model.showInstallGuide(for: agent) }
+                        .help(AgentInstallGuide.forAgent(agent.id, name: agent.name)?.help(on: model.macName) ?? "\(agent.name) is not installed.")
+                }
             }
             LaunchButton(title: "Shell", id: "shell") { model.launch(nil) }
                 .help("Start a shell in \(model.workingDirectory)")
@@ -288,6 +334,8 @@ struct LaunchButton: View {
     let title: String
     let id: String
     var large = false
+    /// An agent that is not installed: dimmed, with a mark that says so.
+    var notInstalled = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -297,9 +345,19 @@ struct LaunchButton: View {
                 Image(systemName: Theme.symbol(for: id))
                     .font(.system(size: large ? 13 : 11, weight: .semibold))
                     .foregroundStyle(Theme.accent(for: id))
-                Text(title)
-                    .font(.system(size: large ? 13 : 12, weight: .medium))
+                if notInstalled {
+                    // Its symbol and a mark, not its name: the header has
+                    // room for the names of the agents that are installed,
+                    // and its help and its label say which it is.
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: large ? 12 : 10.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(title)
+                        .font(.system(size: large ? 13 : 12, weight: .medium))
+                }
             }
+            .opacity(notInstalled ? 0.6 : 1)
             .padding(.horizontal, large ? 14 : 10)
             .padding(.vertical, large ? 9 : 5)
             .background(
@@ -314,6 +372,7 @@ struct LaunchButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .accessibilityLabel(notInstalled ? "\(title), not installed" : title)
     }
 }
 
@@ -391,26 +450,89 @@ private struct FailureBanner: View {
     }
 }
 
-/// An agent of a session that is not in front finished its task or waits
-/// for the user (#22): which session, and why. Touching it opens it.
-private struct AgentNoticeBanner: View {
+/// Something keeps the agents from opening shells the user sees, although
+/// that is on (#58): what, and what to do about it. It stays until the
+/// host says it is over, or it is closed here.
+private struct AgentShellsFaultBanner: View {
     @EnvironmentObject private var model: AppModel
-    let notice: AgentNotice
+    let fault: AgentShellsFault
 
     var body: some View {
         HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(fault.headline(on: model.remote?.name))
+                    .font(.system(size: 12, weight: .medium))
+                Text(fault.advice)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Dismiss") { model.dismiss(fault) }
+                .controlSize(.small)
+                .help("Hide this until it happens again")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent-shells-fault")
+    }
+}
+
+/// An agent of a session that is not in front finished its task or waits
+/// for the user (#22): which session, and why. Touching it opens it.
+///
+/// What the agent said shows on up to six lines, the end of it, where an
+/// agent comes to the point; when that leaves something out, Show All
+/// opens the banner out to the whole of it, to be scrolled when it is long
+/// (#62). The session's name gives way in the middle, so that why it is
+/// told is never the part cut off.
+private struct AgentNoticeBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let notice: AgentNotice
+    @State private var openedOut = false
+
+    /// The lines shown before the banner is opened out.
+    static let lines = 6
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: AgentStateMark.symbol(for: notice.state)).foregroundStyle(AgentStateMark.color(for: notice.state))
+                .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(notice.name) \(notice.why)")
                     .font(.system(size: 12, weight: .medium))
-                if let detail = notice.detail {
-                    Text(detail)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help("\(notice.name) \(notice.why)")
+                if openedOut, let full = notice.full {
+                    ScrollView {
+                        Text(full)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxHeight: 220)
+                    .accessibilityIdentifier("agent-notice-all")
+                } else if let detail = notice.detail {
+                    Text((notice.detailIsCut ? "…" : "") + detail)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(Self.lines)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 8)
+            if notice.detailIsCut {
+                Button(openedOut ? "Show Less" : "Show All") { openedOut.toggle() }
+                    .controlSize(.small)
+                    .help(openedOut ? "Show the end of what the agent said" : "Show all of what the agent said")
+                    .accessibilityIdentifier("agent-notice-more")
+            }
             Button("Open") { model.open(notice) }
                 .controlSize(.small)
             Button("Dismiss") { model.dismissAgentNotice() }
@@ -423,6 +545,8 @@ private struct AgentNoticeBanner: View {
         .onTapGesture { model.open(notice) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-notice")
+        // Another notice starts as short as the first did.
+        .onChange(of: notice) { _ in openedOut = false }
     }
 }
 
@@ -614,6 +738,10 @@ private struct Banners: View {
         // What stopped without being asked to, until it is dismissed.
         ForEach(model.failures) { failure in
             FailureBanner(failure: failure)
+        }
+        // The agents cannot open shells, although that is on.
+        ForEach(model.shownShellsFaults) { fault in
+            AgentShellsFaultBanner(fault: fault)
         }
         // An agent of another session finished, or waits for you.
         if let notice = model.agentNotice {

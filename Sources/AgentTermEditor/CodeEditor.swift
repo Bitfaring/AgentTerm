@@ -69,15 +69,63 @@ enum Highlighting {
 
     static func font(size: CGFloat) -> PlatformFont { .monospacedSystemFont(ofSize: size, weight: .regular) }
 
-    /// Text storage that recolors what is edited, or a plain one if the
-    /// highlighter could not be loaded.
-    static func storage(for path: String, fontSize: CGFloat) -> NSTextStorage {
-        guard let highlightr = shared else { return NSTextStorage() }
+    /// The largest text that is colored, in UTF-16 units: about half a
+    /// megabyte. Coloring a file of 5 MB held the window for five seconds
+    /// when it opened, and a quarter of a second at each key (#21).
+    static let largestColored = 512 * 1024
+
+    /// Whether a file's text is colored: one in a language the highlighter
+    /// knows, and not too large.
+    static func colors(_ path: String, length: Int) -> Bool {
+        length <= largestColored && FileLanguage.forFile(path) != "plaintext"
+    }
+
+    /// Text storage that recolors what is edited; a plain one for text
+    /// that is not colored, or if the highlighter could not be loaded.
+    static func storage(for path: String, fontSize: CGFloat, length: Int) -> NSTextStorage {
+        guard colors(path, length: length), let highlightr = shared else { return NSTextStorage() }
         highlightr.theme.setCodeFont(font(size: fontSize))
         let highlighted = CodeAttributedString(highlightr: highlightr)
         highlighted.language = FileLanguage.forFile(path)
         return highlighted
     }
+
+    /// Gives a layout the storage that fits the text it is about to show,
+    /// when the one it has does not (#50): the text came after the editor
+    /// was made, as on the iPhone, or another file was opened in it, and
+    /// is too large to color, or is small enough now. Called before the
+    /// text is set, which the new storage then holds.
+    static func fit(_ layout: NSLayoutManager, path: String, fontSize: CGFloat, length: Int) {
+        guard let current = layout.textStorage else { return }
+        let wanted = colors(path, length: length) ? FileLanguage.forFile(path) : nil
+        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        guard (current is CodeAttributedString) != (wanted != nil && shared != nil) else {
+            // Told again only when it changed: each time it is told, all of it is colored again.
+            if let coloring = current as? CodeAttributedString, coloring.language != wanted { coloring.language = wanted }
+            return
+        }
+        layout.replaceTextStorage(storage(for: path, fontSize: fontSize, length: length))
+        #else
+        // UIKit's layout manager cannot be given another storage: the
+        // editor's colors when it has a language, and does nothing more
+        // than a plain one without (`editableStorage`).
+        if let coloring = current as? CodeAttributedString, coloring.language != wanted { coloring.language = wanted }
+        #endif
+    }
+
+    #if !(canImport(AppKit) && !targetEnvironment(macCatalyst))
+    /// The iPhone's editor's storage: one that colors, with no language for
+    /// a text that is not colored, so that `fit` can turn its colors on
+    /// and off as the text that comes changes; a plain one if the
+    /// highlighter could not be loaded.
+    static func editableStorage(for path: String, fontSize: CGFloat, length: Int) -> NSTextStorage {
+        guard let highlightr = shared else { return NSTextStorage() }
+        highlightr.theme.setCodeFont(font(size: fontSize))
+        let highlighted = CodeAttributedString(highlightr: highlightr)
+        highlighted.language = colors(path, length: length) ? FileLanguage.forFile(path) : nil
+        return highlighted
+    }
+    #endif
 }
 
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
@@ -88,17 +136,23 @@ public struct CodeEditor: NSViewRepresentable {
     let path: String
     var fontSize: CGFloat
 
-    public init(text: Binding<String>, path: String, fontSize: CGFloat = 12.5) {
+    /// The line to show, when one was asked for.
+    var target: LineTarget?
+
+    public init(text: Binding<String>, path: String, fontSize: CGFloat = 12.5, target: LineTarget? = nil) {
         _text = text
         self.path = path
         self.fontSize = fontSize
+        self.target = target
     }
 
     public func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     public func makeNSView(context: Context) -> NSScrollView {
-        let storage = Highlighting.storage(for: path, fontSize: fontSize)
+        let storage = Highlighting.storage(for: path, fontSize: fontSize, length: text.utf16.count)
         let layout = NSLayoutManager()
+        // Only what is on show is laid out: a file of megabytes opens at once.
+        layout.allowsNonContiguousLayout = true
         storage.addLayoutManager(layout)
         // Lines are not wrapped: code reads better scrolled sideways.
         let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
@@ -138,6 +192,8 @@ public struct CodeEditor: NSViewRepresentable {
         scroll.backgroundColor = EditorStyle.background
         context.coordinator.textView = textView
         context.coordinator.path = path
+        context.coordinator.held = text
+        context.coordinator.go(to: target)
         return scroll
     }
 
@@ -145,22 +201,48 @@ public struct CodeEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = context.coordinator.textView else { return }
         if context.coordinator.path != path {
-            // Another file: its own language, and no undo into the last one.
+            // Another file: its own language, colored or not by its own
+            // size, and no undo into the last one.
             context.coordinator.path = path
-            (textView.textStorage as? CodeAttributedString)?.language = FileLanguage.forFile(path)
+            if let layout = textView.layoutManager { Highlighting.fit(layout, path: path, fontSize: fontSize, length: text.utf16.count) }
             textView.string = text
+            context.coordinator.held = text
             textView.undoManager?.removeAllActions()
             textView.scrollToBeginningOfDocument(nil)
-        } else if textView.string != text {
-            // Changed from outside the editor, such as discarding edits.
-            textView.string = text
+        } else if context.coordinator.held != text {
+            // Changed from outside the editor, such as discarding edits, or
+            // the file read after the editor was made. Told by what the
+            // editor last gave or was given, which is the same text in
+            // memory when nothing changed: asking the view for all of its
+            // text at each key is what made typing in a large file slow.
+            context.coordinator.held = text
+            if let layout = textView.layoutManager { Highlighting.fit(layout, path: path, fontSize: fontSize, length: text.utf16.count) }
+            if textView.string != text { textView.string = text }
         }
+        context.coordinator.go(to: target)
     }
 
     public final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CodeEditor
         weak var textView: NSTextView?
         var path = ""
+        /// The text the editor last gave its owner, or was given by it.
+        var held = ""
+        private var shown: Int?
+
+        /// Scrolls to a line and marks it, once for each time it is asked
+        /// for; after the view was laid out, which it is not yet when made.
+        func go(to target: LineTarget?) {
+            guard let target, target.token != shown, textView?.string.isEmpty == false else { return }
+            shown = target.token
+            DispatchQueue.main.async { [weak self] in
+                guard let textView = self?.textView else { return }
+                let range = LineTarget.range(ofLine: target.line, in: textView.string as NSString)
+                textView.setSelectedRange(range)
+                textView.scrollRangeToVisible(range)
+                textView.showFindIndicator(for: range)
+            }
+        }
 
         init(_ parent: CodeEditor) {
             self.parent = parent
@@ -168,7 +250,12 @@ public struct CodeEditor: NSViewRepresentable {
 
         public func textDidChange(_ notification: Notification) {
             guard let textView else { return }
-            if parent.text != textView.string { parent.text = textView.string }
+            // What the view holds now, kept as the one text both sides
+            // have: the view is not asked for it again, nor compared with
+            // it, when this change comes back round as an update (#21).
+            let now = textView.string
+            held = now
+            parent.text = now
         }
     }
 }
@@ -180,16 +267,21 @@ public struct CodeEditor: UIViewRepresentable {
     let path: String
     var fontSize: CGFloat
 
-    public init(text: Binding<String>, path: String, fontSize: CGFloat = 13) {
+    /// The line to show, when one was asked for.
+    var target: LineTarget?
+
+    public init(text: Binding<String>, path: String, fontSize: CGFloat = 13, target: LineTarget? = nil) {
         _text = text
         self.path = path
         self.fontSize = fontSize
+        self.target = target
     }
 
     public func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     public func makeUIView(context: Context) -> UITextView {
-        let storage = Highlighting.storage(for: path, fontSize: fontSize)
+        // Made before the file's text is here: colored or not once it is (`Highlighting.fit`).
+        let storage = Highlighting.editableStorage(for: path, fontSize: fontSize, length: text.utf16.count)
         let layout = NSLayoutManager()
         storage.addLayoutManager(layout)
         // Lines wrap: a phone is too narrow to scroll code sideways while typing.
@@ -228,27 +320,47 @@ public struct CodeEditor: UIViewRepresentable {
         bar.items = [UIBarButtonItem(systemItem: .flexibleSpace), hide]
         bar.sizeToFit()
         textView.inputAccessoryView = bar
+        context.coordinator.go(to: target, in: textView)
         return textView
     }
 
     public func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.parent = self
         if context.coordinator.path != path {
+            // Another file: colored or not by its own size.
             context.coordinator.path = path
-            (textView.textStorage as? CodeAttributedString)?.language = FileLanguage.forFile(path)
+            Highlighting.fit(textView.layoutManager, path: path, fontSize: fontSize, length: text.utf16.count)
             textView.text = text
             textView.undoManager?.removeAllActions()
             textView.setContentOffset(.zero, animated: false)
         } else if textView.text != text, textView.markedTextRange == nil {
-            // Changed from outside the editor, such as discarding edits. Not
-            // while a character is being composed, which this would break.
+            // Changed from outside the editor, such as discarding edits, or
+            // the file, which is read after the editor is shown: colored or
+            // not by its size (#50). Not while a character is being
+            // composed, which this would break.
+            Highlighting.fit(textView.layoutManager, path: path, fontSize: fontSize, length: text.utf16.count)
             textView.text = text
         }
+        context.coordinator.go(to: target, in: textView)
     }
 
     public final class Coordinator: NSObject, UITextViewDelegate {
         var parent: CodeEditor
         var path = ""
+        private var shown: Int?
+
+        /// Scrolls to a line and selects it, once for each time it is asked
+        /// for, and not before the file's text is there.
+        func go(to target: LineTarget?, in textView: UITextView) {
+            guard let target, target.token != shown, !textView.text.isEmpty else { return }
+            shown = target.token
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView else { return }
+                let range = LineTarget.range(ofLine: target.line, in: textView.text as NSString)
+                textView.selectedRange = range
+                textView.scrollRangeToVisible(range)
+            }
+        }
 
         init(_ parent: CodeEditor) {
             self.parent = parent
@@ -292,7 +404,7 @@ public struct MarkdownPreview: View {
     }
 
     /// GitHub's look, with code blocks marked "mermaid" drawn as diagrams.
-    private static let theme = MarkdownUI.Theme.gitHub
+    static let theme = MarkdownUI.Theme.gitHub
         .text { BackgroundColor(nil) }
         .codeBlock { configuration in
             if configuration.language?.lowercased() == "mermaid" {
@@ -327,5 +439,59 @@ public struct MarkdownPreview: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(EditorStyle.background))
+    }
+}
+
+/// Markdown shown in place among other things, as the preview of a file
+/// shows it but without a scroll view of its own: what an agent said in a
+/// transcript (#50), at the size of the text around it.
+public struct MarkdownText: View {
+    let text: String
+    let size: CGFloat
+
+    public init(_ text: String, size: CGFloat) {
+        self.text = text
+        self.size = size
+    }
+
+    public var body: some View {
+        Markdown(MarkdownHTML.flatten(text))
+            .markdownTheme(MarkdownPreview.theme)
+            .markdownTextStyle {
+                FontSize(size)
+                BackgroundColor(nil)
+            }
+            .markdownCodeSyntaxHighlighter(PreviewCodeHighlighter())
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A line of the file to go to (#45): the editor scrolls to it and marks
+/// it. `token` changes each time one is asked for, the same line too.
+public struct LineTarget: Equatable, Sendable {
+    public var line: Int
+    public var token: Int
+
+    public init(line: Int, token: Int) {
+        self.line = line
+        self.token = token
+    }
+
+    /// Where a line is in a text, by its number from 1; the last line for
+    /// a number past the end.
+    public static func range(ofLine line: Int, in text: NSString) -> NSRange {
+        var start = 0
+        var current = 1
+        while current < line, start < text.length {
+            let range = text.lineRange(for: NSRange(location: start, length: 0))
+            guard NSMaxRange(range) > start, NSMaxRange(range) < text.length else { break }
+            start = NSMaxRange(range)
+            current += 1
+        }
+        var range = text.lineRange(for: NSRange(location: min(start, text.length), length: 0))
+        // Without the line break at its end.
+        while range.length > 0, let last = UnicodeScalar(text.character(at: NSMaxRange(range) - 1)), CharacterSet.newlines.contains(last) { range.length -= 1 }
+        return range
     }
 }
