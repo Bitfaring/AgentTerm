@@ -127,13 +127,17 @@ App Store, are taken the same way the apps are tested, by
 KEEP=/tmp/pictures scripts/screenshots.sh   # take them there, to look at first
 scripts/screenshots.sh                      # put them where the pages take them from
 ONLY=mac scripts/screenshots.sh             # only the Mac's three
-ONLY=ios scripts/screenshots.sh             # only the iPhone's six
+ONLY=ios scripts/screenshots.sh             # only the iPhone app's six, on the iPhone and on the iPad
+ONLY=iphone scripts/screenshots.sh          # or ONLY=ipad: on one of them
 ```
 
 It builds the app into a folder of its own, starts a host with a demo
 project, a second folder and stand-in agents (`scripts/demo-agent.py`,
 which draws an agent's screen and reports usage without any account),
-then runs `ScreenshotTests` of the Mac app and of the iPhone app. What a
+then runs `ScreenshotTests` of the Mac app and of the iPhone app, the
+latter on the iPhone Air and on the iPad Pro 13-inch (`IPAD=` names
+another), each paired by a link of its own. The iPad's go beside the
+iPhone's in `fastlane/screenshots/en-US`, named `ipad-*.png` (#88). What a
 picture shows is decided there: the demo project in the script, what the
 agent says in `demo-agent.py`, where each picture is taken in the two
 `ScreenshotTests`. They are taken again whenever a release changes what

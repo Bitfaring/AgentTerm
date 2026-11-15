@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Takes the pictures of both apps again: the three of the Mac app in
-# docs/screenshots (the README and the product page show them) and the six
-# of the iPhone app in fastlane/screenshots/en-US (the App Store and the
-# product page).
+# docs/screenshots (the README and the product page show them), and the six
+# of the iPhone app, on an iPhone and on an iPad (#88), in
+# fastlane/screenshots/en-US, the iPad's named ipad-*.png (the App Store,
+# which `make store-screenshots` sends them to, and the product page).
 #
-#   ./scripts/screenshots.sh                  # both, the iPhone's on the simulator "iPhone Air"
-#   ./scripts/screenshots.sh "iPhone Air"     # a simulator by name, or by UDID
+#   ./scripts/screenshots.sh                  # all, the iPhone's on "iPhone Air", the iPad's on "iPad Pro 13-inch (M5)"
+#   ./scripts/screenshots.sh "iPhone Air"     # the iPhone's simulator by name, or by UDID
+#   IPAD="iPad Pro 13-inch (M5)" ./scripts/screenshots.sh  # the iPad's
 #   ONLY=mac ./scripts/screenshots.sh         # only the Mac's
-#   ONLY=ios ./scripts/screenshots.sh         # only the iPhone's
+#   ONLY=ios ./scripts/screenshots.sh         # only the iPhone app's, on the iPhone and the iPad
+#   ONLY=iphone or ONLY=ipad                  # only those of one of them
 #   KEEP=/some/folder ./scripts/screenshots.sh  # put them there instead, to look at first
 #
 # What they show is made up here and the same every time: a small project
@@ -21,11 +24,22 @@
 # so anything paired in that simulator has to pair again.
 #
 # The App Store wants the iPhone's pictures at 1260 x 2736, which is the
-# iPhone Air: another simulator gives pictures the store does not take.
+# iPhone Air: another simulator gives pictures the store does not take. The
+# iPad's it wants at 13 inches, 2064 x 2752, the iPad Pro 13-inch's; fastlane
+# tells the two apart by their size.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 ONLY="${ONLY:-both}"
+DO_MAC=yes DO_IPHONE=yes DO_IPAD=yes
+case "$ONLY" in
+    both) ;;
+    mac) DO_IPHONE="" DO_IPAD="" ;;
+    ios) DO_MAC="" ;;
+    iphone) DO_MAC="" DO_IPAD="" ;;
+    ipad) DO_MAC="" DO_IPHONE="" ;;
+    *) echo "screenshots.sh: ONLY is mac, ios, iphone or ipad" >&2; exit 2 ;;
+esac
 PORT=7790
 # Not in the temporary folder: its path has a symbolic link in it, and a
 # file is shown by its place in the project, which it is not found to be in
@@ -43,14 +57,22 @@ LOG="$(mktemp)"
 # its own: with the development app's it would read and write that app's.
 IDENTIFIER=com.manhpham.agentterm.screenshots
 defaults delete "$IDENTIFIER" >/dev/null 2>&1 || true
-mkdir -p "$STATE" "$FAKE_HOME" "$AGENTS" "$PROJECT/src" "$PROJECT/docs" "$WEBSITE" "$SHOTS/mac" "$SHOTS/ios"
+mkdir -p "$STATE" "$FAKE_HOME" "$AGENTS" "$PROJECT/src" "$PROJECT/docs" "$WEBSITE" "$SHOTS/mac" "$SHOTS/ios" "$SHOTS/ipad"
 
-if [ "$ONLY" != mac ]; then
+DEVICE="" IPAD_DEVICE=""
+if [ -n "$DO_IPHONE$DO_IPAD" ]; then
     command -v xcodegen >/dev/null || { echo "screenshots.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
     source scripts/lib-simulator.sh
+fi
+if [ -n "$DO_IPHONE" ]; then
     choose_simulator "${1:-iPhone Air}" "iPhone Air"
     DEVICE="$SIM_UDID"
     echo "The iPhone's pictures are taken on $SIM_NAME ($SIM_UDID)."
+fi
+if [ -n "$DO_IPAD" ]; then
+    choose_simulator "${IPAD:-iPad Pro 13-inch (M5)}" "iPad Pro 13-inch (M5)"
+    IPAD_DEVICE="$SIM_UDID"
+    echo "The iPad's pictures are taken on $SIM_NAME ($SIM_UDID)."
 fi
 
 # The demo project: one change staged, one file changed, one new.
@@ -126,6 +148,7 @@ cleanup() {
     kill "$DAEMON" 2>/dev/null || true
     defaults delete "$IDENTIFIER" >/dev/null 2>&1 || true
     [ -n "${DEVICE:-}" ] && xcrun simctl status_bar "$DEVICE" clear 2>/dev/null || true
+    [ -n "${IPAD_DEVICE:-}" ] && xcrun simctl status_bar "$IPAD_DEVICE" clear 2>/dev/null || true
     rm -rf "$ROOT"
 }
 trap cleanup EXIT
@@ -148,7 +171,7 @@ part() {
     fi
 }
 
-if [ "$ONLY" != ios ]; then
+if [ -n "$DO_MAC" ]; then
     HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" "$APP/AgentTerm" > "$STATE/mac.log" 2>&1 &
     MAC=$!
     AGENTTERM_SHOTS_PID="$MAC" part "the Mac app's pictures" swift test --skip-build --filter "AgentTermMacUITests.ScreenshotTests/testPart1"
@@ -160,20 +183,30 @@ else
     export AGENTTERM_SHOTS_FIRST=1
 fi
 
-if [ "$ONLY" != mac ]; then
-    part "the sessions for the iPhone" swift test --skip-build --filter "AgentTermMacUITests.ScreenshotTests/testPart2"
-    (cd iOS && xcodegen generate --quiet)
-    xcrun simctl bootstatus "$DEVICE" -b >/dev/null
-    xcrun simctl keychain "$DEVICE" reset
-    XCODEBUILD=(xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm
-        -destination "platform=iOS Simulator,id=$DEVICE"
-        -derivedDataPath .build/ios -skipPackagePluginValidation)
-    part "building the iPhone app" "${XCODEBUILD[@]}" build-for-testing
+# The iPhone app's pictures on one simulator: paired with the host by a
+# link of its own (a pairing code is good once), into a folder.
+pictures_on() {
+    local device="$1" what="$2" into="$3"
+    xcrun simctl bootstatus "$device" -b >/dev/null
+    xcrun simctl keychain "$device" reset
+    # Named as the store names it: the iPad shows the app's name in its
+    # status bar. Its identifier stays the development build's.
+    local xcodebuild=(xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm
+        -destination "platform=iOS Simulator,id=$device"
+        -derivedDataPath .build/ios -skipPackagePluginValidation APP_DISPLAY_NAME=AgentTerm)
+    part "building the app for the $what" "${xcodebuild[@]}" build-for-testing
     # The status bar the App Store's pictures have.
-    xcrun simctl status_bar "$DEVICE" override --time "9:41" --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
+    xcrun simctl status_bar "$device" override --time "9:41" --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
     export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$APP/agenttermd" pairing-link --port "$PORT" --host 127.0.0.1 --name "MacBook Pro")"
-    export TEST_RUNNER_AGENTTERM_SCREENSHOTS=1 TEST_RUNNER_AGENTTERM_SHOT_DIR="$SHOTS/ios"
-    part "the iPhone app's pictures" "${XCODEBUILD[@]}" test-without-building -only-testing:AgentTermUITests/ScreenshotTests
+    export TEST_RUNNER_AGENTTERM_SCREENSHOTS=1 TEST_RUNNER_AGENTTERM_SHOT_DIR="$into"
+    part "the $what's pictures" "${xcodebuild[@]}" test-without-building -only-testing:AgentTermUITests/ScreenshotTests
+}
+
+if [ -n "$DO_IPHONE$DO_IPAD" ]; then
+    part "the sessions for the iPhone and the iPad" swift test --skip-build --filter "AgentTermMacUITests.ScreenshotTests/testPart2"
+    (cd iOS && xcodegen generate --quiet)
+    [ -z "$DO_IPHONE" ] || pictures_on "$DEVICE" "iPhone" "$SHOTS/ios"
+    [ -z "$DO_IPAD" ] || pictures_on "$IPAD_DEVICE" "iPad" "$SHOTS/ipad"
 fi
 
 MAC_OUT="${KEEP:+$KEEP/mac}"
@@ -181,7 +214,12 @@ IOS_OUT="${KEEP:+$KEEP/ios}"
 MAC_OUT="${MAC_OUT:-docs/screenshots}"
 IOS_OUT="${IOS_OUT:-fastlane/screenshots/en-US}"
 mkdir -p "$MAC_OUT" "$IOS_OUT"
-[ "$ONLY" = ios ] || cp "$SHOTS/mac/"*.png "$MAC_OUT/"
-[ "$ONLY" = mac ] || cp "$SHOTS/ios/"*.png "$IOS_OUT/"
+[ -z "$DO_MAC" ] || cp "$SHOTS/mac/"*.png "$MAC_OUT/"
+[ -z "$DO_IPHONE" ] || cp "$SHOTS/ios/"*.png "$IOS_OUT/"
+# Beside the iPhone's, in the folder fastlane sends: it tells them apart
+# by their size, and puts each device's in the order of their names.
+if [ -n "$DO_IPAD" ]; then
+    for picture in "$SHOTS/ipad/"*.png; do cp "$picture" "$IOS_OUT/ipad-$(basename "$picture")"; done
+fi
 echo "The pictures are in ${KEEP:-docs/screenshots and fastlane/screenshots/en-US}. Look at them before they are committed."
 rm -f "$LOG"

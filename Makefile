@@ -74,7 +74,7 @@ release: ## Release both apps from GitHub Actions: make release [V=0.3.0-beta.1]
 store-metadata: ## Send the App Store listing (fastlane/metadata) to App Store Connect
 	./scripts/release.sh ios metadata
 
-store-screenshots: ## Send the iPhone screenshots (fastlane/screenshots) to App Store Connect
+store-screenshots: ## Send the iPhone and iPad screenshots (fastlane/screenshots) to App Store Connect
 	./scripts/release.sh ios screenshots
 
 announce: ## Announce a release on Discord: make announce [V=0.3.0-beta.3] (needs DISCORD_WEBHOOK_URL)
