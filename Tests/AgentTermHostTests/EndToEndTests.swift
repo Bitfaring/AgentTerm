@@ -128,7 +128,9 @@ final class EndToEndTests: XCTestCase {
     /// pressed, as the Mac's guide to installing an agent does it.
     func testACommandTypedIntoANewShellWaitsForReturn() {
         let client = connect()
-        client.connection.send(.create(CreateRequest(command: nil, cwd: "/tmp", title: "Install", typed: "echo typed-$((40+2))")))
+        // Wide: CI's runners have a prompt of some 60 characters, after
+        // which the shell wrapped the typed line at 80 columns.
+        client.connection.send(.create(CreateRequest(command: nil, cwd: "/tmp", title: "Install", size: TermSize(cols: 250, rows: 24), typed: "echo typed-$((40+2))")))
         waitUntil("attached") { client.attached != nil }
         let id = client.attached!.id
         // Said with what the terminal showed: the login shell is the
