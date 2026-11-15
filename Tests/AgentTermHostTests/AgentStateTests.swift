@@ -163,24 +163,49 @@ final class AgentStateTests: XCTestCase {
         let tool = "/Apps/AgentTerm.app/agenttermd"
 
         // Antigravity: a rule always on, in the folder it is given.
-        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, useShells: true)
+        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, prompt: AgentShellsInstructions.useShells)
         let rule = hooks.appendingPathComponent("antigravity/.agents/rules/agentterm.md")
         let text = try String(contentsOf: rule, encoding: .utf8)
         XCTAssertTrue(text.hasPrefix("---\ntrigger: always_on\n---\n"), text)
         XCTAssertTrue(text.contains(AgentShellsInstructions.useShells))
-        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, useShells: false)
+        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, prompt: nil)
         XCTAssertFalse(FileManager.default.fileExists(atPath: rule.path), "turned off, the rule is still there")
 
         // Copilot CLI: a folder of instructions it is told of, next to any
         // the user's own environment names.
-        let environment = try AgentHooks.instructionsEnvironment(agent: "copilot", directory: hooks, useShells: true, current: ["COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "/mine"])
+        let environment = try AgentHooks.instructionsEnvironment(agent: "copilot", directory: hooks, prompt: AgentShellsInstructions.useShells, current: ["COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "/mine"])
         let folder = hooks.appendingPathComponent("copilot-instructions").path
         XCTAssertEqual(environment, ["COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "/mine," + folder])
         let instructions = try String(contentsOfFile: folder + "/instructions/agentterm.instructions.md", encoding: .utf8)
         XCTAssertTrue(instructions.hasPrefix("---\napplyTo: \"**\"\n---\n"), instructions)
         XCTAssertTrue(instructions.contains(AgentShellsInstructions.useShells))
-        XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "copilot", directory: hooks, useShells: false, current: [:]), [:])
-        XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "claude", directory: hooks, useShells: true, current: [:]), [:])
+        XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "copilot", directory: hooks, prompt: nil, current: [:]), [:])
+        XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "claude", directory: hooks, prompt: AgentShellsInstructions.useShells, current: [:]), [:])
+    }
+
+    /// PROMPT-1: Claude Code is told what AgentTerm says in its system
+    /// prompt, the user's words or the default, and nothing when there is
+    /// nothing to say; the default names the browser's tools and the
+    /// server they are of.
+    func testClaudeIsToldInItsSystemPrompt() throws {
+        func words(_ arguments: String) -> [String] {
+            let result = Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' x" + arguments])
+            return String(decoding: result?.output ?? Data(), as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).map(String.init).dropFirst()
+                .filter { !$0.isEmpty }
+        }
+        let tool = "/Apps/AgentTerm.app/agenttermd"
+        let told = words(try AgentHooks.launchArguments(agent: "claude", tool: tool, usageFile: nil, directory: nil, home: "/tmp", prompt: "Use AgentTerm's browser."))
+        let at = try XCTUnwrap(told.firstIndex(of: "--append-system-prompt"))
+        XCTAssertEqual(told[at + 1], "Use AgentTerm's browser.")
+        let silent = words(try AgentHooks.launchArguments(agent: "claude", tool: tool, usageFile: nil, directory: nil, home: "/tmp", prompt: nil))
+        XCTAssertFalse(silent.contains("--append-system-prompt"))
+
+        let both = try XCTUnwrap(AgentShellsInstructions.told(useShells: true, browser: true, server: "agentterm-dev"))
+        XCTAssertTrue(both.contains("shell_open") && both.contains("browser_open"), both)
+        XCTAssertTrue(both.contains("the agentterm-dev MCP server"), both)
+        XCTAssertTrue(both.contains("Claude in Chrome"), "the other way to a browser is not named: \(both)")
+        XCTAssertEqual(AgentShellsInstructions.told(useShells: false, browser: true, server: "x"), AgentShellsInstructions.browser(server: "x"))
+        XCTAssertNil(AgentShellsInstructions.told(useShells: false, browser: false))
     }
 
     func testWhatMayStopATurn() {

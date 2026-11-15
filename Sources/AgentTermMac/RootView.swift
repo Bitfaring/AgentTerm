@@ -14,6 +14,8 @@ struct RootView: View {
             panes
         }
         .background(Theme.canvas)
+        // Where the browser's pages no pane shows are drawn (#76).
+        .background(alignment: .bottomLeading) { BrowserParkingLot().frame(width: 1, height: 1).accessibilityHidden(true) }
     }
 
     private var panes: some View {
@@ -106,6 +108,12 @@ private struct WindowSheets: ViewModifier {
             }
             .sheet(item: $model.panelConversation) { conversation in
                 ConversationSheet(conversation: conversation)
+            }
+            .sheet(item: $model.pendingPick) { pick in
+                SendToAgentSheet(pick: pick)
+            }
+            .sheet(item: $model.profileQuestion) { question in
+                ProfileQuestionSheet(question: question)
             }
     }
 }
@@ -249,6 +257,11 @@ struct LaunchBar: View {
             LaunchButton(title: "Shell", id: "shell") { model.launch(nil) }
                 .help("Start a shell in \(model.workingDirectory)")
                 .contextMenu { WorktreeLaunchItem(agent: nil) }
+            // A page, as a shell is started (#76): this Mac's browser only.
+            if !model.isRemote {
+                LaunchButton(title: "Browser", id: "browser") { model.openBrowserTab() }
+                    .help("Open a browser tab, in the default profile")
+            }
             SSHMenu()
         }
         .disabled(model.status != .connected)
@@ -588,9 +601,6 @@ private struct OtherHostBanner: View {
 
 struct CenterView: View {
     @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var files: FilesModel
-    @State private var showingUsage = false
-
     var body: some View {
         ZStack {
             Theme.canvas
@@ -614,76 +624,8 @@ struct CenterView: View {
                 }
                 .padding(40)
             case .connected:
-                if model.diffInFront, let file = model.diffTabFile {
-                    // The diff tab is in front.
-                    VStack(spacing: 0) {
-                        SessionTabs()
-                        DiffDocumentView(file: file)
-                    }
-                } else if let document = files.activeDocument {
-                    // A file tab is in front.
-                    VStack(spacing: 0) {
-                        SessionTabs()
-                        DocumentView(document: document)
-                    }
-                } else if let controller = model.currentController {
-                    VStack(spacing: 0) {
-                        SessionTabs()
-                        let info = model.sessions.first { $0.id == controller.session }
-                        if let size = model.foreignSizes[controller.session] {
-                            ForeignSizeBanner(size: size)
-                        }
-                        let foreign = model.foreignSizes[controller.session]
-                        TerminalPane(controller: controller, foreignSize: foreign)
-                            .id(controller.session)
-                            .overlay {
-                                // The session's earlier output is on its
-                                // way, megabytes of it: a terminal racing
-                                // through that says less than a word that
-                                // it is loading.
-                                if model.replaying.contains(controller.session) {
-                                    LoadingView("Loading the session…", cover: Theme.canvas.opacity(0.92))
-                                }
-                            }
-                            // The framed preview of another device's screen
-                            // is centered, so it gets no one-sided padding.
-                            .padding(.horizontal, foreign == nil ? TerminalInsets.horizontal : 0)
-                            .padding(.top, foreign == nil ? TerminalInsets.top : 0)
-                            // Room under the last row. The rows fill the
-                            // pane from the top, so what is left over under
-                            // them is anything from nothing to almost a
-                            // row: without this, the last line (an agent's
-                            // status line) can sit right on the edge.
-                            .padding(.bottom, foreign == nil ? TerminalInsets.bottom : 0)
-                            .background(TerminalAreaReader(insets: foreign == nil ? TerminalInsets.total : CGSize(width: 10, height: 12)))
-                        if let info, let agent = info.agent {
-                            // What the agent's session has used, under its terminal.
-                            Theme.hairline.frame(height: 1)
-                            UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) {
-                                showingUsage = true
-                            }
-                            .background(Theme.panel)
-                            .help("Show the account's usage")
-                            .popover(isPresented: $showingUsage, arrowEdge: .bottom) {
-                                ScrollView {
-                                    UsageDetails(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) {
-                                        model.refreshAccountUsage()
-                                    }
-                                }
-                                .frame(width: 380)
-                                .frame(maxHeight: 520)
-                            }
-                        }
-                    }
-                } else {
-                    VStack(spacing: 0) {
-                        SessionTabs()
-                        WelcomeView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                            // Where a terminal would go, less its padding,
-                            // and less the strip of tabs it will have then.
-                            .background(TerminalAreaReader(insets: TerminalInsets.total, stripShown: !model.sessions.isEmpty || !files.documents.isEmpty || model.diffTabFile != nil))
-                    }
-                }
+                // The panes of the project on show (#69).
+                WorkspaceView()
             }
         }
     }
@@ -788,23 +730,30 @@ enum TerminalInsets {
     static let total = CGSize(width: 2 * horizontal, height: top + bottom)
 }
 
-private struct TerminalAreaReader: View {
+/// Tells the model how much room a terminal has, so a new session can be
+/// started at the size it will be shown at: the room of the pane the
+/// keyboard is in, where a new session goes (#69).
+struct TerminalAreaReader: View {
     @EnvironmentObject private var model: AppModel
     /// What to take off for the padding a terminal gets.
     let insets: CGSize
     /// False on the launch screen with no session: the strip of tabs a
     /// session brings is taken off too.
     var stripShown = true
+    /// Whether this is the place a new session would be shown in.
+    var reports = true
 
     var body: some View {
         GeometryReader { proxy in
             Color.clear
                 .onAppear { report(proxy.size) }
                 .onChange(of: proxy.size) { _, size in report(size) }
+                .onChange(of: reports) { _, _ in report(proxy.size) }
         }
     }
 
     private func report(_ size: CGSize) {
+        guard reports else { return }
         let strip = stripShown ? 0 : model.tabStripHeight
         model.terminalArea = CGSize(width: size.width - insets.width, height: size.height - insets.height - strip)
     }
@@ -814,6 +763,8 @@ private struct TerminalAreaReader: View {
 struct ForeignSizeBanner: View {
     @EnvironmentObject private var model: AppModel
     let size: TermSize
+    /// The session it is about: with several panes, not always the one in front.
+    let session: SessionID
 
     var body: some View {
         HStack(spacing: 8) {
@@ -823,7 +774,7 @@ struct ForeignSizeBanner: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer()
-            Button("Use This Window's Size") { model.takeControl() }
+            Button("Use This Window's Size") { model.controller(for: session)?.claimSize() }
                 .controlSize(.small)
         }
         .padding(.horizontal, 12)
@@ -863,6 +814,9 @@ struct WelcomeView: View {
                 }
                 LaunchButton(title: "Shell", id: "shell", large: true) { model.launch(nil) }
                     .contextMenu { WorktreeLaunchItem(agent: nil) }
+                if !model.isRemote {
+                    LaunchButton(title: "Browser", id: "browser", large: true) { model.openBrowserTab() }
+                }
                 SSHMenu(large: true)
             }
             if model.agentsLoaded && model.installedAgents.isEmpty {

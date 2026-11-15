@@ -74,6 +74,49 @@ final class PhoneModel: ObservableObject {
         didSet { if status != oldValue { updateLiveActivity() } }
     }
     @Published private(set) var sessions: [SessionInfo] = []
+    /// The tabs of the browser in AgentTerm on the Mac (#76). The phone
+    /// does not browse: it looks at a tab, and takes it from its agent or
+    /// gives it back.
+    @Published private(set) var browserTabs: [BrowserTabInfo] = []
+    /// What the Mac answered about a tab: a picture of it, or why there is none.
+    @Published private(set) var browserPictures: [String: Data] = [:]
+    @Published private(set) var browserProblems: [String: String] = [:]
+    private var browserAsks: [Int: (BrowserResult) -> Void] = [:]
+    private var nextBrowserAsk = 1
+
+    /// Asks the browser on the Mac, through its host.
+    func askBrowser(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
+        let id = nextBrowserAsk
+        nextBrowserAsk += 1
+        browserAsks[id] = done
+        connection?.send(.browserAsk(id: id, request: request))
+    }
+
+    func browserAnswered(id: Int, result: BrowserResult) {
+        browserAsks.removeValue(forKey: id)?(result)
+    }
+
+    /// Asks for a picture of a tab as it is now.
+    func refreshPicture(of tab: String) {
+        askBrowser(.picture(tab: tab)) { [weak self] result in
+            switch result {
+            case .image(let data, _):
+                self?.browserPictures[tab] = data
+                self?.browserProblems[tab] = nil
+            case .refused(let why):
+                self?.browserProblems[tab] = why
+            default:
+                break
+            }
+        }
+    }
+
+    /// Takes a tab from its agent, or gives it back.
+    func setUserHas(_ tab: String, _ has: Bool) {
+        askBrowser(has ? .takeOver(tab: tab) : .giveBack(tab: tab)) { [weak self] result in
+            if case .refused(let why) = result { self?.browserProblems[tab] = why }
+        }
+    }
     /// How the sessions are arranged: order, pins and groups. The Mac keeps
     /// it, and its window and every phone show the same.
     @Published var sessionLayout = TabLayout() {
@@ -1104,9 +1147,15 @@ final class PhoneModel: ObservableObject {
             // Seen on the Mac, or on another device.
             if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
             if let mac = pairing?.id, sessions.first(where: { $0.id == session })?.state == state { notifications.remove(mac: mac, session: session) }
-        case .agentShellResult:
-            // For `agenttermd mcp`, not for an app.
+        case .agentShellResult, .agentBrowserResult, .browserCall, .agentPrompts, .shellSettings:
+            // What the agents are told is written on the Mac only (principle 1).
+            // For `agenttermd mcp`, and for the Mac app that shows the browser.
             break
+        case .browserTabs(let tabs):
+            // The browser's tabs, on the Mac (#76).
+            browserTabs = tabs
+        case .browserAnswer(let id, let result):
+            browserAnswered(id: id, result: result)
         case .macInUse(let inUse):
             macInUse = inUse
             updateLiveActivity()

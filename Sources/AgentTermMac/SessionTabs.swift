@@ -2,11 +2,13 @@ import AgentTermProtocol
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Every running session and every open file as a tab above the middle pane,
-/// to switch between them with one click or Command and a number.
+/// The tabs of one pane (#69): its sessions, files, diff and pages, to
+/// switch between them with one click, or Command and a number in the pane
+/// the keyboard is in.
 struct SessionTabs: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
+    let pane: PaneLayout.Pane
 
     /// A tab's 25 points and 6 above and below.
     private static let stripHeight: CGFloat = 37
@@ -14,9 +16,20 @@ struct SessionTabs: View {
     /// What a dragged tab is over: a tab's id, a group's id, or "end".
     @State private var dropTarget: String?
 
+    private var focused: Bool { model.paneLayout.focused == pane.id }
+
+    /// The pane's tabs on show, in the order of its strip.
+    private var visible: [String] {
+        let here = Set(pane.tabs)
+        let live = Set(model.liveTabIDs)
+        return model.tabLayout.visibleTabs(front: pane.front).filter { here.contains($0) && live.contains($0) }
+    }
+
     @ViewBuilder
-    private func tab(_ id: String) -> some View {
-        let number = (model.visibleTabs.firstIndex(of: id) ?? 99) + 1
+    private func tab(_ id: String, visible: [String]) -> some View {
+        // The shortcuts are the pane the keyboard is in's: with several
+        // panes, only its strip shows them.
+        let number = focused || !model.paneLayout.isSplit ? (visible.firstIndex(of: id) ?? 99) + 1 : 99
         Group {
             if let session = model.session(forTab: id) {
                 SessionTab(session: session, number: number)
@@ -24,29 +37,32 @@ struct SessionTabs: View {
                 FileTab(document: document, number: number)
             } else if id == TabID.diff, let file = model.diffTabFile {
                 DiffTab(file: file, number: number)
+            } else if let browser = model.browsers.tab(forTab: id) {
+                BrowserTabLabel(tab: browser, number: number)
             }
         }
-        .modifier(TabChrome(id: id, dropTarget: $dropTarget))
+        .modifier(TabChrome(id: id, pane: pane.id, dropTarget: $dropTarget))
     }
 
     var body: some View {
-        if !model.sessions.isEmpty || !files.documents.isEmpty || model.diffTabFile != nil {
+        if !pane.tabs.isEmpty || model.paneLayout.isSplit {
+            let visible = visible
             HStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 4) {
-                            ForEach(Array(model.tabLayout.items(front: model.frontTabID).enumerated()), id: \.offset) { _, item in
+                            ForEach(Array(model.tabLayout.items(front: pane.front, among: Set(pane.tabs)).enumerated()), id: \.offset) { _, item in
                                 switch item {
                                 case .group(let group, let count):
-                                    GroupLabel(group: group, count: count, dropTarget: $dropTarget)
+                                    GroupLabel(group: group, count: count, pane: pane.id, dropTarget: $dropTarget)
                                 case .tab(let id):
-                                    if model.liveTabIDs.contains(id) { tab(id).id(id) }
+                                    if model.liveTabIDs.contains(id) { tab(id, visible: visible).id(id) }
                                 }
                             }
                             // Room after the last tab to drop one at the end.
                             Color.clear.frame(width: 28, height: 24)
                                 .overlay(alignment: .leading) { if dropTarget == "end" { InsertionMark() } }
-                                .onDrop(of: [TabDrag.type], delegate: TabDropDelegate(place: .end, model: model, dropTarget: $dropTarget))
+                                .onDrop(of: [TabDrag.type], delegate: TabDropDelegate(place: .end, pane: pane.id, model: model, dropTarget: $dropTarget))
                         }
                         .padding(.horizontal, 8)
                         // One fixed height for the row and for the strip:
@@ -57,25 +73,13 @@ struct SessionTabs: View {
                     }
                     .frame(height: Self.stripHeight)
                     .scrollBounceBehavior(.basedOnSize, axes: .vertical)
-                    .onChange(of: model.frontTabID) { _, front in
+                    .onChange(of: pane.front) { _, front in
                         if let front { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(front) } }
                     }
                 }
-                Menu {
-                    ForEach(model.installedAgents) { agent in
-                        Button("New \(agent.name)") { model.launch(agent) }
-                    }
-                    Button("New Shell") { model.launch(nil) }
-                } label: {
-                    Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
-                }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .help("Start a session in \(model.workingDirectory)")
+                // No button of its own to start or split: sessions and
+                // pages start from the header, and a pane is split only by
+                // an agent's shells and pages, beside it.
             }
             .background(Theme.panel)
             .overlay(alignment: .bottom) { Theme.hairline.frame(height: 1) }
@@ -93,9 +97,11 @@ private struct SessionTab: View {
     /// Place in the strip, counted from 1. The first nine have a shortcut.
     let number: Int
     @State private var hovering = false
+    @Environment(\.paneFront) private var paneFront
+    @Environment(\.paneID) private var paneID
 
-    /// A file in front means no session's tab is the selected one.
-    private var selected: Bool { model.selectedSession == session.id && files.active == nil && !model.diffInFront }
+    /// The tab in front of its pane (#69).
+    private var selected: Bool { paneFront == TabID.session(session) }
     private var agentID: String { session.agent ?? "shell" }
 
     var body: some View {
@@ -133,7 +139,7 @@ private struct SessionTab: View {
             TabArrangeMenu(id: TabID.session(session))
             Divider()
             Button("End Session") { model.requestEnd(session.id) }
-            CloseOthersButton(request: .init(keepSession: session.id))
+            CloseOthersButton(request: .init(keepSession: session.id, pane: paneID))
             TabStripMenu()
         }
         .accessibilityElement(children: .combine)
@@ -144,8 +150,8 @@ private struct SessionTab: View {
         // offered as the tab's own actions too.
         .accessibilityAction { model.select(session: session) }
         .accessibilityAction(named: "End Session") { model.requestEnd(session.id) }
-        .accessibilityAction(named: "Close Other Tabs") { model.closeTabs(.init(keepSession: session.id)) }
-        .accessibilityAction(named: "Close All Tabs") { model.closeTabs() }
+        .accessibilityAction(named: "Close Other Tabs") { model.closeTabs(.init(keepSession: session.id, pane: paneID)) }
+        .accessibilityAction(named: "Close All Tabs") { model.closeTabs(.init(pane: paneID)) }
         .accessibilityAction(named: "Hand Off") { model.requestHandoff(session: session) }
     }
 }
@@ -156,8 +162,10 @@ private struct FileTab: View {
     let document: OpenDocument
     let number: Int
     @State private var hovering = false
+    @Environment(\.paneFront) private var paneFront
+    @Environment(\.paneID) private var paneID
 
-    private var selected: Bool { files.active == document.path }
+    private var selected: Bool { paneFront == TabID.file(document.path) }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -192,7 +200,7 @@ private struct FileTab: View {
             TabArrangeMenu(id: TabID.file(document.path))
             Divider()
             Button("Close File") { files.requestClose(document.path) }
-            CloseOthersButton(request: .init(keepFile: document.path))
+            CloseOthersButton(request: .init(keepFile: document.path, pane: paneID))
             TabStripMenu()
         }
         .accessibilityElement(children: .combine)
@@ -206,8 +214,10 @@ private struct DiffTab: View {
     let file: FileDiff
     let number: Int
     @State private var hovering = false
+    @Environment(\.paneFront) private var paneFront
+    @Environment(\.paneID) private var paneID
 
-    private var selected: Bool { model.diffInFront }
+    private var selected: Bool { paneFront == TabID.diff }
     private var name: String { (file.path as NSString).lastPathComponent }
 
     var body: some View {
@@ -242,7 +252,7 @@ private struct DiffTab: View {
             TabArrangeMenu(id: TabID.diff)
             Divider()
             Button("Close Diff") { model.closeDiffTab() }
-            CloseOthersButton(request: .init(keepDiff: true))
+            CloseOthersButton(request: .init(keepDiff: true, pane: paneID))
             TabStripMenu()
         }
         .accessibilityElement(children: .combine)
@@ -257,27 +267,33 @@ private struct DiffTab: View {
 struct TabStripMenu: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
+    @Environment(\.paneID) private var paneID
+
+    /// The tabs of the pane the menu is in (#69): what it closes.
+    private var count: Int { paneID.flatMap { model.paneLayout.pane($0)?.tabs.count } ?? model.tabCount }
 
     var body: some View {
-        Button("Close All Files") { model.closeFileTabs() }
+        Button("Close All Files") { model.closeFileTabs(pane: paneID) }
             .disabled(files.documents.isEmpty && model.diffTabFile == nil)
-            .help("Close every file and diff. The terminals stay.")
-        Button(model.sessionsEnded(by: .init()).isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs() }
-            .disabled(model.tabCount == 0)
-            .help("Close every tab, ending the sessions. Pinned tabs stay.")
+            .help("Close every file and diff of this pane. The terminals stay.")
+        Button(model.sessionsEnded(by: .init(pane: paneID)).isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs(.init(pane: paneID)) }
+            .disabled(count == 0)
+            .help("Close every tab of this pane, ending its sessions. Pinned tabs stay.")
     }
 }
 
-/// Closes every other tab, sessions included, keeping the one named.
+/// Closes every other tab of the pane, sessions included, keeping the one named.
 struct CloseOthersButton: View {
     @EnvironmentObject private var model: AppModel
     let request: AppModel.CloseRequest
 
+    private var count: Int { request.pane.flatMap { model.paneLayout.pane($0)?.tabs.count } ?? model.tabCount }
+
     var body: some View {
         // The dots say a question follows, which it does when sessions would end.
         Button(model.sessionsEnded(by: request).isEmpty ? "Close Other Tabs" : "Close Other Tabs…") { model.closeTabs(request) }
-            .disabled(model.tabCount < 2)
-            .help("Close every other tab, ending the other sessions. Pinned tabs stay.")
+            .disabled(count < 2)
+            .help("Close every other tab of this pane, ending the other sessions. Pinned tabs stay.")
     }
 }
 
@@ -341,6 +357,7 @@ private struct InsertionMark: View {
 private struct TabChrome: ViewModifier {
     @EnvironmentObject private var model: AppModel
     let id: String
+    let pane: String
     @Binding var dropTarget: String?
 
     func body(content: Content) -> some View {
@@ -361,7 +378,7 @@ private struct TabChrome: ViewModifier {
                 }
                 return provider
             }
-            .onDrop(of: [TabDrag.type], delegate: TabDropDelegate(place: .before(id), model: model, dropTarget: $dropTarget))
+            .onDrop(of: [TabDrag.type], delegate: TabDropDelegate(place: .before(id), pane: pane, model: model, dropTarget: $dropTarget))
     }
 }
 
@@ -379,6 +396,8 @@ private struct TabDropDelegate: DropDelegate {
     }
 
     let place: Place
+    /// The pane whose strip it is: a tab dropped there moves into it (#69).
+    let pane: String
     let model: AppModel
     @Binding var dropTarget: String?
 
@@ -415,6 +434,7 @@ private struct GroupLabel: View {
     @EnvironmentObject private var model: AppModel
     let group: TabGroup
     let count: Int
+    let pane: String
     @Binding var dropTarget: String?
     @State private var renaming = false
     @State private var name = ""
@@ -438,7 +458,7 @@ private struct GroupLabel: View {
         .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(color.opacity(dropTarget == group.id ? 0.34 : 0.16)))
         .contentShape(Rectangle())
         .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { model.tabLayout.toggleCollapsed(group.id) } }
-        .onDrop(of: [TabDrag.type], delegate: TabDropDelegate(place: .group(group.id), model: model, dropTarget: $dropTarget))
+        .onDrop(of: [TabDrag.type], delegate: TabDropDelegate(place: .group(group.id), pane: pane, model: model, dropTarget: $dropTarget))
         .help(group.isCollapsed ? "Show the \(count) tabs of this group" : "Fold this group away. Drop a tab here to add it.")
         .contextMenu {
             Button(group.isCollapsed ? "Expand Group" : "Collapse Group") { model.tabLayout.toggleCollapsed(group.id) }
@@ -482,7 +502,7 @@ struct TabArrangeMenu: View {
 
     var body: some View {
         let layout = model.tabLayout
-        let visible = model.visibleTabs
+        let visible = model.stripTabs(of: model.paneLayout.pane(containing: id))
         let index = visible.firstIndex(of: id)
         Button(layout.isPinned(id) ? "Unpin Tab" : "Pin Tab") { model.setTabPinned(id, !layout.isPinned(id)) }
         Button("Add to New Group") { model.newTabGroup(with: id) }

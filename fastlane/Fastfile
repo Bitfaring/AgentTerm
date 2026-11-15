@@ -252,6 +252,18 @@ platform :mac do
       # things such as scripting another app; see the file.
       entitlements = File.join(ROOT, "assets/AgentTerm.entitlements")
       flags = ["--force", "--options", "runtime", "--timestamp", "--entitlements", entitlements, "--keychain", path, "--sign", identity]
+      # The browser's Chromium (#76): its libraries, the framework, then
+      # each helper app with the entitlements scripts/browser-helpers.sh
+      # names for it.
+      frameworks = File.join(app, "Contents/Frameworks")
+      cef = File.join(frameworks, "Chromium Embedded Framework.framework")
+      plain = ["--force", "--options", "runtime", "--timestamp", "--keychain", path, "--sign", identity]
+      Dir.glob(File.join(cef, "Versions/A/Libraries/*.dylib")).each { |library| sh("codesign", *plain, library) }
+      sh("codesign", *plain, cef)
+      Dir.glob(File.join(frameworks, "* Helper*.app")).each do |helper|
+        helper_entitlements = sh(File.join(ROOT, "scripts/browser-helpers.sh"), "entitlements", helper, log: false).strip
+        sh("codesign", *plain, "--entitlements", helper_entitlements, helper)
+      end
       sh("codesign", *flags, File.join(app, "Contents/MacOS/agenttermd"))
       sh("codesign", *flags, app)
       sh("codesign", "--verify", "--deep", "--strict", "--verbose=2", app)

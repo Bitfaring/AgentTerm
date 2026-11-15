@@ -43,6 +43,10 @@ struct SessionsView: View {
                         FolderSection(group: group)
                     }
                     if model.status == .connected {
+                        // The Mac's browser, its tabs only (#76).
+                        BrowserSection()
+                    }
+                    if model.status == .connected {
                         // Any folder on the Mac, not only the listed ones.
                         Button {
                             model.showBrowser = true

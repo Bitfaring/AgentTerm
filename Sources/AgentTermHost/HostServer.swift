@@ -209,6 +209,12 @@ public final class HostServer {
         /// What is to be typed into it, without Return, once its shell has
         /// written something: then it is at its prompt (`CreateRequest.typed`).
         var pendingTyped: String?
+        /// Its shell was set up to say when its commands start and end
+        /// (`ShellIntegration`): a shell an agent opened.
+        var marksPrepared = false
+        /// What Settings > Shell has run first in it, typed with Return
+        /// once it shows its prompt, as a person would.
+        var pendingStartup: String?
 
         init(info: SessionInfo, process: PTYProcess, screenLines: Int) {
             self.info = info
@@ -285,6 +291,17 @@ public final class HostServer {
     /// signed in since.
     private var agentShellsRefused = false
     private var agentShellsFaultsTold: [AgentShellsFault] = []
+
+    // MARK: The browser (#76)
+
+    /// The app on this Mac that shows the browser and does what is asked of it.
+    private var browserProvider: ClientID?
+    /// Its tabs, as it last said.
+    private var browserTabsList: [BrowserTabInfo] = []
+    /// What waits for the app's answer, by the number it was asked with:
+    /// who asked, under which number of theirs, and whether an agent did.
+    private var browserCalls: [Int: (client: ClientID, id: Int, agent: Bool)] = [:]
+    private var nextBrowserCall = 1
     /// What a session's agent said or asks that the user has seen on one
     /// device (#60), for the devices that connect later.
     private var noticesSeen: [SessionID: AgentState] = [:]
@@ -309,6 +326,7 @@ public final class HostServer {
             displaySettings = saved.display
             startAtLoginChosen = saved.startAtLoginChosen ?? false
             agentsUseShells = saved.agentsUseShells ?? true
+            shellSettings = saved.shell ?? ShellSettings()
         }
         if let file = tabLayoutFile, let data = try? Data(contentsOf: file),
             let saved = try? JSONDecoder().decode(TabLayout.self, from: data)
@@ -368,6 +386,35 @@ public final class HostServer {
         var startAtLoginChosen: Bool?
         /// Whether the agents are asked to use shells the user sees; on when unset.
         var agentsUseShells: Bool?
+        /// How shells are started (Settings > Shell).
+        var shell: ShellSettings?
+    }
+
+    /// How shells are started (Settings > Shell).
+    private var shellSettings = ShellSettings()
+
+    /// The program a new session starts: the shell picked for a shell, the
+    /// login shell for a command, which is written for it.
+    private func program(forCommand command: String?) -> String {
+        guard (command ?? "").isEmpty, let program = shellSettings.program, FileManager.default.isExecutableFile(atPath: program) else {
+            return HostEnvironment.shell
+        }
+        return program
+    }
+
+    /// The shells the Mac has, to pick from: those `/etc/shells` names and
+    /// those Homebrew put in its folders.
+    private static var availableShells: [String] {
+        let listed = ((try? String(contentsOfFile: "/etc/shells", encoding: .utf8)) ?? "").split(separator: "\n").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }.filter { $0.hasPrefix("/") }
+        let brewed = ["/opt/homebrew/bin", "/usr/local/bin"].flatMap { folder in ["zsh", "bash", "fish", "nu"].map { "\(folder)/\($0)" } }
+        var seen = Set<String>()
+        return (listed + brewed).filter { FileManager.default.isExecutableFile(atPath: $0) && seen.insert($0).inserted }
+    }
+
+    private var shellSettingsMessage: ServerMessage {
+        .shellSettings(shellSettings, loginShell: HostEnvironment.shell, shells: Self.availableShells)
     }
 
     /// Whether the user has turned Start at Login on or off.
@@ -397,7 +444,7 @@ public final class HostServer {
         guard let file = settingsFile else { return }
         let settings = Settings(
             keepAwake: keepAwake, keepAwakeOptions: keepAwakeOptions, commitWriter: commitWriter, display: displaySettings,
-            startAtLoginChosen: startAtLoginChosen, agentsUseShells: agentsUseShells)
+            startAtLoginChosen: startAtLoginChosen, agentsUseShells: agentsUseShells, shell: shellSettings)
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? MessageCoding.encode(settings).write(to: file, options: .atomic)
     }
@@ -1742,6 +1789,7 @@ public final class HostServer {
         }
         client.attached.removeAll()
         if case .device = client.identity { broadcastDevices() }
+        if browserProvider == client.id { setBrowserProvider(client, false) }
     }
 
     private func send(_ message: ServerMessage, to client: Client) {
@@ -1828,6 +1876,29 @@ public final class HostServer {
             create(request, for: client)
         case .agentShell(let id, let key, let request):
             handleAgentShell(id: id, key: key, request: request, from: client)
+        case .agentBrowser(let id, let key, let request):
+            handleAgentBrowser(id: id, key: key, request: request, from: client)
+        case .browserProvider(let on):
+            setBrowserProvider(client, on)
+        case .browserReply(let id, let result):
+            browserReplied(id, result, from: client)
+        case .browserTabs(let list):
+            // Only from the app that shows the browser.
+            guard browserProvider == client.id else { return }
+            browserTabsList = list
+            for other in clients.values where other.authenticated { send(.browserTabs(list), to: other) }
+        case .browserAsk(let id, let request):
+            handleBrowserAsk(id: id, request: request, from: client)
+        case .setAgentPrompt(let agent, let text):
+            setAgentPrompt(agent, text)
+        case .setShellSettings(let settings):
+            if let program = settings.program, !FileManager.default.isExecutableFile(atPath: program) {
+                return send(.error("\(program) is not a program that can be run: the shell was not changed."), to: client)
+            }
+            shellSettings = settings
+            saveSettings()
+            let message = shellSettingsMessage
+            for other in clients.values where other.authenticated { send(message, to: other) }
         case .noticeSeen(let id, let state):
             // Only what the agent still says: what it said before is gone
             // from every device already.
@@ -1840,6 +1911,8 @@ public final class HostServer {
             agentsUseShells = on
             saveSettings()
             for other in clients.values where other.authenticated { send(.agentsUseShells(on), to: other) }
+            // What the agents are told by default follows it.
+            broadcastAgentPrompts()
         case .answer(let id, let state, let text):
             // Only while the agent still asks what the reply answers: one
             // that comes later is not typed into what it asks next.
@@ -2620,6 +2693,9 @@ public final class HostServer {
         send(.schedules(schedules), to: client)
         send(.schedulesPaused(schedulesPaused), to: client)
         send(.worktreeSetups(worktreeSetups), to: client)
+        send(.browserTabs(browserTabsList), to: client)
+        send(agentPromptsMessage, to: client)
+        send(shellSettingsMessage, to: client)
         send(historyMarksMessage, to: client)
         send(.commitWriter(commitWriter), to: client)
         if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
@@ -2725,6 +2801,10 @@ public final class HostServer {
         var environment = HostEnvironment.sessionEnvironment()
         let agent = SessionSummaries.agent(forCommand: command)
         var hooked = false
+        // What the agent is told: the user's words for it, or the default.
+        // Its MCP server gives the same as its instructions.
+        let prompt = agent.flatMap { agentPrompt(for: $0) }
+        if let agent { writePromptForServer(prompt, agent: agent) }
         if let agent, let tool = configuration.statusLineTool, let events = eventsFile(for: id) {
             // Claude Code reports its usage through its status line, and
             // every agent what it is doing through its hooks.
@@ -2732,12 +2812,12 @@ public final class HostServer {
             for file in [usage, events].compactMap({ $0 }) { try? FileManager.default.removeItem(at: file) }
             if let more = try? AgentHooks.launchArguments(
                 agent: agent, tool: tool, usageFile: usage?.path, directory: configuration.hooksDirectory, home: configuration.home,
-                trust: run.map { [$0.folder] } ?? [], useShells: asksToUseShells)
+                trust: run.map { [$0.folder] } ?? [], prompt: prompt)
             {
                 command = (command ?? "") + more
                 environment[AgentHooks.eventsVariable] = events.path
                 if let told = try? AgentHooks.instructionsEnvironment(
-                    agent: agent, directory: configuration.hooksDirectory, useShells: asksToUseShells, current: environment)
+                    agent: agent, directory: configuration.hooksDirectory, prompt: prompt, current: environment)
                 {
                     environment.merge(told) { _, new in new }
                 }
@@ -2750,16 +2830,37 @@ public final class HostServer {
             command = Handoff.shellQuote((directory as NSString).appendingPathComponent(agent)) + text.dropFirst(agent.count)
         }
         environment.merge(more) { _, new in new }
+        // A shell is the program picked in Settings > Shell; a command is
+        // started by the login shell, for which it is written.
+        let isShell = (request.command ?? "").isEmpty
+        let program = program(forCommand: request.command)
+        // A shell an agent opens says when its commands start and end, for
+        // `shell_run` (#10), unless that is turned off; what it is to run
+        // first is run before its first prompt, not taken for a command of
+        // the agent's. The user's own sessions are left as they are.
+        var marksPrepared = false
+        var startup: String?
+        if isShell {
+            startup = openedBy == nil ? shellSettings.startup : shellSettings.agentStartup
+            if startup?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { startup = nil }
+        }
+        if openedBy != nil, isShell, shellSettings.marks,
+            let integration = ShellIntegration.environment(shell: program, current: environment, startup: startup)
+        {
+            environment.merge(integration) { _, new in new }
+            marksPrepared = true
+            startup = nil
+        }
         // The agent's MCP server tells the host which session's it is.
         let agentKey = agent.map { _ in UUID().uuidString + UUID().uuidString }
         if let agentKey {
-            environment[Self.agentShellsVariable] = AgentShellsMCP.Session(port: boundPort, key: agentKey, useShells: asksToUseShells).variable()
+            environment[Self.agentShellsVariable] = AgentShellsMCP.Session(port: boundPort, key: agentKey, useShells: asksToUseShells, agent: agent).variable()
         }
         let process: PTYProcess
         do {
             process = try PTYProcess(
-                executable: HostEnvironment.shell,
-                arguments: HostEnvironment.shellArguments(command: command),
+                executable: program,
+                arguments: HostEnvironment.shellArguments(command: command, shell: program),
                 environment: environment,
                 cwd: cwd,
                 size: size,
@@ -2773,7 +2874,7 @@ public final class HostServer {
         nextSessionID += 1
         let fallbackTitle =
             request.command?.split(separator: " ").first.map(String.init)
-            ?? (HostEnvironment.shell as NSString).lastPathComponent
+            ?? (program as NSString).lastPathComponent
         let info = SessionInfo(
             id: id, title: request.title ?? fallbackTitle, cwd: cwd, size: size, createdAt: Date(),
             agent: SessionSummaries.agent(forCommand: request.command),
@@ -2785,8 +2886,10 @@ public final class HostServer {
         let session = Session(info: info, process: process, screenLines: configuration.screenLines)
         session.hooked = hooked
         session.agentKey = agentKey
+        session.marksPrepared = marksPrepared
         session.info.openedBy = openedBy
         session.pendingTyped = request.typed.flatMap { $0.isEmpty ? nil : $0 }
+        session.pendingStartup = startup
         session.info.schedule = run?.name
         session.info.schedulePermissions = run?.permissions
         if run != nil { session.lastOutputAt = configuration.now() }
@@ -2829,28 +2932,20 @@ public final class HostServer {
         for client in clients.values where client.authenticated { send(.startAtLogin(on), to: client) }
     }
 
-    /// Does what an agent asks of the shells agents opened, as the session
-    /// its key names, and answers the client that asked. Those shells are
-    /// every agent's, so that one agent uses a shell another opened rather
-    /// than open one more; the user's own sessions, and the agents', are
-    /// never reached.
+    /// Does what an agent asks of the shells it opened, as the session its
+    /// key names, and answers the client that asked. An agent sees, reads,
+    /// types into and closes only the shells it opened; another agent's,
+    /// the user's own sessions, and the agents', it never reaches. One whose
+    /// agent's session has ended is the user's.
     private func handleAgentShell(id: Int, key: String, request: AgentShellRequest, from client: Client) {
         func answer(_ result: AgentShellResult) { send(.agentShellResult(id: id, result: result), to: client) }
         guard !key.isEmpty, let owner = sessions.values.first(where: { $0.agentKey == key }) else {
             return answer(.refused("This is not the session of an agent AgentTerm started, or that session has ended."))
         }
-        /// A shell an agent opened and that still runs: any agent reads it.
-        func opened(_ session: SessionID) -> Session? {
-            sessions[session].flatMap { $0.info.openedBy != nil ? $0 : nil }
-        }
-        let notOpened = "That is not a shell an agent opened, or it has ended. Use list_shells."
-        /// A shell this agent opened: only it types into it and closes it
-        /// (#61). One whose agent's session has ended is nobody's, and is
-        /// left to the user.
+        /// A shell this agent opened and that still runs.
         func own(_ session: SessionID) -> (Session?, String) {
-            guard let shell = opened(session) else { return (nil, notOpened) }
-            guard shell.info.openedBy == owner.info.id else {
-                return (nil, "Shell \(session) was opened by another agent: you may read it, not type into it or close it. Open one of your own with open_shell.")
+            guard let shell = sessions[session], shell.info.openedBy == owner.info.id else {
+                return (nil, "There is no shell \(session) of yours: you see and use only the shells you opened. Open one with shell_open, or list yours with shell_list.")
             }
             return (shell, "")
         }
@@ -2871,10 +2966,10 @@ public final class HostServer {
             }
             answer(.opened(session.info))
         case .list:
-            let shells = sessions.values.filter { $0.info.openedBy != nil }.map(\.info).sorted { $0.id < $1.id }
-            answer(.shells(shells, own: shells.filter { $0.openedBy == owner.info.id }.map(\.id)))
+            answer(.shells(sessions.values.filter { $0.info.openedBy == owner.info.id }.map(\.info).sorted { $0.id < $1.id }))
         case .read(let session, let linesAbove):
-            guard let shell = opened(session) else { return answer(.refused(notOpened)) }
+            let (found, why) = own(session)
+            guard let shell = found else { return answer(.refused(why)) }
             let lines = min(linesAbove, configuration.screenLines)
             // Read where the screen is kept, after what was written to it,
             // without this queue, which every session's output goes
@@ -2894,6 +2989,38 @@ public final class HostServer {
             }
             shell.process.write(Data(bytes.utf8))
             answer(.done)
+        case .run(let session, let command):
+            let (found, why) = own(session)
+            guard let shell = found else { return answer(.refused(why)) }
+            let mirror = shell.mirror
+            let prepared = shell.marksPrepared
+            // As the screen stands once what came before is fed to it.
+            shell.mirrorQueue.async { [weak self] in
+                var before = mirror.command(lines: 0)
+                before.prepared = prepared
+                let paste = mirror.bracketedPasteMode
+                self?.queue.async { [weak shell] in
+                    guard let shell else { return answer(.refused("Shell \(session) has ended.")) }
+                    if before.integrated, before.running {
+                        return answer(
+                            .refused(
+                                "Shell \(session) is still running a command. Wait for it to end with shell_wait, stop it with shell_send and the key Control C, or open another shell with shell_open."
+                            ))
+                    }
+                    shell.process.write(Data((SentText.text(command, bracketedPaste: paste) + "\r").utf8))
+                    answer(.ran(before))
+                }
+            }
+        case .command(let session, let lines):
+            let (found, why) = own(session)
+            guard let shell = found else { return answer(.refused(why)) }
+            let mirror = shell.mirror
+            let prepared = shell.marksPrepared
+            shell.mirrorQueue.async { [weak self] in
+                var state = mirror.command(lines: lines)
+                state.prepared = prepared
+                self?.queue.async { answer(.command(state)) }
+            }
         case .close(let session):
             let (found, why) = own(session)
             guard let shell = found else { return answer(.refused(why)) }
@@ -2901,6 +3028,150 @@ public final class HostServer {
             shell.process.hangUp()
             queue.asyncAfter(deadline: .now() + 3) { [weak shell] in shell?.process.forceKill() }
             answer(.done)
+        }
+    }
+
+    // MARK: What the agents are told
+
+    /// What the user wrote for each agent in Settings, by agent; one that
+    /// is not here is told the default.
+    private lazy var agentPrompts: [String: String] = {
+        guard let data = FileManager.default.contents(atPath: Self.agentPromptsFile.path) else { return [:] }
+        return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+    }()
+
+    public static var agentPromptsFile: URL { HostEnvironment.supportDirectory.appendingPathComponent("agent-prompts.json") }
+
+    /// What AgentTerm tells an agent by default: to run its commands in the
+    /// shells the user sees, when that is on, and to use AgentTerm's
+    /// browser, while the MCP server is set up.
+    private func defaultPrompt(for agent: String) -> String? {
+        AgentShellsInstructions.told(useShells: asksToUseShells, browser: configuration.agentShells?.isOn ?? false)
+    }
+
+    func agentPrompt(for agent: String) -> String? {
+        if let own = agentPrompts[agent] { return own.isEmpty ? nil : own }
+        return defaultPrompt(for: agent)
+    }
+
+    /// Where the agent's MCP server finds its instructions: the same words,
+    /// which it gives as its own. Codex reads only those.
+    public static func promptFile(for agent: String) -> URL {
+        HostEnvironment.supportDirectory.appendingPathComponent("prompts", isDirectory: true).appendingPathComponent(agent + ".md")
+    }
+
+    private func writePromptForServer(_ prompt: String?, agent: String) {
+        let file = Self.promptFile(for: agent)
+        guard let prompt else {
+            try? FileManager.default.removeItem(at: file)
+            return
+        }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data(prompt.utf8).write(to: file, options: .atomic)
+    }
+
+    /// The user's words for an agent, or none to go back to the default.
+    private func setAgentPrompt(_ agent: String, _ text: String?) {
+        if let text { agentPrompts[agent] = text } else { agentPrompts[agent] = nil }
+        if let data = try? JSONEncoder().encode(agentPrompts) {
+            try? FileManager.default.createDirectory(at: Self.agentPromptsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: Self.agentPromptsFile, options: .atomic)
+        }
+        broadcastAgentPrompts()
+    }
+
+    private var agentPromptsMessage: ServerMessage {
+        let agents = AgentDetector.known.map(\.id)
+        var defaults: [String: String] = [:]
+        for agent in agents { defaults[agent] = defaultPrompt(for: agent) ?? "" }
+        return .agentPrompts(custom: agentPrompts, defaults: defaults)
+    }
+
+    func broadcastAgentPrompts() {
+        let message = agentPromptsMessage
+        for client in clients.values where client.authenticated { send(message, to: client) }
+    }
+
+    // MARK: The browser (#76)
+
+    /// The Mac app on this Mac says it shows the browser, or no longer does.
+    /// Only an app that signed in with this Mac's own token, on this Mac,
+    /// may: the browser holds the user's sign-ins.
+    private func setBrowserProvider(_ client: Client, _ on: Bool) {
+        if on {
+            guard client.isAdmin, client.isLocal else { return send(.error("not allowed"), to: client) }
+            browserProvider = client.id
+            return
+        }
+        guard browserProvider == client.id else { return }
+        browserProvider = nil
+        browserTabsList = []
+        for other in clients.values where other.authenticated && other !== client { send(.browserTabs([]), to: other) }
+        // Whoever waits for the app is answered now, with why.
+        for (call, waiting) in browserCalls {
+            browserCalls[call] = nil
+            answerBrowser(waiting, .refused(BrowserWords.noApp))
+        }
+    }
+
+    private func answerBrowser(_ waiting: (client: ClientID, id: Int, agent: Bool), _ result: BrowserResult) {
+        guard let asker = clients[waiting.client] else { return }
+        send(waiting.agent ? .agentBrowserResult(id: waiting.id, result: result) : .browserAnswer(id: waiting.id, result: result), to: asker)
+    }
+
+    /// Passes a request on to the app that shows the browser, and answers
+    /// whoever asked when it answers, or at once when there is no such app.
+    private func callBrowser(_ request: BrowserRequest, agent: SessionID?, for waiting: (client: ClientID, id: Int, agent: Bool)) {
+        guard let providerID = browserProvider, let provider = clients[providerID] else {
+            return answerBrowser(waiting, .refused(BrowserWords.noApp))
+        }
+        let call = nextBrowserCall
+        nextBrowserCall += 1
+        browserCalls[call] = waiting
+        send(.browserCall(id: call, agent: agent, request: request), to: provider)
+        // An app that is there and silent is waited for, as long as the
+        // request may take and a little more.
+        var seconds: Double = 60
+        if case .wait(_, _, _, let wait) = request { seconds = min(max(wait, 0), 600) + 30 }
+        queue.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self, let waiting = self.browserCalls.removeValue(forKey: call) else { return }
+            self.answerBrowser(waiting, .refused("The AgentTerm app did not answer for \(Int(seconds)) seconds. Try again; if it goes on, ask the user to look at the app."))
+        }
+    }
+
+    private func browserReplied(_ call: Int, _ result: BrowserResult, from client: Client) {
+        guard browserProvider == client.id, let waiting = browserCalls.removeValue(forKey: call) else { return }
+        answerBrowser(waiting, result)
+    }
+
+    /// What an agent asks of the browser, as the session its key names.
+    /// Which tabs it may reach is the app's to check: it knows them.
+    private func handleAgentBrowser(id: Int, key: String, request: BrowserRequest, from client: Client) {
+        let waiting = (client: client.id, id: id, agent: true)
+        guard !key.isEmpty, let owner = sessions.values.first(where: { $0.agentKey == key }) else {
+            return answerBrowser(waiting, .refused("This is not the session of an agent AgentTerm started, or that session has ended."))
+        }
+        switch request {
+        case .picture, .takeOver, .giveBack:
+            // The user's, from a device.
+            return answerBrowser(waiting, .refused("That is for the user, not for an agent."))
+        default:
+            callBrowser(request, agent: owner.info.id, for: waiting)
+        }
+    }
+
+    /// What a device asks of the browser: its tabs, a picture of one, and
+    /// taking one over from its agent or giving it back. A device does not
+    /// drive the pages.
+    private func handleBrowserAsk(id: Int, request: BrowserRequest, from client: Client) {
+        let waiting = (client: client.id, id: id, agent: false)
+        switch request {
+        case .tabs:
+            answerBrowser(waiting, .tabs(browserTabsList))
+        case .picture, .takeOver, .giveBack:
+            callBrowser(request, agent: nil, for: waiting)
+        default:
+            answerBrowser(waiting, .refused("A device can look at a tab of the browser, and take it over or give it back, not drive it."))
         }
     }
 
@@ -2917,6 +3188,7 @@ public final class HostServer {
             self?.queue.async {
                 guard let self else { return }
                 for client in self.clients.values where client.authenticated { self.send(.agentShells(isOn), to: client) }
+                self.broadcastAgentPrompts()
                 // Set up again: what was refused before is not known to be still.
                 if on != nil { self.agentShellsRefused = false }
                 self.agentShellsNotInstalled = failed.map(\.name)
@@ -3016,12 +3288,21 @@ public final class HostServer {
     private static let replayPiece = 256 * 1024
 
     private func record(_ data: Data, in session: Session) {
+        var typedAfter = 0.3
+        if let startup = session.pendingStartup {
+            // Run first, a line at a time with Return, as a person types
+            // them; what is to be typed after it waits a little longer.
+            session.pendingStartup = nil
+            typedAfter = 0.6
+            let lines = startup.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r") + "\r"
+            queue.asyncAfter(deadline: .now() + 0.3) { [weak session] in session?.process.write(Data(lines.utf8)) }
+        }
         if let typed = session.pendingTyped {
             // The shell has started to write its prompt: typed a moment
             // later, once the prompt is out, and never with Return.
             session.pendingTyped = nil
             let text = typed.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
-            queue.asyncAfter(deadline: .now() + 0.3) { [weak session] in session?.process.write(Data(text.utf8)) }
+            queue.asyncAfter(deadline: .now() + typedAfter) { [weak session] in session?.process.write(Data(text.utf8)) }
         }
         let mirror = session.mirror
         session.mirrorQueue.async { mirror.feed(data) }

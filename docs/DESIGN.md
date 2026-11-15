@@ -898,19 +898,61 @@ signs it with a profile of its own from `match`.
 ## Shells an agent opens
 
 AgentTerm's MCP server is `agenttermd mcp` (`AgentShellsMCP`): JSON-RPC, one
-message to a line, on standard input and output. Its tools are
-`open_shell`, `list_shells`, `read_screen`, `send_input`, `wait` and
-`close_shell`. `wait` reads the screen every 0.2 seconds until a text
-appears, or the screen has been the same for a while, or the time is up.
+message to a line, on standard input and output. Its shells' tools are
+named alike, as the browser's are: `shell_open`, `shell_run`, `shell_list`,
+`shell_read`, `shell_send`, `shell_wait` and `shell_close`. Each says in
+its annotations whether it only looks (`readOnlyHint`: `shell_list`,
+`shell_read`, `shell_wait`, and the browser's that only look) and whether
+it ends something (`destructiveHint`: `shell_close`, `browser_close`).
+
+**How shells start.** The host keeps `ShellSettings` in its
+`settings.json` (`setShellSettings`, told to every device with
+`shellSettings`, with the login shell and the Mac's shells from
+`/etc/shells` and Homebrew's folders): the program of a shell (a session
+with no command; one with a command keeps the login shell), what is run
+first in the user's shells (`pendingStartup`, typed a line at a time with
+Return once the shell first writes) and in the agents' (in
+`AGENTTERM_STARTUP`, `eval`ed by the integration's `.zshrc` after the
+user's own, before the hooks; typed as in the user's when the shell is not
+set up), and `marks`, whether an agent's shell is set up at all. How the
+terminals look is the Mac app's own (`terminalFontName`, `terminalCursor`,
+`cursorBlinks`, `scrollbackLines`), given to each `TerminalController`
+and to `TerminalStyle.fontName`, which `TerminalMetrics` measures by.
+
+**A command and how it ended.** A shell an agent opens without a command
+is set up to say when each command starts and ends, with its exit code,
+in the marks of OSC 133 (`ShellIntegration`): zsh is started with
+`ZDOTDIR` pointing at the host's `shell-integration/zsh`, whose startup
+files read the user's own from their folder as zsh would (a `ZDOTDIR`
+their `.zshenv` sets included), then add a `precmd` hook, first, that
+writes `D;<exit code>` and `A`, and a `preexec` hook that writes `C`, and
+point zsh back at the user's folder. fish writes the marks by itself;
+another shell is used as it is. The user's own sessions are never set up.
+`ScreenMirror` finds the marks in the output as it comes
+(`CommandMarks`, a mark cut in two included) and feeds what a command
+writes, from its `C` to its `D`, to a terminal of its own as well, whose
+text is the command's output as a terminal shows it. `run(session:command:)`
+types the command at the prompt as a paste when the shell takes one (so
+that lines are one command) and Return, refused while a command runs;
+`command(session:lines:)` tells the commands as they stand (`AgentCommand`:
+whether the shell says anything, how many started, whether one runs, the
+last exit code, the last lines of its output). `shell_open` returns once
+the shell showed its first prompt. `shell_run` waits for the command to
+end, 60 seconds unless told otherwise, and answers its exit code and its
+last 300 lines; one still running is left running, and the server keeps
+which it is, so that `shell_wait` tells how it ended, also when it ended
+in between. From a shell that says nothing, `shell_run` answers the screen
+once it is still. `shell_wait` with a text waits for it; without, for the
+command that runs to end; with none running, for the screen to be still,
+reading it every 0.2 seconds.
 
 The server answers tool calls side by side (#64). Its lines are read in
 turn; a `tools/call` is handed to a concurrent queue and answered when its
-tool is done, under its request's id, so that a `wait`, which may take as
-long as the agent lets it, does not hold up the `read_screen`,
-`send_input`, `list_shells`, `open_shell` and `close_shell` that follow
-it, nor another `wait` on another shell. `notifications/cancelled` with a
-request's id ends a `wait` that is going on, and that request is then not
-answered. An answer is one line, written whole. The line to the host
+tool is done, under its request's id, so that a `shell_wait` or a
+`shell_run`, which may take as long as the agent lets it, does not hold up
+the calls that follow it, nor another on another shell.
+`notifications/cancelled` with a request's id ends a wait that is going
+on, and that request is then not answered. An answer is one line, written whole. The line to the host
 (`AgentShellsLink.ask`) already took requests side by side.
 
 **Which session's agent it is.** The host gives every agent's session a key
@@ -928,9 +970,20 @@ build the variable does not name stays out rather than sign in to a host
 with another host's token. A variable that names no build is from a host
 of 0.6, and is the released build's. With "agents run their
 commands in shells you see" on (the host's `agentsUseShells`, on by
-default) the variable ends with `use`: the server's instructions are then
-`AgentShellsInstructions.useShells`, and the agents are told the same
-where each reads it (MCP-13): Claude Code is started with
+default) the variable ends with `use`, and it names the session's agent
+(`agent:claude`).
+
+**What an agent is told.** The host works out one text for each agent:
+what the user saved for it in Settings > Agents (`setAgentPrompt`, kept in
+`agent-prompts.json` of the host's folder and told to every device with
+`agentPrompts`, with each agent's default), or else the default:
+`AgentShellsInstructions.useShells` while "agents run their commands in
+shells you see" is on, and `AgentShellsInstructions.browser` while the
+server is set up (`AgentShellsInstructions.told`). An empty text tells
+nothing. When it starts an agent's session the host writes that text to
+`prompts/<agent>.md` of its folder, which the session's server gives as
+its instructions, and gives it where each agent reads it (MCP-13,
+PROMPT-1 to PROMPT-4): Claude Code is started with
 `--append-system-prompt`; Antigravity gets a rule always on,
 `.agents/rules/agentterm.md` in the folder it is given with `--add-dir`;
 Copilot CLI gets `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` naming a folder of the
@@ -940,17 +993,16 @@ servers it allows, and Antigravity not at all. Codex follows the server's.
 
 **What it may reach.** A shell it opens is a session like any other, in the
 agent's folder and at its size, with `SessionInfo.openedBy` naming the
-agent's session. Only that agent types into it and closes it; every agent
-lists and reads the shells any agent opened, and `agentShellResult`'s
-`shells(_:own:)` says which are the asking agent's (#61). So what runs in
-an agent's shell is what that agent started, and no agent has to guess
-from a screen whether a shell is free: one that has none, or whose own is
-busy, opens another. Typing into or closing another agent's shell is
-refused with words that say to open one; so it is for a shell whose
-agent's session has ended, which is nobody's: it stays open for the user,
-and nothing takes it over. A session that is resumed or handed off is, to
-the host, another agent, and only reads the shells it opened before. An
-agent never reaches the user's sessions or an agent's session. A command
+agent's session. Only that agent sees it: it alone lists, reads, types
+into and closes it, and `agentShellResult`'s `shells(_:)` lists the asking
+agent's own (#61). So what runs in an agent's shell is what that agent
+started, and no agent has to guess from a screen whether a shell is free:
+one that has none, or whose own is busy, opens another. Any other shell is
+answered as if it were not there, with words that say to open one; so it
+is for a shell whose agent's session has ended: it stays open for the
+user, and nothing takes it over. A session that is resumed or handed off
+is, to the host, another agent, and does not see the shells it opened
+before. An agent never reaches the user's sessions or an agent's session. A command
 whose first word is an agent's is refused. Typing is the same as typing:
 text, and keys by name turned into the bytes a terminal sends
 (`TerminalKeys`). When the agent's session ends, the server it started
@@ -995,6 +1047,107 @@ put right by hand (`<agent> mcp remove agentterm`, then the released app
 started again). The host does it at start and on
 `setAgentShells`, off its queue, and tells every client `agentShells(Bool)`.
 A host with a state folder of its own (a test, a trial run) never does.
+
+## The browser
+
+The Mac app's browser (#76) is Chromium, embedded with the Chromium
+Embedded Framework (CEF 156.0.30, Chromium 156.0.8078.96, tried on
+2026-11-15). Nothing of CEF is in the repository: `scripts/fetch-cef.sh`
+fetches the minimal binary distribution, pinned with its SHA-1, into
+`.build/cef/<name>` and points `.build/cef/current` at it.
+
+**The bridge.** `CAgentTermCEF` is C and Objective-C on CEF's C API, its
+headers read from `.build/cef/current` (`headerSearchPath`) with
+`CEF_API_VERSION` 15600 pinned, so that a later build of the same API is
+taken without a change. Built without the headers (`__has_include`), it
+compiles to stubs and the browser says it is not in the build. The
+framework is never linked: it is loaded with `dlopen` the first time a
+browser is wanted, and the dozen functions used are looked up by name.
+Reference counting follows the C API: a struct a callback receives
+carries a reference the callback releases, and a struct of ours given to
+CEF carries one CEF releases. CEF runs on the main thread with an
+external message pump: `on_schedule_message_pump_work` sets a run loop
+timer in the common modes, at most a thirtieth of a second away, as
+cefclient does. Chromium wants its application to say whether it is
+sending an event: `isHandlingSendEvent`, `setHandlingSendEvent:` and a
+wrapped `sendEvent:` are added to `NSApplication` itself. Changing the
+running application's class instead, as first done, crashed the app the
+first time Chromium added a key-value observer to it: by then the
+application's class was the one observing had made for it. `do_close`
+answers that it is handled; answered otherwise, CEF sends `performClose:`
+to the window the page is in, the app's own.
+
+**The processes.** The pages, the GPU and the network run in the helper
+apps of the bundle's Frameworks folder, "<App> Helper.app" and its four
+variants, all one program (`AgentTermBrowserHelper`), which enters
+Chromium's sandbox (`libcef_sandbox.dylib`, `cef_sandbox_initialize`)
+before it loads the framework, then runs `cef_execute_process`. The
+browser runs in the app bundle only: `scripts/bundle-mac.sh` puts the
+framework in, in the versioned layout codesign wants, and the helpers,
+each signed with the entitlements `scripts/browser-helpers.sh` names.
+No DevTools port is opened (`remote_debugging_port` 0).
+
+**Settings and profiles.** CEF's root folder is the state folder's
+`browser`, so the two builds and every test keep their own; its
+keychain item is "<App> Safe Storage" (`keychain_service_name`, new in
+CEF 156). A test, which runs with a state folder of its own, and the
+development build use a key of Chromium's own (`use-mock-keychain`) and
+never the user's keychain: the development build is signed ad hoc, anew
+with each build, and macOS asked each time whether it may read its item
+(decided by the owner on 2026-11-15). Its cookies are then only as safe
+as its folder. A profile (`BrowserProfiles`) is a request context with
+`cache_path` `browser/profile-<id>`, right in the root folder, where
+Chromium's profiles have to be: one a level further down is refused
+("Cannot create profile at path"), and its pages fall back silently to
+a profile of Chromium's own, which every profile then shares (found on
+2026-11-15, BROWSER-10). It is opened in the background: a
+browser is made in it once `on_request_context_initialized` says it is
+open, and `atc_create` answers with `ATC_EVENT_CREATED` and the token it
+was given. The profiles, their names and the default are the app's
+preferences. Data Chromium has open is wiped at the next start, before
+Chromium opens anything (`browserProfilesToWipe`). An agent's profile is
+asked once, at its first `browser_open` (`ProfileQuestion`), when there
+is more than one profile and the host says someone is at the Mac;
+otherwise, and after 45 seconds with no answer, the default.
+
+**Tabs.** A `BrowserTab` holds Chromium's browser for one page, the view
+it draws in (`BrowserContainerView`, moved to whichever pane shows it),
+and its `DevToolsSession`. A page no pane shows waits in a one-point view
+in the window's corner (`BrowserParking`): Chromium draws, and takes
+pictures of, a page in a window only. Its tab id in a `TabLayout` is
+`b:<id>`; a tab an agent opened is its companion and shows in its area
+(see Panes). The tabs are not kept: the app opens with none, and what an
+earlier build kept in the app's preferences (`browserTabs`) is forgotten.
+An agent's tab whose agent has ended is the user's.
+
+**The agents.** An agent's `browser_*` tool is a `BrowserRequest`, which
+`agenttermd mcp` sends as `agentBrowser(id:key:request:)`. The host finds
+the agent's session by its key and passes the request to the app that
+said `browserProvider(true)`, the Mac app on this Mac signed in with the
+Mac's own token, as `browserCall(id:agent:request:)`; the app answers
+`browserReply(id:result:)`, passed back as `agentBrowserResult`. With no
+such app, or when it goes, whoever waits is answered at once
+(`BrowserWords.noApp`). An agent sees and reaches only the tabs it
+opened (`BrowserTabInfo.reachable`): `browser_tabs` lists those, and any
+other tab, the user's or another agent's, is answered as if it were not
+there (`BrowserWords.notYours`). The app refuses an action, not a look,
+while the user has the tab. It drives the page with the DevTools
+protocol inside the process (`atc_devtools`, CEF's
+`SendDevToolsMessage`): the snapshot is `Accessibility.getFullAXTree`
+written as text, a ref for each element of an actionable role, kept with
+the document it was taken of, which goes up with each navigation of the
+main frame; a click is `DOM.getBoxModel` and `Input.dispatchMouseEvent`
+at the element's middle; typing is `DOM.focus` and `Input.insertText`;
+a picture is `Page.captureScreenshot`; the console and the requests are
+kept from `Runtime`, `Log` and `Network` events. Each action answers
+with where the page is, its title read from the page, and what happened
+meanwhile.
+
+**Devices.** The iPhone sees `browserTabs`, which the app sends the host
+whenever a tab changes and the host keeps and passes on, and asks
+`browserAsk(id:request:)` for a picture (`picture`, a JPEG) or to take a
+tab over or give it back; a device's request to act on a page is
+refused by the host.
 
 ## Handoff
 
@@ -1114,6 +1267,59 @@ the same folder can therefore be mixed up; the History tab is exact.
   sessions keeps scrollback.
 - If the app cannot connect, it starts the `agenttermd` that sits next to its
   own executable, in a new session so it outlives the app, and retries.
+
+### Panes
+
+The middle of the window shows the project on show's one pane (#69). The
+user does not split it: no button, menu item, shortcut or action does, and
+a layout split by an earlier build is put back together into one pane by
+`syncPanes`, its tab in front kept. What is shown side by side is an
+agent's area, its shells and pages beside it (below). `PaneLayout`
+(`AgentTermProtocol`, so that `swift test` reaches it) can still hold a tree
+of splits,
+each with an axis and the share of its first side, whose leaves are panes;
+a pane has the ids of its tabs, the one in front, and whether it was split
+off empty to be given one. `TabLayout`, which the host keeps for every
+device, still decides the order, pins and groups of all the tabs; a pane's
+strip shows `TabLayout.items(front:among:)`, the items among its own tabs.
+A tab is in one pane at most: the window is one client of the host, and
+`SizeArbiter` keeps one size for each client.
+
+The app keeps a `PaneLayout` for each project, by its folder ("" for the
+sessions of no listed folder), in its preferences under `paneLayouts` for
+this Mac and `paneLayouts.<id>` for another Mac; the host keeps none and
+the iPhone has none. A tab's project is the listed folder its session
+belongs to as the list at the left has it (`WorktreePath.belongs`), or the
+folder that holds its file, the diff's folder or the browser tab's
+project. `syncPanes` runs whenever the tabs change, after `syncTabs`: it
+drops what is gone, puts a new tab in the pane the keyboard is in, keeps
+each pane's tabs in the strip's order, and closes a pane left empty by a
+tab that went, unless it was split off empty or is the only one. It waits,
+as `syncTabs` does, until the host has listed its sessions and sent its
+`TabLayout`, so that nothing saved is dropped at launch.
+
+The rest of the app knows one tab in front: `selectedSession`,
+`files.active`, `diffInFront` and `browserInFront`, in that order of
+priority the other way round. That is the front of the pane the keyboard is
+in. Setting it (`frontChanged`) shows the project of that tab and brings the
+tab to the front of its pane, with the keyboard; focusing a pane
+(`focusPane`, a click found in `paneFrames`, ⌘⌥ and an arrow) sets it to that
+pane's front (`adoptFocusedFront`), or to nothing. A session that ends
+leaves the tab before it in front of its pane, not a tab of another pane or
+project. A terminal takes the keyboard only when its pane and part have it
+(`TerminalPane`'s `focused`), and a terminal moved to another container
+keeps the keyboard it had, so that a layout that changes as an agent opens
+a shell does not take it from where the user types.
+
+**An agent's area.** The running shells whose `openedBy` names a running
+agent, and the browser tabs an agent opened, are always its companions
+(`companions`): they are in no pane, are not dragged, pinned or moved, and
+the agent's pane shows `AgentAreaView`, the agent and its browser side by
+side over its shells. What is remembered of each (the shares, a
+part closed, the shell and page in front) is an `AgentArea`, by the agent's
+tab id, in `agentAreas`; which part has the keyboard is `agentAreaFocus`.
+Picking a companion brings its agent's area, with it in front and its part
+shown. When the agent's session ends, its shells are tabs again.
 
 ## A part that stopped
 

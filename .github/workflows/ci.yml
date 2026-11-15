@@ -33,6 +33,14 @@ jobs:
       # the settings in .swift-format. `make format` fixes what it reports.
       - name: Lint
         run: make lint
+      # The browser's Chromium (#76), pinned in the script: the package is
+      # compiled against its headers. Kept between runs.
+      - uses: actions/cache@v4
+        with:
+          path: .build/cef
+          key: cef-${{ runner.arch }}-${{ hashFiles('scripts/fetch-cef.sh') }}
+      - name: Fetch CEF
+        run: ./scripts/fetch-cef.sh
       - name: Build
         run: swift build --build-tests
       - name: Test

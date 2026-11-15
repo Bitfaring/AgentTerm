@@ -12,7 +12,8 @@ import SwiftUI
 /// width is smaller.
 @MainActor
 public enum TerminalMetrics {
-    private static var cache: [CGFloat: (cell: CGSize, extraWidth: CGFloat)] = [:]
+    /// By font and size: a font picked anew is measured anew.
+    private static var cache: [String: (cell: CGSize, extraWidth: CGFloat)] = [:]
 
     /// The grid a terminal with this font would pick for an area this large.
     public static func grid(for area: CGSize, fontSize: CGFloat) -> TermSize? {
@@ -28,7 +29,8 @@ public enum TerminalMetrics {
     /// taken from a terminal view rather than from font tables so they match
     /// what the real view will do.
     private static func measure(fontSize: CGFloat) -> (cell: CGSize, extraWidth: CGFloat) {
-        if let known = cache[fontSize] { return known }
+        let key = "\(TerminalStyle.fontName ?? "") \(fontSize)"
+        if let known = cache[key] { return known }
         let view = TerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
         view.font = TerminalStyle.font(size: fontSize)
         // Two widths tell the cell width apart from the fixed extra.
@@ -39,7 +41,7 @@ public enum TerminalMetrics {
         let cellWidth = (wide.width - narrow.width) / 80
         let cellHeight = (wide.height - narrow.height) / 20
         let result = (cell: CGSize(width: cellWidth, height: cellHeight), extraWidth: max(0, narrow.width - cellWidth * 80))
-        cache[fontSize] = result
+        cache[key] = result
         return result
     }
 }

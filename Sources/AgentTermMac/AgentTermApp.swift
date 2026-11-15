@@ -25,6 +25,8 @@ struct AgentTermApp: App {
                 .modifier(CrashReportQuestion())
                 .environmentObject(model)
                 .environmentObject(model.files)
+                .environmentObject(model.browsers)
+                .environmentObject(model.profiles)
                 .preferredColorScheme(.dark)
                 .frame(minWidth: 940, minHeight: 540)
         }
@@ -65,6 +67,9 @@ struct AgentTermApp: App {
             }
             CommandMenu("Tab") {
                 TabCommands(model: model, files: model.files)
+            }
+            CommandMenu("Browser") {
+                BrowserCommands(model: model)
             }
             CommandGroup(after: .sidebar) {
                 Button("Bigger Text") { model.changeFontSize(by: 1) }
@@ -254,26 +259,6 @@ struct SettingsView: View {
                                 help: "Only the host starts, with no window; the app uses it when you open it.",
                                 isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) }))
                         }
-                        if let agentShells = model.agentShells {
-                            Divider()
-                            SettingSwitch(
-                                "Agents can open shells you see", id: "agent-shells",
-                                detail: "An agent can open a shell as a tab here, and reaches only the shells it opened.",
-                                help:
-                                    "Through AgentTerm's MCP server, put in the settings of Claude Code, Codex, Copilot CLI and Antigravity; turning this off takes it out. An agent opens shells only, never another agent.",
-                                isOn: Binding(get: { agentShells }, set: { model.setAgentShells($0) }))
-                            if let useShells = model.agentsUseShells {
-                                Divider()
-                                SettingSwitch(
-                                    "Agents run their commands in shells you see", id: "agents-use-shells",
-                                    detail: "They are asked to use those shells rather than their own.",
-                                    help:
-                                        "Claude Code is told in its system prompt, Copilot CLI and Antigravity in instructions files of AgentTerm's, Codex through the MCP server's instructions. An agent still decides for itself.",
-                                    isOn: Binding(get: { useShells }, set: { model.setAgentsUseShells($0) })
-                                )
-                                .disabled(!agentShells)
-                            }
-                        }
                     }
                 }
                 if let keepAwake = model.keepAwake {
@@ -322,7 +307,7 @@ struct SettingsView: View {
 }
 
 /// A switch with its name and one line under it; the rest on hover.
-private struct SettingSwitch: View {
+struct SettingSwitch: View {
     let title: String
     let id: String
     let detail: String
@@ -697,6 +682,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Closing the window quits, unless the app is set to stay in the menu bar.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !MenuBarMode.isOn }
 
+    /// Chromium closes its pages and its processes with the app (#76).
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { Chromium.shared.shutDown() }
+    }
+
     /// Opened again from the Dock or the Finder: back to a normal app.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         NSApp.setActivationPolicy(.regular)
@@ -751,25 +741,63 @@ private struct TabCommands: View {
             .keyboardShortcut("]", modifiers: [.command, .control, .shift])
             .disabled(model.tabCount < 2)
         Divider()
-        Button(model.diffInFront ? "Close Diff" : (files.active != nil ? "Close File" : "End Session")) { model.closeFrontTab() }
+        Button(model.browserInFront != nil ? "Close Tab" : model.diffInFront ? "Close Diff" : (files.active != nil ? "Close File" : "End Session")) { model.closeFrontTab() }
             .keyboardShortcut("w")
-            .disabled(!model.diffInFront && files.active == nil && model.selectedSession == nil)
-        Button("Close Other Files") { model.closeFileTabs(except: files.active, keepDiff: model.diffInFront) }
+            .disabled(model.browserInFront == nil && !model.diffInFront && files.active == nil && model.selectedSession == nil)
+        // What closes many tabs closes those of the pane the keyboard is
+        // in (#69): the ones the user sees there.
+        let pane = model.paneLayout.focused
+        Button("Close Other Files") { model.closeFileTabs(except: files.active, keepDiff: model.diffInFront, pane: pane) }
             .keyboardShortcut("w", modifiers: [.command, .option])
             .disabled(files.documents.isEmpty && model.diffTabFile == nil)
-        Button("Close All Files") { model.closeFileTabs() }
+        Button("Close All Files") { model.closeFileTabs(pane: pane) }
             .keyboardShortcut("w", modifiers: [.command, .shift])
             .disabled(files.documents.isEmpty && model.diffTabFile == nil)
         Button("Close Other Tabs…") {
             model.closeTabs(
                 .init(
                     keepSession: model.diffInFront || files.active != nil ? nil : model.selectedSession,
-                    keepFile: model.diffInFront ? nil : files.active, keepDiff: model.diffInFront
+                    keepFile: model.diffInFront ? nil : files.active, keepDiff: model.diffInFront, pane: pane
                 ))
         }
         .disabled(model.tabCount < 2)
-        Button(model.sessions.isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs() }
+        Button(model.sessions.isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs(.init(pane: pane)) }
             .disabled(model.tabCount == 0)
+    }
+}
+
+/// The browser's commands (#76), for the tab in front.
+private struct BrowserCommands: View {
+    @ObservedObject var model: AppModel
+
+    private var tab: BrowserTab? { model.browserInFront.flatMap { model.browsers.tab(forTab: $0) } }
+
+    var body: some View {
+        Button("New Browser Tab") { model.openBrowserTab() }
+            .keyboardShortcut("t", modifiers: [.command, .option])
+            .disabled(model.isRemote || model.status != .connected)
+        Divider()
+        Button("Open Location") { model.browserAddressRequest += 1 }
+            .keyboardShortcut("l")
+            .disabled(tab == nil)
+        Button("Reload Page") { tab?.reload() }
+            .keyboardShortcut("r")
+            .disabled(tab == nil)
+        Button("Back") { tab?.back() }
+            .keyboardShortcut("[")
+            .disabled(tab?.canGoBack != true)
+        Button("Forward") { tab?.forward() }
+            .keyboardShortcut("]")
+            .disabled(tab?.canGoForward != true)
+        Button("Find in Page…") { model.browserFindRequest += 1 }
+            .keyboardShortcut("f", modifiers: [.command, .option])
+            .disabled(tab == nil)
+        Divider()
+        Button("Developer Tools") { tab?.showDevTools() }
+            .keyboardShortcut("i", modifiers: [.command, .option])
+            .disabled(tab == nil)
+        Button("Send to Agent…") { if let tab { model.pickForAgent(tab) } }
+            .disabled(tab.map { model.agentsInProject(of: $0).isEmpty } ?? true)
     }
 }
 

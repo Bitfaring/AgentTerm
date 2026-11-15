@@ -1,0 +1,434 @@
+import AgentTermHost
+import AgentTermProtocol
+import AppKit
+import SwiftUI
+
+/// What the browser does for the agents, the user and the other devices
+/// (#76). This app shows the browser of the Mac it runs on: it tells that
+/// Mac's host so, and answers what the host passes on.
+extension AppModel {
+    /// What the user picked in a page to send an agent.
+    struct BrowserPick: Identifiable {
+        let id = UUID()
+        let tab: BrowserTab
+        let png: Data
+        let url: String
+        let details: String
+    }
+
+    // MARK: Wiring
+
+    /// Called once: what the browser's tabs do reaches the rest of the app.
+    func wireBrowser() {
+        BrowserModel.forgetKeptTabs()
+        browsers.profiles = profiles
+        browsers.changed = { [weak self] in self?.browserTabsChanged() }
+        browsers.popup = { [weak self] opener, address in
+            guard let self else { return }
+            let owner = opener.owner.flatMap { id in self.sessions.first { $0.id == id } }
+            let tab = self.browsers.open(url: address, project: opener.project, owner: owner)
+            opener.devtools.happened.append("The page opened \(address) in a new tab, \(tab.id).")
+            // The user's tab opens in front, as a browser's does; an
+            // agent's goes beside the agent without taking the keyboard.
+            if owner == nil { self.selectTab(id: tab.tabID) }
+        }
+        browsers.focused = { [weak self] tab in
+            guard let self, self.frontTabID != tab.tabID else { return }
+            self.selectTab(id: tab.tabID)
+        }
+    }
+
+    /// The tabs changed: the panes follow, and the other devices are told,
+    /// a moment later so that a page loading says it once.
+    func browserTabsChanged() {
+        syncTabs()
+        var widths: [String: Int] = [:]
+        for tab in browsers.tabs {
+            if let device = tab.emulating, device.width > 0 { widths[tab.tabID] = device.width }
+        }
+        if widths != browserEmulation { browserEmulation = widths }
+        // Only this Mac's.
+        guard !isRemote, !browserTabsPending else { return }
+        browserTabsPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            self.browserTabsPending = false
+            guard !self.isRemote else { return }
+            self.connection?.send(.browserTabs(self.browsers.infos))
+        }
+    }
+
+    /// Once connected to this Mac's own host: this app shows its browser.
+    func announceBrowser() {
+        guard !isRemote else { return }
+        connection?.send(.browserProvider(true))
+        connection?.send(.browserTabs(browsers.infos))
+    }
+
+    // MARK: The user's
+
+    /// A new tab of the user's, in the project on show, in front.
+    func openBrowserTab(url: String? = nil) {
+        guard !isRemote else {
+            notice = "The browser is the Mac's own: open it in AgentTerm on \(remote?.name ?? "that Mac")."
+            return
+        }
+        show(.sessions, toggling: false)
+        let tab = browsers.open(url: url, project: shownProject, owner: nil)
+        selectTab(id: tab.tabID)
+        if url == nil { browserAddressRequest += 1 }
+    }
+
+    func closeBrowserTab(_ tab: BrowserTab) {
+        browsers.close(tab)
+        if browserInFront == tab.tabID {
+            browserInFront = nil
+            syncTabs()
+            adoptFocusedFront()
+        }
+    }
+
+    /// The running agents of a tab's project, which what the user picks in
+    /// it can be sent to.
+    func agentsInProject(of tab: BrowserTab) -> [SessionInfo] {
+        sessions.filter { session in
+            session.agent != nil && session.openedBy == nil && (tab.project.isEmpty || WorktreePath.belongs(session.cwd, to: tab.project))
+        }
+    }
+
+    /// The agent that drives a tab, by name: the one that opened it; ""
+    /// for the user's.
+    func agentNames(of tab: BrowserTab) -> String {
+        tab.owner.flatMap { id in sessions.first { $0.id == id }?.displayName } ?? ""
+    }
+
+    /// The user takes a tab from its agents, or gives it back.
+    func setUserHas(_ tab: BrowserTab, _ has: Bool) {
+        tab.userHasIt = has
+        if has { tab.agentAction = nil }
+    }
+
+    func emulate(_ tab: BrowserTab, _ device: BrowserDevice?) {
+        Task { @MainActor in
+            guard await tab.ready() else { return }
+            try? await tab.devtools.emulate(device)
+            tab.emulating = device
+        }
+    }
+
+    /// A click in a page an agent drives takes it over: the two never type
+    /// or click in it at once (#76).
+    func pageClicked(at point: CGPoint) {
+        for (place, frame) in paneFrames where frame.contains(point) {
+            guard case .page(let id) = place, let tab = browsers.tab(forTab: id) else { continue }
+            if !agentNames(of: tab).isEmpty, !tab.userHasIt { setUserHas(tab, true) }
+        }
+    }
+
+    // MARK: Profiles
+
+    /// The profile an agent's tab opens in: the one it has, or the one the
+    /// user picks for it when it opens its first tab, the default picked
+    /// already. With nobody at the Mac to ask, or a single profile, the
+    /// default; a question nobody answers gives way to it after a while.
+    private func profile(for agent: SessionInfo) async -> String {
+        if let had = browsers.tabs.first(where: { $0.owner == agent.id })?.profile, profiles.profile(had) != nil { return had }
+        if let chosen = browsers.agentProfiles[agent.id], profiles.profile(chosen) != nil { return chosen }
+        guard profiles.list.count > 1, hostSaysSomeoneIsHere else {
+            browsers.agentProfiles[agent.id] = profiles.defaultID
+            return profiles.defaultID
+        }
+        let chosen = await withCheckedContinuation { continuation in
+            profileWaiters[agent.id, default: []].append { continuation.resume(returning: $0) }
+            if profileQuestion?.agent.id != agent.id {
+                profileQuestion = ProfileQuestion(agent: agent)
+                NSApp.requestUserAttention(.informationalRequest)
+                // The agent waits on it: not for longer than its call may.
+                let asked = profileQuestion?.id
+                DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
+                    guard let self, let question = self.profileQuestion, question.id == asked else { return }
+                    self.answerProfileQuestion(question, with: self.profiles.defaultID)
+                }
+            }
+        }
+        return chosen
+    }
+
+    func answerProfileQuestion(_ question: ProfileQuestion, with profile: String) {
+        let chosen = profiles.profile(profile)?.id ?? profiles.defaultID
+        browsers.agentProfiles[question.agent.id] = chosen
+        if profileQuestion?.id == question.id { profileQuestion = nil }
+        let waiting = profileWaiters.removeValue(forKey: question.agent.id) ?? []
+        waiting.forEach { $0(chosen) }
+    }
+
+    /// Deletes a profile, closing its tabs first.
+    func deleteProfile(_ id: String) {
+        for tab in browsers.tabs where tab.profile == id { closeBrowserTab(tab) }
+        browsers.agentProfiles = browsers.agentProfiles.filter { $0.value != id }
+        profiles.delete(id)
+    }
+
+    // MARK: Sending a part of a page to an agent
+
+    /// Lets the user point at an element of the page, then asks what to
+    /// send and to whom.
+    func pickForAgent(_ tab: BrowserTab) {
+        guard tab.browserID != 0 else { return }
+        tab.devtools.pickElement { [weak self] node in
+            Task { @MainActor in
+                guard let self else { return }
+                let box = try? await tab.devtools.box(of: node)
+                let png = (try? await tab.devtools.screenshot(clip: box, fullPage: false)) ?? Data()
+                let details = await tab.devtools.describe(node)
+                self.pendingPick = BrowserPick(tab: tab, png: png, url: tab.url, details: details)
+            }
+        }
+        notice = nil
+    }
+
+    /// Saves the picture in the project, and types into the agent's
+    /// session where it is, with the address, the element and the note.
+    func send(_ pick: BrowserPick, note: String, to agent: SessionID) {
+        guard let session = sessions.first(where: { $0.id == agent }), let controller = controller(for: agent) else { return }
+        let folder = URL(fileURLWithPath: session.cwd).appendingPathComponent(".agentterm/shots", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        Handoff.keepOutOfGit(session.cwd)
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let file = folder.appendingPathComponent("\(stamp)-tab-\(pick.tab.id).png")
+        try? pick.png.write(to: file)
+        var text = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { text = "Look at this element of the page." }
+        text += "\nPage: \(pick.url) (browser tab \(pick.tab.id) in AgentTerm)\nScreenshot: \(file.path)"
+        if !pick.details.isEmpty { text += "\n" + pick.details }
+        let typed = SentText.text(text, bracketedPaste: controller.bracketedPasteMode)
+        connection?.sendInput(Data(typed.utf8), to: agent)
+        // Apart from the text, or an agent takes the Return for a new line.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in self?.connection?.sendInput(Data("\r".utf8), to: agent) }
+        if let session = sessions.first(where: { $0.id == agent }) { select(session: session) }
+    }
+
+    // MARK: What is asked of the browser
+
+    /// Does what the host passed on, for an agent's session or a device,
+    /// and answers it.
+    func answerBrowser(id: Int, agent: SessionID?, request: BrowserRequest) {
+        Task { @MainActor in
+            let result = await browserResult(agent: agent, request: request)
+            connection?.send(.browserReply(id: id, result: result))
+        }
+    }
+
+    private func browserResult(agent: SessionID?, request: BrowserRequest) async -> BrowserResult {
+        if isRemote { return .refused(BrowserWords.noApp) }
+        if agent != nil, !agentsUseBrowser { return .refused(BrowserWords.turnedOff) }
+        guard let agent else { return await deviceRequest(request) }
+        guard let session = sessions.first(where: { $0.id == agent }) else {
+            return .refused("This is not the session of an agent AgentTerm started, or that session has ended.")
+        }
+        switch request {
+        case .open(let url):
+            let project = folders.first { WorktreePath.belongs(session.cwd, to: $0.path) }?.path ?? ""
+            let profile = await profile(for: session)
+            // Empty first, then loaded as browser_navigate does: made with
+            // its address, its first document is the empty one, which has
+            // loaded already, and the page would be said before it is there.
+            let tab = browsers.open(url: nil, project: project, owner: session, profile: profile)
+            tab.agentAction = "Opened \(url ?? "a tab")"
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            guard let url else { return .text("Opened tab \(tab.id), empty. The user sees it beside you.") }
+            let loaded: BrowserResult
+            do {
+                loaded = try await act(.navigate(tab: tab.id, url: url), in: tab)
+            } catch let failure as DevToolsSession.Failure {
+                loaded = .refused(failure.text)
+            } catch {
+                loaded = .refused(error.localizedDescription)
+            }
+            if case .refused(let why) = loaded { return .text("Opened tab \(tab.id), beside you where the user sees it, but \(why)") }
+            return .text("Opened tab \(tab.id)" + (await whereNow(tab)) + " The user sees it beside you.")
+        case .tabs:
+            return .tabs(browsers.tabs.filter { $0.reachable(by: agent) }.map(\.info))
+        default:
+            break
+        }
+        guard let id = request.tab else { return .refused("Which tab: give its id.") }
+        // Another's tab is as good as none: an agent sees only its own.
+        guard let tab = browsers.tab(id: id), tab.reachable(by: agent) else { return .refused(BrowserWords.notYours(id)) }
+        if request.acts, tab.userHasIt { return .refused(BrowserWords.userHasIt(id)) }
+        guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+        if case .close = request {
+            closeBrowserTab(tab)
+            return .text("Closed tab \(id).")
+        }
+        do {
+            return try await act(request, in: tab)
+        } catch let failure as DevToolsSession.Failure {
+            return .refused(failure.text)
+        } catch {
+            return .refused("It failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Where a tab is now, for an agent: its address, title, and what came of the last action.
+    private func whereNow(_ tab: BrowserTab) async -> String {
+        let title = await tab.devtools.pageTitle() ?? tab.title
+        var text = " at \(tab.url)" + (title.isEmpty ? "" : " — “\(title)”") + "."
+        if let error = tab.loadError { text += " It did not load: " + BrowserPaneView.words(for: error) }
+        let happened = tab.devtools.happened
+        tab.devtools.happened = []
+        if !happened.isEmpty { text += " " + happened.joined(separator: " ") }
+        let errors = tab.devtools.console.suffix(5).filter { $0.level == "error" }
+        if !errors.isEmpty { text += " The console has \(errors.count) recent error\(errors.count == 1 ? "" : "s"); see browser_console." }
+        return text
+    }
+
+    private func act(_ request: BrowserRequest, in tab: BrowserTab) async throws -> BrowserResult {
+        let devtools = tab.devtools
+        func done(_ action: String) { tab.agentAction = action }
+        switch request {
+        case .navigate(_, let url):
+            let address = BrowserTab.address(from: url)
+            done("Went to \(address)")
+            tab.loadError = nil
+            let answer = try await devtools.call("Page.navigate", ["url": address], seconds: 30)
+            if let failed = answer["errorText"] as? String {
+                let words = failed.contains("CONNECTION_REFUSED") ? BrowserWords.nothingAnswers(address) : failed
+                return .refused("\(address) did not load: \(words)")
+            }
+            await devtools.waitForLoad(seconds: 20)
+            return .text("Loaded" + (await self.whereNow(tab)))
+        case .history(_, let step):
+            let before = devtools.document
+            if step < 0 { tab.back() } else if step > 0 { tab.forward() } else { tab.reload() }
+            done(step < 0 ? "Went back" : step > 0 ? "Went forward" : "Reloaded")
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if devtools.document != before || step == 0 { await devtools.waitForLoad(seconds: 20) }
+            return .text("Now" + (await self.whereNow(tab)))
+        case .snapshot(_, let within):
+            let text = try await devtools.snapshot(within: within)
+            return .text("Tab \(tab.id) at \(tab.url)" + (tab.title.isEmpty ? "" : " — “\(tab.title)”") + ":\n" + text)
+        case .screenshot(_, let ref, let fullPage):
+            let clip = try await ref.map { try devtools.node(for: $0) }.asyncMap { try await devtools.box(of: $0) }
+            let png = try await devtools.screenshot(clip: clip, fullPage: fullPage)
+            return .image(png: png, text: "Tab \(tab.id) at \(tab.url)" + (fullPage ? ", all of the page." : clip != nil ? ", element \(ref ?? "")." : ", as it is shown."))
+        case .click(_, let ref, let double):
+            let node = try devtools.node(for: ref)
+            let before = (url: tab.url, document: devtools.document)
+            done("Clicked \(ref)")
+            try await devtools.click(node, double: double)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if devtools.document != before.document || tab.loading { await devtools.waitForLoad(seconds: 15) }
+            let moved = devtools.document != before.document || tab.url != before.url
+            return .text("Clicked \(ref). " + (moved ? "The page changed:" : "The page stayed") + (await self.whereNow(tab)))
+        case .hover(_, let ref):
+            let point = try await devtools.center(of: try devtools.node(for: ref))
+            try await devtools.mouse("mouseMoved", at: point)
+            done("Pointed at \(ref)")
+            return .text("The pointer is over \(ref).")
+        case .type(_, let ref, let text, let submit, let append):
+            let node = try devtools.node(for: ref)
+            done("Typed into \(ref)")
+            let value = try await devtools.type(text, into: node, append: append, submit: submit)
+            if submit {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if tab.loading { await devtools.waitForLoad(seconds: 15) }
+            }
+            return .text(
+                "Typed into \(ref)" + (value.map { ", which now holds “\($0.count > 200 ? String($0.prefix(200)) + "…" : $0)”" } ?? "")
+                    + (submit ? ", and pressed Enter. Now" + (await self.whereNow(tab)) : "."))
+        case .select(_, let ref, let values):
+            let picked = try await devtools.select(values, in: try devtools.node(for: ref))
+            done("Picked \(picked.joined(separator: ", ")) in \(ref)")
+            return .text("Picked \(picked.map { "“\($0)”" }.joined(separator: ", ")) in \(ref).")
+        case .press(_, let key):
+            done("Pressed \(key)")
+            let before = devtools.document
+            try await devtools.press(key)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if devtools.document != before || tab.loading { await devtools.waitForLoad(seconds: 15) }
+            return .text("Pressed \(key). Now" + (await self.whereNow(tab)))
+        case .scroll(_, let ref, let x, let y):
+            let point: CGPoint
+            if let ref {
+                point = try await devtools.center(of: try devtools.node(for: ref))
+            } else {
+                let metrics = try await devtools.call("Page.getLayoutMetrics")
+                let viewport = (metrics["cssLayoutViewport"] as? [String: Any]) ?? [:]
+                point = CGPoint(x: (viewport["clientWidth"] as? Double ?? 800) / 2, y: (viewport["clientHeight"] as? Double ?? 600) / 2)
+            }
+            try await devtools.mouse("mouseWheel", at: point, deltaX: x, deltaY: y)
+            done("Scrolled")
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            return .text("Scrolled by \(Int(x)), \(Int(y)).")
+        case .wait(_, let text, let gone, let seconds):
+            let deadline = Date().addingTimeInterval(min(max(seconds, 0), 600))
+            while Date() < deadline {
+                if Task.isCancelled { break }
+                let page = await devtools.pageText()
+                if let text, page.contains(text) { return .text("“\(text)” is on the page" + (await self.whereNow(tab))) }
+                if let gone, !page.contains(gone) { return .text("“\(gone)” is gone from the page" + (await self.whereNow(tab))) }
+                if text == nil, gone == nil, devtools.loaded || !tab.loading { return .text("The page has loaded" + (await self.whereNow(tab))) }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            return .text("Still waiting after \(Int(seconds)) seconds; the page" + (await self.whereNow(tab)))
+        case .evaluate(_, let script):
+            done("Ran a script")
+            return .text(try await devtools.evaluate(script))
+        case .console(_, let errorsOnly):
+            let entries = devtools.console.filter { !errorsOnly || $0.level == "error" || $0.level == "warning" }
+            if entries.isEmpty { return .text(errorsOnly ? "No error or warning in the console." : "The console is empty.") }
+            return .text(entries.suffix(200).map { "[\($0.level)] \($0.text)" + ($0.source.map { " (\($0))" } ?? "") }.joined(separator: "\n"))
+        case .network(_, let failedOnly):
+            let requests = devtools.requests.filter { !failedOnly || $0.failure != nil || ($0.status ?? 0) >= 400 }
+            if requests.isEmpty { return .text(failedOnly ? "No request failed." : "No request since the page loaded.") }
+            return .text(
+                requests.suffix(200).map { request in
+                    let outcome = request.failure.map { "failed: \($0)" } ?? request.status.map(String.init) ?? (request.done ? "done" : "pending")
+                    return "\(request.method) \(request.url) → \(outcome)" + (request.type.isEmpty ? "" : " (\(request.type))")
+                }.joined(separator: "\n"))
+        case .emulate(_, let device):
+            try await devtools.emulate(device)
+            tab.emulating = device
+            done(device.map { "Shows the page as \($0.name)" } ?? "Shows the page as itself")
+            return .text(device.map { "Tab \(tab.id) is shown as \($0.name)" + ($0.width > 0 ? ", \($0.width) × \($0.height)" : "") + "." } ?? "Tab \(tab.id) is shown as itself again.")
+        case .open, .tabs, .close, .picture, .takeOver, .giveBack:
+            return .refused("That is not for this tab.")
+        }
+    }
+
+    /// What a device asks: a picture of a tab, or taking it over.
+    private func deviceRequest(_ request: BrowserRequest) async -> BrowserResult {
+        guard let id = request.tab, let tab = browsers.tab(id: id) else { return .refused(BrowserWords.noTab(request.tab ?? "")) }
+        switch request {
+        case .takeOver:
+            setUserHas(tab, true)
+            return .tabs(browsers.infos)
+        case .giveBack:
+            setUserHas(tab, false)
+            return .tabs(browsers.infos)
+        case .picture:
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            do {
+                // Small, for a phone: a JPEG of what is shown.
+                let answer = try await tab.devtools.call("Page.captureScreenshot", ["format": "jpeg", "quality": 60], seconds: 20)
+                guard let base64 = answer["data"] as? String, let data = Data(base64Encoded: base64) else { return .refused("The page gave no picture.") }
+                return .image(png: data, text: tab.displayTitle)
+            } catch let failure as DevToolsSession.Failure {
+                return .refused(failure.text)
+            } catch {
+                return .refused(error.localizedDescription)
+            }
+        default:
+            return .refused("A device can look at a tab, and take it over or give it back.")
+        }
+    }
+}
+
+extension Optional {
+    /// The value made into another with an async function, or nil.
+    func asyncMap<T>(_ transform: (Wrapped) async throws -> T) async rethrows -> T? {
+        guard let value = self else { return nil }
+        return try await transform(value)
+    }
+}

@@ -39,13 +39,15 @@ public enum AgentHooks {
     /// Code its status line too (`usageFile`). Copilot CLI and Antigravity
     /// need a `directory` to keep what they are given in; without one,
     /// they get nothing.
-    /// `useShells`: each agent is told to run its commands in shells the
-    /// user sees (`AgentShellsInstructions`): Claude Code in its system
-    /// prompt, Antigravity in a rule of the folder it is given, Copilot CLI
-    /// in instructions it is told of (`instructionsEnvironment`), Codex by
-    /// the MCP server's instructions, which it reads.
+    /// `prompt`: what AgentTerm tells the agent (`AgentPrompts`): what the
+    /// user wrote for it in Settings, or the default, to run its commands
+    /// in shells the user sees and to use AgentTerm's browser. Claude Code
+    /// gets it in its system prompt, Antigravity in a rule of the folder it
+    /// is given, Copilot CLI in instructions it is told of
+    /// (`instructionsEnvironment`), Codex in the MCP server's instructions,
+    /// which it reads. Nil tells it nothing.
     public static func launchArguments(
-        agent: String, tool: String, usageFile: String?, directory: URL?, home: String, trust: [String] = [], useShells: Bool = false
+        agent: String, tool: String, usageFile: String?, directory: URL?, home: String, trust: [String] = [], prompt: String? = nil
     ) throws -> String {
         switch agent {
         case "claude":
@@ -53,7 +55,7 @@ public enum AgentHooks {
             if let usageFile { settings["statusLine"] = StatusLineRelay.statusLine(tool: tool, file: usageFile) }
             let json = try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])
             return " --settings " + Handoff.shellQuote(String(decoding: json, as: UTF8.self))
-                + (useShells ? " --append-system-prompt " + Handoff.shellQuote(AgentShellsInstructions.useShells) : "")
+                + (prompt.map { " --append-system-prompt " + Handoff.shellQuote($0) } ?? "")
         case "codex":
             return codexArguments(tool: tool)
         case "copilot":
@@ -61,7 +63,7 @@ public enum AgentHooks {
             return try copilotArguments(tool: tool, directory: directory)
         case "agy":
             guard let directory else { throw CocoaError(.fileNoSuchFile) }
-            return try antigravityArguments(tool: tool, directory: directory, home: home, trust: trust, useShells: useShells)
+            return try antigravityArguments(tool: tool, directory: directory, home: home, trust: trust, prompt: prompt)
         default:
             throw CocoaError(.featureUnsupported)
         }
@@ -110,16 +112,16 @@ public enum AgentHooks {
     /// folders the user trusts already, which are read from their settings
     /// and not changed: `--settings` is for this session only.
     /// `trust`: folders trusted for the session too, a schedule's (#11).
-    static func antigravityArguments(tool: String, directory: URL, home: String, trust: [String] = [], useShells: Bool = false) throws -> String {
+    static func antigravityArguments(tool: String, directory: URL, home: String, trust: [String] = [], prompt: String? = nil) throws -> String {
         let folder = directory.appendingPathComponent("antigravity", isDirectory: true)
         let agents = folder.appendingPathComponent(".agents", isDirectory: true)
         try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // Antigravity reads the rules of a folder it is given, as it does
         // a project's: the only way to tell it something more (MCP-13).
         let rule = agents.appendingPathComponent("rules/agentterm.md")
-        if useShells {
+        if let prompt {
             try FileManager.default.createDirectory(at: rule.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try writeText("---\ntrigger: always_on\n---\n" + AgentShellsInstructions.useShells + "\n", to: rule)
+            try writeText("---\ntrigger: always_on\n---\n" + prompt + "\n", to: rule)
         } else {
             try? FileManager.default.removeItem(at: rule)
         }
@@ -140,12 +142,12 @@ public enum AgentHooks {
     /// What an agent's environment is given besides: for Copilot CLI, the
     /// folder of instructions it is told to run its commands in shells the
     /// user sees, next to any its own environment names (MCP-13).
-    public static func instructionsEnvironment(agent: String, directory: URL?, useShells: Bool, current: [String: String]) throws -> [String: String] {
-        guard agent == "copilot", useShells, let directory else { return [:] }
+    public static func instructionsEnvironment(agent: String, directory: URL?, prompt: String?, current: [String: String]) throws -> [String: String] {
+        guard agent == "copilot", let prompt, let directory else { return [:] }
         let folder = directory.appendingPathComponent("copilot-instructions", isDirectory: true)
         let file = folder.appendingPathComponent("instructions/agentterm.instructions.md")
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try writeText("---\napplyTo: \"**\"\n---\n" + AgentShellsInstructions.useShells + "\n", to: file)
+        try writeText("---\napplyTo: \"**\"\n---\n" + prompt + "\n", to: file)
         let name = "COPILOT_CUSTOM_INSTRUCTIONS_DIRS"
         let theirs = current[name].flatMap { $0.isEmpty ? nil : $0 }
         return [name: [theirs, folder.path].compactMap { $0 }.joined(separator: ",")]

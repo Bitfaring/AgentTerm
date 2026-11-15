@@ -30,8 +30,13 @@ esac
 BUNDLE_ID="${IDENTIFIER:-$BUNDLE_ID}"
 APP="${OUT:-dist}/$NAME.app"
 
+# The browser's Chromium (#76): its headers are what the app is compiled
+# against, and its framework goes into the app.
+CEF="$(./scripts/fetch-cef.sh --print)"
+
 swift build -c "$CONFIG" --product AgentTermMac
 swift build -c "$CONFIG" --product agenttermd
+swift build -c "$CONFIG" --product AgentTermBrowserHelper
 BIN="$(swift build -c "$CONFIG" --show-bin-path)"
 
 rm -rf "$APP"
@@ -113,6 +118,54 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# Chromium's framework, in the versioned layout codesign wants, cloned
+# rather than copied where the disk allows it (340 MB).
+FRAMEWORKS="$APP/Contents/Frameworks"
+CEF_FRAMEWORK="$FRAMEWORKS/Chromium Embedded Framework.framework"
+mkdir -p "$CEF_FRAMEWORK/Versions"
+cp -Rc "$CEF/Release/Chromium Embedded Framework.framework" "$CEF_FRAMEWORK/Versions/A" 2>/dev/null \
+    || cp -R "$CEF/Release/Chromium Embedded Framework.framework" "$CEF_FRAMEWORK/Versions/A"
+ln -s A "$CEF_FRAMEWORK/Versions/Current"
+for item in "Chromium Embedded Framework" Libraries Resources; do
+    ln -s "Versions/Current/$item" "$CEF_FRAMEWORK/$item"
+done
+
+# The helper apps Chromium starts its other processes from: one program,
+# under the five names Chromium looks for (scripts/browser-helpers.sh
+# says which entitlements each gets when the app is signed for release).
+for kind in "" " (GPU)" " (Renderer)" " (Plugin)" " (Alerts)"; do
+    HELPER="$FRAMEWORKS/$NAME Helper$kind.app"
+    suffix="$(echo "$kind" | tr -d ' ()' | tr '[:upper:]' '[:lower:]')"
+    mkdir -p "$HELPER/Contents/MacOS"
+    cp "$BIN/AgentTermBrowserHelper" "$HELPER/Contents/MacOS/$NAME Helper$kind"
+    cat > "$HELPER/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>${NAME} Helper${kind}</string>
+    <key>CFBundleDisplayName</key><string>${NAME} Helper${kind}</string>
+    <key>CFBundleIdentifier</key><string>${BUNDLE_ID}.helper${suffix:+.$suffix}</string>
+    <key>CFBundleExecutable</key><string>${NAME} Helper${kind}</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+    <key>CFBundleVersion</key><string>${VERSION}</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSUIElement</key><true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+</dict>
+</plist>
+PLIST
+done
+
+# Inside out: what is inside a bundle is signed before the bundle.
+for library in "$CEF_FRAMEWORK/Versions/A/Libraries/"*.dylib; do
+    codesign --force --sign - "$library"
+done
+codesign --force --sign - "$CEF_FRAMEWORK"
+for HELPER in "$FRAMEWORKS/$NAME Helper"*.app; do
+    codesign --force --sign - --entitlements "$(./scripts/browser-helpers.sh entitlements "$HELPER")" "$HELPER"
+done
 codesign --force --sign - --entitlements assets/AgentTerm.entitlements "$APP/Contents/MacOS/agenttermd"
 codesign --force --sign - --entitlements assets/AgentTerm.entitlements "$APP"
 echo "Built $APP"

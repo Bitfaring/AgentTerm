@@ -53,6 +53,7 @@ final class AppModel: ObservableObject {
         // it came to be selected (#23).
         didSet {
             hideNoticeOfTheSessionInFront()
+            if selectedSession != oldValue { frontChanged() }
             guard selectedSession != oldValue, let session = sessions.first(where: { $0.id == selectedSession }) else { return }
             if let project = WorktreePath.project(of: session.cwd), folders.contains(where: { $0.path == project }) {
                 if selectedFolder != project { selectedFolder = project }
@@ -83,7 +84,14 @@ final class AppModel: ObservableObject {
         var inSubmodule = false
     }
     /// Whether the diff's tab is the one in front.
-    @Published private(set) var diffInFront = false
+    @Published private(set) var diffInFront = false {
+        didSet { if diffInFront, !oldValue { frontChanged() } }
+    }
+    /// The browser's tab in front, when one is (#76): before a file, the
+    /// diff or a session.
+    @Published var browserInFront: String? {
+        didSet { if browserInFront != nil, browserInFront != oldValue { frontChanged() } }
+    }
     private var observers: Set<AnyCancellable> = []
     /// The commit message being written, by folder.
     @Published var commitMessages: [String: String] = [:]
@@ -199,6 +207,63 @@ final class AppModel: ObservableObject {
     /// True once the host has sent the arrangement it keeps.
     var tabLayoutKnown = false
     private var applyingHostLayout = false
+
+    /// The panes of each project's place in the middle of the window
+    /// (#69), by the project's folder; "" for the sessions of no folder in
+    /// the list. Kept by this app, for each Mac it shows.
+    @Published var workspaces: [String: PaneLayout] = AppModel.savedWorkspaces(for: nil) {
+        didSet { if workspaces != oldValue { saveWorkspaces() } }
+    }
+    /// The project whose panes are on show.
+    @Published var shownProject = ""
+    /// How each agent's own shells and browser are laid out beside it, by
+    /// the tab id of its session.
+    @Published var agentAreas: [String: AgentArea] = AppModel.savedAgentAreas(for: nil) {
+        didSet { if agentAreas != oldValue { saveAgentAreas() } }
+    }
+    /// Where each pane, and each part of an agent's area, is in the window,
+    /// in its coordinates from the top left: a click finds its pane here.
+    var paneFrames: [PanePlace: CGRect] = [:]
+    /// The part of an agent's area the keyboard is in, by the agent's tab.
+    @Published var agentAreaFocus: [String: AgentAreaPart] = [:]
+
+    // The browser (#76).
+    /// Whether the agents may use the browser: a switch in Settings, on
+    /// unless turned off (principle 4).
+    @Published var agentsUseBrowser = UserDefaults.standard.object(forKey: "agentsUseBrowser") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(agentsUseBrowser, forKey: "agentsUseBrowser") }
+    }
+    /// ⌘L and ⌥⌘F ask the browser in front for its address field and its find bar.
+    @Published var browserAddressRequest = 0
+    @Published var browserFindRequest = 0
+    /// What the user picked in a page to send an agent, while its sheet is open.
+    @Published var pendingPick: BrowserPick?
+    /// What each agent is told (Settings > Agents): the user's words by
+    /// agent, and the default each is told without them, as the host says.
+    @Published private(set) var agentPromptsCustom: [String: String] = [:]
+    @Published private(set) var agentPromptsDefaults: [String: String] = [:]
+
+    func setAgentPrompt(_ agent: String, _ text: String?) {
+        connection?.send(.setAgentPrompt(agent: agent, text: text))
+    }
+
+    /// How the host starts shells (Settings > Shell), its login shell and
+    /// the shells it has. Nil until the host has said.
+    @Published private(set) var shellSettings: ShellSettings?
+    @Published private(set) var loginShell = ""
+    @Published private(set) var availableShells: [String] = []
+
+    func setShellSettings(_ settings: ShellSettings) {
+        connection?.send(.setShellSettings(settings))
+    }
+    /// Which profile an agent's first tab opens in, while it is asked.
+    @Published var profileQuestion: ProfileQuestion?
+    /// What waits for the answer, by agent's session.
+    var profileWaiters: [SessionID: [(String) -> Void]] = [:]
+    var browserTabsPending = false
+    /// How wide each tab's page is, by tab id, while it is shown as a
+    /// device: an agent's area gives its page just that room.
+    @Published var browserEmulation: [String: Int] = [:]
 
     /// Whether the Mac is kept awake while sessions run. Nil until the host
     /// has said, which an older host never does.
@@ -618,6 +683,9 @@ final class AppModel: ObservableObject {
         var keepSession: SessionID?
         var keepFile: String?
         var keepDiff = false
+        /// The pane whose strip it was asked from: only its tabs are closed
+        /// (#69), what the user sees there. Nil for every tab of every pane.
+        var pane: String?
         let id = UUID()
     }
     /// Every agent conversation on the Mac, as History lists them. `nil`
@@ -662,6 +730,10 @@ final class AppModel: ObservableObject {
 
     /// The Files tab's tree and open file, for the selected folder.
     let files = FilesModel()
+    /// The browser's tabs (#76).
+    let browsers = BrowserModel()
+    /// The browser's profiles, kept by this app.
+    let profiles = BrowserProfiles()
     /// The search of the folder's files, in the Files tab (#45).
     let search = SearchModel()
     /// History's filters, search, transcripts and pins (#46).
@@ -690,7 +762,8 @@ final class AppModel: ObservableObject {
     /// The conversation being handed off, while its sheet is open.
     @Published var pendingHandoff: Conversation?
 
-    private var connection: AgentTermConnection?
+    /// Read by the browser's part (#76), which answers through it.
+    private(set) var connection: AgentTermConnection?
     private var controllers: [SessionID: TerminalController] = [:]
     private var port = agenttermDefaultPort
     private var connectAttempts = 0
@@ -770,13 +843,23 @@ final class AppModel: ObservableObject {
         }
         // A file that comes to the front takes the diff's place there.
         files.$active.sink { [weak self] active in
-            if active != nil { self?.diffInFront = false }
+            if active != nil {
+                self?.diffInFront = false
+                self?.browserInFront = nil
+            }
+            // After the value is set: `files.active` reads the new one then.
+            if active != nil { DispatchQueue.main.async { self?.frontChanged() } }
         }.store(in: &observers)
         // The arrangement of the tabs follows the tabs that exist.
         $sessions.combineLatest(files.$documents, $diffTab, $diff)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.syncTabs() }
             .store(in: &observers)
+        browsers.$tabs
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.browserTabsChanged() }
+            .store(in: &observers)
+        wireBrowser()
         // A key or a click in the app: someone is at the Mac again, after a
         // device was used. A click in a terminal another device sized
         // takes it back for this Mac.
@@ -820,6 +903,17 @@ final class AppModel: ObservableObject {
 
     var currentController: TerminalController? { selectedSession.flatMap { controllers[$0] } }
 
+    /// A session's terminal, shown in whichever pane holds it (#69).
+    func controller(for id: SessionID) -> TerminalController? { controllers[id] }
+
+    /// Whether someone is at the Mac, as its host says (#22): the browser
+    /// asks them which profile an agent uses, and uses the default when
+    /// nobody is (#76).
+    var hostSaysSomeoneIsHere: Bool { hostSaysMacInUse }
+
+    /// The diff's tab stays where it is, out of the front.
+    func showingNoDiff() { diffInFront = false }
+
     /// What the host last said of whether someone is at the Mac: false once
     /// a device was used, until this app is.
     private var hostSaysMacInUse = true
@@ -830,6 +924,14 @@ final class AppModel: ObservableObject {
             // Said once: the host answers that the Mac is in use again.
             hostSaysMacInUse = true
             connection?.send(.used)
+        }
+        // A click in a pane puts the keyboard there (#69); in a page an
+        // agent drives, it takes the page over (#76).
+        if event.type == .leftMouseDown, let window = event.window, window.canBecomeMain, let content = window.contentView {
+            var point = content.convert(event.locationInWindow, from: nil)
+            if !content.isFlipped { point.y = content.bounds.height - point.y }
+            paneClicked(at: point)
+            pageClicked(at: point)
         }
         guard event.type == .leftMouseDown, let controller = currentController, foreignSizes[controller.session] != nil else { return }
         let terminal = controller.view
@@ -1047,6 +1149,14 @@ final class AppModel: ObservableObject {
         applyingHostLayout = true
         tabLayout = mac == nil ? Self.savedTabLayout() : TabLayout()
         applyingHostLayout = false
+        // Each Mac's panes are kept here, apart (#69).
+        workspaces = Self.savedWorkspaces(for: mac?.id)
+        agentAreas = Self.savedAgentAreas(for: mac?.id)
+        shownProject = ""
+        // The browser is this Mac's: its tabs close while another Mac is
+        // on show (#76).
+        browsers.closeAll()
+        browserInFront = nil
         folders = []
         selectedFolder = nil
         diff = nil
@@ -1300,9 +1410,12 @@ final class AppModel: ObservableObject {
             // A host that is lost later is started again: until 0.6.0 this
             // stayed set, and only the first host that was lost ever was.
             launchedDaemon = false
+            // This app shows the browser of its own Mac (#76).
+            announceBrowser()
         case .sessions(let list):
             sessionsKnown = true
             sessions = list
+            browsers.sessionsChanged(list)
             // The session in front of someone at this window needs no notice.
             let shown = NSApp.isActive ? selectedSession : nil
             if let latest = AgentNotice.notices(in: list, told: &told).last(where: { $0.session != shown }) { agentNotice = latest }
@@ -1346,9 +1459,22 @@ final class AppModel: ObservableObject {
             worktreeSaid = said
         case .macInUse(let inUse):
             hostSaysMacInUse = inUse
-        case .agentShellResult:
-            // For `agenttermd mcp`.
+        case .agentShellResult, .agentBrowserResult, .browserAnswer:
+            // For `agenttermd mcp`, and for the iPhone.
             break
+        case .browserCall(let id, let agent, let request):
+            // An agent, or a device, asks the browser this app shows (#76).
+            answerBrowser(id: id, agent: agent, request: request)
+        case .browserTabs:
+            // This app's own: it is the one that said them.
+            break
+        case .agentPrompts(let custom, let defaults):
+            agentPromptsCustom = custom
+            agentPromptsDefaults = defaults
+        case .shellSettings(let settings, let login, let shells):
+            shellSettings = settings
+            loginShell = login
+            availableShells = shells
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):
@@ -1418,7 +1544,10 @@ final class AppModel: ObservableObject {
             foreignSizes[id] = nil
             sessions.removeAll { $0.id == id }
             if selectedSession == id {
-                selectedSession = sessions.last(where: { $0.cwd == workingDirectory })?.id ?? sessions.last?.id
+                // What its pane shows next, the tab before it, comes to the
+                // front: not a session of another pane or project (#69).
+                syncTabs()
+                adoptFocusedFront()
             }
         case .error(let text):
             starting = nil
@@ -1547,6 +1676,7 @@ final class AppModel: ObservableObject {
 
     private func makeController(for id: SessionID) -> TerminalController {
         let controller = TerminalController(session: id, fontSize: terminalFontSize)
+        controller.setLooks(cursor: terminalCursor, blinks: cursorBlinks, scrollback: scrollbackLines)
         controller.onInput = { [weak self] data in self?.connection?.sendInput(data, to: id) }
         controller.onResize = { [weak self] size in self?.connection?.send(.resize(session: id, size: size)) }
         controller.onClaim = { [weak self] size in self?.connection?.send(.takeControl(session: id, size: size)) }
@@ -1629,6 +1759,53 @@ final class AppModel: ObservableObject {
         controllers.values.forEach { $0.setFontSize(size) }
     }
 
+    // MARK: How the terminals look (Settings > Shell, this Mac's)
+
+    /// The font picked, by its PostScript name; nil for the system's
+    /// monospaced font.
+    @Published private(set) var terminalFontName: String? = {
+        let name = UserDefaults.standard.string(forKey: "terminalFontName")
+        TerminalStyle.fontName = name
+        return name
+    }()
+    @Published private(set) var terminalCursor = UserDefaults.standard.string(forKey: "terminalCursor").flatMap(TerminalCursor.init) ?? .block
+    @Published private(set) var cursorBlinks = UserDefaults.standard.object(forKey: "cursorBlinks") as? Bool ?? true
+    /// How far back a terminal scrolls, in lines.
+    @Published private(set) var scrollbackLines = UserDefaults.standard.object(forKey: "scrollbackLines") as? Int ?? TerminalController.scrollbackLines
+    static let scrollbackChoices = [5_000, 10_000, 20_000, 50_000, 100_000]
+
+    /// The monospaced fonts of the Mac, by PostScript name and the name
+    /// shown, those of their families' regular weight.
+    static var monospacedFonts: [(name: String, shown: String)] {
+        let manager = NSFontManager.shared
+        return manager.availableFontFamilies.compactMap { family in
+            guard let members = manager.availableMembers(ofFontFamily: family),
+                let regular = members.first(where: { ($0[1] as? String) == "Regular" }) ?? members.first,
+                let name = regular[0] as? String, let font = NSFont(name: name, size: 13), font.isFixedPitch
+            else { return nil }
+            return (name, family)
+        }
+    }
+
+    func setTerminalFont(_ name: String?) {
+        terminalFontName = name
+        UserDefaults.standard.set(name, forKey: "terminalFontName")
+        TerminalStyle.fontName = name
+        // The cells change size: each terminal gets the font again, and so
+        // the grid that fits.
+        controllers.values.forEach { $0.setFontSize(terminalFontSize) }
+    }
+
+    func setTerminalLooks(cursor: TerminalCursor? = nil, blinks: Bool? = nil, scrollback: Int? = nil) {
+        if let cursor { terminalCursor = cursor }
+        if let blinks { cursorBlinks = blinks }
+        if let scrollback { scrollbackLines = scrollback }
+        UserDefaults.standard.set(terminalCursor.rawValue, forKey: "terminalCursor")
+        UserDefaults.standard.set(cursorBlinks, forKey: "cursorBlinks")
+        UserDefaults.standard.set(scrollbackLines, forKey: "scrollbackLines")
+        controllers.values.forEach { $0.setLooks(cursor: terminalCursor, blinks: cursorBlinks, scrollback: scrollbackLines) }
+    }
+
     func close(_ session: SessionID) {
         connection?.send(.kill(session: session))
     }
@@ -1655,6 +1832,10 @@ final class AppModel: ObservableObject {
     func select(session: SessionInfo) {
         files.active = nil
         diffInFront = false
+        browserInFront = nil
+        // Already the one in front, as the rest of the app sees it, while
+        // its pane is not: it comes to the front there all the same (#69).
+        if selectedSession == session.id { frontChanged() }
         selectedSession = session.id
         if let project = WorktreePath.project(of: session.cwd), folders.contains(where: { $0.path == project }) {
             selectedFolder = project
@@ -1772,14 +1953,20 @@ final class AppModel: ObservableObject {
     /// Closes the tabs of files and the diff, leaving the terminals. A file
     /// given as `kept` stays open too; `keepDiff` leaves the diff tab.
     /// Pinned tabs are closed one at a time only, never with the rest.
-    func closeFileTabs(except kept: String? = nil, keepDiff: Bool = false) {
-        if !keepDiff, !tabLayout.isPinned(TabID.diff) { closeDiffTab() }
-        files.closeAll(except: kept, keeping: pinnedFilePaths)
+    func closeFileTabs(except kept: String? = nil, keepDiff: Bool = false, pane: String? = nil) {
+        // Of one pane, those in it only (#69).
+        let inPane = pane.flatMap { paneLayout.pane($0) }.map { Set($0.tabs) }
+        if !keepDiff, !tabLayout.isPinned(TabID.diff), inPane?.contains(TabID.diff) ?? true { closeDiffTab() }
+        let elsewhere = inPane.map { tabs in Set(files.documents.map(\.path).filter { !tabs.contains(TabID.file($0)) }) } ?? []
+        files.closeAll(except: kept, keeping: pinnedFilePaths.union(elsewhere))
     }
 
     /// The sessions a request would end.
     func sessionsEnded(by request: CloseRequest) -> [SessionInfo] {
-        sessions.filter { $0.id != request.keepSession && !tabLayout.isPinned(TabID.session($0)) }
+        let inPane = request.pane.flatMap { paneLayout.pane($0) }.map { Set($0.tabs) }
+        return sessions.filter {
+            $0.id != request.keepSession && !tabLayout.isPinned(TabID.session($0)) && (inPane?.contains(TabID.session($0)) ?? true)
+        }
     }
 
     /// Closes every tab but the one the request keeps. Sessions are running
@@ -1789,7 +1976,7 @@ final class AppModel: ObservableObject {
     }
 
     func closeTabsConfirmed(_ request: CloseRequest) {
-        closeFileTabs(except: request.keepFile, keepDiff: request.keepDiff)
+        closeFileTabs(except: request.keepFile, keepDiff: request.keepDiff, pane: request.pane)
         for session in sessionsEnded(by: request) { close(session.id) }
         // What was kept comes to the front.
         if let kept = request.keepSession, let session = sessions.first(where: { $0.id == kept }) {
@@ -2083,6 +2270,8 @@ final class AppModel: ObservableObject {
     func showDiffTab() {
         guard let tab = diffTab else { return }
         files.active = nil
+        browserInFront = nil
+        if diffInFront { frontChanged() }
         diffInFront = true
         // Its folder comes with it, as a session's does: the Git tab lists
         // that folder's changes, staging acts on it, and the diff is read again.
