@@ -102,21 +102,37 @@ extension AppModel {
         tab.owner.flatMap { id in sessions.first { $0.id == id }?.displayName } ?? ""
     }
 
-    /// Pictures of a tab's page for the devices that watch it, a few a
-    /// second, each sent only when it differs from the last: taken, not
-    /// streamed, so that they come while the page is not shown on the Mac
-    /// either, which Chromium then stops drawing (BROWSER-15).
+    /// Pictures of a tab's page for the devices that watch it, about ten a
+    /// second. While the Mac draws the page they are what it draws,
+    /// streamed: a picture taken of a page shown as a device whose pixels
+    /// are not the screen's has Chromium lay it out again for the picture,
+    /// which the Mac would show in between (#100). While the Mac does not
+    /// draw it, which Chromium then stops doing, they are taken, each sent
+    /// only when it differs from the last (BROWSER-15).
     func watch(_ tab: BrowserTab, _ on: Bool, width: Int) {
         tab.frames?.cancel()
         tab.frames = nil
+        tab.devtools.screencast(width: width, nil)
         guard on else { return }
         tab.frames = Task { @MainActor [weak self, weak tab] in
             var last: Data?
             while !Task.isCancelled {
                 guard let self, let tab else { return }
-                if await tab.ready(), let frame = try? await tab.devtools.frame(width: width), frame.jpeg != last {
-                    last = frame.jpeg
-                    self.connection?.send(.browserFrame(tab: tab.id, jpeg: frame.jpeg, width: frame.width, height: frame.height))
+                if await tab.ready() {
+                    // The size of what is shown, by which a touch is placed.
+                    let size = try? await tab.devtools.viewport()
+                    if tab.isDrawn, let size {
+                        tab.devtools.screencast(width: width) { [weak self, weak tab] jpeg in
+                            guard let self, let tab else { return }
+                            self.connection?.send(.browserFrame(tab: tab.id, jpeg: jpeg, width: size.width, height: size.height))
+                        }
+                    } else {
+                        tab.devtools.screencast(width: width, nil)
+                        if let frame = try? await tab.devtools.frame(width: width), frame.jpeg != last {
+                            last = frame.jpeg
+                            self.connection?.send(.browserFrame(tab: tab.id, jpeg: frame.jpeg, width: frame.width, height: frame.height))
+                        }
+                    }
                 }
                 try? await Task.sleep(for: .milliseconds(200))
             }

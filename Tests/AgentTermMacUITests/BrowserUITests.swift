@@ -510,6 +510,102 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertEqual(frames().count, count, "pictures came after the device stopped watching")
     }
 
+    /// BROWSER-19 (#100): a page shown on the Mac as a device whose pixels
+    /// are not the screen's, watched by a device: what the Mac shows of it
+    /// stays as it is, the page standing still.
+    func testWatchingDoesNotShakeThePage() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
+        // A phone of three pixels to the point: not the screen's, whatever it is.
+        let phone = try XCTUnwrap(BrowserDevice.presets.first { $0.kind == .phone && $0.scale == 3 })
+        let emulated = server.text("browser_emulate", ["tab": tab, "device": phone.name])
+        XCTAssertFalse(emulated.failed, emulated.text)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        let rect = try XCTUnwrap(app.frame(of: .id("browser-page")))
+        let window = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []).first {
+            ($0[kCGWindowOwnerPID as String] as? Int32) == app.pid && (($0[kCGWindowLayer as String] as? Int) ?? 1) == 0
+        }
+        let bounds = try XCTUnwrap((window?[kCGWindowBounds as String] as? [String: Any]).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) })
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-shake-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        func shot(_ name: String) -> NSBitmapImageRep? {
+            let file = folder.appendingPathComponent(name + ".png")
+            app.capture(to: file)
+            return NSImage(contentsOf: file)?.representations.first as? NSBitmapImageRep
+        }
+        // The share of the page's points that differ between two pictures of the window.
+        func differs(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Double {
+            guard a.pixelsWide == b.pixelsWide, a.pixelsHigh == b.pixelsHigh else { return 1 }
+            let scale = CGFloat(a.pixelsWide) / bounds.width
+            let xs = max(Int((rect.minX - bounds.minX) * scale), 0)..<min(Int((rect.maxX - bounds.minX) * scale), a.pixelsWide)
+            let ys = max(Int((rect.minY - bounds.minY) * scale), 0)..<min(Int((rect.maxY - bounds.minY) * scale), a.pixelsHigh)
+            var changed = 0, all = 0
+            for y in stride(from: ys.lowerBound, to: ys.upperBound, by: 3) {
+                for x in stride(from: xs.lowerBound, to: xs.upperBound, by: 3) {
+                    all += 1
+                    guard let p = a.colorAt(x: x, y: y), let q = b.colorAt(x: x, y: y) else { continue }
+                    if abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent) + abs(p.blueComponent - q.blueComponent) > 0.06 { changed += 1 }
+                }
+            }
+            return Double(changed) / Double(max(all, 1))
+        }
+        let still = try XCTUnwrap(shot("before"), "no picture of the window")
+        let device = try self.device()
+        device.send(.browserAsk(id: 2001, request: .watch(tab: tab, on: true, width: 1290)))
+        wait("a picture of the page", timeout: 15) { device.messages.contains { if case .browserFrame = $0 { return true } else { return false } } }
+        var during: [Double] = []
+        for index in 1...14 { if let picture = shot("during-\(index)") { during.append(differs(still, picture)) } }
+        XCTAssertEqual(during.count, 14, "pictures of the window missing")
+        XCTAssertTrue(during.allSatisfy { $0 < 0.002 }, "the page shown as \(phone.name) changed while watched: \(during.map { String(format: "%.3f", $0) })")
+    }
+
+    /// BROWSER-20: a device watches and uses an agent's page while the Mac's
+    /// window is minimized, as when the user is away from it: pictures come,
+    /// and a touch on a field, text typed and a touch on a button reach the
+    /// page.
+    func testADeviceUsesAPageTheMacDoesNotShow() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let phone = try device()
+        var asked = 1000
+        func ask(_ request: BrowserRequest) -> BrowserResult? {
+            asked += 1
+            let id = asked
+            phone.send(.browserAsk(id: id, request: request))
+            var answer: BrowserResult?
+            wait("the answer to \(request)") {
+                answer = phone.messages.lazy.compactMap { if case .browserAnswer(id, let result) = $0 { return result } else { return nil } }.first
+                return answer != nil
+            }
+            return answer
+        }
+        func center(_ id: String) throws -> (Double, Double) {
+            let rect = server.text("browser_evaluate", ["tab": tab, "script": "(r => [r.x + r.width / 2, r.y + r.height / 2])(document.getElementById('\(id)').getBoundingClientRect())"]).text
+            let numbers = rect.split { !"0123456789.".contains($0) }.compactMap { Double($0) }
+            return (try XCTUnwrap(numbers.first), try XCTUnwrap(numbers.dropFirst().first))
+        }
+        let field = try center("name"), button = try center("greet")
+        app.minimize(true)
+        defer { app.minimize(false) }
+        _ = ask(.watch(tab: tab, on: true, width: 300))
+        wait("a picture of the page", timeout: 15) { phone.messages.contains { if case .browserFrame(tab, _, _, _) = $0 { return true } else { return false } } }
+        func looked() -> String { server.text("browser_snapshot", ["tab": tab]).text }
+        if case .refused(let why)? = ask(.tap(tab: tab, x: field.0, y: field.1)) { XCTFail(why) }
+        _ = ask(.text(tab: tab, text: "Bo"))
+        if case .refused(let why)? = ask(.tap(tab: tab, x: button.0, y: button.1)) { XCTFail(why) }
+        wait("the page did it, not \(looked())") { looked().contains("Hi there, Bo") }
+        _ = ask(.watch(tab: tab, on: false, width: 0))
+    }
+
     /// BROWSER-17 (#94): an agent with its page beside it opens a shell,
     /// which shows under both: the page stays shown, and so does the
     /// agent's terminal.

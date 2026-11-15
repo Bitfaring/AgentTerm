@@ -117,6 +117,15 @@ final class DevToolsSession {
             document += 1
         case "Page.loadEventFired":
             loaded = true
+        case "Page.screencastFrame":
+            guard let session = params["sessionId"] as? Int else { return }
+            if let base64 = params["data"] as? String, let jpeg = Data(base64Encoded: base64) { screencastFrame?(jpeg) }
+            // The next one is sent once this one is acknowledged: in a
+            // tenth of a second, as many as a device needs.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                guard let self, self.screencastFrame != nil else { return }
+                self.send("Page.screencastFrameAck", ["sessionId": session]) { _ in }
+            }
         case "Runtime.consoleAPICalled":
             let level = params["type"] as? String ?? "log"
             let words = (params["args"] as? [[String: Any]] ?? []).map(Self.describe).joined(separator: " ")
@@ -497,23 +506,56 @@ final class DevToolsSession {
     /// JPEG, and the size in CSS pixels of what it shows, by which a touch
     /// on the picture is placed.
     func frame(width: Int) async throws -> (jpeg: Data, width: Double, height: Double) {
-        let shown = try await call(
-            "Runtime.evaluate", ["expression": "[window.innerWidth, window.innerHeight, window.devicePixelRatio, window.scrollX, window.scrollY]", "returnByValue": true],
-            seconds: 5)
-        guard let values = (shown["result"] as? [String: Any])?["value"] as? [Double], values.count == 5, values[0] > 0, values[1] > 0 else {
+        let size = try await viewport()
+        // What is drawn, as it is drawn: a clip, or a scale, has Chromium
+        // lay the page out again for the picture (#100). Made smaller here
+        // instead.
+        let answer = try await call("Page.captureScreenshot", ["format": "jpeg", "quality": 55, "optimizeForSpeed": true], seconds: 10)
+        guard let base64 = answer["data"] as? String, let data = Data(base64Encoded: base64) else { throw Failure(text: "The page gave no picture.") }
+        return (Self.shrunk(data, width: max(width, 160)) ?? data, size.width, size.height)
+    }
+
+    /// The size in CSS pixels of what the page shows.
+    func viewport() async throws -> (width: Double, height: Double) {
+        let shown = try await call("Runtime.evaluate", ["expression": "[window.innerWidth, window.innerHeight]", "returnByValue": true], seconds: 5)
+        guard let values = (shown["result"] as? [String: Any])?["value"] as? [Double], values.count == 2, values[0] > 0, values[1] > 0 else {
             throw Failure(text: "The page has no size yet.")
         }
-        let (cssWidth, cssHeight, ratio) = (values[0], values[1], max(values[2], 1))
-        // No larger than asked, nor than the page draws it.
-        let scale = min(1, Double(max(width, 160)) / (cssWidth * ratio))
-        let answer = try await call(
-            "Page.captureScreenshot",
-            [
-                "format": "jpeg", "quality": 55, "optimizeForSpeed": true,
-                "clip": ["x": values[3], "y": values[4], "width": cssWidth, "height": cssHeight, "scale": scale],
-            ], seconds: 10)
-        guard let base64 = answer["data"] as? String, let data = Data(base64Encoded: base64) else { throw Failure(text: "The page gave no picture.") }
-        return (data, cssWidth, cssHeight)
+        return (values[0], values[1])
+    }
+
+    /// What is streamed of the page: each picture Chromium draws, as a JPEG.
+    private var screencastFrame: ((Data) -> Void)?
+
+    /// Streams what the page draws as it draws it, at most `width` pixels
+    /// wide and about ten pictures a second, to `frame`; nil stops it.
+    func screencast(width: Int, _ frame: ((Data) -> Void)?) {
+        let streaming = screencastFrame != nil
+        screencastFrame = frame
+        if frame != nil, !streaming {
+            let wide = max(width, 160)
+            send("Page.startScreencast", ["format": "jpeg", "quality": 55, "maxWidth": wide, "maxHeight": wide * 4, "everyNthFrame": 1]) { _ in }
+        } else if frame == nil, streaming {
+            send("Page.stopScreencast") { _ in }
+        }
+    }
+
+    /// A JPEG made no wider than `width` pixels.
+    static func shrunk(_ jpeg: Data, width: Int) -> Data? {
+        guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+            let wide = properties[kCGImagePropertyPixelWidth] as? Int, let high = properties[kCGImagePropertyPixelHeight] as? Int, wide > 0
+        else { return nil }
+        guard wide > width else { return jpeg }
+        let longest = (Double(max(wide, high)) * Double(width) / Double(wide)).rounded(.down)
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: Int(longest), kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let out = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.55] as CFDictionary)
+        return CGImageDestinationFinalize(destination) ? out as Data : nil
     }
 
     /// A touch at a point of the page, in CSS pixels from its top left: a

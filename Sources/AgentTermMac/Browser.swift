@@ -136,6 +136,13 @@ final class BrowserTab: ObservableObject, Identifiable {
     weak var holder: BrowserHolderView?
     /// Sending pictures of the page to the devices that watch it.
     var frames: Task<Void, Never>?
+
+    /// Whether the Mac draws the page now: in a pane of a window that is
+    /// on screen and not covered.
+    var isDrawn: Bool {
+        guard let window = container.window, window.isVisible, !window.isMiniaturized, window.occlusionState.contains(.visible) else { return false }
+        return !container.isHiddenOrHasHiddenAncestor && !container.visibleRect.isEmpty
+    }
     private(set) lazy var devtools = DevToolsSession { [weak self] in self?.browserID ?? 0 }
     private weak var model: BrowserModel?
     private var starting = false

@@ -1125,14 +1125,19 @@ An agent's tab whose agent has ended is the user's.
 `watch`, `tap`, `text`, `press`, `scroll`, `history`, `navigate`). The
 host keeps which devices watch which tab (`browserWatchers`), and asks the
 app for a tab's pictures when its first watcher comes and stops it when
-its last goes, a device that goes included. The app then takes a picture
-of what the page shows about five times a second
-(`DevToolsSession.frame`: `Page.captureScreenshot` of the viewport as a
-JPEG, scaled to the width the device asked for), and sends it with the
-page's size in CSS pixels (`browserFrame`) only when it differs from the
-last; the host passes it to the watchers. Taken rather than streamed
-(`Page.startScreencast`), so that pictures come while the Mac does not
-show the page, which Chromium then stops drawing. A touch is placed in CSS
+its last goes, a device that goes included. The app sends each picture
+as a JPEG no wider than the device asked, with the size in CSS pixels of
+what the page shows (`browserFrame`); the host passes it to the
+watchers. While the Mac draws the page (`BrowserTab.isDrawn`: in a pane
+of a window on screen and not covered) the pictures are streamed
+(`Page.startScreencast`), about ten a second, each acknowledged a tenth
+of a second after it comes. While it does not, Chromium draws nothing to
+stream, and a picture is taken about five times a second
+(`Page.captureScreenshot`, made smaller with ImageIO) and sent only when
+it differs from the last. Not taken while the Mac draws it: for a page
+shown as a device whose pixels are not the screen's, Chromium lays the
+page out again for each picture, a clip or a scale given or not, and the
+Mac shows it in between, the page shaking (#100). A touch is placed in CSS
 pixels by that size and clicked with `Input.dispatchMouseEvent`; text is
 `Input.insertText`. Acting on an agent's tab from a device makes it the
 user's, as a click on the Mac does.
