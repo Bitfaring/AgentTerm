@@ -91,11 +91,14 @@ final class Chromium {
         // Profiles cleared or deleted while Chromium had them open.
         BrowserProfiles.wipePending()
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path ?? NSHomeDirectory() + "/Downloads"
-        let strings = [
+        // Its type said: the Swift of CodeQL's runner could not work it out
+        // with the `map` (#102).
+        let values: [String] = [
             framework.path, helper.path, bundle.bundlePath, root.path, root.appendingPathComponent("chromium.log").path,
             // Its own keychain item for each build (principle 7).
             "\(name) Safe Storage", name, downloads, "en-US",
-        ].map { strdup($0) }
+        ]
+        let strings: [UnsafeMutablePointer<CChar>?] = values.map { strdup($0) }
         defer { strings.forEach { free($0) } }
         var paths = atc_paths(
             framework_path: strings[0], helper_path: strings[1], main_bundle_path: strings[2], root_cache_path: strings[3],
