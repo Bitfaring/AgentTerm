@@ -474,6 +474,8 @@ private struct FolderSection: View {
                             SessionRow(session: session)
                         }
                         .buttonStyle(.plain)
+                        // Over the link, so that touching it does not open the session.
+                        .overlayPreferenceValue(NoteMark.Place.self) { NoteMark.mark(of: session, at: $0) }
                         .overlay(alignment: .top) {
                             // Where a dragged session will land.
                             if dropTarget == session.layoutID { Palette.tint.frame(height: 2.5) }
@@ -549,12 +551,64 @@ private struct StateMark: View {
                 .foregroundStyle(color)
                 .accessibilityLabel(state.name)
                 .accessibilityIdentifier("state-\(session.id)")
-        } else if let note = session.stateNote {
+        } else if session.stateNote != nil {
+            // The room the note's mark takes. The mark itself is laid over
+            // the row's link (`NoteMark.over`): inside the link's label, a
+            // button's touch, and a gesture's of high priority, opened the
+            // session instead (tried 2026-11-15).
+            Color.clear
+                .frame(width: NoteMark.side, height: NoteMark.side)
+                .anchorPreference(key: NoteMark.Place.self, value: .bounds) { $0 }
+        }
+    }
+}
+
+/// Why an agent's state is not known, read by touching its mark: what the
+/// Mac shows when the pointer rests on it, in the same words (#87).
+private struct NoteMark: View {
+    static let side: CGFloat = 24
+    let note: String
+    let session: SessionID
+    @State private var shown = false
+
+    /// Where a row keeps room for the mark.
+    struct Place: PreferenceKey {
+        static var defaultValue: Anchor<CGRect>? { nil }
+        static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
+    }
+
+    /// The mark of `session`'s note, put over the room its row keeps for it
+    /// (`place`), by `overlayPreferenceValue` on the row's link.
+    static func mark(of session: SessionInfo, at place: Anchor<CGRect>?) -> some View {
+        GeometryReader { proxy in
+            if let place, let note = session.stateNote, session.state == nil {
+                let room = proxy[place]
+                NoteMark(note: note, session: session.id).position(x: room.midX, y: room.midY)
+            }
+        }
+    }
+
+    var body: some View {
+        Button {
+            shown = true
+        } label: {
             Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-                .accessibilityLabel(note)
-                .accessibilityIdentifier("state-note-\(session.id)")
+                .frame(width: Self.side, height: Self.side)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(note)
+        .accessibilityIdentifier("state-note-\(session)")
+        .popover(isPresented: $shown) {
+            Text(note)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 300, alignment: .leading)
+                .padding()
+                .presentationCompactAdaptation(.popover)
+                .accessibilityIdentifier("state-note-text")
         }
     }
 }

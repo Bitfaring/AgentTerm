@@ -83,8 +83,15 @@ wait "$DEAD" || true
 printf '{"pid":%s,"startedAt":%s,"sessions":[{"name":"build","cwd":"%s"},{"name":"tests","cwd":"%s"}]}' \
     "$DEAD" "$(date +%s)" "$PROJECT" "$PROJECT" > "$STATE/host-$PORT.json"
 
+# Stand-ins for the agents, as the screenshots have (scripts/demo-agent.py):
+# none of the installed ones is started, and Antigravity's session has the
+# note the test reads (IOS-9).
+AGENTS="$STATE/agents"
+mkdir -p "$AGENTS"
+for agent in claude codex agy copilot; do cp scripts/demo-agent.py "$AGENTS/$agent"; chmod +x "$AGENTS/$agent"; done
+
 # Two hosts with their own state, standing in for two Macs.
-HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" > "$STATE/daemon.log" 2>&1 &
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
 AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only --protocol-version 1 > "$SECOND_STATE/daemon.log" 2>&1 &
@@ -127,6 +134,16 @@ if [ "${SCROLL:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_SCROLL=1; fi
 # IDLE=only measures how long the steps around a session's menu wait for the
 # app to be idle (#65), and nothing else. The figures are in the log.
 if [ "${IDLE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_IDLE=1; fi
+# MENU=only counts how often a touch on an entry of a folder's menu is lost
+# (#83), MENU_ROUNDS times (20 by default), and nothing else. The figures
+# are in the log.
+# MENU=after does the same where the whole test chooses it once, after
+# everything before it.
+if [ "${MENU:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_MENU=1; fi
+if [ "${MENU:-}" = after ]; then export TEST_RUNNER_AGENTTERM_MENU_AFTER=1; fi
+if [ -n "${MENU:-}" ]; then export TEST_RUNNER_AGENTTERM_MENU_ROUNDS="${MENU_ROUNDS:-20}"; fi
+# NOTE=only reads a stand-in agent's note on its row (IOS-9), and nothing else.
+if [ "${NOTE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NOTE=1; fi
 # PAGES=only checks that a long session's earlier lines come a page at a time.
 if [ "${PAGES:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_HISTORY=1; fi
 # TAKEOVER=1 has something play the Mac: once the phone has a session open,
@@ -146,6 +163,8 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${LANDSCAPE:-}" = only ]; then echo "iOS UI test passed (landscape only)."; rm -f "$LOG"; exit 0; fi
     if [ "${PAGES:-}" = only ]; then echo "iOS UI test passed (paged history only)."; rm -f "$LOG"; exit 0; fi
     if [ "${IDLE:-}" = only ]; then grep -E "MEASURE idle" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (idle waits measured)."; rm -f "$LOG"; exit 0; fi
+    if [ "${NOTE:-}" = only ]; then echo "iOS UI test passed (a note read only)."; rm -f "$LOG"; exit 0; fi
+    if [ -n "${MENU:-}" ]; then grep -E "MEASURE menu" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (menu touches counted)."; rm -f "$LOG"; exit 0; fi
     if [ "${SCROLL:-}" = only ]; then grep -E "Measured \[|average:" "$LOG" | cut -c1-300; echo "iOS UI test passed (scrolling measured)."; rm -f "$LOG"; exit 0; fi
     grep -q '"Group 1 api"' "$STATE/tabs.json" || { echo "test-ios.sh: the host did not save the arrangement of the sessions" >&2; exit 1; }
     # The test committed and pushed from the phone; the remote has to have it.

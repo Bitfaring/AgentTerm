@@ -627,7 +627,12 @@ Handing off a running session uses `conversationID` when it is set.
 `waitingForPermission(AgentQuestion)`, `waitingForAnswer(AgentQuestion)`,
 `done(said:)`, or nil when it is not known. `stateNote` says why it cannot
 all be known, when there is something to say. The host works both out, so
-every client shows the same.
+every client shows the same. A note is a mark on the session's row: the Mac
+shows its words when the pointer rests on it, the iPhone in a popover when
+it is touched, a button of its own that does not open the session (#87).
+On the iPhone the row keeps room for the mark and the mark is laid over the
+row's link (`overlayPreferenceValue`): inside the link's label, a button's
+touch, and a gesture's of high priority, opened the session instead.
 
 **From the agent itself.** When the host starts an agent's session it gives
 the agent hooks for that session only (`AgentHooks`), in the way each agent

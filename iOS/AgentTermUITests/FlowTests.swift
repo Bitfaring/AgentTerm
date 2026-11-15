@@ -75,6 +75,55 @@ final class FlowTests: XCTestCase {
     /// HIST-6: a long session opened again comes with the screen and 500
     /// lines above it; scrolled to their top, a strip says earlier lines
     /// load, and they come, a page at a time.
+    /// PERF-13 (#83): how often a touch on an entry of a listed folder's
+    /// menu is lost. "Move Down" is chosen again and again, as the main
+    /// test chooses it once, and each time the order is looked at. Printed
+    /// as `MEASURE`, with a picture of each loss; nothing fails on it.
+    private func measureMenuTouches(_ app: XCUIApplication, launchButton: String) {
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10))
+        // A second listed folder, so the first can move down.
+        app.buttons["Open Another Folder…"].tap()
+        let add = app.buttons["Add to Folders"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "the folder being looked at cannot be added to the list")
+        add.tap()
+        app.buttons["Cancel"].tap()
+        countMenuTouches(app)
+    }
+
+    /// Chooses "Move Down" in the first listed folder's menu, again and
+    /// again, and says each time whether the folder moved.
+    private func countMenuTouches(_ app: XCUIApplication) {
+        let names = app.staticTexts.matching(identifier: "folder-name")
+        func order() -> [String] { (0..<names.count).map { names.element(boundBy: $0).label } }
+        let rounds = Int(ProcessInfo.processInfo.environment["AGENTTERM_MENU_ROUNDS"] ?? "") ?? 20
+        var lost = 0
+        for round in 1...rounds {
+            var expected = order()
+            guard expected.count >= 2 else { return XCTFail("two listed folders are needed: \(expected)") }
+            expected.swapAt(0, 1)
+            let started = Date()
+            pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app)
+            let moved = IdleWaits.skipped { () -> Bool in
+                let deadline = Date().addingTimeInterval(8)
+                while Date() < deadline {
+                    if order() == expected { return true }
+                    usleep(300_000)
+                }
+                return false
+            }
+            if !moved {
+                lost += 1
+                capture("menu-lost-\(round)")
+                // Away from the menu, which closes it.
+                IdleWaits.skipped { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap() }
+                sleep(2)
+            }
+            print(String(format: "MEASURE menu, round %d: %@ (%.1f s)", round, moved ? "moved" : "LOST", Date().timeIntervalSince(started)))
+        }
+        print("MEASURE menu, lost \(lost) of \(rounds)")
+    }
+
     /// PERF-9 (#65): how long each step waits for the app to be idle
     /// around a session's menu. XCUITest waits for that before every step,
     /// up to a minute; a step that takes about that long found the app
@@ -277,6 +326,15 @@ final class FlowTests: XCTestCase {
         }
         if environment["AGENTTERM_ONLY_IDLE"] != nil {
             measureIdle(app, launchButton: launchButton, compose: compose)
+            return
+        }
+        if environment["AGENTTERM_ONLY_MENU"] != nil {
+            measureMenuTouches(app, launchButton: launchButton)
+            return
+        }
+        if environment["AGENTTERM_ONLY_NOTE"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            readANote(app, compose: compose)
             return
         }
 
@@ -829,6 +887,12 @@ final class FlowTests: XCTestCase {
         }
         // The project, the folder just added, then the unlisted one a session runs in.
         XCTAssertTrue(orderBecomes(["project", "home", "demo"]), "\(order())")
+        // PERF-13: here, after everything before it, the menu's entry
+        // chosen again and again.
+        if environment["AGENTTERM_MENU_AFTER"] != nil {
+            countMenuTouches(app)
+            return
+        }
         pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app) { capture("15-folder-menu") }
         XCTAssertTrue(orderBecomes(["home", "project", "demo"]), "Move Down did not move the folder: \(order())")
         // Back to the top of the list, so both names are on screen and
@@ -837,5 +901,26 @@ final class FlowTests: XCTestCase {
         names.element(boundBy: 1).press(forDuration: 0.7, thenDragTo: names.element(boundBy: 0), withVelocity: .slow, thenHoldForDuration: 0.6)
         XCTAssertTrue(orderBecomes(["project", "home", "demo"]), "dragging a folder onto another did not move it: \(order())")
         capture("16-folders-reordered")
+        readANote(app, compose: compose)
+    }
+
+    /// IOS-9 (#87): why an agent's state is not known is read on the phone
+    /// too. A stand-in Antigravity, whose session always has a note:
+    /// touched, its mark shows the words, and the session does not open.
+    /// Starts in the sessions list.
+    private func readANote(_ app: XCUIApplication, compose: XCUIElement) {
+        let antigravity = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Antigravity")).firstMatch
+        XCTAssertTrue(antigravity.waitForExistence(timeout: 10), "no Antigravity to start")
+        antigravity.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10), "the Antigravity session did not open")
+        app.navigationBars.buttons.firstMatch.tap()
+        let mark = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "state-note-")).firstMatch
+        XCTAssertTrue(mark.waitForExistence(timeout: 10), "no note on the Antigravity session's row")
+        mark.tap()
+        let note = app.staticTexts["state-note-text"]
+        XCTAssertTrue(note.waitForExistence(timeout: 5), "touching the mark did not show the note")
+        XCTAssertTrue(note.label.contains("does not say when it waits for permission"), note.label)
+        XCTAssertFalse(compose.exists, "touching the mark opened the session")
+        capture("17-note")
     }
 }
