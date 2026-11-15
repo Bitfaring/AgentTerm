@@ -513,6 +513,7 @@ A second host stands in for the other Mac, with a project of its own.
 | IOS-5 | The Mac's home with folders | Open Another Folder, pick one, start a shell | The shell starts in that folder | H, P |
 | IOS-6 | The History or Settings tab in front | The Mac answers with an error | The message shows over whichever tab is in front | P |
 | IOS-7 | Paired | Look at the three tabs | Sessions, History, Settings, with the settings the Mac's Settings has | P |
+| IOS-8 | A program that asked for bracketed paste, and one that did not; an agent asking a question | Send a message of more than 64 characters, one of several lines, one of a few characters | The long and the multi-line one go inside bracketed paste, then Return 80 ms later, to the program that asked; everything else typed as it is, lines ended with Return. Before the fix Codex 0.169 kept a single line of 437 characters in its input, the Return a new line in it | H (`SentTextTests`); with the real agents, the same bytes through a throwaway host, on 2026-11-15: 4,000 characters submitted in Claude Code 2.1.325, Codex 0.169.0, Copilot CLI 1.0.112 and Antigravity 1.5.8 |
 
 ### Waiting
 
@@ -621,6 +622,7 @@ A second host stands in for the other Mac, with a project of its own.
 | NOTE-12 | The iPhone, a notification posted for an agent's session | The session is opened in the app; or it is opened on the Mac | The notification goes from Notification Center, and the banner in the app with it | hand: needs a real phone |
 | NOTE-13 | An agent that finished with a long message; one with a short one; a question with choices | What its notice gives; on the Mac, the banner, then Show All, then Show Less | The end of what it said, 300 characters, and all of it to be had; the banner shows the end on up to six lines, opens out to the whole, scrolled when long, and closes again; a long session name gives way in the middle | U, M |
 | NOTE-14 | Claude Code, Copilot CLI and Antigravity asking a question with three choices; a question without; a finished task; a stand-in that writes down what is typed into it | An answer that is the second choice, the first, one in other letters; one that is none of them; an answer to the others | Down for each choice before it, then Return; the user's own words after Down past the choices, with a Return first in Antigravity; text and Return for a prompt; the stand-in is typed Down and Return | H; with the real agents by hand, as on 2026-11-14 |
+| NOTE-15 | A finished task, its agent having asked for bracketed paste; a stand-in that does so and writes down what is typed into it | A next instruction of more than 64 characters; a short one; a long answer to a question | The long instruction inside bracketed paste, then Return; the short one and the answer typed as before. The stand-in gets the paste | H |
 
 ### The Live Activity
 

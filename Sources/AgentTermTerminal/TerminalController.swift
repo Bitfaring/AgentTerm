@@ -254,6 +254,11 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         onInput?(Data(bytes))
     }
 
+    /// Whether the program asked for bracketed paste (mode 2004), as the
+    /// emulator has it from what the program wrote, or from the screen the
+    /// host wrote out on attaching, which carries the mode.
+    public var bracketedPasteMode: Bool { view.terminalInputStateSnapshot()?.bracketedPasteMode ?? false }
+
     public func setFontSize(_ size: CGFloat) {
         view.font = TerminalStyle.font(size: size)
         // The grid's size in points changed with the cells, so a container

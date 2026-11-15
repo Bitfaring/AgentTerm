@@ -49,6 +49,10 @@ final class ScreenMirror: TerminalDelegate {
         terminal.resize(cols: size.cols, rows: size.rows)
     }
 
+    /// Whether the program asked for bracketed paste (mode 2004), as it is
+    /// now. Text sent to it as a whole goes as a paste then (`SentText`).
+    var bracketedPasteMode: Bool { terminal.bracketedPasteMode }
+
     /// The emulator answers what programs ask a terminal. Those answers are
     /// the clients' to give, not this one's.
     func send(source: Terminal, data: ArraySlice<UInt8>) {}

@@ -1849,8 +1849,18 @@ public final class HostServer {
             }
             // As a person types it, a step at a time: text and Return for a
             // prompt, the keys that pick a choice for a list of them (#55).
-            for (index, step) in AgentAnswer.steps(agent: session.info.agent, state: state, text: text).enumerated() {
-                queue.asyncAfter(deadline: .now() + 0.15 * Double(index)) { [weak session] in session?.process.write(Data(step.utf8)) }
+            // Whether the program takes a paste is known where its screen
+            // is kept, after what it wrote before.
+            let mirror = session.mirror
+            let agent = session.info.agent
+            session.mirrorQueue.async { [weak self, weak session] in
+                let bracketedPaste = mirror.bracketedPasteMode
+                self?.queue.async {
+                    guard let self else { return }
+                    for (index, step) in AgentAnswer.steps(agent: agent, state: state, text: text, bracketedPaste: bracketedPaste).enumerated() {
+                        self.queue.asyncAfter(deadline: .now() + 0.15 * Double(index)) { [weak session] in session?.process.write(Data(step.utf8)) }
+                    }
+                }
             }
         case .appInFront(let front):
             client.inFront = front

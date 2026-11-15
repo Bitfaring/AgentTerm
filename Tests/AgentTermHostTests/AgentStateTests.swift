@@ -446,6 +446,53 @@ final class AgentStateHostTests: XCTestCase {
         XCTAssertEqual(AgentAnswer.steps(agent: nil, state: asked, text: "Green"), ["Green", "\r"])
     }
 
+    /// NOTE-15: a finished task's next instruction, long, goes as a paste
+    /// to an agent that asked for bracketed paste, so that its Return
+    /// submits it (Codex 0.169 kept one of 437 characters typed as it was,
+    /// the Return a new line in it). Short, or to a question, it is typed
+    /// as before.
+    func testALongNextInstructionIsPastedWhenTheAgentAsksForIt() {
+        let long = String(repeating: "Write the tests first. ", count: 20)
+        let done = AgentState.done(said: "ok")
+        XCTAssertEqual(AgentAnswer.steps(agent: "codex", state: done, text: long, bracketedPaste: true), ["\u{1b}[200~" + long + "\u{1b}[201~", "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: "codex", state: done, text: long, bracketedPaste: false), [long, "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: "codex", state: done, text: "go on", bracketedPaste: true), ["go on", "\r"])
+        // A question's own words are typed as they were tried.
+        let why = AgentState.waitingForAnswer(AgentQuestion(text: "Why?"))
+        XCTAssertEqual(AgentAnswer.steps(agent: "claude", state: why, text: long, bracketedPaste: true), [long, "\r"])
+    }
+
+    /// NOTE-15: the host knows the session asked for bracketed paste, and
+    /// what it types for a long next instruction reaches the session as one.
+    func testALongNextInstructionReachesTheSessionAsAPaste() throws {
+        let typed = root.appendingPathComponent("typed")
+        let script = root.appendingPathComponent("codex")
+        let hook = Handoff.shellQuote(tool.path) + " hook codex"
+        let stop = #"{"hook_event_name":"Stop","last_assistant_message":"Done."}"#
+        let long = String(repeating: "Write the tests first. ", count: 20)
+        let expected = "\u{1b}[200~" + long + "\u{1b}[201~\r"
+        // It says it is done, asks for bracketed paste, then writes down
+        // what is typed into it.
+        try """
+        #!/bin/sh
+        stty raw -echo
+        printf '\\033[?2004h'
+        printf '%s' '\(stop)' | \(hook) Stop
+        head -c \(expected.utf8.count) > '\(typed.path)'
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let phone = Client(port: port, token: token, name: "phone")
+        waitUntil("connected") { !phone.messages.isEmpty }
+        phone.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        let done = AgentState.done(said: "Done.")
+        waitUntil("done") { phone.sessions.first?.state == done }
+        let agent = try XCTUnwrap(phone.sessions.first)
+        phone.connection.send(.answer(session: agent.id, to: done, text: long))
+        waitUntil("the instruction to be typed") { (try? Data(contentsOf: typed))?.count == expected.utf8.count }
+        XCTAssertEqual(String(decoding: try Data(contentsOf: typed), as: UTF8.self), expected)
+    }
+
     /// NOTE-14: what the host types for a choice reaches the agent's
     /// terminal as those keys.
     func testAChoiceIsTypedAsKeysIntoTheSession() throws {

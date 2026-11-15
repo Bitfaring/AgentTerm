@@ -834,7 +834,11 @@ being the most iOS shows. The body is the question alone
 choice's words as its text.
 
 How the host types an answer is the agent's list's to say
-(`AgentAnswer.steps`, #55). A prompt takes the text, then Return. A
+(`AgentAnswer.steps`, #55). A prompt takes the text, then Return; a
+finished task's next instruction is sent as the message field sends text
+(`SentText`, below under "Vietnamese input"), long ones as a paste when
+the session's program asked for bracketed paste, which the host reads off
+its `ScreenMirror` on the mirror's queue before typing. A
 question with choices is a list with its first choice marked, and Return
 chooses what is marked: text and Return there answered every such question
 with its first choice, in Claude Code, Copilot CLI and Antigravity alike,
@@ -1075,7 +1079,19 @@ the same folder can therefore be mixed up; the History tab is exact.
   complete text, so the emulator never sees a composition. The key bar sends
   control keys directly. The text and the Return that submits it are sent 80 ms
   apart, because agents treat a burst ending in Return as a paste and do not
-  submit it. Multi-line text is wrapped in bracketed paste.
+  submit it. That is not enough for long text: an agent counts a long burst
+  as pasted for a while after it ends, and takes a Return then as part of it.
+  Codex 0.169 kept a single line of 437 characters in its input, the Return
+  a new line in it, and one of 4,020 even with the Return 0.8 s later; it
+  took one of 229 (tried on 2026-11-15). So text of more than 64 characters
+  (`SentText.typedLength`), or of several lines, goes inside bracketed paste,
+  which says where the paste ends, when the program asked for it (mode 2004,
+  which the emulator knows from the program's output or from the screen the
+  host writes out on attaching): 4,000 characters were then submitted by
+  the Return 80 ms after them in all four agents. Shorter text is typed as
+  it is, as is anything sent while the agent asks a question, which was
+  tried typed only, and anything to a program that did not ask, which would
+  show the brackets.
 
 ## macOS app structure
 

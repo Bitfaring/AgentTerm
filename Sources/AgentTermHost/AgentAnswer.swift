@@ -25,8 +25,14 @@ public enum AgentAnswer {
     ///   - state: What the agent asks, which the answer is to.
     ///   - text: The answer: one of the question's choices, or the user's
     ///     own words.
-    public static func steps(agent: String?, state: AgentState, text: String) -> [String] {
+    ///   - bracketedPaste: Whether the program asked the terminal for
+    ///     bracketed paste (mode 2004).
+    public static func steps(agent: String?, state: AgentState, text: String, bracketedPaste: Bool = false) -> [String] {
         guard case .waitingForAnswer(let question) = state, !question.choices.isEmpty, let agent, ["claude", "copilot", "agy"].contains(agent) else {
+            // A finished task's next instruction goes where the agent takes
+            // a prompt, which takes a long one only as a paste (`SentText`).
+            // A question's own words are typed as they were tried.
+            if case .done = state { return [SentText.text(text, bracketedPaste: bracketedPaste), "\r"] }
             return [text, "\r"]
         }
         let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)

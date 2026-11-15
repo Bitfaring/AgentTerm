@@ -405,12 +405,15 @@ private struct ComposeBar: View {
             controller.type([0x0d])
             return
         }
-        var bytes = Array(message.replacingOccurrences(of: "\n", with: "\r").utf8)
-        if message.contains("\n") {
-            // Bracketed paste keeps a multi-line message in one piece.
-            bytes = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e] + bytes + [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]
+        // A long or multi-line message goes as a paste to a program that
+        // takes one (`SentText`), unless the agent asks something: what
+        // its question takes was tried typed only.
+        let asks: Bool
+        switch model.session(controller.session)?.state {
+        case .waitingForAnswer, .waitingForPermission: asks = true
+        default: asks = false
         }
-        controller.type(bytes)
+        controller.type(Array(SentText.text(message, bracketedPaste: controller.bracketedPasteMode && !asks).utf8))
         // Sent separately: agents treat a burst that ends in Return as a
         // paste and would not submit it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
