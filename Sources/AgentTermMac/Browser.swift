@@ -134,6 +134,8 @@ final class BrowserTab: ObservableObject, Identifiable {
     let container = BrowserContainerView()
     /// The view of a pane last asked to show its page, which has it.
     weak var holder: BrowserHolderView?
+    /// Sending pictures of the page to the devices that watch it.
+    var frames: Task<Void, Never>?
     private(set) lazy var devtools = DevToolsSession { [weak self] in self?.browserID ?? 0 }
     private weak var model: BrowserModel?
     private var starting = false

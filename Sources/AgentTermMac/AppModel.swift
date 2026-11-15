@@ -1475,6 +1475,9 @@ final class AppModel: ObservableObject {
             shellSettings = settings
             loginShell = login
             availableShells = shells
+        case .browserFrame:
+            // The pictures this app sends for the devices that watch a page.
+            break
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):

@@ -1120,6 +1120,23 @@ pictures of, a page in a window only. Its tab id in a `TabLayout` is
 earlier build kept in the app's preferences (`browserTabs`) is forgotten.
 An agent's tab whose agent has ended is the user's.
 
+**The devices.** A device asks with `browserAsk`, for what the user does
+(`BrowserRequest.isTheDevices`: a picture, take over and give back,
+`watch`, `tap`, `text`, `press`, `scroll`, `history`, `navigate`). The
+host keeps which devices watch which tab (`browserWatchers`), and asks the
+app for a tab's pictures when its first watcher comes and stops it when
+its last goes, a device that goes included. The app then takes a picture
+of what the page shows about five times a second
+(`DevToolsSession.frame`: `Page.captureScreenshot` of the viewport as a
+JPEG, scaled to the width the device asked for), and sends it with the
+page's size in CSS pixels (`browserFrame`) only when it differs from the
+last; the host passes it to the watchers. Taken rather than streamed
+(`Page.startScreencast`), so that pictures come while the Mac does not
+show the page, which Chromium then stops drawing. A touch is placed in CSS
+pixels by that size and clicked with `Input.dispatchMouseEvent`; text is
+`Input.insertText`. Acting on an agent's tab from a device makes it the
+user's, as a click on the Mac does.
+
 **The agents.** An agent's `browser_*` tool is a `BrowserRequest`, which
 `agenttermd mcp` sends as `agentBrowser(id:key:request:)`. The host finds
 the agent's session by its key and passes the request to the app that

@@ -453,10 +453,18 @@ user sees.
   agent is told at once that the browser is in the app on that Mac and it
   is not open there. "Agents can use the browser" in Settings > Browser,
   on unless turned off, refuses the agents with that reason when off.
-- **On the iPhone**, Sessions lists the browser's tabs on the Mac, whose
-  each is, and what it pretends to be. A tab opens a picture of its page
-  as it is now, renewed on request, and Take Over or Let … Go On. The
-  iPhone does not browse (principle 1).
+- **On the iPhone**, as on the Mac: an agent's own shells and pages are
+  listed right under it, set in, under the headings Shells and Browser;
+  the user's pages are in their project's folder, and those of no folder
+  under "Browser on the Mac". An agent's screen has Agent, Shells and
+  Browser, each with its tabs when it has several: a shell is its
+  terminal, a page is shown live (pictures of it a few times a second,
+  taken on the Mac, so that they come while the Mac does not show it).
+  The page is used by touch: a touch clicks where it lands, a drag
+  scrolls, text is typed into what has the keyboard, with Return, Delete,
+  Back and Reload. An agent's page becomes the user's at the first touch,
+  as a click on the Mac makes it, and Let … Go On gives it back. The
+  user's own pages open the same way, in a sheet.
 
 ### Usage
 

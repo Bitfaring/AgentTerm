@@ -43,7 +43,7 @@ struct SessionsView: View {
                         FolderSection(group: group)
                     }
                     if model.status == .connected {
-                        // The Mac's browser, its tabs only (#76).
+                        // The Mac's pages that no folder shows (#76).
                         BrowserSection()
                     }
                     if model.status == .connected {
@@ -100,6 +100,8 @@ struct SessionsView: View {
                 switch route {
                 case .session(let id):
                     TerminalScreen(session: id)
+                case .companion(let agent, let item):
+                    TerminalScreen(session: agent, initial: item)
                 case .folder(let folder):
                     FolderScreen(folder: folder)
                 case .file(let folder, let file, let staged):
@@ -315,6 +317,8 @@ private struct FolderSection: View {
     @State private var newName = ""
     /// Ending a session asks first, as everywhere else.
     @State private var ending: SessionInfo?
+    /// A page of the user's, shown live.
+    @State private var shownPage: BrowserTabInfo?
 
     @ViewBuilder
     private func arrangeMenu(_ session: SessionInfo) -> some View {
@@ -503,6 +507,36 @@ private struct FolderSection: View {
                                 }
                             }
                         Palette.hairline.frame(height: 1).padding(.leading, 38)
+                    case .part(_, let title):
+                        // The agent's own, under it: its shells, its pages.
+                        Text(title.uppercased())
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 50)
+                            .padding(.top, 8)
+                            .padding(.bottom, 2)
+                            .accessibilityAddTraits(.isHeader)
+                    case .shell(let shell):
+                        NavigationLink(value: Route.companion(agent: shell.openedBy ?? shell.id, item: "s:\(shell.id)")) {
+                            SessionRow(session: shell, nested: true)
+                        }
+                        .buttonStyle(.plain)
+                        Palette.hairline.frame(height: 1).padding(.leading, 64)
+                    case .page(let tab, let nested):
+                        Group {
+                            if nested, let agent = tab.openedBy {
+                                NavigationLink(value: Route.companion(agent: agent, item: "b:\(tab.id)")) { BrowserTabRow(tab: tab, nested: true) }
+                            } else {
+                                Button {
+                                    shownPage = tab
+                                } label: {
+                                    BrowserTabRow(tab: tab)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        Palette.hairline.frame(height: 1).padding(.leading, nested ? 64 : 38)
                     }
                 }
                 LaunchGrid(folder: group.path)
@@ -521,6 +555,11 @@ private struct FolderSection: View {
             }
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .sheet(item: $shownPage) { tab in
+                BrowserTabSheet(tabID: tab.id)
+                    .environmentObject(model)
+                    .preferredColorScheme(.dark)
+            }
             .alert("Rename Group", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
                 TextField("Name", text: $newName)
                 Button("Rename") { if let renaming { model.sessionLayout.rename(renaming.id, to: newName) } }
@@ -622,6 +661,8 @@ private struct SessionRow: View {
     /// The whole row, or one of the two parts it has on each side of a
     /// note's mark (`SessionRowLink`).
     var part = Part.whole
+    /// Set in under its agent, which it is shown under: it is not named.
+    var nested = false
 
     enum Part { case whole, main, end }
 
@@ -630,7 +671,7 @@ private struct SessionRow: View {
             if part != .end { main }
             if part != .main { end }
         }
-        .padding(.leading, part == .end ? 0 : 12)
+        .padding(.leading, part == .end ? 0 : (nested ? 38 : 12))
         .padding(.trailing, part == .main ? 0 : 12)
         .padding(.vertical, 14)
         .contentShape(Rectangle())
@@ -676,7 +717,7 @@ private struct SessionRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            if let owner = session.openedByName(among: model.sessions) {
+            if !nested, let owner = session.openedByName(among: model.sessions) {
                 // A shell an agent opened: whose it is (#61).
                 Label(owner, systemImage: "sparkles")
                     .font(.caption)

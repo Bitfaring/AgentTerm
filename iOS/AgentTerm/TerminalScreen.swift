@@ -2,14 +2,23 @@ import AgentTermProtocol
 import AgentTermTerminal
 import SwiftUI
 
-/// A session's terminal, sized to this screen, with a key bar and a compose field.
+/// A session's terminal, sized to this screen, with a key bar and a compose
+/// field. An agent with shells or pages of its own has them here too, as on
+/// the Mac: Agent, Shells, Browser, each with its tabs (#76, #69).
 struct TerminalScreen: View {
     @EnvironmentObject private var model: PhoneModel
     let session: SessionID
+    /// What to show first: one of the agent's shells ("s:<id>") or pages ("b:<id>").
+    var initial: String?
     @State private var confirmingEnd = false
     @State private var showingUsage = false
+    @State private var part = Part.agent
+    @State private var shellID: SessionID?
+    @State private var pageID: String?
     @Environment(\.verticalSizeClass) private var verticalSize
     @Environment(\.dismiss) private var dismiss
+
+    enum Part: Hashable { case agent, shells, browser }
 
     /// A phone on its side: far wider than it is high, and with the
     /// keyboard up there is hardly any height left. The navigation bar, the
@@ -17,8 +26,63 @@ struct TerminalScreen: View {
     /// there they share one row and the terminal has the rest.
     private var isOnItsSide: Bool { verticalSize == .compact }
 
+    private var companions: (shells: [SessionInfo], pages: [BrowserTabInfo]) { model.companions(of: session) }
+
+    /// The session whose terminal is on screen: the agent's, or one of its shells.
+    private var shown: SessionID {
+        guard part == .shells else { return session }
+        let shells = companions.shells
+        return shellID.flatMap { id in shells.contains { $0.id == id } ? id : nil } ?? shells.first?.id ?? session
+    }
+
+    private var page: String? {
+        let pages = companions.pages
+        return pageID.flatMap { id in pages.contains { $0.id == id } ? id : nil } ?? pages.first?.id
+    }
+
     private var controller: TerminalController? {
-        model.controller?.session == session ? model.controller : nil
+        model.controller?.session == shown ? model.controller : nil
+    }
+
+    /// Agent | Shells | Browser, and the tabs of the one picked.
+    @ViewBuilder private var partBar: some View {
+        let (shells, pages) = companions
+        if !shells.isEmpty || !pages.isEmpty {
+            VStack(spacing: 6) {
+                Picker("Part", selection: $part) {
+                    Text("Agent").tag(Part.agent)
+                    if !shells.isEmpty { Text("Shells (\(shells.count))").tag(Part.shells) }
+                    if !pages.isEmpty { Text("Browser (\(pages.count))").tag(Part.browser) }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("agent-parts")
+                if part == .shells, shells.count > 1 {
+                    chips(shells.map { ($0.id.description, $0.displayName) }, selected: shown.description) { id in shellID = SessionID(id) }
+                }
+                if part == .browser, pages.count > 1 {
+                    chips(pages.map { ($0.id, $0.displayTitle) }, selected: page ?? "") { id in pageID = id }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Palette.panel)
+        }
+    }
+
+    private func chips(_ items: [(id: String, name: String)], selected: String, pick: @escaping (String) -> Void) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(items, id: \.id) { item in
+                    Button(item.name) { pick(item.id) }
+                        .font(.footnote.weight(item.id == selected ? .semibold : .regular))
+                        .lineLimit(1)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(item.id == selected ? Palette.tint.opacity(0.25) : Color.white.opacity(0.06)))
+                        .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     /// Text size, handing off and ending the session.
@@ -82,10 +146,16 @@ struct TerminalScreen: View {
                 .background(Palette.panel)
                 .accessibilityIdentifier("reconnecting")
             }
-            if let size = model.foreignSize {
+            if !isOnItsSide { partBar }
+            if part == .browser, let page {
+                LivePageView(tabID: page)
+                    .id(page)
+            } else if let size = model.foreignSize {
                 ForeignSizeBanner(size: size)
             }
-            if let controller {
+            if part == .browser, page != nil {
+                // The page has its own controls.
+            } else if let controller {
                 TerminalPane(controller: controller, foreignSize: model.foreignSize)
                     .id(ObjectIdentifier(controller))
                     .accessibilityIdentifier("terminal")
@@ -93,14 +163,14 @@ struct TerminalScreen: View {
                         // The session's earlier output is on its way, up to
                         // megabytes of it: a terminal racing through all of
                         // that says less than a word that it is loading.
-                        if model.replaying == session {
+                        if model.replaying == shown {
                             LoadingView("Loading the session…", cover: Palette.canvas.opacity(0.92))
                         }
                     }
                     .overlay(alignment: .top) {
                         // Earlier lines on their way, scrolled to the top of
                         // what was loaded: a strip, the screen stays (HIST-6).
-                        if model.loadingHistory == session {
+                        if model.loadingHistory == shown {
                             HStack(spacing: 8) {
                                 ProgressView().controlSize(.small)
                                 Text("Loading earlier lines…").font(.footnote)
@@ -145,7 +215,7 @@ struct TerminalScreen: View {
                     .background(Palette.panel)
                     .overlay(alignment: .top) { Palette.hairline.frame(height: 1) }
                 } else {
-                    if let info = model.session(session), let agent = info.agent {
+                    if part == .agent, let info = model.session(session), let agent = info.agent {
                         UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent], compact: true) {
                             showingUsage = true
                         }
@@ -185,8 +255,23 @@ struct TerminalScreen: View {
         } message: {
             Text("The program running in it is stopped.")
         }
-        .onAppear { model.open(session) }
-        .onDisappear { model.leave(session) }
+        .onAppear {
+            // Shown first as asked: one of the agent's shells, or pages.
+            if let initial, initial.hasPrefix("s:") {
+                part = .shells
+                shellID = SessionID(initial.dropFirst(2))
+            } else if let initial, initial.hasPrefix("b:") {
+                part = .browser
+                pageID = String(initial.dropFirst(2))
+            }
+            model.open(shown)
+        }
+        .onChange(of: shown) { old, new in
+            // One terminal at a time on the phone: the other one is left.
+            model.leave(old)
+            model.open(new)
+        }
+        .onDisappear { model.leave(shown) }
     }
 }
 

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 17
+public let agenttermProtocolVersion = 18
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -431,6 +431,10 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// `shellSettings` to every device, or an error for a program that does
     /// not run.
     case setShellSettings(ShellSettings)
+    /// A picture of a tab's page, from the app that shows the browser,
+    /// for the devices that watch it (`BrowserRequest.watch`): a JPEG, and
+    /// the page's size in CSS pixels, by which a touch is placed.
+    case browserFrame(tab: String, jpeg: Data, width: Double, height: Double)
     /// Installs the MCP server in each agent's configuration, or removes it.
     case setAgentShells(Bool)
     /// Asks the agents to run their commands in shells the user sees,
@@ -629,6 +633,8 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// How shells are started, the user's login shell, and the shells the
     /// Mac has to pick from. Sent on connecting and whenever it changes.
     case shellSettings(ShellSettings, loginShell: String, shells: [String])
+    /// A picture of a tab's page, live, for a device that watches it.
+    case browserFrame(tab: String, jpeg: Data, width: Double, height: Double)
     /// Whether the MCP server is installed in the agents' configuration.
     /// Not sent by a host that does not install it (a test's, a trial run).
     case agentShells(Bool)

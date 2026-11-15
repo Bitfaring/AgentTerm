@@ -347,6 +347,13 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     case picture(tab: String)
     case takeOver(tab: String)
     case giveBack(tab: String)
+    /// A device shows the page as it is, live: it is sent pictures of it,
+    /// at most `width` pixels wide, while one watches (`browserFrame`).
+    case watch(tab: String, on: Bool, width: Int)
+    /// A touch at a point of the page, in its CSS pixels: a click.
+    case tap(tab: String, x: Double, y: Double)
+    /// Text typed into what has the keyboard in the page.
+    case text(tab: String, text: String)
 
     /// The tab it is about, when it is about one.
     public var tab: String? {
@@ -355,7 +362,7 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
         case .navigate(let tab, _), .history(let tab, _), .snapshot(let tab, _), .screenshot(let tab, _, _), .click(let tab, _, _), .hover(let tab, _),
             .type(let tab, _, _, _, _), .select(let tab, _, _), .press(let tab, _), .scroll(let tab, _, _, _), .wait(let tab, _, _, _),
             .evaluate(let tab, _), .console(let tab, _), .network(let tab, _), .emulate(let tab, _), .close(let tab), .picture(let tab),
-            .takeOver(let tab), .giveBack(let tab):
+            .takeOver(let tab), .giveBack(let tab), .watch(let tab, _, _), .tap(let tab, _, _), .text(let tab, _):
             return tab
         }
     }
@@ -364,7 +371,16 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     /// the tab; looking at it is not.
     public var acts: Bool {
         switch self {
-        case .navigate, .history, .click, .hover, .type, .select, .press, .scroll, .evaluate, .emulate: return true
+        case .navigate, .history, .click, .hover, .type, .select, .press, .scroll, .evaluate, .emulate, .tap, .text: return true
+        default: return false
+        }
+    }
+
+    /// What a device may ask of a tab: the user, who uses the page through
+    /// it (#76). An agent's own tab the device takes over by acting on it.
+    public var isTheDevices: Bool {
+        switch self {
+        case .picture, .takeOver, .giveBack, .watch, .tap, .text, .press, .scroll, .history, .navigate: return true
         default: return false
         }
     }

@@ -1790,6 +1790,8 @@ public final class HostServer {
         client.attached.removeAll()
         if case .device = client.identity { broadcastDevices() }
         if browserProvider == client.id { setBrowserProvider(client, false) }
+        // A device that goes no longer watches a page.
+        for (tab, watchers) in browserWatchers where watchers.contains(client.id) { setWatching(tab, client.id, false, width: 0) }
     }
 
     private func send(_ message: ServerMessage, to client: Client) {
@@ -1891,6 +1893,8 @@ public final class HostServer {
             handleBrowserAsk(id: id, request: request, from: client)
         case .setAgentPrompt(let agent, let text):
             setAgentPrompt(agent, text)
+        case .browserFrame(let tab, let jpeg, let width, let height):
+            browserFramed(tab: tab, jpeg: jpeg, width: width, height: height, from: client)
         case .setShellSettings(let settings):
             if let program = settings.program, !FileManager.default.isExecutableFile(atPath: program) {
                 return send(.error("\(program) is not a program that can be run: the shell was not changed."), to: client)
@@ -3106,12 +3110,37 @@ public final class HostServer {
         guard browserProvider == client.id else { return }
         browserProvider = nil
         browserTabsList = []
+        browserWatchers = [:]
         for other in clients.values where other.authenticated && other !== client { send(.browserTabs([]), to: other) }
         // Whoever waits for the app is answered now, with why.
         for (call, waiting) in browserCalls {
             browserCalls[call] = nil
             answerBrowser(waiting, .refused(BrowserWords.noApp))
         }
+    }
+
+    /// The devices that watch a tab's page live, by tab (`BrowserRequest.watch`).
+    private var browserWatchers: [String: Set<ClientID>] = [:]
+
+    /// A device starts or stops watching a page. The app is asked for its
+    /// pictures while one device watches it, and no longer once none does.
+    private func setWatching(_ tab: String, _ client: ClientID, _ on: Bool, width: Int) {
+        var watchers = browserWatchers[tab] ?? []
+        let was = !watchers.isEmpty
+        if on { watchers.insert(client) } else { watchers.remove(client) }
+        browserWatchers[tab] = watchers.isEmpty ? nil : watchers
+        guard was != !watchers.isEmpty || (on && width > 0), let providerID = browserProvider, let provider = clients[providerID] else { return }
+        // Not waited for: the pictures are the answer.
+        let call = nextBrowserCall
+        nextBrowserCall += 1
+        send(.browserCall(id: call, agent: nil, request: .watch(tab: tab, on: !watchers.isEmpty, width: width)), to: provider)
+    }
+
+    /// A picture of a page, from the app, to the devices that watch it.
+    private func browserFramed(tab: String, jpeg: Data, width: Double, height: Double, from client: Client) {
+        guard browserProvider == client.id, let watchers = browserWatchers[tab] else { return }
+        let message = ServerMessage.browserFrame(tab: tab, jpeg: jpeg, width: width, height: height)
+        for id in watchers { if let watcher = clients[id] { send(message, to: watcher) } }
     }
 
     private func answerBrowser(_ waiting: (client: ClientID, id: Int, agent: Bool), _ result: BrowserResult) {
@@ -3168,10 +3197,15 @@ public final class HostServer {
         switch request {
         case .tabs:
             answerBrowser(waiting, .tabs(browserTabsList))
-        case .picture, .takeOver, .giveBack:
-            callBrowser(request, agent: nil, for: waiting)
+        case .watch(let tab, let on, let width):
+            guard browserProvider != nil else { return answerBrowser(waiting, .refused(BrowserWords.noApp)) }
+            setWatching(tab, client.id, on, width: width)
+            answerBrowser(waiting, .text(on ? "Watching tab \(tab)." : "No longer watching tab \(tab)."))
         default:
-            answerBrowser(waiting, .refused("A device can look at a tab of the browser, and take it over or give it back, not drive it."))
+            guard request.isTheDevices else {
+                return answerBrowser(waiting, .refused("A device can look at a tab of the browser and use its page, not drive it as an agent does."))
+            }
+            callBrowser(request, agent: nil, for: waiting)
         }
     }
 

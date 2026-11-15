@@ -102,6 +102,27 @@ extension AppModel {
         tab.owner.flatMap { id in sessions.first { $0.id == id }?.displayName } ?? ""
     }
 
+    /// Pictures of a tab's page for the devices that watch it, a few a
+    /// second, each sent only when it differs from the last: taken, not
+    /// streamed, so that they come while the page is not shown on the Mac
+    /// either, which Chromium then stops drawing (BROWSER-15).
+    func watch(_ tab: BrowserTab, _ on: Bool, width: Int) {
+        tab.frames?.cancel()
+        tab.frames = nil
+        guard on else { return }
+        tab.frames = Task { @MainActor [weak self, weak tab] in
+            var last: Data?
+            while !Task.isCancelled {
+                guard let self, let tab else { return }
+                if await tab.ready(), let frame = try? await tab.devtools.frame(width: width), frame.jpeg != last {
+                    last = frame.jpeg
+                    self.connection?.send(.browserFrame(tab: tab.id, jpeg: frame.jpeg, width: frame.width, height: frame.height))
+                }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+    }
+
     /// The user takes a tab from its agents, or gives it back.
     func setUserHas(_ tab: BrowserTab, _ has: Bool) {
         tab.userHasIt = has
@@ -392,7 +413,7 @@ extension AppModel {
             tab.emulating = device
             done(device.map { "Shows the page as \($0.name)" } ?? "Shows the page as itself")
             return .text(device.map { "Tab \(tab.id) is shown as \($0.name)" + ($0.width > 0 ? ", \($0.width) × \($0.height)" : "") + "." } ?? "Tab \(tab.id) is shown as itself again.")
-        case .open, .tabs, .close, .picture, .takeOver, .giveBack:
+        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text:
             return .refused("That is not for this tab.")
         }
     }
@@ -407,6 +428,33 @@ extension AppModel {
         case .giveBack:
             setUserHas(tab, false)
             return .tabs(browsers.infos)
+        case .watch(_, let on, let width):
+            watch(tab, on, width: width)
+            return .text(on ? "Watching." : "Stopped.")
+        case .tap(_, let x, let y):
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            // The user acts on it from the device: an agent's tab is theirs
+            // until they give it back, as a click on the Mac makes it.
+            if tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }
+            do {
+                try await tab.devtools.tap(x: x, y: y)
+                return .text("Touched.")
+            } catch {
+                return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
+            }
+        case .text(_, let text):
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            if tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }
+            _ = try? await tab.devtools.call("Input.insertText", ["text": text])
+            return .text("Typed.")
+        case .press, .scroll, .history, .navigate:
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            if tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }
+            do {
+                return try await act(request, in: tab)
+            } catch {
+                return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
+            }
         case .picture:
             guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
             do {

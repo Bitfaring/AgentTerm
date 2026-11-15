@@ -448,6 +448,68 @@ final class BrowserUITests: MacUITestCase {
 
     /// BROWSER-9: the user's own tab, in the project's panes, kept when the
     /// app opens again.
+    /// BROWSER-18: a device watches an agent's page live and uses it: it is
+    /// sent pictures no wider than it asked, with the page's size; a touch
+    /// on a field and on a button, and text typed, reach the page, and the
+    /// tab is the user's from then on; once it no longer watches, no
+    /// picture comes.
+    func testADeviceWatchesAndUsesAPage() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let phone = try device()
+        var asked = 1000
+        func ask(_ request: BrowserRequest) -> BrowserResult? {
+            asked += 1
+            let id = asked
+            phone.send(.browserAsk(id: id, request: request))
+            var answer: BrowserResult?
+            wait("the answer to \(request)") {
+                answer = phone.messages.lazy.compactMap { if case .browserAnswer(id, let result) = $0 { return result } else { return nil } }.first
+                return answer != nil
+            }
+            return answer
+        }
+        func frames() -> [(jpeg: Data, width: Double, height: Double)] {
+            phone.messages.compactMap { if case .browserFrame(tab, let jpeg, let width, let height) = $0 { return (jpeg, width, height) } else { return nil } }
+        }
+
+        _ = ask(.watch(tab: tab, on: true, width: 300))
+        wait("a picture of the page", timeout: 15) { !frames().isEmpty }
+        let frame = try XCTUnwrap(frames().last)
+        let picture = try XCTUnwrap(NSBitmapImageRep(data: frame.jpeg), "not a picture")
+        XCTAssertLessThanOrEqual(picture.pixelsWide, 300)
+        XCTAssertGreaterThan(frame.width, 100)
+        XCTAssertGreaterThan(frame.height, 100)
+
+        // Where the field and the button are, in the page's CSS pixels.
+        func center(_ id: String) throws -> (Double, Double) {
+            let rect = server.text("browser_evaluate", ["tab": tab, "script": "(r => [r.x + r.width / 2, r.y + r.height / 2])(document.getElementById('\(id)').getBoundingClientRect())"]).text
+            let numbers = rect.split { !"0123456789.".contains($0) }.compactMap { Double($0) }
+            return (try XCTUnwrap(numbers.first), try XCTUnwrap(numbers.dropFirst().first))
+        }
+        let field = try center("name"), button = try center("greet")
+        // The agent reads the page still, which is not acting on it.
+        func looked() -> String { server.text("browser_snapshot", ["tab": tab]).text }
+        if case .refused(let why)? = ask(.tap(tab: tab, x: field.0, y: field.1)) { XCTFail(why) }
+        _ = ask(.text(tab: tab, text: "Bo"))
+        wait("the text in the field") { looked().contains("textbox \"Name\"") && looked().contains("Bo") }
+        _ = ask(.tap(tab: tab, x: button.0, y: button.1))
+        wait("the page did it, not \(looked())") { looked().contains("Hi there, Bo") }
+        // The user's now: the agent waits.
+        XCTAssertEqual(server.text("browser_navigate", ["tab": tab, "url": page.absoluteString]).text, BrowserWords.userHasIt(tab))
+        app.wait(for: .containing("You have this tab"))
+
+        _ = ask(.watch(tab: tab, on: false, width: 0))
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        let count = frames().count
+        _ = ask(.text(tab: tab, text: " and more"))
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertEqual(frames().count, count, "pictures came after the device stopped watching")
+    }
+
     /// BROWSER-17 (#94): an agent with its page beside it opens a shell,
     /// which shows under both: the page stays shown, and so does the
     /// agent's terminal.

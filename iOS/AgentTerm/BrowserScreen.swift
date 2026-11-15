@@ -2,29 +2,29 @@ import AgentTermProtocol
 import AgentTermTerminal
 import SwiftUI
 
-/// The tabs of the browser in AgentTerm on the Mac (#76): which there are,
-/// whose each is and what it shows. The iPhone does not browse: a tab is
-/// looked at, and taken from its agent or given back (principle 1).
+/// The pages of the browser in AgentTerm on the Mac (#76) that no folder
+/// shows: an agent's are under it, the user's in their project's folder.
 struct BrowserSection: View {
     @EnvironmentObject private var model: PhoneModel
     @State private var shown: BrowserTabInfo?
 
     var body: some View {
-        if !model.browserTabs.isEmpty {
+        let pages = model.loosePages
+        if !pages.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Browser on the Mac")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
                 VStack(spacing: 0) {
-                    ForEach(model.browserTabs) { tab in
+                    ForEach(pages) { tab in
                         Button {
                             shown = tab
                         } label: {
                             BrowserTabRow(tab: tab)
                         }
                         .buttonStyle(.plain)
-                        if tab.id != model.browserTabs.last?.id { Divider().padding(.leading, 44) }
+                        if tab.id != pages.last?.id { Divider().padding(.leading, 44) }
                     }
                 }
                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
@@ -37,13 +37,18 @@ struct BrowserSection: View {
     }
 }
 
-private struct BrowserTabRow: View {
+/// A page's row in a list: its title, and whose it is unless it is shown
+/// under its agent.
+struct BrowserTabRow: View {
     @EnvironmentObject private var model: PhoneModel
     let tab: BrowserTabInfo
+    /// Set in under its agent, which it is shown under: it is not named.
+    var nested = false
 
     private var owner: String {
         guard let agent = tab.openedBy else { return "Yours" }
         let name = model.sessions.first { $0.id == agent }?.displayName ?? "An agent"
+        if nested { return tab.userHasIt ? "You have it" : "Its agent's" }
         return tab.userHasIt ? "\(name)'s · you have it" : "\(name)'s"
     }
 
@@ -59,7 +64,8 @@ private struct BrowserTabRow: View {
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, nested ? 38 : 12)
+        .padding(.trailing, 12)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -67,7 +73,7 @@ private struct BrowserTabRow: View {
     }
 }
 
-/// One tab: a picture of what it shows, and its agent's control of it.
+/// One page of the user's, in a sheet: live, and used by touch.
 struct BrowserTabSheet: View {
     @EnvironmentObject private var model: PhoneModel
     @Environment(\.dismiss) private var dismiss
@@ -77,59 +83,136 @@ struct BrowserTabSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let tab {
-                        Text(tab.url).font(.footnote).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
-                        if let agent = tab.openedBy.flatMap({ id in model.sessions.first { $0.id == id } }) {
-                            HStack {
-                                Text(tab.userHasIt ? BrowserWords.userHas(agent.displayName) : BrowserWords.agentDrives(agent.displayName))
-                                    .font(.subheadline)
-                                Spacer()
-                                Button(tab.userHasIt ? BrowserWords.giveBack(agent.displayName) : BrowserWords.takeOver) {
-                                    model.setUserHas(tab.id, !tab.userHasIt)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .accessibilityIdentifier("browser-control")
-                            }
-                            .padding(12)
-                            .background(RoundedRectangle(cornerRadius: 12).fill((tab.userHasIt ? Color.orange : Color.accentColor).opacity(0.14)))
-                        }
-                        if let data = model.browserPictures[tab.id], let image = UIImage(data: data) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Palette.hairline))
-                                .accessibilityLabel("A picture of the page")
-                                .accessibilityIdentifier("browser-picture")
-                        } else if let problem = model.browserProblems[tab.id] {
-                            Text(problem).font(.callout).foregroundStyle(.secondary)
-                        } else {
-                            LoadingView("Asking the Mac for a picture…").frame(height: 160)
-                        }
-                        Text("The page is browsed on the Mac. Here you look at it, and take it from its agent or give it back.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    } else {
-                        Text("This tab was closed on the Mac.").foregroundStyle(.secondary)
-                    }
+            Group {
+                if tab != nil {
+                    LivePageView(tabID: tabID)
+                } else {
+                    Text("This tab was closed on the Mac.").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(16)
             }
+            .background(Palette.canvas.ignoresSafeArea())
             .navigationTitle(tab?.displayTitle ?? "Browser")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        model.refreshPicture(of: tabID)
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .accessibilityLabel("New Picture")
-                }
             }
         }
-        .onAppear { model.refreshPicture(of: tabID) }
+    }
+}
+
+/// A page of the Mac's browser as it is now, sent a few times a second
+/// while it is on screen, and used by touch: a touch is a click where it
+/// lands, a drag scrolls, and text is typed into what has the keyboard. An
+/// agent's tab becomes the user's at the first touch, as a click on the Mac
+/// makes it; its agent waits until it is given back (#76).
+struct LivePageView: View {
+    @EnvironmentObject private var model: PhoneModel
+    let tabID: String
+    @State private var typed = ""
+    @FocusState private var typing: Bool
+
+    private var tab: BrowserTabInfo? { model.browserTabs.first { $0.id == tabID } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let tab, let agent = tab.openedBy.flatMap({ id in model.sessions.first { $0.id == id } }) {
+                HStack {
+                    Text(tab.userHasIt ? BrowserWords.userHas(agent.displayName) : BrowserWords.agentDrives(agent.displayName))
+                        .font(.footnote)
+                        .lineLimit(2)
+                    Spacer()
+                    Button(tab.userHasIt ? BrowserWords.giveBack(agent.displayName) : BrowserWords.takeOver) {
+                        model.setUserHas(tab.id, !tab.userHasIt)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("browser-control")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background((tab.userHasIt ? Color.orange : Color.accentColor).opacity(0.14))
+            }
+            page
+            if let problem = model.browserProblems[tabID] {
+                Text(problem).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.vertical, 4)
+            }
+            controls
+        }
+        .onAppear { model.watch(tabID, true) }
+        .onDisappear { model.watch(tabID, false) }
+    }
+
+    private var page: some View {
+        GeometryReader { room in
+            if let frame = model.browserFrames[tabID], frame.width > 0, frame.height > 0 {
+                // The page fitted to the room, top first; its CSS pixels
+                // to this screen's points.
+                let scale = min(room.size.width / frame.width, room.size.height / frame.height)
+                Image(uiImage: frame.image)
+                    .resizable()
+                    .frame(width: frame.width * scale, height: frame.height * scale)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        SpatialTapGesture().onEnded { touch in
+                            model.useBrowser(.tap(tab: tabID, x: touch.location.x / scale, y: touch.location.y / scale))
+                        }
+                    )
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 14).onEnded { drag in
+                            model.useBrowser(.scroll(tab: tabID, ref: nil, x: -drag.translation.width / scale, y: -drag.translation.height / scale))
+                        }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .accessibilityLabel("The page, live")
+                    .accessibilityIdentifier("browser-live")
+            } else {
+                LoadingView("Asking the Mac for the page…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(Palette.canvas)
+    }
+
+    /// Typing, and going back or loading again.
+    private var controls: some View {
+        HStack(spacing: 10) {
+            Button {
+                model.useBrowser(.history(tab: tabID, step: -1))
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .accessibilityLabel("Back")
+            Button {
+                model.useBrowser(.history(tab: tabID, step: 0))
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .accessibilityLabel("Reload")
+            TextField("Type into the page", text: $typed)
+                .textFieldStyle(.roundedBorder)
+                .focused($typing)
+                .submitLabel(.send)
+                .onSubmit {
+                    guard !typed.isEmpty else { return }
+                    model.useBrowser(.text(tab: tabID, text: typed))
+                    typed = ""
+                    typing = true
+                }
+                .accessibilityIdentifier("browser-type")
+            Button {
+                model.useBrowser(.press(tab: tabID, key: "Backspace"))
+            } label: {
+                Image(systemName: "delete.left")
+            }
+            .accessibilityLabel("Delete")
+            Button {
+                model.useBrowser(.press(tab: tabID, key: "Enter"))
+            } label: {
+                Image(systemName: "return")
+            }
+            .accessibilityLabel("Return")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Palette.panel)
     }
 }

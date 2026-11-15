@@ -15,6 +15,9 @@ enum LinkStatus: Equatable {
 /// A screen that can be pushed onto the navigation stack.
 enum Route: Hashable {
     case session(SessionID)
+    /// An agent's screen with one of its own shells ("s:<id>") or pages
+    /// ("b:<id>") in front.
+    case companion(agent: SessionID, item: String)
     /// A folder's changes and history.
     case folder(String)
     /// The diff of one changed file.
@@ -115,6 +118,35 @@ final class PhoneModel: ObservableObject {
     func setUserHas(_ tab: String, _ has: Bool) {
         askBrowser(has ? .takeOver(tab: tab) : .giveBack(tab: tab)) { [weak self] result in
             if case .refused(let why) = result { self?.browserProblems[tab] = why }
+        }
+    }
+
+    // MARK: A page, live (#76)
+
+    /// The last picture of a page this iPhone watches, and the page's size
+    /// in CSS pixels, by which a touch on it is placed.
+    struct BrowserFrame {
+        let image: UIImage
+        let width: Double
+        let height: Double
+    }
+
+    @Published private(set) var browserFrames: [String: BrowserFrame] = [:]
+
+    /// Starts or stops being sent a page's pictures, as wide as this
+    /// screen's pixels.
+    func watch(_ tab: String, _ on: Bool) {
+        askBrowser(.watch(tab: tab, on: on, width: on ? 1290 : 0)) { [weak self] result in
+            if case .refused(let why) = result { self?.browserProblems[tab] = why }
+        }
+        if !on { browserFrames[tab] = nil }
+    }
+
+    /// Uses the page: what an agent's tab the Mac then gives to the user.
+    func useBrowser(_ request: BrowserRequest) {
+        guard let tab = request.tab else { return }
+        askBrowser(request) { [weak self] result in
+            if case .refused(let why) = result { self?.browserProblems[tab] = why } else { self?.browserProblems[tab] = nil }
         }
     }
     /// How the sessions are arranged: order, pins and groups. The Mac keeps
@@ -723,13 +755,50 @@ final class PhoneModel: ObservableObject {
     enum SessionItem: Identifiable {
         case label(TabGroup, count: Int)
         case session(SessionInfo)
+        /// The heading of an agent's own shells or pages, under it: "Shells", "Browser".
+        case part(agent: SessionID, title: String)
+        /// A shell an agent opened, under it.
+        case shell(SessionInfo)
+        /// A page of the Mac's browser: an agent's under it, or the user's.
+        case page(BrowserTabInfo, nested: Bool)
 
         var id: String {
             switch self {
             case .label(let group, _): return "g:" + group.id
             case .session(let session): return session.layoutID
+            case .part(let agent, let title): return "p:\(agent):\(title)"
+            case .shell(let shell): return "s:" + shell.layoutID
+            case .page(let tab, _): return "b:" + tab.id
             }
         }
+    }
+
+    /// Whether a session is a shell an agent opened that still runs: shown
+    /// under its agent, as on the Mac, not on its own.
+    private func isCompanion(_ session: SessionInfo) -> Bool {
+        session.openedBy.map { agent in sessions.contains { $0.id == agent } } ?? false
+    }
+
+    /// An agent's own shells and pages, in the order of the tabs.
+    func companions(of agent: SessionID) -> (shells: [SessionInfo], pages: [BrowserTabInfo]) {
+        let order = Dictionary(sessionLayout.order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let shells = sessions.filter { $0.openedBy == agent }.sorted { (order[$0.layoutID] ?? .max, $0.id) < (order[$1.layoutID] ?? .max, $1.id) }
+        return (shells, browserTabs.filter { $0.openedBy == agent })
+    }
+
+    private func companionItems(of agent: SessionInfo) -> [SessionItem] {
+        let (shells, pages) = companions(of: agent.id)
+        var items: [SessionItem] = []
+        if !shells.isEmpty { items += [.part(agent: agent.id, title: "Shells")] + shells.map(SessionItem.shell) }
+        if !pages.isEmpty { items += [.part(agent: agent.id, title: "Browser")] + pages.map { .page($0, nested: true) } }
+        return items
+    }
+
+    /// The pages of the user's, and of agents that ended, that no folder shows.
+    var loosePages: [BrowserTabInfo] {
+        let paths = Set(groups.compactMap(\.path))
+        let running = Set(sessions.map(\.id))
+        return browserTabs.filter { tab in !(tab.openedBy.map(running.contains) ?? false) && !paths.contains(tab.project) }
     }
 
     func items(for group: FolderGroup) -> [SessionItem] {
@@ -737,7 +806,7 @@ final class PhoneModel: ObservableObject {
         var items: [SessionItem] = []
         var announced: Set<String> = []
         for id in sessionLayout.order {
-            guard let session = own[id] else { continue }
+            guard let session = own[id], !isCompanion(session) else { continue }
             if let tabGroup = sessionLayout.group(of: id) {
                 if announced.insert(tabGroup.id).inserted {
                     let count = sessionLayout.members(of: tabGroup.id).filter { own[$0] != nil }.count
@@ -746,10 +815,17 @@ final class PhoneModel: ObservableObject {
                 if tabGroup.isCollapsed { continue }
             }
             items.append(.session(session))
+            items += companionItems(of: session)
         }
         // Sessions the arrangement has not heard of yet.
         let known = Set(sessionLayout.order)
-        items += group.sessions.filter { !known.contains($0.layoutID) }.map(SessionItem.session)
+        for session in group.sessions where !known.contains(session.layoutID) && !isCompanion(session) {
+            items.append(.session(session))
+            items += companionItems(of: session)
+        }
+        // The user's pages of the folder, after its sessions, as on the Mac.
+        let running = Set(sessions.map(\.id))
+        items += browserTabs.filter { tab in !(tab.openedBy.map(running.contains) ?? false) && tab.project == group.path }.map { .page($0, nested: false) }
         return items
     }
 
@@ -1147,6 +1223,8 @@ final class PhoneModel: ObservableObject {
             // Seen on the Mac, or on another device.
             if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
             if let mac = pairing?.id, sessions.first(where: { $0.id == session })?.state == state { notifications.remove(mac: mac, session: session) }
+        case .browserFrame(let tab, let jpeg, let width, let height):
+            if let image = UIImage(data: jpeg) { browserFrames[tab] = BrowserFrame(image: image, width: width, height: height) }
         case .agentShellResult, .agentBrowserResult, .browserCall, .agentPrompts, .shellSettings:
             // What the agents are told is written on the Mac only (principle 1).
             // For `agenttermd mcp`, and for the Mac app that shows the browser.

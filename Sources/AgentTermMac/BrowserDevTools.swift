@@ -493,6 +493,39 @@ final class DevToolsSession {
         return data
     }
 
+    /// A picture of what the page shows, at most `width` pixels wide, as a
+    /// JPEG, and the size in CSS pixels of what it shows, by which a touch
+    /// on the picture is placed.
+    func frame(width: Int) async throws -> (jpeg: Data, width: Double, height: Double) {
+        let shown = try await call(
+            "Runtime.evaluate", ["expression": "[window.innerWidth, window.innerHeight, window.devicePixelRatio, window.scrollX, window.scrollY]", "returnByValue": true],
+            seconds: 5)
+        guard let values = (shown["result"] as? [String: Any])?["value"] as? [Double], values.count == 5, values[0] > 0, values[1] > 0 else {
+            throw Failure(text: "The page has no size yet.")
+        }
+        let (cssWidth, cssHeight, ratio) = (values[0], values[1], max(values[2], 1))
+        // No larger than asked, nor than the page draws it.
+        let scale = min(1, Double(max(width, 160)) / (cssWidth * ratio))
+        let answer = try await call(
+            "Page.captureScreenshot",
+            [
+                "format": "jpeg", "quality": 55, "optimizeForSpeed": true,
+                "clip": ["x": values[3], "y": values[4], "width": cssWidth, "height": cssHeight, "scale": scale],
+            ], seconds: 10)
+        guard let base64 = answer["data"] as? String, let data = Data(base64Encoded: base64) else { throw Failure(text: "The page gave no picture.") }
+        return (data, cssWidth, cssHeight)
+    }
+
+    /// A touch at a point of the page, in CSS pixels from its top left: a
+    /// click of the mouse there, as the device's user means it.
+    func tap(x: Double, y: Double) async throws {
+        for type in ["mouseMoved", "mousePressed", "mouseReleased"] {
+            try await call(
+                "Input.dispatchMouseEvent", ["type": type, "x": x, "y": y, "button": type == "mouseMoved" ? "none" : "left", "clickCount": type == "mouseMoved" ? 0 : 1],
+                seconds: 5)
+        }
+    }
+
     /// An element's box in the page, in its points.
     func box(of node: Int) async throws -> CGRect {
         _ = try? await call("DOM.scrollIntoViewIfNeeded", ["backendNodeId": node])
