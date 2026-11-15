@@ -82,10 +82,12 @@ itself.
 - A shell has no state. An agent that has just started has none until it
   says something. After Escape or Control C is typed to a working agent,
   its state is not known until the agent says more.
-- Codex runs the hooks AgentTerm gives it without asking (seen with Codex
-  0.169): its session says nothing about trusting them. A Codex from
-  before, which asked to trust them first, shows no state until that is
-  answered.
+- Codex asks to review the hooks AgentTerm gives it when they are new or
+  changed: the first session after AgentTerm is installed, and the first
+  after switching between the released and dev builds (seen with Codex
+  0.169). Until its hooks first report, a Codex session says that its
+  state shows once they run, and to choose "Trust all and continue" if
+  Codex asks; told to go on without them, Codex shows no state.
 - Antigravity does not say when it waits for permission: while it runs a
   tool, its state is not shown, and its session says why.
 

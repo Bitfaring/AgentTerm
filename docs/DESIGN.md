@@ -659,11 +659,18 @@ to trust). Working stays working since it began.
 
 What cannot be known:
 
-- **Codex** before 0.169 ran no hook until the user trusted it, and its
-  session's state was not known until then. Codex 0.169 runs the hooks it
-  is given for a session without asking, as trying it on 2026-11-14
-  showed (#59), so its session carries no note about it any more: the
-  note told the user to wait for a question that no longer comes.
+- **Codex** 0.169 asks to review the hooks it is given for a session when
+  they are new or changed, and runs none of them when told to go on
+  without. It keeps one trusted hash for each place a hook is given in,
+  whoever gave it (`[hooks.state."/<session-flags>/config.toml:stop:0:0"]
+  trusted_hash` in `~/.codex/config.toml`), and the released and dev
+  builds' hooks name different programs: so the first session after
+  AgentTerm is installed asks, and so does the first after the other
+  build's. Tried on 2026-11-15; the trial of 2026-11-14 (#59) found no
+  question because the hooks had been trusted already. Until its hooks
+  first report, a Codex session's note says its state shows once they run
+  and to choose "Trust all and continue" when Codex asks
+  (`AgentHooks.note`, AGENT-8).
 - **Antigravity** says nothing when it waits for permission: its question
   comes after `PreToolUse`, with nothing in between. So while a tool runs,
   its state is not known, and `stateNote` says so.

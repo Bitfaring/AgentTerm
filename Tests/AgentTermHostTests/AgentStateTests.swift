@@ -337,21 +337,39 @@ final class AgentStateHostTests: XCTestCase {
         waitUntil("not known after Escape") { mac.sessions.first { $0.id == agent.id }.map { $0.state == nil } ?? false }
     }
 
-    /// AGENT-8: a Codex session says nothing of its hooks, which Codex runs
-    /// without being asked to trust them (#59); an Antigravity session
+    /// AGENT-8: a Codex session says, until its hooks first report, that
+    /// they have to be trusted for its state to be known: Codex 0.169 asks
+    /// to review hooks that are new or changed, and runs none of them when
+    /// told to go on without (tried 2026-11-15). An Antigravity session
     /// always says what it cannot tell.
     func testWhatIsSaidOfAnAgentWhoseStateCannotAllBeKnown() throws {
         let client = Client(port: port, token: token, name: "mac")
         waitUntil("connected") { !client.messages.isEmpty }
-        for agent in ["codex", "agy"] {
+        let hook = Handoff.shellQuote(tool.path) + " hook codex"
+        let prompt = #"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#
+        let scripts = [
+            // Its hooks report once something is typed into it.
+            "codex": "#!/bin/sh\nstty raw -echo\nhead -c 1 > /dev/null\nprintf '%s' '\(prompt)' | \(hook) UserPromptSubmit\nexec sleep 600\n",
+            "agy": "#!/bin/sh\nexec sleep 600\n",
+        ]
+        for (agent, text) in scripts {
             let script = root.appendingPathComponent(agent)
-            try "#!/bin/sh\nexec sleep 600\n".write(to: script, atomically: true, encoding: .utf8)
+            try text.write(to: script, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
             client.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: agent)))
         }
         waitUntil("both sessions") { client.sessions.count == 2 }
-        XCTAssertNil(client.sessions.first { $0.title == "codex" }?.stateNote)
+        let codex = try XCTUnwrap(client.sessions.first { $0.title == "codex" })
+        XCTAssertEqual(codex.stateNote?.contains("Trust all and continue"), true, codex.stateNote ?? "no note")
         XCTAssertEqual(client.sessions.first { $0.title == "agy" }?.stateNote?.contains("does not say when it waits for permission"), true)
+
+        // Its hooks report: the note goes.
+        client.connection.send(.attach(session: codex.id, size: TermSize(cols: 80, rows: 24)))
+        client.connection.sendInput(Data("\r".utf8), to: codex.id)
+        waitUntil("working, the note gone") {
+            let now = client.sessions.first { $0.id == codex.id }
+            return now?.state?.isWorking == true && now?.stateNote == nil
+        }
     }
 
     /// AWAKE-5: with "only while an agent is working", the Mac is held

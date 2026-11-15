@@ -294,13 +294,21 @@ public enum AgentHooks {
     // MARK: Notes
 
     /// What is said of a session whose agent's state cannot all be known,
-    /// before it said anything (`beforeAnyEvent`) and after. Codex has
-    /// none: since 0.169 it runs the hooks it is given without asking to
-    /// trust them first (#59).
+    /// before it said anything (`beforeAnyEvent`) and after.
+    ///
+    /// Codex 0.169 asks to review hooks that are new or changed when its
+    /// session starts, and runs none of them when told to go on without:
+    /// it keeps one trusted hash for each place a hook is given in, so the
+    /// first session after AgentTerm is installed asks, and so does each
+    /// after the released and dev builds took turns (tried 2026-11-15; the
+    /// trial of #59 had them trusted already). Until its hooks first report,
+    /// a Codex session says so, and what to do.
     public static func note(agent: String?, beforeAnyEvent: Bool) -> String? {
         switch agent {
         case "agy":
             return "Antigravity does not say when it waits for permission: while it runs a tool, its state is not shown."
+        case "codex" where beforeAnyEvent:
+            return "Codex shows its state once AgentTerm's hooks run. If it asks to review hooks, choose “Trust all and continue”; without them its state is not known."
         default:
             return nil
         }
