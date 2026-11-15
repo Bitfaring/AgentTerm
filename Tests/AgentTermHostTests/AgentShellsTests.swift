@@ -949,7 +949,10 @@ final class AgentShellsHostTests: XCTestCase {
     func testAnAgentsShellRunsItsStartupAndTheMarksCanBeTurnedOff() throws {
         let mac = Client(port: port, token: token)
         waitUntil("connected") { !mac.messages.isEmpty }
-        mac.connection.send(.setShellSettings(ShellSettings(agentStartup: "export AT_AGENT=on")))
+        // zsh, the shell that is set up to say when its commands end, which
+        // the login shell of the machine running the tests may not be: CI's
+        // is bash.
+        mac.connection.send(.setShellSettings(ShellSettings(program: "/bin/zsh", agentStartup: "export AT_AGENT=on")))
         waitUntil("told") { mac.messages.contains { if case .shellSettings(let told, _, _) = $0 { return told.agentStartup != "" } else { return false } } }
         let (agent, _) = try startAgent("claude", title: "starter", client: mac)
         let opened = agent.tool("shell_open", ["title": "work"], in: self)
@@ -957,7 +960,7 @@ final class AgentShellsHostTests: XCTestCase {
         let ran = agent.tool("shell_run", ["session": shell, "command": "echo agent:$AT_AGENT"], in: self)
         XCTAssertEqual(ran.text, "Exit code 0. Its output:\n\nagent:on")
 
-        mac.connection.send(.setShellSettings(ShellSettings(agentStartup: "export AT_AGENT=on", marks: false)))
+        mac.connection.send(.setShellSettings(ShellSettings(program: "/bin/zsh", agentStartup: "export AT_AGENT=on", marks: false)))
         waitUntil("told") { mac.messages.contains { if case .shellSettings(let told, _, _) = $0 { return !told.marks } else { return false } } }
         let second = agent.tool("shell_open", ["title": "plain"], in: self)
         let plain = try XCTUnwrap(second.text.range(of: #"shell \d+"#, options: .regularExpression).map { SessionID(second.text[$0].dropFirst(6))! }, second.text)
@@ -974,6 +977,9 @@ final class AgentShellsHostTests: XCTestCase {
     func testAnAgentRunsCommandsAndIsToldHowTheyEnded() throws {
         let mac = Client(port: port, token: token)
         waitUntil("connected") { !mac.messages.isEmpty }
+        // zsh, which the login shell of CI's machine is not.
+        mac.connection.send(.setShellSettings(ShellSettings(program: "/bin/zsh")))
+        waitUntil("told") { mac.messages.contains { if case .shellSettings(let told, _, _) = $0 { return told.program == "/bin/zsh" } else { return false } } }
         let (agent, _) = try startAgent("claude", title: "runner", client: mac)
         let opened = agent.tool("shell_open", ["title": "work"], in: self)
         XCTAssertFalse(opened.failed, opened.text)
