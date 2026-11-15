@@ -139,7 +139,7 @@ itself.
   times of the day), on certain dates, or a little after the agent's
   account limit starts over. On or off without being deleted. Made
   and changed in the Mac's Schedules, a place of the window, and the
-  iPhone's Settings > Schedules; the host keeps them and runs them, with
+  iPhone's Schedules tab; the host keeps them and runs them, with
   the app closed too.
 - **Schedules** shows them in three groups, the same on both: **Running**,
   the runs whose session still runs, each opening its session; **Scheduled**,
@@ -422,9 +422,18 @@ under 20% that is not charging turns amber.
 
 - Buttons start Claude Code (`claude`), Codex (`codex`), Antigravity (`agy`),
   Copilot CLI (`copilot`) or a plain shell in the selected folder.
-- AgentTerm detects which CLIs are installed. A CLI that is not installed has no
-  button. Detection uses the user's login shell so it matches what a terminal
-  would find, and can be re-run without restarting.
+- AgentTerm detects which CLIs are installed. Detection uses the user's login
+  shell so it matches what a terminal would find, and can be re-run without
+  restarting. In the Mac's header, an agent that is not installed is there
+  all the same, dimmed, by its symbol and a mark (#50): pressed, it says how
+  to install it, with its maker's command for macOS, another way where its
+  maker gives one, what it needs, and its maker's page. The command can be
+  copied, or typed into a new shell on the Mac by **Install in a New Shell**,
+  not run: the user reads it there and presses Return. AgentTerm runs no
+  installer by itself. **Look Again** has the agents looked for again; once
+  it is found, the sheet says so and starts it. Everywhere else, the menus,
+  the empty folder's buttons and the iPhone, list the agents that are
+  installed only.
 - An **SSH** menu lists the hosts of the Mac's `~/.ssh/config`, the files it
   includes too, and opens `ssh <host>` as a session with one click. Entries
   that are patterns (`*`, `?`, `!`) are not hosts and are left out. The menu
@@ -566,7 +575,12 @@ panel.
     deleted, and a remote's branches are not changed from here.
     Above the changes, **Fetch**, **Pull** and **Push** act on the branch
     that is checked out, Pull and Push each with the number of commits
-    waiting, next to the name of the branch it follows. Fetch asks the
+    waiting ("Push 1 commit"), next to the name of the branch it follows.
+    A number in the panel says what it counts beside it (#50): the lines
+    put in and taken out of what is not committed ("+5 −0 lines"), the
+    files of each list ("Changes 3 files"), and on a worktree's chip its
+    files changed and commits ahead ("3 changed · 2 ahead"); a file's own
+    "+1 −0" is its lines, as git writes it. Fetch asks the
     remotes for what is new and changes neither the branch nor the files.
     It is also done by itself every five minutes while the folder's changes
     are shown and the app is in front, so that the numbers stay true; when
@@ -682,7 +696,11 @@ panel.
       title or what was said in them holds the words, whatever their case,
       each with a piece of the text around them and in how many places
       they are. What a tool printed is not searched. The host searches
-      every conversation, not only those listed.
+      every conversation, not only those listed. **Titles Only** beside
+      the field (on the iPhone, in the menu beside it) searches the
+      titles alone, which is faster on a long history; what was said is
+      searched too by default, and the choice is kept on each device
+      (#50).
     - **Group and filter**, from the menu beside the field: grouped by
       agent or by day (Today, Yesterday, then the date); only one agent's,
       only one folder's (a worktree AgentTerm made for it included), only
@@ -698,7 +716,12 @@ panel.
       has ended, and its cost is in a unit of its own and is not shown. A
       long conversation is shown by its last 600 entries, and says so.
       **Copy Transcript** copies it as Markdown; **Open as a File** writes
-      it out on the Mac and opens it as any file.
+      it out on the Mac and opens it as any file. **Preview Markdown**
+      shows what was said with its Markdown rendered, headings, lists,
+      tables and code as a file's preview shows them, and **Show as Text**
+      as it was written; the choice is kept for the next transcript, on
+      each device (#50). Each thing asked and answered has its own
+      **Copy**, which copies it as it was written (#50).
     - **Pin** keeps a conversation in a group of its own at the top;
       **Hide** takes it out of the list, until Show Hidden is chosen.
       Both are kept by the Mac and are the same on every device.
@@ -706,8 +729,18 @@ panel.
       after two questions: its file is moved to the Trash of the Mac. A
       conversation a session is having is not deleted; Antigravity's
       cannot be, and it says why.
+    - **Select**, above the list, picks conversations to delete together
+      (#50): a click ticks one instead of opening it, and **Delete N…**
+      deletes those picked after two questions. In History, not in a
+      folder's list, **Delete All…** deletes every conversation on the Mac,
+      after two questions too. Either way pinned ones stay, as does one a
+      session is having, and Antigravity's; how many were kept is said,
+      and nothing more when none was. **Done** ends the picking.
     - **Show Older Conversations**, at the end of a full list, brings the
       next 200.
+
+    History's list is wider than the other places' lists, for the titles
+    and what a search found in them (#50); it can be made wider still.
 
 ### What the app reports
 
@@ -945,9 +978,10 @@ The app opens on **Macs**, the list of the Macs it is paired with, each with
 whether it is connected and how many sessions it has. Picking one goes into
 that Mac; pairing another adds it to the list, and holding a Mac forgets it.
 
-Inside a Mac there are three tabs: **Sessions** (how the Mac is doing, then
-the folders and their sessions), **History** (every conversation on the
-Mac) and **Settings**, in the order of the Mac's Settings: General
+Inside a Mac there are four tabs, the places of the Mac's bar: **Sessions**
+(how the Mac is doing, then the folders and their sessions), **History**
+(every conversation on the Mac), **Schedules** (as the Mac's Schedules
+shows them, #50) and **Settings**, in the order of the Mac's Settings: General
 (keeping the Mac awake with its options, the temperature's unit), Git
 (commit messages, diffs), Privacy, then the Mac itself (switching to
 another, forgetting this one) and About (the version and the links). The
@@ -972,13 +1006,15 @@ button at the top right of Sessions goes back to the list of Macs.
   scrolls sideways and can be shown as two panels as on the Mac; files can
   be staged, unstaged, discarded (from a file's menu, or all of them, asked
   first as on the Mac) and committed as on the
-  Mac; the branch's name lists the branches, to switch to one or make one
-  (renaming and deleting a branch are on the Mac); Fetch, pulling by merge
+  Mac; the branch's name lists the branches, to switch to one or make one,
+  and one of the repository's own is renamed or deleted from its menu,
+  asked as on the Mac; Fetch, pulling by merge
   or by rebase and Force Push… are there as on the Mac, and the remotes
   are asked by themselves while the folder's changes are on screen;
-  **Commits** opens the history of the checked out branch, with the graph,
-  and a commit shows its message, its hash to copy, and its files with
-  their diffs (reverting and picking a commit are on the Mac); **Stashes**
+  **Commits** opens the history of the checked out branch, or of another
+  picked above it, with the graph, and a commit shows its message, its hash
+  to copy, and its files with their diffs, and is reverted or picked onto
+  the checked out branch, asked as on the Mac; **Stashes**
   stashes the changes, lists the stashes with their files and diffs, and
   applies, pops and drops one, as on the Mac; the last commit is amended
   and undone from the menu beside the branch; what git is stopped in is

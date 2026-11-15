@@ -472,10 +472,15 @@ final class ProtocolTests: XCTestCase {
     func testWhatAWorktreesChipSays() {
         let own = WorktreeInfo(path: "/code/project", branch: "main", isMain: true, changed: 1)
         XCTAssertEqual(own.chipTitle, "main")
-        XCTAssertEqual(own.chipCounts, "1")
+        // In words beside the numbers (#50).
+        XCTAssertEqual(own.chipCounts, "1 changed")
         XCTAssertEqual(own.chipHelp, "The folder itself, 1 file changed")
         let busy = WorktreeInfo(path: "/code/project/.agentterm/worktrees/x", branch: "x", isMain: false, ahead: 2, changed: 3, inUse: true, isAgentTerm: true)
-        XCTAssertEqual(busy.chipCounts, "3 ↑2")
+        XCTAssertEqual(busy.chipCounts, "3 changed · 2 ahead")
+        XCTAssertEqual(CountWords.files(1), "1 file")
+        XCTAssertEqual(CountWords.files(3), "3 files")
+        XCTAssertEqual(CountWords.commits(1), "1 commit")
+        XCTAssertEqual(CountWords.commits(2), "2 commits")
         XCTAssertEqual(busy.chipHelp, "A worktree, 3 files changed, 2 commits ahead, a session runs in it")
         XCTAssertEqual(WorktreeInfo(path: "/code/review", branch: nil, isMain: false).chipTitle, "review", "a detached HEAD is named by its folder")
         XCTAssertEqual(WorktreeInfo(path: "/code/clean", branch: "clean", isMain: false).chipCounts, "")
@@ -700,6 +705,29 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(PatchParts.patch(path: "a", hunk: hunks[0], picked: [], use: .stage), "nothing picked is no patch")
         XCTAssertTrue(PatchParts.Use.unstage.reversed && PatchParts.Use.discard.reversed && !PatchParts.Use.stage.reversed)
         XCTAssertEqual(PatchParts.hunks(of: "@@ -1 +1 @@\n-a\n+b\n… diff truncated …").first?.lines, ["-a", "+b"])
+    }
+
+    /// LAUNCH-7 (#50): each agent AgentTerm knows has its maker's command to
+    /// install it on macOS, read from the maker's own page, and the words
+    /// the Mac's guide says it in; an agent it does not know has none.
+    func testEveryAgentHasItsMakersInstallCommand() throws {
+        let commands = [
+            "claude": "curl -fsSL https://claude.ai/install.sh | bash", "codex": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+            "agy": "curl -fsSL https://antigravity.google/cli/install.sh | bash", "copilot": "curl -fsSL https://gh.io/copilot-install | bash",
+        ]
+        for (id, command) in commands {
+            let guide = try XCTUnwrap(AgentInstallGuide.forAgent(id, name: id), id)
+            XCTAssertEqual(guide.command, command)
+            XCTAssertEqual(guide.docs.scheme, "https")
+            XCTAssertEqual(guide.id, id)
+        }
+        XCTAssertEqual(AgentInstallGuide.forAgent("copilot", name: "Copilot CLI")?.alternative, "brew install --cask copilot-cli")
+        XCTAssertNil(AgentInstallGuide.forAgent("agy", name: "Antigravity")?.alternative, "its maker gives no other way for macOS")
+        XCTAssertNil(AgentInstallGuide.forAgent("aider", name: "Aider"))
+        let codex = try XCTUnwrap(AgentInstallGuide.forAgent("codex", name: "Codex"))
+        XCTAssertEqual(codex.title, "Install Codex")
+        XCTAssertEqual(codex.message(on: "this Mac"), "Codex is not installed on this Mac. Run its maker's install command in a terminal there, then look for it again.")
+        XCTAssertEqual(codex.help(on: "Studio"), "Codex is not installed on Studio. Click to see how to install it.")
     }
 
     /// GIT-69 (#50): the hunk a diff was cut off in is shown, and is not

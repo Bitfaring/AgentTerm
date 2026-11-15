@@ -31,6 +31,11 @@ public struct TranscriptEntry: Codable, Equatable, Identifiable, Sendable {
 /// run in it, and what the file tells about it. What an agent does not
 /// record is nil here, and shown as not known.
 public struct ConversationDetails: Codable, Equatable, Sendable {
+    /// The transcript's switch between what was said as it was written and
+    /// its Markdown rendered (#50), in both apps' words.
+    public static let previewMarkdown = "Preview Markdown"
+    public static let showAsText = "Show as Text"
+
     public var conversation: Conversation
     /// Oldest first. A long conversation is given by its end.
     public var entries: [TranscriptEntry]
@@ -268,6 +273,40 @@ public struct HistoryFilter: Equatable, Sendable {
         if calendar.isDate(day, inSameDayAs: now) { return "Today" }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(day, inSameDayAs: yesterday) { return "Yesterday" }
         return day.formatted(date: .complete, time: .omitted)
+    }
+}
+
+/// What is asked before several conversations are deleted at once (#50),
+/// those picked or every one on the Mac, twice, as one is; and what is
+/// said once it is done. The same on the Mac and the iPhone.
+public struct DeleteConversationsQuestion: Equatable, Sendable {
+    public var title: String
+    public var message: String
+    public var confirm: String
+
+    /// - Parameters:
+    ///   - count: How many were picked; nil for every conversation on the Mac.
+    ///   - again: The second question, after the first was confirmed.
+    public init(count: Int?, again: Bool) {
+        let them = count.map { $0 == 1 ? "1 conversation" : "\($0) conversations" } ?? "every conversation on this Mac"
+        if again {
+            title = "Delete them for good from their agents?"
+            message =
+                "Then \(them) can no longer be resumed, read or handed off, in AgentTerm or in their agents. Their files are moved to the Trash of the Mac, from where they can be put back."
+            confirm = count == nil ? "Delete Every Conversation" : "Delete \(count == 1 ? "Conversation" : "\(count ?? 0) Conversations")"
+        } else {
+            title = count == nil ? "Delete every conversation on this Mac?" : "Delete \(them)?"
+            message =
+                "This deletes the agents' own records of \(count == 1 ? "it" : "them"), not only the rows here. Pinned ones stay, as does one a session is having, and Antigravity's, which are deleted in Antigravity."
+            confirm = "Delete…"
+        }
+    }
+
+    /// Said once they were deleted: how many, and how many were kept.
+    public static func done(deleted: Int, kept: Int) -> String {
+        let gone = deleted == 1 ? "1 conversation was deleted." : "\(deleted) conversations were deleted."
+        guard kept > 0 else { return gone }
+        return gone + " \(kept) \(kept == 1 ? "was" : "were") kept: pinned, having a session, or of Antigravity."
     }
 }
 

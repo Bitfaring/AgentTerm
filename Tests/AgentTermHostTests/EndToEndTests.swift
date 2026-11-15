@@ -123,6 +123,23 @@ final class EndToEndTests: XCTestCase {
         waitUntil("session list emptied") { client.sessions == [] }
     }
 
+    /// SES-27 (#50): a session can be started with a command typed into it
+    /// and not run: it is there to read, and runs only once Return is
+    /// pressed, as the Mac's guide to installing an agent does it.
+    func testACommandTypedIntoANewShellWaitsForReturn() {
+        let client = connect()
+        client.connection.send(.create(CreateRequest(command: nil, cwd: "/tmp", title: "Install", typed: "echo typed-$((40+2))")))
+        waitUntil("attached") { client.attached != nil }
+        let id = client.attached!.id
+        waitUntil("typed at its prompt") { client.text(id).contains("echo typed-$((40+2))") }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertFalse(client.text(id).contains("typed-42"), "it ran without Return being pressed")
+        client.type("\r", in: id)
+        waitUntil("run once Return is pressed") { client.text(id).contains("typed-42") }
+        client.connection.send(.kill(session: id))
+        waitUntil("ended") { client.sessions == [] }
+    }
+
     func testInteractiveShellWithVietnameseInput() {
         let client = connect()
         client.connection.send(.create(CreateRequest(command: "cat", size: TermSize(cols: 80, rows: 24))))
@@ -1197,6 +1214,68 @@ final class EndToEndTests: XCTestCase {
         waitUntil("no longer listed") {
             phone.messages.contains { if case .history(project, let list) = $0 { return list.map(\.sessionID) == ["c-2"] } else { return false } }
         }
+    }
+
+    /// HIST-23 (#50): the history is searched by its titles only when
+    /// asked; conversations are deleted several at once, those picked or
+    /// every one on the Mac, the pinned ones kept, every device told of
+    /// each, and the sender of what came of it.
+    func testConversationsAreSearchedByTitleAndDeletedSeveralAtOnce() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-many-\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: home) }
+        let trash = home.appendingPathComponent("trash")
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        setenv(FileBrowser.trashVariable, trash.path, 1)
+        defer { unsetenv(FileBrowser.trashVariable) }
+        let folder = home.appendingPathComponent(".claude/projects/-Users-me-Dev-app")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for (id, said) in [("c-1", "keep this one"), ("c-2", "tidy the README"), ("c-3", "write the parser"), ("c-4", "rename the token")] {
+            try #"{"type":"user","timestamp":"2026-11-14T08:00:00.000Z","cwd":"/Users/me/Dev/app","message":{"role":"user","content":"\#(said)"}}"#
+                .appending("\n")
+                .write(to: folder.appendingPathComponent("\(id).jsonl"), atomically: true, encoding: .utf8)
+        }
+        // Said by its agent, not in its title.
+        let answer = #"{"type":"assistant","timestamp":"2026-11-14T08:01:00.000Z","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"The parser is next."}]}}"#
+        try (String(contentsOf: folder.appendingPathComponent("c-2.jsonl"), encoding: .utf8) + answer + "\n")
+            .write(to: folder.appendingPathComponent("c-2.jsonl"), atomically: true, encoding: .utf8)
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, home: home.path)
+        configuration.foldersFile = home.appendingPathComponent("state/folders.json")
+        let host = HostServer(configuration: configuration)
+        let hostPort = try host.start()
+        defer { host.stop() }
+        let phone = TestClient(port: hostPort, token: token, name: "phone")
+        let other = TestClient(port: hostPort, token: token, name: "other")
+        waitUntil("welcome") { phone.welcomed && other.welcomed }
+        func hits(_ search: Int) -> [String] {
+            phone.messages.flatMap { message -> [HistoryHit] in
+                if case .historyFound(search, let hits) = message { return hits } else { return [] }
+            }.map(\.conversation.sessionID).sorted()
+        }
+
+        // By what was said too, and by the titles alone: c-2's agent named
+        // the parser, its title does not.
+        phone.connection.send(.searchHistory(search: 1, path: nil, query: "parser"))
+        waitUntil("searched everything") { phone.messages.contains(.historySearchEnded(search: 1)) }
+        XCTAssertEqual(hits(1), ["c-2", "c-3"])
+        phone.connection.send(.searchHistory(search: 2, path: nil, query: "parser", titlesOnly: true))
+        waitUntil("searched the titles") { phone.messages.contains(.historySearchEnded(search: 2)) }
+        XCTAssertEqual(hits(2), ["c-3"])
+
+        // Two picked: deleted, every device told of each.
+        phone.connection.send(.markConversation(id: "claude:c-1", pinned: true, hidden: nil))
+        waitUntil("pinned") { other.messages.contains(.historyMarks(pinned: ["claude:c-1"], hidden: [])) }
+        phone.connection.send(.deleteConversations(ids: ["claude:c-2", "claude:c-1"]))
+        waitUntil("what came of it") { phone.messages.contains(.conversationsDeleted(deleted: 1, kept: 1)) }
+        XCTAssertTrue(other.messages.contains(.conversationDeleted(id: "claude:c-2")))
+        XCTAssertFalse(other.messages.contains(.conversationDeleted(id: "claude:c-1")), "a pinned one was deleted")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("c-2.jsonl").path))
+
+        // Every one on the Mac: all but the pinned one, to the Trash.
+        phone.connection.send(.deleteConversations(ids: nil))
+        waitUntil("every one") { phone.messages.contains(.conversationsDeleted(deleted: 2, kept: 1)) }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["c-1.jsonl"])
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: trash.path)), ["c-2.jsonl", "c-3.jsonl", "c-4.jsonl"])
+        XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 2, kept: 1), "2 conversations were deleted. 1 was kept: pinned, having a session, or of Antigravity.")
     }
 
     func testAClientCanReadHistoryAndOnlyResumeRealConversations() throws {

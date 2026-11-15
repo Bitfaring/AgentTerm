@@ -6,17 +6,47 @@ final class SessionTests: MacUITestCase {
     func testTheWindowShowsTheFolderTheAgentsAndTheMac() throws {
         // WIN-1: the folder of the host's list.
         app.wait(for: .text("project, folder"))
-        // LAUNCH-1: a button for each agent that is installed, and none for the others.
+        // LAUNCH-1: a button for each agent in the header; one that is not
+        // installed is there too, said to be not installed (#50).
         app.wait(for: .button("Claude Code"))
         XCTAssertTrue(app.exists(.button("Codex")))
         XCTAssertTrue(app.exists(.button("Shell")))
-        XCTAssertFalse(app.exists(.button("Antigravity")), "an agent that is not installed has a launch button")
-        XCTAssertFalse(app.exists(.button("Copilot CLI")))
+        XCTAssertTrue(app.exists(.button("Antigravity, not installed")), "an agent that is not installed has no button in the header")
+        XCTAssertTrue(app.exists(.button("Copilot CLI, not installed")))
+        XCTAssertFalse(app.exists(.button("Antigravity")))
         // SYS-2: how the Mac is doing.
         for figure in ["system-cpu", "system-memory", "system-down", "system-up", "system-temperature", "system-battery", "system-uptime"] {
             app.wait(for: .id(figure), timeout: 15)
         }
         XCTAssertTrue(app.first(.id("system-cpu"))?.label.hasPrefix("CPU ") ?? false)
+    }
+
+    /// LAUNCH-6 (#50): an agent that is not installed, pressed in the
+    /// header, says how to install it: its maker's command; looked for
+    /// again, it is still missing and says why that may be; Install in a
+    /// New Shell opens a shell with the command typed in and not run.
+    /// Nothing is ever run here: Return is not pressed, and the shell is ended.
+    func testAnAgentThatIsNotInstalledSaysHowToInstallIt() throws {
+        let phone = try device()
+        app.press(.button("Antigravity, not installed"))
+        app.wait(for: .text("Install Antigravity"))
+        XCTAssertTrue(app.exists(.text("curl -fsSL https://antigravity.google/cli/install.sh | bash")), "the maker's command is not shown")
+        XCTAssertTrue(app.exists(.id("install-docs")))
+        app.press(.button("Look Again"))
+        app.wait(for: .id("install-still-missing"), timeout: 20)
+        shot("install-guide")
+        XCTAssertEqual(phone.sessions, [], "a session was started before it was asked for")
+
+        app.press(.button("Install in a New Shell"))
+        // The sheet goes; the shell's tab has its name.
+        app.waitGone(.button("Install in a New Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first)
+        XCTAssertNil(shell.agent)
+        phone.send(.attach(session: shell.id, size: .default, have: nil, history: nil))
+        wait("the command typed at its prompt") { phone.text(shell.id).contains("antigravity.google/cli/install.sh") }
+        phone.send(.kill(session: shell.id))
+        wait("the shell ended, the command not run") { phone.sessions.isEmpty }
     }
 
     /// TEST-1: the host and the app a test starts, and the login shells they

@@ -1,3 +1,4 @@
+import AgentTermEditor
 import AgentTermProtocol
 import AgentTermTerminal
 import SwiftUI
@@ -10,6 +11,9 @@ struct ConversationTranscript: View {
     let conversation: Conversation
     @State private var copied = false
     @State private var showsFiles = false
+    /// What was said shown with its Markdown rendered (#50): agents answer
+    /// in Markdown. Kept for the next transcript, on this Mac.
+    @AppStorage("transcriptMarkdown") private var markdown = false
 
     private var agentName: String { model.agents.first { $0.id == conversation.agent }?.name ?? conversation.agent }
     private var isPinned: Bool { store.pinned.contains(conversation.id) }
@@ -20,24 +24,17 @@ struct ConversationTranscript: View {
             HStack(spacing: 10) {
                 Text("Transcript").font(.system(size: 13, weight: .semibold))
                 Spacer(minLength: 0)
+                // Each in view, not in a menu: there is room for them here.
                 Button(isPinned ? "Unpin" : "Pin") { store.pin(conversation, !isPinned) }
                     .accessibilityIdentifier("conversation-pin")
-                Menu {
-                    Button(isHidden ? "Show Again in the List" : "Hide from the List") { store.hide(conversation, !isHidden) }
-                    Divider()
-                    Button("Delete…", role: .destructive) {
-                        // Asked over the window, not over the sheet this may be in.
-                        model.panelConversation = nil
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { store.deleting = conversation }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
+                Button(isHidden ? "Show Again in the List" : "Hide from the List") { store.hide(conversation, !isHidden) }
+                    .accessibilityIdentifier("conversation-hide")
+                Button("Delete…", role: .destructive) {
+                    // Asked over the window, not over the sheet this may be in.
+                    model.panelConversation = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { store.deleting = conversation }
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .accessibilityLabel("More")
-                .accessibilityIdentifier("conversation-more")
+                .accessibilityIdentifier("conversation-delete")
             }
             .controlSize(.small)
             switch store.details[conversation.id] {
@@ -94,6 +91,13 @@ struct ConversationTranscript: View {
             }
             .help("Write it out as a Markdown file and open it")
             .accessibilityIdentifier("transcript-open")
+            Button {
+                markdown.toggle()
+            } label: {
+                Label(markdown ? ConversationDetails.showAsText : ConversationDetails.previewMarkdown, systemImage: markdown ? "text.alignleft" : "doc.richtext")
+            }
+            .help(markdown ? "Show what was said as it was written" : "Show what was said with its Markdown rendered")
+            .accessibilityIdentifier("transcript-markdown")
         }
         .controlSize(.small)
         if details.omitted > 0 {
@@ -105,7 +109,7 @@ struct ConversationTranscript: View {
         }
         LazyVStack(alignment: .leading, spacing: 10) {
             ForEach(details.entries) { entry in
-                TranscriptEntryView(entry: entry, agent: conversation.agent, agentName: agentName)
+                TranscriptEntryView(entry: entry, agent: conversation.agent, agentName: agentName, markdown: markdown)
             }
         }
         .accessibilityElement(children: .contain)
@@ -118,6 +122,17 @@ private struct TranscriptEntryView: View {
     let entry: TranscriptEntry
     let agent: String
     let agentName: String
+    /// Its Markdown rendered, not its text as written.
+    var markdown = false
+    @State private var copied = false
+
+    /// What was said, as it was written, onto the pasteboard (#50).
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(entry.text, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+    }
 
     var body: some View {
         switch entry.kind {
@@ -132,24 +147,50 @@ private struct TranscriptEntryView: View {
             .accessibilityLabel("\(entry.tool ?? "Tool"): \(entry.text)")
         case .user, .agent:
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Circle().fill(entry.kind == .user ? Color.accentColor : Theme.accent(for: agent)).frame(width: 7, height: 7)
-                    Text(entry.kind == .user ? "You" : agentName).font(.system(size: 11.5, weight: .semibold))
-                    if let at = entry.at {
-                        Text(at.formatted(date: .omitted, time: .shortened)).font(.system(size: 10.5)).foregroundStyle(.tertiary)
-                    }
-                }
-                Text(entry.text)
-                    .font(.system(size: 12.5))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 13)
+                header
+                said.padding(.leading, 13)
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(entry.kind == .user ? 0.07 : 0.03)))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(entry.kind == .user ? "You" : agentName): \(entry.text)")
+            .accessibilityLabel(who + ": " + entry.text)
+            .accessibilityIdentifier(markdown ? "transcript-entry-markdown" : "transcript-entry-text")
+            // Its Copy button, for VoiceOver, which reads the entry as one.
+            .accessibilityAction(named: "Copy", copy)
+        }
+    }
+
+    private var who: String { entry.kind == .user ? "You" : agentName }
+
+    /// Who said it, when, and its Copy button.
+    private var header: some View {
+        HStack(spacing: 6) {
+            Circle().fill(entry.kind == .user ? Color.accentColor : Theme.accent(for: agent)).frame(width: 7, height: 7)
+            Text(who).font(.system(size: 11.5, weight: .semibold))
+            if let at = entry.at {
+                Text(at.formatted(date: .omitted, time: .shortened)).font(.system(size: 10.5)).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+            Button(action: copy) {
+                Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 10.5))
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(copied ? Color.green : Color.secondary)
+            .help(entry.kind == .user ? "Copy what you said" : "Copy what \(agentName) said")
+        }
+    }
+
+    @ViewBuilder private var said: some View {
+        if markdown {
+            MarkdownText(entry.text, size: 12.5)
+        } else {
+            Text(entry.text)
+                .font(.system(size: 12.5))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

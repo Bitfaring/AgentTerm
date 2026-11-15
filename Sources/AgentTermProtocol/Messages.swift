@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 13
+public let agenttermProtocolVersion = 15
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -106,12 +106,17 @@ public struct CreateRequest: Codable, Equatable, Sendable {
     public var cwd: String?
     public var title: String?
     public var size: TermSize
+    /// Text typed into the session once it has started, as a person types
+    /// it, without Return: the user reads it there, then runs it or not.
+    /// An agent's install command, for one (`AgentInstallGuide`).
+    public var typed: String?
 
-    public init(command: String? = nil, cwd: String? = nil, title: String? = nil, size: TermSize = .default) {
+    public init(command: String? = nil, cwd: String? = nil, title: String? = nil, size: TermSize = .default, typed: String? = nil) {
         self.command = command
         self.cwd = cwd
         self.title = title
         self.size = size
+        self.typed = typed
     }
 }
 
@@ -360,8 +365,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// client's search ends the one before it of the same list, every
     /// folder's (`path` nil) or a folder's, and no search for text: the
     /// Mac shows the two lists side by side, and a client numbers its
-    /// searches of each kind by themselves.
-    case searchHistory(search: Int, path: String?, query: String)
+    /// searches of each kind by themselves. With `titlesOnly`, what was
+    /// said is not searched, only the titles (#50).
+    case searchHistory(search: Int, path: String?, query: String, titlesOnly: Bool? = nil)
     /// Pins a conversation or takes its pin away, hides it or shows it
     /// again; what is nil is left as it is. `id` is `Conversation.id`. The
     /// host keeps both, and tells every device with `historyMarks`.
@@ -370,6 +376,14 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Trash. Sent once the user was asked twice. Answered with
     /// `conversationDeleted`, or with `error` and why not.
     case deleteConversation(agent: String, sessionID: String, cwd: String)
+    /// Deletes several conversations at once (#50): those named by
+    /// `Conversation.id`, or every conversation on the host when `ids` is
+    /// nil, but never one that is pinned, one a session is having, or one
+    /// of Antigravity (`AgentHistory.delete`). Sent once the user was asked
+    /// twice (`DeleteConversationsQuestion`). Each one deleted is told to
+    /// every device with `conversationDeleted`; the sender then gets
+    /// `conversationsDeleted`.
+    case deleteConversations(ids: [String]?)
     /// Writes a conversation out as a Markdown file on the host, to be
     /// opened as any file. Answered with `conversationExported`.
     case exportConversation(agent: String, sessionID: String, cwd: String)
@@ -523,6 +537,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// The conversations that are pinned, and those that are hidden, by `Conversation.id`.
     case historyMarks(pinned: [String], hidden: [String])
     case conversationDeleted(id: String)
+    /// What came of `deleteConversations`: how many were deleted, and how
+    /// many were kept (pinned, having a session, Antigravity's, or failed).
+    case conversationsDeleted(deleted: Int, kept: Int)
     /// Where a conversation was written out as a file, on the host.
     case conversationExported(id: String, path: String)
     case directory(DirectoryListing)

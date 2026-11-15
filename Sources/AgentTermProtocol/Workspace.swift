@@ -371,6 +371,18 @@ public struct CommitGraphRow: Equatable, Sendable {
     }
 }
 
+/// The numbers of the Git side panel with what they count beside them
+/// (#50), the same on the Mac and the iPhone: a number alone said nothing
+/// to the owner.
+public enum CountWords {
+    /// "1 file", "3 files": the files of a list of changes.
+    public static func files(_ count: Int) -> String { "\(count) \(count == 1 ? "file" : "files")" }
+    /// "1 commit", "2 commits": what a pull brings in, or a push sends.
+    public static func commits(_ count: Int) -> String { "\(count) \(count == 1 ? "commit" : "commits")" }
+    /// After the lines put in and taken out of what is not committed: "+5 −0 lines".
+    public static let lines = "lines"
+}
+
 /// What is asked before a commit is reverted or picked onto the checked
 /// out branch (#36), the same on every device.
 public struct CommitActionQuestion: Equatable, Sendable {

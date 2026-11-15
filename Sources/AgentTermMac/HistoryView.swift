@@ -68,6 +68,8 @@ private struct HistoryList: View {
             if NSApp.isActive { model.refreshHistory(ofFolder: ofFolder) }
         }
         .onChange(of: scope.query) { _, _ in store.search(ofFolder: ofFolder, path: model.panelFolder) }
+        // Searched again the other way, titles only or what was said too.
+        .onChange(of: store.titlesOnly) { _, _ in store.search(ofFolder: ofFolder, path: model.panelFolder) }
         .popover(isPresented: $pickingDay, arrowEdge: .bottom) { dayPicker }
     }
 
@@ -86,10 +88,25 @@ private struct HistoryList: View {
     private var searchRow: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 10.5)).foregroundStyle(.secondary)
-            TextField("Search titles and what was said", text: Binding(get: { scope.query }, set: { store[ofFolder: ofFolder].query = $0 }))
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .accessibilityIdentifier(ofFolder ? "history-search-folder" : "history-search")
+            TextField(
+                store.titlesOnly ? "Search titles" : "Search titles and what was said",
+                text: Binding(get: { scope.query }, set: { store[ofFolder: ofFolder].query = $0 })
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .accessibilityIdentifier(ofFolder ? "history-search-folder" : "history-search")
+            // What a search looks at: the titles only, or what was said too (#50).
+            Toggle(isOn: $store.titlesOnly) {
+                // On, it says so: the button's own shade alone is faint.
+                HStack(spacing: 3) {
+                    if store.titlesOnly { Image(systemName: "checkmark").font(.system(size: 8.5, weight: .bold)) }
+                    Text("Titles Only").font(.system(size: 10.5))
+                }
+            }
+            .toggleStyle(.button)
+            .controlSize(.mini)
+            .help(store.titlesOnly ? "Searching the titles only: turn off to search what was said too" : "Search the titles only, not what was said")
+            .accessibilityIdentifier(ofFolder ? "history-titles-only-folder" : "history-titles-only")
             if !scope.query.isEmpty {
                 Button {
                     store[ofFolder: ofFolder].query = ""
@@ -117,12 +134,21 @@ private struct HistoryList: View {
         .padding(.bottom, 6)
     }
 
+    /// Conversations are being picked in this list, to be deleted (#50).
+    private var picking: Bool { store.picking == ofFolder }
+
     private var summaryRow: some View {
-        HStack {
-            Text(summary).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
-                .accessibilityIdentifier(ofFolder ? "history-summary-folder" : "history-summary")
+        HStack(spacing: 10) {
+            if picking {
+                Text(store.picked.isEmpty ? "Pick the ones to delete" : "\(store.picked.count) picked")
+                    .font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
+                    .accessibilityIdentifier(ofFolder ? "history-picked-folder" : "history-picked")
+            } else {
+                Text(summary).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
+                    .accessibilityIdentifier(ofFolder ? "history-summary-folder" : "history-summary")
+            }
             Spacer(minLength: 0)
-            if scope.filter.isActive {
+            if !picking, scope.filter.isActive {
                 Button("Clear Filters") {
                     filter.wrappedValue.agent = nil
                     filter.wrappedValue.folder = nil
@@ -132,9 +158,37 @@ private struct HistoryList: View {
                 .font(.system(size: 10.5))
                 .foregroundStyle(Color.accentColor)
             }
+            manageButtons
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 7)
+    }
+
+    /// Picking conversations to delete, and deleting every one on the Mac
+    /// (#50), which is History's to offer, not a folder's list.
+    @ViewBuilder private var manageButtons: some View {
+        Group {
+            if picking {
+                Button("Delete \(store.picked.count)…", role: .destructive) { store.requestDeletePicked() }
+                    .disabled(store.picked.isEmpty)
+                    .foregroundStyle(store.picked.isEmpty ? Color.secondary : Color.red)
+                    .accessibilityIdentifier("history-delete-picked")
+                if !ofFolder {
+                    Button("Delete All…", role: .destructive) { store.requestDeleteAll() }
+                        .foregroundStyle(Color.red)
+                        .accessibilityIdentifier("history-delete-all")
+                }
+                Button("Done") { store.stopPicking() }
+                    .accessibilityIdentifier("history-pick-done")
+            } else if listed != nil {
+                Button("Select") { store.startPicking(ofFolder: ofFolder) }
+                    .help("Pick conversations to delete them together")
+                    .accessibilityIdentifier(ofFolder ? "history-select-folder" : "history-select")
+            }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 10.5, weight: .medium))
+        .foregroundStyle(Color.accentColor)
     }
 
     /// How the list is grouped, and which conversations it shows.
@@ -300,6 +354,9 @@ private struct ConversationRow: View {
     }
 
     private var selected: Bool { !inSheet && model.historySelection?.id == conversation.id }
+    /// Its list is picking conversations to delete (#50): a touch ticks it.
+    private var picking: Bool { store.picking == inSheet }
+    private var picked: Bool { store.picked.contains(conversation.id) }
     private var isPinned: Bool { store.pinned.contains(conversation.id) }
     private var isHidden: Bool { store.hidden.contains(conversation.id) }
 
@@ -317,6 +374,10 @@ private struct ConversationRow: View {
     }
 
     private func pick() {
+        if picking {
+            store.togglePicked(conversation)
+            return
+        }
         if inSheet {
             model.panelConversation = conversation
         } else {
@@ -384,24 +445,34 @@ private struct ConversationRow: View {
         .padding(.leading, 27)
         .padding(.trailing, 8)
         .padding(.vertical, 6)
+        .overlay(alignment: .topLeading) {
+            if picking {
+                Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(picked ? Color.accentColor : Color.secondary)
+                    .padding(.leading, 8)
+                    .padding(.top, 7)
+            }
+        }
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(fill)
+                .fill(picked ? Color.accentColor.opacity(0.14) : fill)
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         // Picked at once, it is shown in History's middle, with what can be
         // done with it; a second click resumes it. With two tap gestures the
-        // first would wait to know there is no second.
+        // first would wait to know there is no second. While picking, a
+        // click ticks it, and two do not resume it.
         .simultaneousGesture(TapGesture().onEnded(pick))
-        .simultaneousGesture(TapGesture(count: 2).onEnded(resume))
+        .simultaneousGesture(TapGesture(count: 2).onEnded { if !picking { resume() } })
         .contextMenu { menu }
         .help(tip)
         // The row says what it is and offers what the middle does as its actions.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken)
         .accessibilityIdentifier("conversation-" + conversation.sessionID)
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(selected || (picking && picked) ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { pick() }
         .accessibilityAction(named: "Resume") { resume() }
         .accessibilityAction(named: "Hand Off") { model.requestHandoff(conversation) }
@@ -438,5 +509,27 @@ struct DeleteConversationQuestions: ViewModifier {
             } message: {
                 Text(second?.message ?? "")
             }
+            .modifier(DeleteManyQuestions(store: store))
+    }
+}
+
+/// The two questions before several conversations are deleted (#50), in
+/// the words both apps use.
+private struct DeleteManyQuestions: ViewModifier {
+    @ObservedObject var store: HistoryStore
+
+    private var question: DeleteConversationsQuestion? {
+        store.deletingMany.map { DeleteConversationsQuestion(count: $0.ids?.count, again: $0.again) }
+    }
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            question?.title ?? "", isPresented: Binding(get: { store.deletingMany != nil }, set: { if !$0 { store.deletingMany = nil } }), titleVisibility: .visible
+        ) {
+            Button(question?.confirm ?? "Delete", role: .destructive) { store.deleteManyConfirmed() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(question?.message ?? "")
+        }
     }
 }

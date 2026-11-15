@@ -63,6 +63,11 @@ final class HistoryAndTabsTests: MacUITestCase {
         app.wait(for: .text("Claude Code: The tokenizer is renamed."))
         app.wait(for: .text("20 min"))
         app.wait(for: .text("claude-fable-5"))
+        // HIST-25 (#50): what each said is copied by itself; not pressed, the
+        // pasteboard being the user's.
+        XCTAssertTrue(app.offers("Copy", on: .text("You: rename the token")), "what was asked has no Copy")
+        XCTAssertTrue(app.offers("Copy", on: .text("Claude Code: The tokenizer is renamed.")), "what was answered has no Copy")
+        XCTAssertFalse(app.offers("Copy", on: .text("Bash: swift test")), "a tool's line has a Copy")
         shot("transcript")
         app.press(.id("conversation-pin"))
         app.wait(for: .button("Unpin"))
@@ -80,6 +85,123 @@ final class HistoryAndTabsTests: MacUITestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: history.appendingPathComponent("c-1.jsonl").path))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".Trash-of-the-tests").path), ["c-1.jsonl"])
         app.wait(for: .id("conversation-c-2"))
+    }
+
+    /// HIST-21 (#50): what an agent said in Markdown is shown as it was
+    /// written, and with Preview Markdown rendered; the choice is kept
+    /// for the next transcript.
+    func testATranscriptsMarkdownIsPreviewed() throws {
+        let history = home.appendingPathComponent(".claude/projects/" + project.path.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())
+        try [
+            #"{"type":"user","timestamp":"2026-11-14T08:00:00.000Z","cwd":"\#(project.path)","message":{"role":"user","content":"plan the parser"}}"#,
+            ###"{"type":"assistant","timestamp":"2026-11-14T08:05:00.000Z","message":{"id":"m1","model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"## The plan\n\n- **Tokens** first\n- then `parse()`\n\n| Step | Done |\n|---|---|\n| lex | yes |"}],"usage":{"input_tokens":10,"output_tokens":5}}}"###,
+        ].joined(separator: "\n").appending("\n").write(to: history.appendingPathComponent("c-md.jsonl"), atomically: true, encoding: .utf8)
+
+        app.press(.id("panel-history"))
+        app.wait(for: .id("conversation-c-md"), timeout: 20)
+        app.press(.id("conversation-c-md"))
+        app.wait(for: .id("transcript-entry-text"), timeout: 15)
+        XCTAssertFalse(app.exists(.id("transcript-entry-markdown")))
+        app.press(.button(ConversationDetails.previewMarkdown))
+        app.wait(for: .id("transcript-entry-markdown"))
+        XCTAssertFalse(app.exists(.id("transcript-entry-text")))
+        app.wait(for: .button(ConversationDetails.showAsText))
+        // HIST-22: Hide and Delete in view beside Pin, not in a menu.
+        XCTAssertFalse(app.exists(.id("conversation-more")))
+        XCTAssertTrue(app.exists(.button("Delete…")))
+        app.press(.button("Hide from the List"))
+        app.wait(for: .button("Show Again in the List"))
+        app.press(.button("Show Again in the List"))
+        app.wait(for: .button("Hide from the List"))
+        shot("markdown")
+        // Kept: the next transcript opens rendered too.
+        app.press(.button("Close"))
+        app.press(.id("conversation-c-md"))
+        app.wait(for: .id("transcript-entry-markdown"), timeout: 15)
+        app.press(.button(ConversationDetails.showAsText))
+        app.wait(for: .id("transcript-entry-text"))
+    }
+
+    /// HIST-24 (#50): History's list is wider than the other places'; a
+    /// search looks at the titles only when asked; conversations are picked
+    /// and deleted together, and then every one on the Mac is, each time
+    /// after two questions, the pinned one kept.
+    func testConversationsAreSearchedByTitleAndDeletedTogether() throws {
+        let history = home.appendingPathComponent(".claude/projects/" + project.path.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())
+        try [
+            #"{"type":"user","timestamp":"2026-11-14T08:00:00.000Z","cwd":"\#(project.path)","message":{"role":"user","content":"rename the token"}}"#,
+            #"{"type":"assistant","timestamp":"2026-11-14T08:20:00.000Z","message":{"id":"m1","model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"The tokenizer is renamed."}],"usage":{"input_tokens":10,"output_tokens":5}}}"#,
+        ].joined(separator: "\n").appending("\n").write(to: history.appendingPathComponent("c-2.jsonl"), atomically: true, encoding: .utf8)
+        let demo = home.appendingPathComponent("Projects/demo").path
+        let other = home.appendingPathComponent(".claude/projects/" + demo.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try #"{"type":"user","cwd":"\#(demo)","message":{"role":"user","content":"tidy the demo"}}"#.appending("\n").write(
+            to: other.appendingPathComponent("c-3.jsonl"), atomically: true, encoding: .utf8)
+
+        app.press(.id("place-history"))
+        app.wait(for: .id("conversation-c-3"), timeout: 20)
+        app.wait(for: .id("conversation-c-2"))
+        // Wide: the other places' lists are at most 380 points.
+        XCTAssertGreaterThan(width(of: .id("conversation-c-1")), 320, "History's list is as narrow as the others'")
+
+        // By what was said, then by the titles only.
+        app.write("tokenizer", into: .id("history-search"))
+        app.wait(for: .text("1 found"), timeout: 15)
+        app.press(.id("history-titles-only"))
+        app.wait(for: .containing("No conversation holds"), timeout: 15)
+        app.write("token", into: .id("history-search"))
+        app.wait(for: .text("1 found"), timeout: 15)
+        app.wait(for: .id("conversation-c-2"))
+        shot("titles-only")
+        app.press(.id("history-titles-only"))
+        app.write("", into: .id("history-search"))
+        app.wait(for: .id("conversation-c-3"))
+
+        // Picked: a click ticks a row and opens nothing.
+        app.press(.id("history-select"))
+        app.wait(for: .text("Pick the ones to delete"))
+        app.press(.id("conversation-c-2"))
+        app.press(.id("conversation-c-3"))
+        app.wait(for: .text("2 picked"))
+        app.press(.id("conversation-c-3"))
+        app.wait(for: .text("1 picked"))
+        XCTAssertTrue(app.exists(.text("Choose a conversation")), "a click while picking opened the conversation")
+        shot("picking")
+        app.press(.id("history-delete-picked"))
+        app.wait(for: .text("Delete 1 conversation?"))
+        app.press(.button("Delete…"))
+        app.wait(for: .text("Delete them for good from their agents?"), timeout: 10)
+        app.press(.button("Delete Conversation"))
+        app.waitGone(.id("conversation-c-2"), timeout: 15)
+        app.wait(for: .id("history-select"))
+        // All that was picked went: nothing more to be told.
+        XCTAssertFalse(app.exists(.containing("was deleted")), "told what the rows going say")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: other.appendingPathComponent("c-3.jsonl").path))
+
+        // Every one on the Mac: the pinned one stays.
+        app.perform("Pin", on: .id("conversation-c-1"))
+        app.wait(for: .containing("Pinned, 1 conversations"))
+        app.press(.id("history-select"))
+        app.press(.id("history-delete-all"))
+        app.wait(for: .text("Delete every conversation on this Mac?"))
+        app.press(.button("Delete…"))
+        app.wait(for: .text("Delete them for good from their agents?"), timeout: 10)
+        app.press(.button("Delete Every Conversation"))
+        app.waitGone(.id("conversation-c-3"), timeout: 15)
+        app.wait(for: .containing("1 was kept"))
+        app.wait(for: .id("conversation-c-1"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: history.appendingPathComponent("c-1.jsonl").path))
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".Trash-of-the-tests").path)), ["c-2.jsonl", "c-3.jsonl"])
+    }
+
+    /// The width an element has on the screen.
+    private func width(of query: MacDriver.Query) -> CGFloat {
+        guard let node = app.all(query).first else { return 0 }
+        var value: CFTypeRef?
+        AXUIElementCopyAttributeValue(node.element, kAXSizeAttribute as CFString, &value)
+        var size = CGSize.zero
+        if let value, CFGetTypeID(value) == AXValueGetTypeID() { AXValueGetValue(value as! AXValue, .cgSize, &size) }
+        return size.width
     }
 
     func testTabsAreShownPinnedGroupedAndClosed() throws {

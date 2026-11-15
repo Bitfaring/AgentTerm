@@ -404,7 +404,7 @@ public struct MarkdownPreview: View {
     }
 
     /// GitHub's look, with code blocks marked "mermaid" drawn as diagrams.
-    private static let theme = MarkdownUI.Theme.gitHub
+    static let theme = MarkdownUI.Theme.gitHub
         .text { BackgroundColor(nil) }
         .codeBlock { configuration in
             if configuration.language?.lowercased() == "mermaid" {
@@ -439,6 +439,31 @@ public struct MarkdownPreview: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(EditorStyle.background))
+    }
+}
+
+/// Markdown shown in place among other things, as the preview of a file
+/// shows it but without a scroll view of its own: what an agent said in a
+/// transcript (#50), at the size of the text around it.
+public struct MarkdownText: View {
+    let text: String
+    let size: CGFloat
+
+    public init(_ text: String, size: CGFloat) {
+        self.text = text
+        self.size = size
+    }
+
+    public var body: some View {
+        Markdown(MarkdownHTML.flatten(text))
+            .markdownTheme(MarkdownPreview.theme)
+            .markdownTextStyle {
+                FontSize(size)
+                BackgroundColor(nil)
+            }
+            .markdownCodeSyntaxHighlighter(PreviewCodeHighlighter())
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

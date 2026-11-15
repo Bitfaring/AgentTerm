@@ -191,7 +191,7 @@ private struct ChangesList: View {
                                 BranchButton(folder: folder, branch: diff.branch)
                                 Spacer()
                                 LastCommitMenu(folder: folder)
-                                DiffCount(added: diff.files.reduce(0) { $0 + $1.added }, deleted: diff.files.reduce(0) { $0 + $1.deleted })
+                                DiffCount(added: diff.files.reduce(0) { $0 + $1.added }, deleted: diff.files.reduce(0) { $0 + $1.deleted }, saysLines: true)
                                 Button {
                                     model.setDisplay { $0.changesView = isTree ? "list" : "tree" }
                                 } label: {
@@ -434,14 +434,15 @@ private struct SyncBar: View {
                 }
                 Text(title).font(.subheadline.weight(.semibold))
                 if count > 0 {
-                    Text("\(count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
+                    // What the number counts, beside it, as on the Mac (#50).
+                    Text(CountWords.commits(count)).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 3)
         }
         .buttonStyle(.bordered)
-        .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
+        .accessibilityLabel(count > 0 ? "\(title), \(CountWords.commits(count))" : title)
     }
 }
 
@@ -556,7 +557,7 @@ private struct SectionHeader: View {
             Text(title.uppercased())
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            Text("\(count)")
+            Text(CountWords.files(count))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.tertiary)
             Spacer()
@@ -643,13 +644,18 @@ private struct FileRow: View {
 private struct DiffCount: View {
     let added: Int
     let deleted: Int
+    /// "lines" after the two: said where they stand by themselves, as on the Mac (#50).
+    var saysLines = false
 
     var body: some View {
         HStack(spacing: 6) {
             Text("+\(added)").foregroundStyle(Palette.added)
             Text("−\(deleted)").foregroundStyle(Palette.danger)
+            if saysLines { Text(CountWords.lines).font(.caption).foregroundStyle(.secondary) }
         }
         .font(.system(size: 12, weight: .medium, design: .monospaced))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(added) \(added == 1 ? "line" : "lines") put in, \(deleted) taken out")
     }
 }
 
@@ -778,6 +784,12 @@ struct HistoryList: View {
     @State private var query = ""
     @State private var filter = HistoryFilter()
     @State private var deleting: Conversation?
+    /// Conversations being picked to be deleted together (#50), by id.
+    @State private var picking = false
+    @State private var picked: Set<String> = []
+    /// Several asked about before they are deleted: those picked, or nil
+    /// inside for every one on the Mac.
+    @State private var deletingMany: [String]??
 
     private var showsAll: Bool { folder == nil }
     private var key: String { showsAll ? "" : (folder ?? "") }
@@ -811,9 +823,15 @@ struct HistoryList: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
             if model.histories[key] != nil {
-                HStack {
-                    Text(summary).font(.footnote).foregroundStyle(.secondary).lineLimit(1).accessibilityIdentifier("history-summary")
+                HStack(spacing: 14) {
+                    if picking {
+                        Text(picked.isEmpty ? "Pick the ones to delete" : "\(picked.count) picked")
+                            .font(.footnote).foregroundStyle(.secondary).lineLimit(1).accessibilityIdentifier("history-picked")
+                    } else {
+                        Text(summary).font(.footnote).foregroundStyle(.secondary).lineLimit(1).accessibilityIdentifier("history-summary")
+                    }
                     Spacer(minLength: 0)
+                    manageButtons
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 8)
@@ -863,6 +881,34 @@ struct HistoryList: View {
                 .preferredColorScheme(.dark)
         }
         .modifier(DeleteConversationAsk(asked: $deleting))
+        .modifier(DeleteConversationsAsk(asked: $deletingMany) { stopPicking() })
+        // Those deleted, here or elsewhere, are no longer picked.
+        .onChange(of: model.deletedConversations) { _, deleted in picked.subtract(deleted) }
+    }
+
+    private func stopPicking() {
+        picking = false
+        picked = []
+    }
+
+    /// Picking conversations to delete them together, and deleting every
+    /// one on the Mac (#50), which is the History tab's, not a folder's.
+    @ViewBuilder private var manageButtons: some View {
+        if picking {
+            Button("Delete \(picked.count)…", role: .destructive) { deletingMany = .some(picked.sorted()) }
+                .disabled(picked.isEmpty)
+                .accessibilityIdentifier("history-delete-picked")
+            if showsAll {
+                Button("Delete All…", role: .destructive) { deletingMany = .some(nil) }
+                    .accessibilityIdentifier("history-delete-all")
+            }
+            Button("Done") { stopPicking() }
+                .fontWeight(.semibold)
+                .accessibilityIdentifier("history-pick-done")
+        } else {
+            Button("Select") { picking = true }
+                .accessibilityIdentifier("history-select")
+        }
     }
 
     private func groupView(_ group: HistoryFilter.Group) -> some View {
@@ -899,15 +945,23 @@ struct HistoryList: View {
             ForEach(list) { conversation in
                 let pinned = model.pinnedConversations.contains(conversation.id)
                 let hidden = model.hiddenConversations.contains(conversation.id)
+                let isPicked = picked.contains(conversation.id)
                 Button {
-                    selected = conversation
+                    if !picking {
+                        selected = conversation
+                    } else if isPicked {
+                        picked.remove(conversation.id)
+                    } else {
+                        picked.insert(conversation.id)
+                    }
                 } label: {
                     ConversationRow(
                         conversation: conversation, showsFolder: showsAll, agentName: showsAgent ? model.agents.first { $0.id == conversation.agent }?.name : nil,
-                        isPinned: pinned, isHidden: hidden, hit: hits?.first { $0.id == conversation.id })
+                        isPinned: pinned, isHidden: hidden, hit: hits?.first { $0.id == conversation.id }, picked: picking ? isPicked : nil)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("conversation-" + conversation.sessionID)
+                .accessibilityAddTraits(picking && isPicked ? .isSelected : [])
                 .contextMenu {
                     Button {
                         model.markConversation(conversation, pinned: !pinned)
@@ -948,9 +1002,16 @@ private struct ConversationRow: View {
     var isHidden = false
     /// What a search found in it.
     var hit: HistoryHit?
+    /// Whether it is picked to be deleted; nil while nothing is picked.
+    var picked: Bool?
 
     var body: some View {
         HStack(spacing: 10) {
+            if let picked {
+                Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(picked ? Color.accentColor : Color.secondary)
+            }
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     if isPinned { Image(systemName: "pin.fill").font(.system(size: 10)).foregroundStyle(.orange) }
@@ -982,9 +1043,11 @@ private struct ConversationRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.tertiary)
+            if picked == nil {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
@@ -1514,12 +1577,32 @@ struct StashFileScreen: View {
     }
 }
 
-/// The commits of the checked out branch, newest first, with the graph of
-/// where branches part and meet, as on the Mac. Reverting and picking a
-/// commit are on the Mac.
+/// The commits of the checked out branch, or of another one picked above
+/// them, newest first, with the graph of where branches part and meet, as
+/// on the Mac. A commit opened is reverted, or picked onto the checked out
+/// branch, from its screen.
 struct CommitsScreen: View {
     @EnvironmentObject private var model: PhoneModel
     let folder: String
+
+    private var chosen: Binding<String> {
+        Binding(get: { model.commitsBranch[folder] ?? "" }, set: { model.showCommits(of: $0.isEmpty ? nil : $0, in: folder) })
+    }
+
+    private var others: [BranchInfo] { (model.branches[folder] ?? []).filter { !$0.isCurrent } }
+
+    private var branchMenu: some View {
+        Menu {
+            Picker("Commits of", selection: chosen) {
+                Text((model.diffs[folder]?.branch.map { $0 + " (checked out)" }) ?? "The checked out commit").tag("")
+                ForEach(others) { branch in Text(branch.name).tag(branch.name) }
+            }
+        } label: {
+            Label(model.commitsBranch[folder] ?? "Checked out", systemImage: "arrow.triangle.branch")
+        }
+        .accessibilityLabel("Commits of \(model.commitsBranch[folder] ?? "the checked out branch")")
+        .accessibilityIdentifier("commits-branch")
+    }
 
     private static let ago: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -1573,7 +1656,11 @@ struct CommitsScreen: View {
         .background(Palette.canvas.ignoresSafeArea())
         .navigationTitle("Commits")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { model.loadCommits(folder) }
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { branchMenu } }
+        .onAppear {
+            model.loadBranches(folder)
+            model.loadCommits(folder)
+        }
     }
 }
 
@@ -1611,11 +1698,45 @@ private struct CommitGraphLines: View {
     }
 }
 
-/// One commit: its message, and the files it changed.
+/// One commit: its message, and the files it changed; reverted, or picked
+/// onto the checked out branch, as on the Mac (#36).
 struct CommitScreen: View {
     @EnvironmentObject private var model: PhoneModel
     let folder: String
     let hash: String
+    /// What the user is asked before, in the words both apps use.
+    @State private var asking: CommitActionQuestion.Action?
+
+    /// The branch a revert or a pick lands on.
+    private var onBranch: String? { model.diffs[folder]?.branch }
+
+    private func question(_ commit: CommitInfo) -> CommitActionQuestion? {
+        asking.map { CommitActionQuestion($0, commit: commit, onto: onBranch) }
+    }
+
+    @ViewBuilder
+    private func actions(_ commit: CommitInfo) -> some View {
+        Section {
+            Button("Revert…") { asking = .revert }
+                .accessibilityIdentifier("commit-revert")
+            Button("Cherry-Pick onto \(onBranch.map { "“\($0)”" } ?? "the Checked Out Commit")…") { asking = .cherryPick }
+                .accessibilityIdentifier("commit-pick")
+        } footer: {
+            if let doing = model.syncing[folder] { Text(doing == "revert" ? "Reverting…" : doing == "cherry-pick" ? "Picking…" : "Busy with git…") }
+        }
+        .disabled(model.status != .connected || model.syncing[folder] != nil)
+        .confirmationDialog(
+            question(commit)?.title ?? "", isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } }), titleVisibility: .visible
+        ) {
+            Button(question(commit)?.confirm ?? "OK") {
+                if let action = asking { model.apply(action, commit, in: folder) }
+                asking = nil
+            }
+            Button("Cancel", role: .cancel) { asking = nil }
+        } message: {
+            Text(question(commit)?.message ?? "")
+        }
+    }
 
     var body: some View {
         Group {
@@ -1639,6 +1760,7 @@ struct CommitScreen: View {
                         .accessibilityLabel("Copy the hash \(details.commit.short)")
                         .accessibilityIdentifier("copy-hash")
                     }
+                    actions(details.commit)
                     Section(details.files.isEmpty ? "It changed no file" : "\(details.files.count) \(details.files.count == 1 ? "file" : "files")") {
                         if details.diffsLeftOut { Text("Its diffs are too large to show here.").font(.footnote).foregroundStyle(.secondary) }
                         ForEach(details.files) { file in
@@ -1705,8 +1827,7 @@ struct CommitFileScreen: View {
 }
 
 /// The checked out branch (#35). Touched, it lists the repository's
-/// branches, to switch to one or make one; renaming and deleting are on
-/// the Mac.
+/// branches, to switch to one, make one, rename or delete one, as on the Mac.
 struct BranchButton: View {
     let folder: String
     /// Nil for a detached HEAD.
@@ -1735,8 +1856,8 @@ struct BranchButton: View {
     }
 }
 
-/// The branches of a folder on the Mac: touch one to check it out, or make
-/// a new one.
+/// The branches of a folder on the Mac: touch one to check it out, make a
+/// new one; one of the repository's own is renamed or deleted from its menu.
 private struct BranchesSheet: View {
     @EnvironmentObject private var model: PhoneModel
     @Environment(\.dismiss) private var dismiss
@@ -1746,8 +1867,30 @@ private struct BranchesSheet: View {
     @State private var newName = ""
     @State private var from = ""
     @State private var checkout = true
+    /// The branch being given another name, and the name.
+    @State private var renaming: BranchInfo?
+    @State private var renameTo = ""
+    /// The branch asked about before it is deleted, and whether it is the
+    /// second time: one with commits of its own is asked about twice.
+    @State private var deleting: (branch: BranchInfo, again: Bool)?
 
     private var all: [BranchInfo] { model.branches[folder] ?? [] }
+    private var current: String? { all.first(where: \.isCurrent)?.name }
+
+    private var deleteQuestion: DeleteBranchQuestion? {
+        deleting.map { DeleteBranchQuestion(branch: $0.branch, into: current, again: $0.again) }
+    }
+
+    private func deleteConfirmed() {
+        guard let asked = deleting else { return }
+        deleting = nil
+        if !asked.branch.isMerged && !asked.again {
+            // Asked once more, once the first question has left the screen.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { deleting = (asked.branch, true) }
+            return
+        }
+        model.deleteBranch(asked.branch, in: folder)
+    }
 
     private func shown(remote: Bool) -> [BranchInfo] {
         let wanted = filter.trimmingCharacters(in: .whitespaces).lowercased()
@@ -1767,6 +1910,7 @@ private struct BranchesSheet: View {
                             ForEach(all) { branch in Text(branch.name).tag(branch.name) }
                         }
                         Toggle("Switch to it", isOn: $checkout)
+                            .accessibilityIdentifier("new-branch-checkout")
                         Button("Create Branch") {
                             model.createBranch(named: newName.trimmingCharacters(in: .whitespaces), from: from.isEmpty ? nil : from, checkout: checkout, in: folder)
                             making = false
@@ -1783,6 +1927,31 @@ private struct BranchesSheet: View {
             .searchable(text: $filter, prompt: "Find a branch")
             .navigationTitle("Branches")
             .navigationBarTitleDisplayMode(.inline)
+            .alert(
+                "Rename “\(renaming?.name ?? "")”",
+                isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
+            ) {
+                TextField("New name", text: $renameTo)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .accessibilityIdentifier("rename-branch-name")
+                Button("Rename") {
+                    if let branch = renaming { model.renameBranch(branch, to: renameTo.trimmingCharacters(in: .whitespaces), in: folder) }
+                    renaming = nil
+                }
+                .disabled(renameTo.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Cancel", role: .cancel) { renaming = nil }
+            }
+            .confirmationDialog(
+                deleteQuestion?.title ?? "",
+                isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button(deleteQuestion?.confirm ?? "Delete", role: .destructive) { deleteConfirmed() }
+                Button("Cancel", role: .cancel) { deleting = nil }
+            } message: {
+                Text(deleteQuestion?.message ?? "")
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
                 ToolbarItem(placement: .primaryAction) {
@@ -1804,7 +1973,13 @@ private struct BranchesSheet: View {
         if !list.isEmpty {
             Section(title) {
                 ForEach(list) { branch in
+                    // The one that is checked out, and one another worktree
+                    // holds, stay where they are: touched, nothing happens,
+                    // and their menu is still there (not `disabled`, which
+                    // would take it away).
+                    let switchable = !branch.isCurrent && branch.worktree == nil
                     Button {
+                        guard switchable else { return }
                         model.switchBranch(branch, in: folder)
                         dismiss()
                     } label: {
@@ -1817,10 +1992,28 @@ private struct BranchesSheet: View {
                             }
                         }
                     }
-                    .foregroundStyle(.primary)
-                    // The one that is checked out, and one another worktree holds, stay where they are.
-                    .disabled(branch.isCurrent || branch.worktree != nil)
+                    .foregroundStyle(switchable ? .primary : .secondary)
                     .accessibilityIdentifier("branch-" + branch.id)
+                    // The repository's own, as on the Mac: a remote's are
+                    // not changed from here, and the checked out one, or
+                    // one another worktree holds, is not deleted.
+                    .contextMenu {
+                        if !branch.isRemote {
+                            Button {
+                                renameTo = ""
+                                renaming = branch
+                            } label: {
+                                Label("Rename…", systemImage: "pencil")
+                            }
+                            if !branch.isCurrent && branch.worktree == nil {
+                                Button(role: .destructive) {
+                                    deleting = (branch, false)
+                                } label: {
+                                    Label("Delete…", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

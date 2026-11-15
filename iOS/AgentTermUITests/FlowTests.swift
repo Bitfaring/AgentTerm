@@ -409,17 +409,17 @@ final class FlowTests: XCTestCase {
             let commitMessages = app.staticTexts["Commit Messages"].firstMatch
             for _ in 0..<4 where !commitMessages.isHittable { app.swipeUp() }
             XCTAssertTrue(commitMessages.exists, "Settings has no Commit Messages")
-            // SCHED-14: Schedules in three groups, as the Mac shows them.
-            let schedules = app.buttons["schedules"].firstMatch
-            for _ in 0..<4 where !schedules.isHittable { app.swipeDown() }
-            schedules.tap()
+            // SCHED-14: Schedules, a tab of its own as on the Mac's bar of
+            // places, in three groups, as the Mac shows them; no longer a
+            // row of Settings.
+            XCTAssertFalse(app.buttons["schedules"].exists, "Schedules is still in Settings")
+            app.tabBars.buttons["Schedules"].tap()
             XCTAssertTrue(app.navigationBars["Schedules"].waitForExistence(timeout: 5))
             for group in ["RUNNING", "SCHEDULED", "PAST RUNS"] {
                 XCTAssertTrue(app.staticTexts[group].waitForExistence(timeout: 5) || app.staticTexts[group.capitalized].exists, "no \(group) group")
             }
             XCTAssertTrue(app.staticTexts["No run is going on."].exists)
             capture("7-schedules")
-            app.navigationBars.buttons.firstMatch.tap()
             app.tabBars.buttons["History"].tap()
             XCTAssertTrue(app.navigationBars["History"].waitForExistence(timeout: 5))
             app.tabBars.buttons["Sessions"].tap()
@@ -510,13 +510,75 @@ final class FlowTests: XCTestCase {
             // The commit is what there is to push: the project follows a remote.
             let push = app.buttons["git-push"]
             XCTAssertTrue(push.waitForExistence(timeout: 10), "there is no Push button")
-            XCTAssertEqual(push.label, "Push, 1", "one commit is waiting to be pushed")
+            XCTAssertEqual(push.label, "Push, 1 commit", "one commit is waiting to be pushed")
             XCTAssertTrue(app.buttons["git-pull"].exists)
             XCTAssertTrue(app.staticTexts["Follows origin/main"].exists)
             push.tap()
             expectation(for: NSPredicate(format: "label == %@", "Push"), evaluatedWith: push)
             waitForExpectations(timeout: 20)
             capture("7b4a-pushed")
+
+            // GIT-73 (#35): a branch made, renamed and deleted from the
+            // phone, as on the Mac; one with nothing of its own is asked
+            // about once.
+            app.buttons["branch-menu"].tap()
+            app.buttons["new-branch"].tap()
+            let newBranch = app.textFields["new-branch-name"]
+            XCTAssertTrue(newBranch.waitForExistence(timeout: 5))
+            newBranch.tap()
+            newBranch.typeText("phone-branch")
+            // Not switched to: the switch itself, at the row's end, not its label.
+            let switchToIt = app.switches["new-branch-checkout"]
+            switchToIt.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+            XCTAssertEqual(switchToIt.value as? String, "0", "Switch to it is still on")
+            app.buttons["new-branch-create"].tap()
+            let made = app.buttons["branch-phone-branch"]
+            XCTAssertTrue(made.waitForExistence(timeout: 10), "the branch was not made")
+            made.press(forDuration: 1.2)
+            app.buttons["Rename…"].tap()
+            let newName = app.alerts.textFields.firstMatch
+            XCTAssertTrue(newName.waitForExistence(timeout: 5), "not asked for the new name")
+            newName.typeText("phone-renamed")
+            app.alerts.buttons["Rename"].tap()
+            let renamed = app.buttons["branch-phone-renamed"]
+            XCTAssertTrue(renamed.waitForExistence(timeout: 10), "the branch was not renamed")
+            XCTAssertFalse(app.buttons["branch-phone-branch"].exists)
+            capture("7b4b-branch-renamed")
+            renamed.press(forDuration: 1.2)
+            app.buttons["Delete…"].tap()
+            let deleteBranch = app.buttons["Delete Branch"]
+            XCTAssertTrue(deleteBranch.waitForExistence(timeout: 5), "not asked before deleting")
+            deleteBranch.tap()
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: renamed)
+            waitForExpectations(timeout: 10)
+            app.buttons["Done"].tap()
+
+            // GIT-74 (#36): the newest commit reverted from the phone, then
+            // the revert reverted, so the files are as they were; picking
+            // is offered and asked about the same way.
+            app.buttons["git-commits"].tap()
+            func revertNewest(_ subject: String) {
+                let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", subject)).firstMatch
+                XCTAssertTrue(row.waitForExistence(timeout: 15), "the commit “\(subject)” is not listed")
+                row.tap()
+                let revert = app.buttons["commit-revert"]
+                XCTAssertTrue(revert.waitForExistence(timeout: 10), "the commit cannot be reverted")
+                XCTAssertTrue(app.buttons["commit-pick"].exists, "the commit cannot be picked")
+                revert.tap()
+                let confirm = app.buttons["Revert"]
+                XCTAssertTrue(confirm.waitForExistence(timeout: 5), "not asked before reverting")
+                confirm.tap()
+                app.navigationBars.buttons.firstMatch.tap()
+            }
+            revertNewest("test: add a second line")
+            revertNewest("Revert \"test: add a second line\"")
+            // git 2.43 and later name the revert of a revert "Reapply".
+            XCTAssertTrue(
+                app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "Reapply \"test: add a second line\"", "Revert \"Revert"))
+                    .firstMatch.waitForExistence(timeout: 15),
+                "the revert of the revert is not listed")
+            capture("7b4c-reverted")
+            app.navigationBars.buttons.firstMatch.tap()
 
             // The folder's files: open one, edit it, save it, make a new one.
             app.buttons["Files"].tap()
@@ -553,6 +615,17 @@ final class FlowTests: XCTestCase {
             let conversation = app.staticTexts["write tests for the parser"]
             XCTAssertTrue(conversation.waitForExistence(timeout: 10), "the conversation is not listed")
             capture("7c-history")
+            // HIST-24 (#50): picked to be deleted, a touch ticks a row and
+            // opens nothing; Done leaves the rows as they were.
+            app.buttons["history-select"].tap()
+            XCTAssertTrue(app.staticTexts["Pick the ones to delete"].waitForExistence(timeout: 5))
+            conversation.tap()
+            XCTAssertTrue(app.staticTexts["1 picked"].waitForExistence(timeout: 5), "a touch did not pick the row")
+            XCTAssertFalse(app.buttons["Resume in Claude Code"].exists, "a touch while picking opened the conversation")
+            XCTAssertTrue(app.buttons["history-delete-all"].exists)
+            capture("7c2-history-picking")
+            app.buttons["history-pick-done"].tap()
+            XCTAssertTrue(app.staticTexts["history-summary"].waitForExistence(timeout: 5))
             conversation.tap()
             XCTAssertTrue(app.buttons["Resume in Claude Code"].waitForExistence(timeout: 5))
             XCTAssertTrue(app.buttons["Copy Resume Command"].exists)

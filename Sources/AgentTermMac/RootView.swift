@@ -45,8 +45,11 @@ struct RootView: View {
     private var panes: some View {
         HSplitView {
             if model.showSidebar {
+                // History's list of conversations is the place's own and
+                // reads better wide (#50); the others' lists are narrow.
+                let wide = model.place == .history
                 PlaceList()
-                    .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
+                    .frame(minWidth: wide ? 340 : 210, idealWidth: wide ? 420 : 250, maxWidth: wide ? 640 : 380)
             }
             // In parts of their own: in one expression, the compiler of a
             // slower machine (CodeQL's) gave up on it.
@@ -106,6 +109,9 @@ struct RootView: View {
         }
         .sheet(isPresented: $model.showBrowseFolders) {
             BrowseFoldersSheet()
+        }
+        .sheet(item: $model.installGuide) { guide in
+            AgentInstallSheet(guide: guide)
         }
         .confirmationDialog(
             saveQuestion,
@@ -190,16 +196,24 @@ private struct WorktreeLaunchItem: View {
     }
 }
 
-/// Quick launch buttons for the agents that are installed, plus a plain shell.
+/// Quick launch buttons for every agent AgentTerm knows, plus a plain
+/// shell. One that is not installed on the Mac is there all the same,
+/// dimmed, and says how to install it (#50): here only, as the owner
+/// decided; everywhere else lists the agents that are installed.
 struct LaunchBar: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         HStack(spacing: 6) {
-            ForEach(model.installedAgents) { agent in
-                LaunchButton(title: agent.name, id: agent.id) { model.launch(agent) }
-                    .help("Start \(agent.name) in \(model.workingDirectory). Its menu starts it in a new worktree.")
-                    .contextMenu { WorktreeLaunchItem(agent: agent) }
+            ForEach(model.agents) { agent in
+                if agent.isInstalled {
+                    LaunchButton(title: agent.name, id: agent.id) { model.launch(agent) }
+                        .help("Start \(agent.name) in \(model.workingDirectory). Its menu starts it in a new worktree.")
+                        .contextMenu { WorktreeLaunchItem(agent: agent) }
+                } else {
+                    LaunchButton(title: agent.name, id: agent.id, notInstalled: true) { model.showInstallGuide(for: agent) }
+                        .help(AgentInstallGuide.forAgent(agent.id, name: agent.name)?.help(on: model.macName) ?? "\(agent.name) is not installed.")
+                }
             }
             LaunchButton(title: "Shell", id: "shell") { model.launch(nil) }
                 .help("Start a shell in \(model.workingDirectory)")
@@ -289,6 +303,8 @@ struct LaunchButton: View {
     let title: String
     let id: String
     var large = false
+    /// An agent that is not installed: dimmed, with a mark that says so.
+    var notInstalled = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -298,9 +314,19 @@ struct LaunchButton: View {
                 Image(systemName: Theme.symbol(for: id))
                     .font(.system(size: large ? 13 : 11, weight: .semibold))
                     .foregroundStyle(Theme.accent(for: id))
-                Text(title)
-                    .font(.system(size: large ? 13 : 12, weight: .medium))
+                if notInstalled {
+                    // Its symbol and a mark, not its name: the header has
+                    // room for the names of the agents that are installed,
+                    // and its help and its label say which it is.
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: large ? 12 : 10.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(title)
+                        .font(.system(size: large ? 13 : 12, weight: .medium))
+                }
             }
+            .opacity(notInstalled ? 0.6 : 1)
             .padding(.horizontal, large ? 14 : 10)
             .padding(.vertical, large ? 9 : 5)
             .background(
@@ -315,6 +341,7 @@ struct LaunchButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .accessibilityLabel(notInstalled ? "\(title), not installed" : title)
     }
 }
 

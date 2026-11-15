@@ -1,3 +1,4 @@
+import AgentTermEditor
 import AgentTermProtocol
 import AgentTermTerminal
 import SwiftUI
@@ -11,6 +12,8 @@ struct TranscriptScreen: View {
     let close: () -> Void
     @State private var copied = false
     @State private var deleting: Conversation?
+    /// What was said shown with its Markdown rendered (#50), as on the Mac.
+    @AppStorage("transcriptMarkdown") private var markdown = false
 
     private var agentName: String { model.agents.first { $0.id == conversation.agent }?.name ?? conversation.agent }
     private var isPinned: Bool { model.pinnedConversations.contains(conversation.id) }
@@ -111,6 +114,13 @@ struct TranscriptScreen: View {
             .accessibilityIdentifier("transcript-open")
         }
         .font(.footnote.weight(.medium))
+        Button {
+            markdown.toggle()
+        } label: {
+            Label(markdown ? ConversationDetails.showAsText : ConversationDetails.previewMarkdown, systemImage: markdown ? "text.alignleft" : "doc.richtext")
+        }
+        .font(.footnote.weight(.medium))
+        .accessibilityIdentifier("transcript-markdown")
         if details.omitted > 0 {
             Text("\(details.omitted) earlier entries are left out: this is the end of a long conversation.").font(.caption).foregroundStyle(.secondary)
         }
@@ -141,15 +151,45 @@ struct TranscriptScreen: View {
                     Circle().fill(entry.kind == .user ? Palette.tint : AgentStyle.accent(for: conversation.agent)).frame(width: 7, height: 7)
                     Text(entry.kind == .user ? "You" : agentName).font(.caption.weight(.semibold))
                     if let at = entry.at { Text(at.formatted(date: .omitted, time: .shortened)).font(.caption2).foregroundStyle(.tertiary) }
+                    Spacer(minLength: 0)
+                    CopyEntryButton(text: entry.text)
                 }
-                Text(entry.text).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                if markdown {
+                    MarkdownText(entry.text, size: 15)
+                } else {
+                    Text(entry.text).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(11)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(entry.kind == .user ? 0.09 : 0.04)))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(entry.kind == .user ? "You" : agentName): \(entry.text)")
+            .accessibilityIdentifier(markdown ? "transcript-entry-markdown" : "transcript-entry-text")
+            // Its Copy button, for VoiceOver, which reads the entry as one.
+            .accessibilityAction(named: "Copy") { UIPasteboard.general.string = entry.text }
         }
+    }
+}
+
+/// Copies what was said in one entry of a transcript, as it was written
+/// (#50), and says so for a moment.
+private struct CopyEntryButton: View {
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = text
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+        } label: {
+            Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                .font(.caption)
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(copied ? Color.green : Color.secondary)
     }
 }
 
@@ -192,6 +232,47 @@ struct DeleteConversationAsk: ViewModifier {
     }
 }
 
+/// The two questions before several conversations are deleted at once
+/// (#50), those picked or every one on the Mac (`ids` nil), in the words
+/// the Mac uses.
+struct DeleteConversationsAsk: ViewModifier {
+    @EnvironmentObject private var model: PhoneModel
+    /// What is asked about: the ids picked, or nil inside for every one.
+    @Binding var asked: [String]??
+    /// Once they were sent to be deleted.
+    var done: () -> Void = {}
+    @State private var again: [String]??
+
+    private func question(_ ids: [String]??, again: Bool) -> DeleteConversationsQuestion? {
+        ids.map { DeleteConversationsQuestion(count: $0?.count, again: again) }
+    }
+
+    func body(content: Content) -> some View {
+        let first = question(asked, again: false)
+        let second = question(again, again: true)
+        content
+            .confirmationDialog(first?.title ?? "", isPresented: Binding(get: { asked != nil }, set: { if !$0 { asked = nil } }), titleVisibility: .visible) {
+                Button(first?.confirm ?? "Delete…", role: .destructive) {
+                    let ids = asked
+                    // The second question comes once the first has left the screen.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { again = ids }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(first?.message ?? "")
+            }
+            .confirmationDialog(second?.title ?? "", isPresented: Binding(get: { again != nil }, set: { if !$0 { again = nil } }), titleVisibility: .visible) {
+                Button(second?.confirm ?? "Delete", role: .destructive) {
+                    if let again { model.deleteConversations(again) }
+                    done()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(second?.message ?? "")
+            }
+    }
+}
+
 /// History's search field and its menu of groups and filters, above the list.
 struct HistoryControls: View {
     @EnvironmentObject private var model: PhoneModel
@@ -206,7 +287,7 @@ struct HistoryControls: View {
         HStack(spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search titles and what was said", text: $query)
+                TextField(model.historyTitlesOnly ? "Search titles" : "Search titles and what was said", text: $query)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
@@ -224,6 +305,8 @@ struct HistoryControls: View {
             .padding(.vertical, 9)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
             Menu {
+                // What a search looks at (#50), as on the Mac.
+                Toggle("Search Titles Only", isOn: $model.historyTitlesOnly)
                 Picker("Group", selection: $filter.grouping) {
                     ForEach(HistoryFilter.Grouping.allCases, id: \.self) { Text($0.title).tag($0) }
                 }

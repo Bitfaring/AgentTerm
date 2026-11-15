@@ -65,7 +65,7 @@ struct DiffView: View {
             }
             Spacer()
             if let files = model.diff?.files, !files.isEmpty {
-                DiffCount(added: files.reduce(0) { $0 + $1.added }, deleted: files.reduce(0) { $0 + $1.deleted })
+                DiffCount(added: files.reduce(0) { $0 + $1.added }, deleted: files.reduce(0) { $0 + $1.deleted }, saysLines: true)
             }
             Button {
                 model.setDisplay { $0.changesView = isTree ? "list" : "tree" }
@@ -572,12 +572,13 @@ private struct SyncButton: View {
                 }
                 if !symbolOnly { Text(title).fixedSize() }
                 if count > 0 {
-                    Text("\(count)").monospacedDigit().foregroundStyle(.secondary)
+                    // What the number counts, beside it (#50).
+                    Text(CountWords.commits(count)).monospacedDigit().foregroundStyle(.secondary).fixedSize()
                 }
             }
         }
         .controlSize(.small)
-        .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
+        .accessibilityLabel(count > 0 ? "\(title), \(CountWords.commits(count))" : title)
     }
 }
 
@@ -730,8 +731,8 @@ private struct ChangesHeader: View {
             Text(title.uppercased())
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
-            Text("\(count)")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+            Text(CountWords.files(count))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.tertiary)
             Spacer()
             if let second {
@@ -799,13 +800,19 @@ private struct DiffFolderRow: View {
 struct DiffCount: View {
     let added: Int
     let deleted: Int
+    /// "lines" after the two: said where they stand by themselves (#50).
+    var saysLines = false
 
     var body: some View {
         HStack(spacing: 5) {
             Text("+\(added)").foregroundStyle(Theme.added)
             Text("−\(deleted)").foregroundStyle(Theme.removed)
+            if saysLines {
+                Text(CountWords.lines).font(.system(size: 10.5)).foregroundStyle(.secondary)
+            }
         }
         .font(.system(size: 11, weight: .medium, design: .monospaced))
+        .help("\(added) \(added == 1 ? "line" : "lines") put in, \(deleted) taken out")
     }
 }
 

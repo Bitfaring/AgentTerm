@@ -99,10 +99,11 @@ extension WorktreeInfo {
     /// it, and how many commits it has that the folder's branch has not.
     public var chipCounts: String {
         if missing { return "missing" }
+        // In words, not numbers alone (#50).
         var parts: [String] = []
-        if changed > 0 { parts.append("\(changed)") }
-        if ahead > 0 { parts.append("↑\(ahead)") }
-        return parts.joined(separator: " ")
+        if changed > 0 { parts.append("\(changed) changed") }
+        if ahead > 0 { parts.append("\(ahead) ahead") }
+        return parts.joined(separator: " · ")
     }
 
     /// All of it in a sentence, for a tooltip and for assistive tools.

@@ -93,4 +93,19 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(second.title, "Delete it for good from Claude Code?")
         XCTAssertEqual(second.confirm, "Delete Conversation")
     }
+
+    /// HIST-24 (#50): the two questions before several conversations are
+    /// deleted, those picked or every one, and what is said after.
+    func testTheQuestionsBeforeSeveralConversationsAreDeleted() {
+        XCTAssertEqual(DeleteConversationsQuestion(count: 1, again: false).title, "Delete 1 conversation?")
+        XCTAssertEqual(DeleteConversationsQuestion(count: 3, again: false).title, "Delete 3 conversations?")
+        XCTAssertTrue(DeleteConversationsQuestion(count: 3, again: false).message.contains("Pinned ones stay"))
+        XCTAssertEqual(DeleteConversationsQuestion(count: nil, again: false).title, "Delete every conversation on this Mac?")
+        XCTAssertEqual(DeleteConversationsQuestion(count: 1, again: true).confirm, "Delete Conversation")
+        XCTAssertEqual(DeleteConversationsQuestion(count: 3, again: true).confirm, "Delete 3 Conversations")
+        XCTAssertEqual(DeleteConversationsQuestion(count: nil, again: true).confirm, "Delete Every Conversation")
+        XCTAssertTrue(DeleteConversationsQuestion(count: nil, again: true).message.contains("every conversation on this Mac can no longer be resumed"))
+        XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 1, kept: 0), "1 conversation was deleted.")
+        XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 0, kept: 1), "0 conversations were deleted. 1 was kept: pinned, having a session, or of Antigravity.")
+    }
 }

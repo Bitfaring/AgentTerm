@@ -206,6 +206,9 @@ public final class HostServer {
         /// one whose agent's state is not known is taken to be done once it
         /// has been quiet for a while.
         var lastOutputAt = Date.distantPast
+        /// What is to be typed into it, without Return, once its shell has
+        /// written something: then it is at its prompt (`CreateRequest.typed`).
+        var pendingTyped: String?
 
         init(info: SessionInfo, process: PTYProcess, screenLines: Int) {
             self.info = info
@@ -1251,7 +1254,7 @@ public final class HostServer {
         for client in clients.values where client.authenticated { send(historyMarksMessage, to: client) }
     }
 
-    private func searchHistory(search: Int, in path: String?, query: String, for client: Client) {
+    private func searchHistory(search: Int, in path: String?, query: String, titlesOnly: Bool = false, for client: Client) {
         // One at a time for each list, everywhere's and a folder's, which
         // the Mac shows side by side; a search for text is another's.
         let everywhere = path == nil
@@ -1263,7 +1266,7 @@ public final class HostServer {
         workQueue.async { [weak self] in
             // Every conversation there is, not only the page that is listed.
             let all = path.map { AgentHistory.conversations(in: $0, home: home, limit: .max) } ?? AgentHistory.allConversations(home: home, limit: .max)
-            AgentHistory.search(query, in: all, isCancelled: { flag.isStopped }) { hit in
+            AgentHistory.search(query, in: all, titlesOnly: titlesOnly, isCancelled: { flag.isStopped }) { hit in
                 self?.queue.async {
                     guard let self, let client = self.clients[id], !flag.isStopped else { return }
                     self.send(.historyFound(search: search, hits: [hit]), to: client)
@@ -1302,6 +1305,50 @@ public final class HostServer {
             server.saveHistoryMarks()
             server.broadcastHistoryMarks()
             for other in server.clients.values where other.authenticated { server.send(.conversationDeleted(id: id), to: other) }
+        }
+    }
+
+    /// Several conversations deleted at once (#50): those named, or every
+    /// one on the host when `ids` is nil. Never one that is pinned, nor one
+    /// a session is having, whose agent may be writing to it; Antigravity's
+    /// are refused by `AgentHistory.delete` and kept.
+    private func deleteConversations(_ ids: [String]?, for client: Client) {
+        let home = configuration.home
+        let pinned = historyMarks.pinned
+        let inSession = Set(sessions.values.compactMap { session in session.info.conversationID.map { (session.info.agent ?? "") + ":" + $0 } })
+        let wanted = ids.map(Set.init)
+        work(
+            for: client,
+            { () -> (deleted: [String], kept: Int) in
+                let all = AgentHistory.allConversations(home: home, limit: .max)
+                let named = wanted.map { wanted in all.filter { wanted.contains($0.id) } } ?? all
+                var deleted: [String] = []
+                var kept = 0
+                for conversation in named {
+                    // Pinned is kept, as the question says: unpinned first.
+                    if pinned.contains(conversation.id) || inSession.contains(conversation.id) {
+                        kept += 1
+                    } else if AgentHistory.delete(conversation, home: home) == nil {
+                        deleted.append(conversation.id)
+                    } else {
+                        kept += 1
+                    }
+                }
+                return (deleted, kept)
+            }
+        ) { server, client, result in
+            for id in result.deleted {
+                server.historyMarks.pinned.remove(id)
+                server.historyMarks.hidden.remove(id)
+            }
+            if !result.deleted.isEmpty {
+                server.saveHistoryMarks()
+                server.broadcastHistoryMarks()
+            }
+            for other in server.clients.values where other.authenticated {
+                for id in result.deleted { server.send(.conversationDeleted(id: id), to: other) }
+            }
+            server.send(.conversationsDeleted(deleted: result.deleted.count, kept: result.kept), to: client)
         }
     }
 
@@ -2153,8 +2200,8 @@ public final class HostServer {
                 server, client, details in
                 server.send(.conversationRead(id: id, details: details), to: client)
             }
-        case .searchHistory(let search, let path, let query):
-            searchHistory(search: search, in: path, query: query, for: client)
+        case .searchHistory(let search, let path, let query, let titlesOnly):
+            searchHistory(search: search, in: path, query: query, titlesOnly: titlesOnly ?? false, for: client)
         case .markConversation(let id, let pinned, let hidden):
             if let pinned { if pinned { historyMarks.pinned.insert(id) } else { historyMarks.pinned.remove(id) } }
             if let hidden { if hidden { historyMarks.hidden.insert(id) } else { historyMarks.hidden.remove(id) } }
@@ -2162,6 +2209,8 @@ public final class HostServer {
             broadcastHistoryMarks()
         case .deleteConversation(let agent, let sessionID, let cwd):
             deleteConversation(agent: agent, sessionID: sessionID, cwd: cwd, for: client)
+        case .deleteConversations(let ids):
+            deleteConversations(ids, for: client)
         case .exportConversation(let agent, let sessionID, let cwd):
             exportConversation(agent: agent, sessionID: sessionID, cwd: cwd, for: client)
         case .resume(let agent, let sessionID, let cwd, let size):
@@ -2727,6 +2776,7 @@ public final class HostServer {
         session.hooked = hooked
         session.agentKey = agentKey
         session.info.openedBy = openedBy
+        session.pendingTyped = request.typed.flatMap { $0.isEmpty ? nil : $0 }
         session.info.schedule = run?.name
         session.info.schedulePermissions = run?.permissions
         if run != nil { session.lastOutputAt = configuration.now() }
@@ -2956,6 +3006,13 @@ public final class HostServer {
     private static let replayPiece = 256 * 1024
 
     private func record(_ data: Data, in session: Session) {
+        if let typed = session.pendingTyped {
+            // The shell has started to write its prompt: typed a moment
+            // later, once the prompt is out, and never with Return.
+            session.pendingTyped = nil
+            let text = typed.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
+            queue.asyncAfter(deadline: .now() + 0.3) { [weak session] in session?.process.write(Data(text.utf8)) }
+        }
         let mirror = session.mirror
         session.mirrorQueue.async { mirror.feed(data) }
         session.scrollback.append(data)

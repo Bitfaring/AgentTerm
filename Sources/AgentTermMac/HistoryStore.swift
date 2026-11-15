@@ -38,6 +38,62 @@ final class HistoryStore: ObservableObject {
     var exported: ((String) -> Void)?
     /// A conversation was deleted.
     var deleted: ((String) -> Void)?
+    /// What came of deleting several at once, in words, to be said (#50).
+    var deletedMany: ((String) -> Void)?
+
+    /// Searches look at the titles only, not at what was said (#50). Kept
+    /// on this Mac; what was said too by default.
+    @Published var titlesOnly = UserDefaults.standard.bool(forKey: "historyTitlesOnly") {
+        didSet { UserDefaults.standard.set(titlesOnly, forKey: "historyTitlesOnly") }
+    }
+
+    /// The list whose conversations are being picked to be deleted, the
+    /// folder's (true) or all (false), and those picked, by `Conversation.id`.
+    @Published var picking: Bool?
+    @Published var picked: Set<String> = []
+
+    /// Several conversations the user is asked about before they are
+    /// deleted, twice: those picked, or every one on the Mac (`ids` nil).
+    struct ManyToDelete: Identifiable {
+        let ids: [String]?
+        let again: Bool
+        var id: String { (ids?.joined(separator: ",") ?? "all") + (again ? "!" : "") }
+    }
+    @Published var deletingMany: ManyToDelete?
+
+    func startPicking(ofFolder: Bool) {
+        picked = []
+        picking = ofFolder
+    }
+
+    func stopPicking() {
+        picking = nil
+        picked = []
+    }
+
+    func togglePicked(_ conversation: Conversation) {
+        if picked.contains(conversation.id) { picked.remove(conversation.id) } else { picked.insert(conversation.id) }
+    }
+
+    func requestDeletePicked() {
+        guard !picked.isEmpty else { return }
+        deletingMany = ManyToDelete(ids: picked.sorted(), again: false)
+    }
+
+    func requestDeleteAll() { deletingMany = ManyToDelete(ids: nil, again: false) }
+
+    /// The first question answered: the second once it has left the
+    /// screen; the second answered: they are deleted.
+    func deleteManyConfirmed() {
+        guard let asked = deletingMany else { return }
+        deletingMany = nil
+        if !asked.again {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.deletingMany = ManyToDelete(ids: asked.ids, again: true) }
+            return
+        }
+        send?(.deleteConversations(ids: asked.ids))
+        stopPicking()
+    }
 
     /// Numbers the searches, of both lists.
     private var counter = 0
@@ -68,6 +124,8 @@ final class HistoryStore: ObservableObject {
         details = [:]
         deleting = nil
         deletingAgain = nil
+        deletingMany = nil
+        stopPicking()
     }
 
     /// The side panel shows another folder: its own conversations.
@@ -101,7 +159,7 @@ final class HistoryStore: ObservableObject {
             self.numbers[ofFolder] = self.counter
             self[ofFolder: ofFolder].hits = []
             self[ofFolder: ofFolder].isSearching = true
-            self.send?(.searchHistory(search: self.counter, path: ofFolder ? path : nil, query: query))
+            self.send?(.searchHistory(search: self.counter, path: ofFolder ? path : nil, query: query, titlesOnly: self.titlesOnly))
         }
         pending[ofFolder] = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
@@ -164,7 +222,11 @@ final class HistoryStore: ObservableObject {
             let known = Set(self[ofFolder: ofFolder].older.map(\.id))
             self[ofFolder: ofFolder].older += conversations.filter { !known.contains($0.id) }
             self[ofFolder: ofFolder].more = more
+        case .conversationsDeleted(let deleted, let kept):
+            // The rows going say the rest; one that was kept is told.
+            if kept > 0 { deletedMany?(DeleteConversationsQuestion.done(deleted: deleted, kept: kept)) }
         case .conversationDeleted(let id):
+            picked.remove(id)
             details[id] = nil
             all.older.removeAll { $0.id == id }
             folder.older.removeAll { $0.id == id }

@@ -760,6 +760,7 @@ final class AppModel: ObservableObject {
             self?.show(.sessions, toggling: false)
             self?.files.open(path)
         }
+        historyStore.deletedMany = { [weak self] said in self?.notice = said }
         historyStore.deleted = { [weak self] id in
             guard let self else { return }
             self.history?.removeAll { $0.id == id }
@@ -1337,7 +1338,7 @@ final class AppModel: ObservableObject {
             // Each takes the answers that carry its own searches' numbers.
             search.handle(message)
             promptSearch.handle(message)
-        case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .historyMarks, .conversationDeleted, .conversationExported:
+        case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .historyMarks, .conversationDeleted, .conversationsDeleted, .conversationExported:
             historyStore.handle(message, folderPath: panelFolder)
         case .worktreeSetups(let setups):
             worktreeSetups = setups
@@ -1584,6 +1585,36 @@ final class AppModel: ObservableObject {
     enum WorktreeLaunch: Equatable {
         case agent(AgentInfo)
         case shell
+    }
+
+    // MARK: An agent that is not installed (#50)
+
+    /// How to install the agent whose button in the header was pressed,
+    /// while it is not installed: shown in a sheet.
+    @Published var installGuide: AgentInstallGuide?
+    /// The agents were looked for again from the guide: what was found is said there.
+    @Published private(set) var lookedForAgentsAgain = false
+
+    func showInstallGuide(for agent: AgentInfo) {
+        lookedForAgentsAgain = false
+        installGuide = AgentInstallGuide.forAgent(agent.id, name: agent.name)
+    }
+
+    /// A shell in the home folder with the install command typed in and not
+    /// run: the user reads it there and presses Return, or does not. The
+    /// app runs nothing it fetched by itself (CLAUDE.md, principle 2).
+    func installInNewShell(_ guide: AgentInstallGuide) {
+        guard status == .connected else { return }
+        lastError = nil
+        selectNextAttached = true
+        installGuide = nil
+        connection?.send(.create(CreateRequest(command: nil, cwd: isRemote ? nil : HostEnvironment.homeDirectory, title: guide.title, size: startingSize, typed: guide.command)))
+    }
+
+    /// Has the host look for the agents again, once one may have been installed.
+    func lookForAgentsAgain() {
+        lookedForAgentsAgain = true
+        refreshAgents()
     }
     /// Asked before a worktree is made while the folder has changes.
     @Published var worktreeQuestion: WorktreeLaunch?

@@ -3,8 +3,8 @@ import AgentTermTelemetry
 import AgentTermTerminal
 import SwiftUI
 
-/// The app's three places inside a Mac: its sessions, every conversation,
-/// and the settings.
+/// The app's places inside a Mac, as the Mac's bar of places has them: its
+/// sessions, every conversation, the schedules, and the settings.
 struct RootTabs: View {
     @EnvironmentObject private var model: PhoneModel
 
@@ -20,6 +20,12 @@ struct RootTabs: View {
             }
             .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
             .tag("history")
+            // A place of its own, as on the Mac, not a row of Settings.
+            NavigationStack {
+                SchedulesScreen()
+            }
+            .tabItem { Label("Schedules", systemImage: "calendar.badge.clock") }
+            .tag("schedules")
             SettingsTab()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag("settings")
@@ -138,12 +144,6 @@ private struct SettingsTab: View {
                 }
 
                 Section {
-                    NavigationLink {
-                        SchedulesScreen()
-                    } label: {
-                        LabeledContent("Schedules", value: model.schedules.isEmpty ? "None" : "\(model.schedules.count)")
-                    }
-                    .accessibilityIdentifier("schedules")
                     Toggle("Tell me when an agent is done or needs me", isOn: $model.notifyAgents)
                         .accessibilityIdentifier("notify-agents")
                     Toggle("Live Activity while no one is at the Mac", isOn: $model.showsLiveActivity)

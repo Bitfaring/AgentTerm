@@ -150,7 +150,7 @@ final class GitTests: MacUITestCase {
         app.wait(for: .button("Fetch"))
         app.press(.button("Fetch"))
         // One commit to pull, known without pulling it.
-        app.wait(for: .button("Pull, 1"), timeout: 20)
+        app.wait(for: .button("Pull, 1 commit"), timeout: 20)
         XCTAssertFalse(FileManager.default.fileExists(atPath: project.appendingPathComponent("theirs.txt").path), "fetching changed the files")
 
         // A commit of this side's, so that there is something to force.

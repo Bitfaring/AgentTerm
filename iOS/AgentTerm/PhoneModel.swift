@@ -392,20 +392,38 @@ final class PhoneModel: ObservableObject {
     /// What each commit that was opened changed, by its hash.
     @Published private(set) var commitDetails: [String: CommitDetails] = [:]
     static let commitsPage = 50
+    /// The branch whose commits each folder lists, as on the Mac: nil for
+    /// the checked out one. Another branch's commits are picked onto it.
+    @Published var commitsBranch: [String: String] = [:]
 
     /// Reads the first page of a folder's commits again.
     func loadCommits(_ folder: String) {
         commits[folder] = []
         commitsMore[folder] = false
         loadingCommits.insert(folder)
-        connection?.send(.gitLog(path: folder, branch: nil, skip: 0, limit: Self.commitsPage))
+        connection?.send(.gitLog(path: folder, branch: commitsBranch[folder], skip: 0, limit: Self.commitsPage))
     }
 
     /// Reads the next page, when there is one and none is on its way.
     func loadMoreCommits(_ folder: String) {
         guard commitsMore[folder] == true, !loadingCommits.contains(folder) else { return }
         loadingCommits.insert(folder)
-        connection?.send(.gitLog(path: folder, branch: nil, skip: commits[folder]?.count ?? 0, limit: Self.commitsPage))
+        connection?.send(.gitLog(path: folder, branch: commitsBranch[folder], skip: commits[folder]?.count ?? 0, limit: Self.commitsPage))
+    }
+
+    /// Lists another branch's commits, or the checked out one's (nil).
+    func showCommits(of branch: String?, in folder: String) {
+        commitsBranch[folder] = branch
+        loadCommits(folder)
+    }
+
+    /// Reverts a commit, or picks it onto the checked out branch (#36), once
+    /// the user was asked in the words of `CommitActionQuestion`. One that
+    /// conflicts is left to be resolved, as on the Mac, and said.
+    func apply(_ action: CommitActionQuestion.Action, _ commit: CommitInfo, in folder: String) {
+        guard status == .connected, syncing[folder] == nil else { return }
+        syncing[folder] = action == .revert ? "revert" : "cherry-pick"
+        connection?.send(action == .revert ? .gitRevert(path: folder, hash: commit.hash) : .gitCherryPick(path: folder, hash: commit.hash))
     }
 
     func loadCommit(_ hash: String, in folder: String) {
@@ -426,6 +444,18 @@ final class PhoneModel: ObservableObject {
 
     func createBranch(named name: String, from start: String?, checkout: Bool, in folder: String) {
         connection?.send(.gitCreateBranch(path: folder, name: name, from: start, checkout: checkout))
+    }
+
+    /// Gives one of the repository's own branches another name (#35).
+    func renameBranch(_ branch: BranchInfo, to name: String, in folder: String) {
+        connection?.send(.gitRenameBranch(path: folder, from: branch.name, to: name))
+    }
+
+    /// Deletes one of the repository's own branches, once asked as on the
+    /// Mac (`DeleteBranchQuestion`): with force for one whose commits are
+    /// on no other branch, which is asked about twice.
+    func deleteBranch(_ branch: BranchInfo, in folder: String) {
+        connection?.send(.gitDeleteBranch(path: folder, name: branch.name, force: !branch.isMerged))
     }
     /// The diff of a file, by `patchKey`. A missing file is stored as nil.
     @Published private(set) var patches: [String: FileDiff?] = [:]
@@ -1108,10 +1138,14 @@ final class PhoneModel: ObservableObject {
             olderHistory[key, default: []] += conversations.filter { !known.contains($0.id) }
             if !more { historyEnded.insert(key) }
         case .conversationDeleted(let id):
+            deletedConversations.insert(id)
             conversationDetails[id] = nil
             for key in histories.keys { histories[key]?.removeAll { $0.id == id } }
             for key in olderHistory.keys { olderHistory[key]?.removeAll { $0.id == id } }
             for key in historyHits.keys { historyHits[key]?.removeAll { $0.id == id } }
+        case .conversationsDeleted(let deleted, let kept):
+            // The rows going say the rest; one that was kept is told.
+            if kept > 0 { self.message = DeleteConversationsQuestion.done(deleted: deleted, kept: kept) }
         case .conversationExported(_, let path):
             exportedTranscript = path
         case .filesFound(let search, let files, let among):
@@ -1254,14 +1288,14 @@ final class PhoneModel: ObservableObject {
             stashes[folder] = list
         case .gitStashShow(_, let hash, let files):
             stashFiles[hash] = files ?? []
-        case .gitLog(let folder, nil, let skip, let list, let more):
+        case .gitLog(let folder, let branch, let skip, let list, let more):
+            // Of the branch listed now, not of one listed before.
+            guard branch == commitsBranch[folder] else { break }
             loadingCommits.remove(folder)
             // A page that does not follow what is listed is another list's.
             guard skip == (commits[folder]?.count ?? 0) else { break }
             commits[folder, default: []] += list
             commitsMore[folder] = more
-        case .gitLog:
-            break
         case .gitShow(let folder, let hash, let details):
             commitDetails[hash] = details ?? commits[folder]?.first { $0.hash == hash }.map { CommitDetails(commit: $0) }
         case .diff(let folder, let snapshot):
@@ -1297,7 +1331,9 @@ final class PhoneModel: ObservableObject {
         case .gitSynced(let folder):
             // Not at the `diff` before it: one asked for while git was still
             // at work would free the buttons for a second push beside the first.
-            syncing[folder] = nil
+            let was = syncing.removeValue(forKey: folder)
+            // A revert or a pick made a commit: the list is another now.
+            if was == "revert" || was == "cherry-pick", commits[folder] != nil { loadCommits(folder) }
         case .diffFile(let folder, let file):
             // The host answers per folder; the file asked for is the one waiting.
             if let file {
@@ -1683,7 +1719,23 @@ final class PhoneModel: ObservableObject {
         historySearchKey = key
         historyHits[key] = []
         historySearching.insert(key)
-        connection?.send(.searchHistory(search: historySearch, path: folder, query: wanted))
+        connection?.send(.searchHistory(search: historySearch, path: folder, query: wanted, titlesOnly: historyTitlesOnly))
+    }
+
+    /// Searches look at the titles only, not at what was said (#50), as on
+    /// the Mac. Kept on this iPhone; what was said too by default.
+    @Published var historyTitlesOnly = UserDefaults.standard.bool(forKey: "historyTitlesOnly") {
+        didSet { UserDefaults.standard.set(historyTitlesOnly, forKey: "historyTitlesOnly") }
+    }
+
+    /// The conversations deleted since the app started, here or on another
+    /// device: a list picking some to delete lets them go (#50).
+    @Published private(set) var deletedConversations: Set<String> = []
+
+    /// Deletes several conversations' records on the Mac at once (#50), or
+    /// every one there (`ids` nil), once the user was asked twice.
+    func deleteConversations(_ ids: [String]?) {
+        connection?.send(.deleteConversations(ids: ids))
     }
 
     func readConversation(_ conversation: Conversation) {

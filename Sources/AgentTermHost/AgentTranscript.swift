@@ -248,8 +248,11 @@ extension AgentHistory {
 
     /// The conversations whose title or what was said in them holds
     /// `query`, whatever its case, given as they are found. Blocks until it
-    /// is over; `isCancelled` is asked between conversations.
-    public static func search(_ query: String, in conversations: [Conversation], isCancelled: () -> Bool, found: (HistoryHit) -> Void) {
+    /// is over; `isCancelled` is asked between conversations. With
+    /// `titlesOnly` no file is read: the titles alone are looked at (#50).
+    public static func search(
+        _ query: String, in conversations: [Conversation], titlesOnly: Bool = false, isCancelled: () -> Bool, found: (HistoryHit) -> Void
+    ) {
         let wanted = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !wanted.isEmpty else { return }
         // Text is written in the file as it was said, unless it holds a
@@ -260,7 +263,7 @@ extension AgentHistory {
             if isCancelled() { return }
             let inTitle = conversation.title.lowercased().contains(wanted)
             var hit = HistoryHit(conversation: conversation)
-            if let source = conversation.source {
+            if !titlesOnly, let source = conversation.source {
                 let data = read(URL(fileURLWithPath: source), tail: detailBytes)
                 if !plain || holds(data, wanted) {
                     for message in transcript(of: conversation, data: data) {
