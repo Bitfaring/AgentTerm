@@ -144,7 +144,7 @@ final class FlowTests: XCTestCase {
             step()
             print(String(format: "MEASURE idle, %@: %.1f s", what, Date().timeIntervalSince(started)))
         }
-        timed("a tap with no menu about (the tab bar)") { app.tabBars.buttons["Sessions"].tap() }
+        timed("a tap with no menu about (the tab bar)") { app.tab("Sessions").tap() }
         timed("the press that opens a row's menu") { rows.element(boundBy: 0).press(forDuration: 1.2) }
         timed("finding an entry of the open menu") { XCTAssertTrue(app.buttons["Pin"].waitForExistence(timeout: 90)) }
         timed("touching the entry") { app.buttons["Pin"].tap() }
@@ -249,10 +249,10 @@ final class FlowTests: XCTestCase {
             }
             app.navigationBars.buttons.firstMatch.tap()
         }
-        app.tabBars.buttons["Settings"].firstMatch.tap()
+        app.tab("Settings").tap()
         sleep(1)
         capture("L9-settings")
-        app.tabBars.buttons["History"].firstMatch.tap()
+        app.tab("History").tap()
         sleep(1)
         capture("L10-history")
     }
@@ -298,6 +298,12 @@ final class FlowTests: XCTestCase {
             XCTAssertTrue(start.waitForExistence(timeout: 15), "not connected to the first Mac again")
         }
         capture("2-sessions")
+        // IPAD-2 (#88): on the iPad's screen the list keeps a column's width.
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            let another = app.buttons["Open Another Folder…"].firstMatch
+            XCTAssertTrue(another.waitForExistence(timeout: 10))
+            XCTAssertLessThanOrEqual(another.frame.width, 760, "the list is as wide as the screen")
+        }
         // The Mac's figures arrive a moment after the list and push it
         // down: a tap aimed at where the button was would land beside it.
         _ = app.descendants(matching: .any)["system-cpu"].firstMatch.waitForExistence(timeout: 10)
@@ -335,6 +341,11 @@ final class FlowTests: XCTestCase {
         if environment["AGENTTERM_ONLY_NOTE"] != nil {
             app.navigationBars.buttons.firstMatch.tap()
             readANote(app, compose: compose)
+            return
+        }
+        if environment["AGENTTERM_ONLY_NARROW"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            narrowTheWindow(app)
             return
         }
 
@@ -391,6 +402,14 @@ final class FlowTests: XCTestCase {
         // The whole grid is on screen, also after the text size changes: a
         // marker written on the last row has to sit right above the key
         // bar. Full screen programs keep their status line there.
+        // On the iPad, with the keyboard up, an entry of this menu touched
+        // was taken by nothing, and the menu stayed open; with it down it
+        // was taken (#88, 2026-11-15). Why is #83's to find: the keyboard
+        // goes first here meanwhile, and #83 stays open.
+        if UIDevice.current.userInterfaceIdiom == .pad, app.buttons["hide-keyboard"].firstMatch.exists {
+            app.buttons["hide-keyboard"].firstMatch.tap()
+            sleep(1)
+        }
         for _ in 0..<3 {
             app.buttons["session-menu"].tap()
             app.buttons["Larger Text"].tap()
@@ -460,8 +479,12 @@ final class FlowTests: XCTestCase {
             }
             // The Settings tab: what the menu used to hold, in the order of
             // the Mac's Settings.
-            app.tabBars.buttons["Settings"].tap()
+            app.tab("Settings").tap()
             XCTAssertTrue(app.switches["keep-awake"].waitForExistence(timeout: 5), "Settings has no Keep Mac Awake switch")
+            // IPAD-3 (#88): what the app says names the device it runs on.
+            let device = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+            let said = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "this \(device) can still reach them")).firstMatch
+            XCTAssertTrue(said.exists, "Settings does not say this \(device)")
             capture("7-settings-tab")
             // Further down, under the agents' settings.
             let commitMessages = app.staticTexts["Commit Messages"].firstMatch
@@ -471,16 +494,16 @@ final class FlowTests: XCTestCase {
             // places, in three groups, as the Mac shows them; no longer a
             // row of Settings.
             XCTAssertFalse(app.buttons["schedules"].exists, "Schedules is still in Settings")
-            app.tabBars.buttons["Schedules"].tap()
+            app.tab("Schedules").tap()
             XCTAssertTrue(app.navigationBars["Schedules"].waitForExistence(timeout: 5))
             for group in ["RUNNING", "SCHEDULED", "PAST RUNS"] {
                 XCTAssertTrue(app.staticTexts[group].waitForExistence(timeout: 5) || app.staticTexts[group.capitalized].exists, "no \(group) group")
             }
             XCTAssertTrue(app.staticTexts["No run is going on."].exists)
             capture("7-schedules")
-            app.tabBars.buttons["History"].tap()
+            app.tab("History").tap()
             XCTAssertTrue(app.navigationBars["History"].waitForExistence(timeout: 5))
-            app.tabBars.buttons["Sessions"].tap()
+            app.tab("Sessions").tap()
             // The hosts of the Mac's SSH configuration, without its patterns.
             let ssh = app.buttons["ssh-menu"].firstMatch
             XCTAssertTrue(ssh.waitForExistence(timeout: 5), "there is no SSH menu")
@@ -773,7 +796,7 @@ final class FlowTests: XCTestCase {
         // SET-4: the second Mac kept awake, then out of reach (the script
         // stops its host): its settings stay as it last said them, and
         // cannot be changed until it is reached again.
-        app.tabBars.buttons["Settings"].tap()
+        app.tab("Settings").tap()
         let awake = app.switches["keep-awake"].firstMatch
         XCTAssertTrue(awake.waitForExistence(timeout: 10), "the second Mac's settings are not shown")
         awake.switches.firstMatch.exists ? awake.switches.firstMatch.tap() : awake.tap()
@@ -782,7 +805,7 @@ final class FlowTests: XCTestCase {
         XCTAssertFalse(awake.isEnabled, "the setting of a Mac out of reach can still be changed")
         XCTAssertEqual(awake.value as? String, "1", "the setting is not as the Mac last said")
         capture("8a-second-mac-gone")
-        app.tabBars.buttons["Sessions"].tap()
+        app.tab("Sessions").tap()
 
         // The menu lists both, and switching goes back to the first Mac and
         // its session, which kept running.
@@ -904,6 +927,39 @@ final class FlowTests: XCTestCase {
         readANote(app, compose: compose)
     }
 
+    /// IPAD-2 (#88): the iPad's window narrowed by the handle at its bottom
+    /// right corner, the list is laid out as on the iPhone, as wide as the
+    /// window less its margins. Starts in the sessions list.
+    private func narrowTheWindow(_ app: XCUIApplication) {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        // In the screen's points: the app's own frame moves with its window.
+        let screen = XCUIApplication(bundleIdentifier: "com.apple.springboard").coordinate(withNormalizedOffset: .zero)
+        let screenWidth = XCUIScreen.main.screenshot().image.size.width
+        /// The handle at the window's bottom right corner, dragged across to `x`.
+        func dragCorner(to x: CGFloat) {
+            let window = app.windows.firstMatch.frame
+            screen.withOffset(CGVector(dx: window.maxX - 4, dy: window.maxY - 4))
+                .press(forDuration: 0.8, thenDragTo: screen.withOffset(CGVector(dx: x, dy: window.maxY - 4)))
+            sleep(3)
+        }
+        // A window left narrow by a run before this one is made whole first.
+        if app.windows.firstMatch.frame.width < screenWidth - 40 { dragCorner(to: screenWidth - 2) }
+        let another = app.buttons["Open Another Folder…"].firstMatch
+        XCTAssertTrue(another.waitForExistence(timeout: 10))
+        let window = app.windows.firstMatch.frame
+        let wide = another.frame.width
+        capture("N0-full")
+        dragCorner(to: window.minX + 420)
+        capture("N1-narrowed")
+        let narrowed = app.windows.firstMatch.frame
+        print("MEASURE narrow: window \(window.width) -> \(narrowed.width), list \(wide) -> \(another.frame.width)")
+        XCTAssertLessThan(narrowed.width, window.width - 200, "the window was not narrowed")
+        XCTAssertGreaterThan(another.frame.width, narrowed.width - 60, "narrowed, the list does not fill the window as on the iPhone")
+        // Whole again, for the runs after this one.
+        dragCorner(to: screenWidth - 2)
+        print("MEASURE narrow: window back to \(app.windows.firstMatch.frame.width)")
+    }
+
     /// IOS-9 (#87): why an agent's state is not known is read on the phone
     /// too. A stand-in Antigravity, whose session always has a note:
     /// touched, its mark shows the words, and the session does not open.
@@ -916,6 +972,7 @@ final class FlowTests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
         let mark = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "state-note-")).firstMatch
         XCTAssertTrue(mark.waitForExistence(timeout: 10), "no note on the Antigravity session's row")
+        capture("17a-before-note")
         mark.tap()
         let note = app.staticTexts["state-note-text"]
         XCTAssertTrue(note.waitForExistence(timeout: 5), "touching the mark did not show the note")

@@ -1016,7 +1016,7 @@ final class PhoneModel: ObservableObject {
                 isPairing = false
                 pendingPairing = nil
                 if message == nil {
-                    message = "Could not reach the Mac. Check that Tailscale is connected on this iPhone and on the Mac, then try again."
+                    message = "Could not reach the Mac. Check that Tailscale is connected on this \(ThisDevice.name) and on the Mac, then try again."
                 }
                 // Back to the Mac that was on screen before, if there was one.
                 if pairing != nil { connect() }
@@ -1260,7 +1260,7 @@ final class PhoneModel: ObservableObject {
             if text == "invalid token" {
                 let name = pairing?.name ?? "The Mac"
                 forgetMac()
-                self.message = "\(name) removed this iPhone from its paired devices. Pair it again to reconnect."
+                self.message = "\(name) removed this \(ThisDevice.name) from its paired devices. Pair it again to reconnect."
             } else if text == "invalid pairing code" {
                 self.message = "That pairing code has expired or was already used. Show a new one on the Mac and try again."
             } else if text == "malformed message" {

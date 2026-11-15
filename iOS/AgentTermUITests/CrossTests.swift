@@ -36,7 +36,7 @@ final class CrossTests: XCTestCase {
         capture("1-sessions")
 
         // AWAKE-2: switched on on the Mac, it is on here; an option switched on here is for the Mac to show.
-        app.tabBars.buttons["Settings"].tap()
+        app.tab("Settings").tap()
         let keepAwake = app.switches["keep-awake"]
         XCTAssertTrue(keepAwake.waitForExistence(timeout: 10))
         XCTAssertEqual(keepAwake.value as? String, "1", "Keep Mac Awake was switched on on the Mac and is off here")
@@ -44,7 +44,7 @@ final class CrossTests: XCTestCase {
         XCTAssertTrue(display.waitForExistence(timeout: 5))
         display.switches.firstMatch.exists ? display.switches.firstMatch.tap() : display.tap()
         capture("2-settings")
-        app.tabBars.buttons["Sessions"].tap()
+        app.tab("Sessions").tap()
 
         // GIT-6: the Mac grouped the changes by folder, so they are grouped here.
         app.buttons["folder-details"].firstMatch.tap()

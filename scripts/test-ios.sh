@@ -144,6 +144,9 @@ if [ "${MENU:-}" = after ]; then export TEST_RUNNER_AGENTTERM_MENU_AFTER=1; fi
 if [ -n "${MENU:-}" ]; then export TEST_RUNNER_AGENTTERM_MENU_ROUNDS="${MENU_ROUNDS:-20}"; fi
 # NOTE=only reads a stand-in agent's note on its row (IOS-9), and nothing else.
 if [ "${NOTE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NOTE=1; fi
+# NARROW=only narrows the iPad's window and looks at the list (IPAD-2), and
+# nothing else. On an iPhone it checks nothing.
+if [ "${NARROW:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NARROW=1; fi
 # PAGES=only checks that a long session's earlier lines come a page at a time.
 if [ "${PAGES:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_HISTORY=1; fi
 # TAKEOVER=1 has something play the Mac: once the phone has a session open,
@@ -164,6 +167,7 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${PAGES:-}" = only ]; then echo "iOS UI test passed (paged history only)."; rm -f "$LOG"; exit 0; fi
     if [ "${IDLE:-}" = only ]; then grep -E "MEASURE idle" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (idle waits measured)."; rm -f "$LOG"; exit 0; fi
     if [ "${NOTE:-}" = only ]; then echo "iOS UI test passed (a note read only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${NARROW:-}" = only ]; then grep -E "MEASURE narrow" "$LOG" | sed 's/^.*MEASURE //'; echo "iOS UI test passed (the window narrowed only)."; rm -f "$LOG"; exit 0; fi
     if [ -n "${MENU:-}" ]; then grep -E "MEASURE menu" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (menu touches counted)."; rm -f "$LOG"; exit 0; fi
     if [ "${SCROLL:-}" = only ]; then grep -E "Measured \[|average:" "$LOG" | cut -c1-300; echo "iOS UI test passed (scrolling measured)."; rm -f "$LOG"; exit 0; fi
     grep -q '"Group 1 api"' "$STATE/tabs.json" || { echo "test-ios.sh: the host did not save the arrangement of the sessions" >&2; exit 1; }

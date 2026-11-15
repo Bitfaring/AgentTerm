@@ -77,6 +77,7 @@ struct SessionsView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 24)
             }
+            .readableWidth()
             .background(Palette.canvas.ignoresSafeArea())
             .navigationTitle(model.pairing?.name ?? "AgentTerm")
             .toolbar {
@@ -470,38 +471,33 @@ private struct FolderSection: View {
                             .onDrop(of: [.text], delegate: SessionDropDelegate(place: .group(tabGroup.id), model: model, dropTarget: $dropTarget))
                         Palette.hairline.frame(height: 1)
                     case .session(let session):
-                        NavigationLink(value: Route.session(session.id)) {
-                            SessionRow(session: session)
-                        }
-                        .buttonStyle(.plain)
-                        // Over the link, so that touching it does not open the session.
-                        .overlayPreferenceValue(NoteMark.Place.self) { NoteMark.mark(of: session, at: $0) }
-                        .overlay(alignment: .top) {
-                            // Where a dragged session will land.
-                            if dropTarget == session.layoutID { Palette.tint.frame(height: 2.5) }
-                        }
-                        .onDrag {
-                            model.draggedFolder = nil
-                            model.draggedSession = session.layoutID
-                            return NSItemProvider(object: session.layoutID as NSString)
-                        }
-                        .onDrop(of: [.text], delegate: SessionDropDelegate(place: .before(session.layoutID), model: model, dropTarget: $dropTarget))
-                        .contextMenu {
-                            arrangeMenu(session)
-                            Divider()
-                            if model.canHandOff(session) {
-                                Button {
-                                    model.requestHandoff(session: session)
+                        SessionRowLink(session: session)
+                            .overlay(alignment: .top) {
+                                // Where a dragged session will land.
+                                if dropTarget == session.layoutID { Palette.tint.frame(height: 2.5) }
+                            }
+                            .onDrag {
+                                model.draggedFolder = nil
+                                model.draggedSession = session.layoutID
+                                return NSItemProvider(object: session.layoutID as NSString)
+                            }
+                            .onDrop(of: [.text], delegate: SessionDropDelegate(place: .before(session.layoutID), model: model, dropTarget: $dropTarget))
+                            .contextMenu {
+                                arrangeMenu(session)
+                                Divider()
+                                if model.canHandOff(session) {
+                                    Button {
+                                        model.requestHandoff(session: session)
+                                    } label: {
+                                        Label("Hand Off…", systemImage: "arrowshape.turn.up.right")
+                                    }
+                                }
+                                Button(role: .destructive) {
+                                    ending = session
                                 } label: {
-                                    Label("Hand Off…", systemImage: "arrowshape.turn.up.right")
+                                    Label("End Session…", systemImage: "xmark.circle")
                                 }
                             }
-                            Button(role: .destructive) {
-                                ending = session
-                            } label: {
-                                Label("End Session…", systemImage: "xmark.circle")
-                            }
-                        }
                         Palette.hairline.frame(height: 1).padding(.leading, 38)
                     }
                 }
@@ -551,14 +547,34 @@ private struct StateMark: View {
                 .foregroundStyle(color)
                 .accessibilityLabel(state.name)
                 .accessibilityIdentifier("state-\(session.id)")
-        } else if session.stateNote != nil {
-            // The room the note's mark takes. The mark itself is laid over
-            // the row's link (`NoteMark.over`): inside the link's label, a
-            // button's touch, and a gesture's of high priority, opened the
-            // session instead (tried 2026-11-15).
-            Color.clear
-                .frame(width: NoteMark.side, height: NoteMark.side)
-                .anchorPreference(key: NoteMark.Place.self, value: .bounds) { $0 }
+        }
+        // A note, when the state is not known, is `NoteMark`'s, beside the
+        // row's link rather than in it (`SessionRowLink`).
+    }
+}
+
+/// A session's row: a link to its terminal. When a note says why its
+/// agent's state is not known, the note's mark stands between two parts of
+/// the link, a button of its own: inside the link's label, or laid over the
+/// link, touching the mark opened the session (on the iPhone a button
+/// inside it, on the iPad also one laid over it; tried 2026-11-15, #87, #88).
+private struct SessionRowLink: View {
+    let session: SessionInfo
+
+    var body: some View {
+        if let note = session.stateNote, session.state == nil {
+            HStack(spacing: 12) {
+                NavigationLink(value: Route.session(session.id)) { SessionRow(session: session, part: .main) }
+                NoteMark(note: note, session: session.id)
+                // The same link again, for the rest of the row; said once
+                // to assistive tools.
+                NavigationLink(value: Route.session(session.id)) { SessionRow(session: session, part: .end) }
+                    .accessibilityHidden(true)
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: Route.session(session.id)) { SessionRow(session: session, part: .whole) }
+                .buttonStyle(.plain)
         }
     }
 }
@@ -566,27 +582,9 @@ private struct StateMark: View {
 /// Why an agent's state is not known, read by touching its mark: what the
 /// Mac shows when the pointer rests on it, in the same words (#87).
 private struct NoteMark: View {
-    static let side: CGFloat = 24
     let note: String
     let session: SessionID
     @State private var shown = false
-
-    /// Where a row keeps room for the mark.
-    struct Place: PreferenceKey {
-        static var defaultValue: Anchor<CGRect>? { nil }
-        static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
-    }
-
-    /// The mark of `session`'s note, put over the room its row keeps for it
-    /// (`place`), by `overlayPreferenceValue` on the row's link.
-    static func mark(of session: SessionInfo, at place: Anchor<CGRect>?) -> some View {
-        GeometryReader { proxy in
-            if let place, let note = session.stateNote, session.state == nil {
-                let room = proxy[place]
-                NoteMark(note: note, session: session.id).position(x: room.midX, y: room.midY)
-            }
-        }
-    }
 
     var body: some View {
         Button {
@@ -595,7 +593,8 @@ private struct NoteMark: View {
             Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-                .frame(width: Self.side, height: Self.side)
+                .frame(width: 24)
+                .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -616,64 +615,80 @@ private struct NoteMark: View {
 private struct SessionRow: View {
     @EnvironmentObject private var model: PhoneModel
     let session: SessionInfo
+    /// The whole row, or one of the two parts it has on each side of a
+    /// note's mark (`SessionRowLink`).
+    var part = Part.whole
+
+    enum Part { case whole, main, end }
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: AgentStyle.symbol(for: model.agentID(for: session)))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(AgentStyle.accent(for: model.agentID(for: session)))
-                .frame(width: 18)
-            if model.sessionLayout.isPinned(session.layoutID) {
-                Image(systemName: "pin.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Pinned")
-            }
-            // The conversation's title once the agent has saved one, the
-            // agent's name until then.
-            VStack(alignment: .leading, spacing: 1) {
-                Text(session.displayName)
-                    .font(.body)
-                    .lineLimit(1)
-                if let branch = session.branch {
-                    Label(branch, systemImage: "arrow.triangle.branch")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                if let owner = session.openedByName(among: model.sessions) {
-                    // A shell an agent opened: whose it is (#61).
-                    Label(owner, systemImage: "sparkles")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .accessibilityLabel("Opened by \(owner)")
-                }
-            }
-            Spacer(minLength: 8)
-            if session.schedule != nil {
-                Image(systemName: "calendar.badge.clock")
-                    .font(.system(size: 12))
-                    .foregroundStyle(session.schedulePermissions == .skipAll ? .orange : .secondary)
-                    .accessibilityLabel(session.schedulePermissions == .skipAll ? "A scheduled run, without asking for permission" : "A scheduled run")
-            }
-            StateMark(session: session)
-            Text("\(session.size.cols)×\(session.size.rows)")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.tertiary)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.tertiary)
+            if part != .end { main }
+            if part != .main { end }
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, part == .end ? 0 : 12)
+        .padding(.trailing, part == .main ? 0 : 12)
         .padding(.vertical, 14)
         .contentShape(Rectangle())
         .overlay(alignment: .leading) {
             // The color of the group the session is in.
-            if let tabGroup = model.sessionLayout.group(of: session.layoutID) {
+            if part != .end, let tabGroup = model.sessionLayout.group(of: session.layoutID) {
                 GroupColor.color(tabGroup.color).frame(width: 3)
             }
         }
+    }
+
+    /// The size and the way in.
+    @ViewBuilder private var end: some View {
+        Text("\(session.size.cols)×\(session.size.rows)")
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(.tertiary)
+        Image(systemName: "chevron.right")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.tertiary)
+    }
+
+    /// What the session is, and what its agent is doing.
+    @ViewBuilder private var main: some View {
+        Image(systemName: AgentStyle.symbol(for: model.agentID(for: session)))
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(AgentStyle.accent(for: model.agentID(for: session)))
+            .frame(width: 18)
+        if model.sessionLayout.isPinned(session.layoutID) {
+            Image(systemName: "pin.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Pinned")
+        }
+        // The conversation's title once the agent has saved one, the
+        // agent's name until then.
+        VStack(alignment: .leading, spacing: 1) {
+            Text(session.displayName)
+                .font(.body)
+                .lineLimit(1)
+            if let branch = session.branch {
+                Label(branch, systemImage: "arrow.triangle.branch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if let owner = session.openedByName(among: model.sessions) {
+                // A shell an agent opened: whose it is (#61).
+                Label(owner, systemImage: "sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .accessibilityLabel("Opened by \(owner)")
+            }
+        }
+        Spacer(minLength: 8)
+        if session.schedule != nil {
+            Image(systemName: "calendar.badge.clock")
+                .font(.system(size: 12))
+                .foregroundStyle(session.schedulePermissions == .skipAll ? .orange : .secondary)
+                .accessibilityLabel(session.schedulePermissions == .skipAll ? "A scheduled run, without asking for permission" : "A scheduled run")
+        }
+        StateMark(session: session)
     }
 }
 

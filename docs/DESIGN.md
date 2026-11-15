@@ -1275,6 +1275,16 @@ toolbar, before the agents, switches between this Mac and the paired ones.
 
 ## iPhone app structure
 
+The app is built for the iPhone and the iPad (`TARGETED_DEVICE_FAMILY "1,2"`
+for the app, its Live Activity and its UI tests, #88), every way round on
+the iPad, which Split View and Stage Manager ask of an app that does not
+take the whole screen. The iPad has the iPhone's tabs, which iPadOS draws
+in a bar floating at the top. `ReadableWidth` keeps the tabs' lists to 760
+points in the middle on the iPad's screen, by `contentMargins` on their
+scroll content, so their background and scroll bar stay at its edges; it
+does nothing on an iPhone, nor on an iPad narrowed to the compact width.
+`ThisDevice.name` is what the app's words call the device.
+
 - `PhoneModel` holds the paired Macs, the connection and the single
   `TerminalController` for the session on screen.
 - There is one connection at a time, to the Mac on screen. Switching Macs

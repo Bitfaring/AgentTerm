@@ -34,9 +34,17 @@ trading off scope:
 |---|---|---|
 | macOS | Runs the sessions and shows them | macOS 14 |
 | iPhone | Remote control for sessions on the Mac | iOS 17 |
+| iPad | The iPhone app, laid out for the iPad's screen (#88) | iPadOS 17 |
 
 iOS does not allow apps to start processes, so the iPhone never runs an agent
 itself.
+
+The iPad has what the iPhone has (principle 1): the same tabs and screens,
+a session's terminal over the whole screen, one window. What takes careful
+editing stays the Mac's there too. The lists (sessions, History, Schedules,
+Settings) keep a column's width in the middle of its screen; narrowed by
+Split View or Stage Manager it is laid out as the iPhone is. What the app
+says names the device it runs on.
 
 ## Features
 

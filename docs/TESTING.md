@@ -45,6 +45,7 @@ full log is.
 | The host, the protocol and the shared code | `swift test` | 2 minutes |
 | The Mac app | `scripts/test-mac.sh` | 5 minutes |
 | The iPhone app | `scripts/test-ios.sh "iPhone Air"` | 5 minutes |
+| The iPhone app on an iPad (#88) | `scripts/test-ios.sh "iPad Pro 13-inch (M5)"` | 7 minutes |
 | The iPhone app on its side | `LANDSCAPE=only scripts/test-ios.sh "iPhone Air"` | a few minutes |
 | Both apps on one host | `scripts/test-both.sh "iPhone Air"` | 5 minutes |
 
@@ -62,9 +63,12 @@ which replaces the test runner's own wait while they run. The test went
 from 13 minutes to 5. Should a later Xcode name that wait otherwise,
 nothing is replaced and the steps wait as before; `IDLE=only
 scripts/test-ios.sh` says which waits it found. The grouping steps still
-make four of their gestures again when the first did nothing (`gesture`):
-whether a touch is still lost now and then without the minute-long waits
-is not known yet.
+make four of their gestures again when the first did nothing (`gesture`),
+and they have to (#83): made once, a drag onto a session of a group was
+lost in 2 of 10 runs on 2026-11-15. On the iPad, with the keyboard up, a
+touch on an entry of the terminal's menu was lost too, now and then, and
+the menu stayed open: the test puts the keyboard down before that menu
+there. Why either touch is lost is #83's, still open.
 
 Before a release all of them are run, in that order: the first is the
 quickest to say that something is broken, the last needs everything else
@@ -76,8 +80,8 @@ What they need, once:
   runs in, allowed under System Settings > Privacy & Security >
   Accessibility. Without it the Mac tests are skipped, not failed: a run
   that says "Executed 0 tests" or lists them as skipped checked nothing.
-- For P, L and X: Xcode with an iPhone simulator, and `brew install
-  xcodegen`. Name the simulator: the test resets its keychain, so it should
+- For P, L and X: Xcode with an iPhone simulator (an iPad one too, for the
+  iPad), and `brew install xcodegen`. Name the simulator: the test resets its keychain, so it should
   not be the one an app you use is paired in. `scripts/test-ios.sh --list`
   shows the simulators.
 
@@ -514,6 +518,9 @@ A second host stands in for the other Mac, with a project of its own.
 | IOS-5 | The Mac's home with folders | Open Another Folder, pick one, start a shell | The shell starts in that folder | H, P |
 | IOS-6 | The History or Settings tab in front | The Mac answers with an error | The message shows over whichever tab is in front | P |
 | IOS-7 | Paired | Look at the three tabs | Sessions, History, Settings, with the settings the Mac's Settings has | P |
+| IPAD-1 | The app on an iPad Pro 13-inch simulator (#88) | The whole of the iPhone's test, `scripts/test-ios.sh "iPad Pro 13-inch (M5)"` | Everything the iPhone does, done the same; the tabs in the bar that floats at the top | P on the iPad |
+| IPAD-2 | The sessions' list on the iPad's screen; then the app narrowed by Split View | Look at it | The list, History, Schedules and Settings keep a column of 760 points in the middle, their background and scroll bar at the edges; narrowed, they fill it as on the iPhone. A terminal and a folder's Git, History and Files take the whole width. Narrowed by the window's handle from 1,032 points to 375, the list went from 728 to 343 (2026-11-15) | P on the iPad (the list's width); `NARROW=only scripts/test-ios.sh "iPad Pro 13-inch (M5)"` narrows the window by its handle, and makes it whole again |
+| IPAD-3 | The app on an iPad | Read Settings, the pairing screen and the messages that name the device | "this iPad", not "this iPhone" | P on the iPad (Settings) |
 | IOS-9 | A stand-in Antigravity's session in the list, its state not known | Touch the mark on its row | A popover with the note in the Mac's words; the session does not open. Before the fix the words were only the mark's accessibility label (#87) | P |
 | IOS-8 | A program that asked for bracketed paste, and one that did not; an agent asking a question | Send a message of more than 64 characters, one of several lines, one of a few characters | The long and the multi-line one go inside bracketed paste, then Return 80 ms later, to the program that asked; everything else typed as it is, lines ended with Return. Before the fix Codex 0.169 kept a single line of 437 characters in its input, the Return a new line in it | H (`SentTextTests`); with the real agents, the same bytes through a throwaway host, on 2026-11-15: 4,000 characters submitted in Claude Code 2.1.325, Codex 0.169.0, Copilot CLI 1.0.112 and Antigravity 1.5.8 |
 

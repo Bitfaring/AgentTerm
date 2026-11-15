@@ -41,7 +41,9 @@ targets:
         PRODUCT_NAME: AgentTerm
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CURRENT_PROJECT_VERSION: 1
-        TARGETED_DEVICE_FAMILY: "1"
+        # The iPhone and the iPad (#88): what the iPhone has, laid out for
+        # the iPad's screen.
+        TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
         # Firebase's Objective-C categories are only found with this.
@@ -73,6 +75,13 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        # Every way round on the iPad, which Split View and Stage Manager
+        # ask of an app that does not take the whole screen.
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: AgentTerm uses the camera to scan the pairing code shown on your Mac.
         NSLocalNetworkUsageDescription: AgentTerm connects to the AgentTerm host running on your Mac.
         ITSAppUsesNonExemptEncryption: false
@@ -96,7 +105,7 @@ targets:
       base:
         PRODUCT_NAME: AgentTermLiveActivity
         CURRENT_PROJECT_VERSION: 1
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
         ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -128,7 +137,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm.uitests
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "5.0"
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
 schemes:
   AgentTerm:
     build:
