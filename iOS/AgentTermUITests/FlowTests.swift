@@ -622,7 +622,10 @@ final class FlowTests: XCTestCase {
             conversation.tap()
             XCTAssertTrue(app.staticTexts["1 picked"].waitForExistence(timeout: 5), "a touch did not pick the row")
             XCTAssertFalse(app.buttons["Resume in Claude Code"].exists, "a touch while picking opened the conversation")
-            XCTAssertTrue(app.buttons["history-delete-all"].exists)
+            // A folder's list deletes what is picked; every one on the Mac
+            // is the History tab's to offer.
+            XCTAssertTrue(app.buttons["history-delete-picked"].exists)
+            XCTAssertFalse(app.buttons["history-delete-all"].exists, "a folder's list offers to delete every conversation")
             capture("7c2-history-picking")
             app.buttons["history-pick-done"].tap()
             XCTAssertTrue(app.staticTexts["history-summary"].waitForExistence(timeout: 5))

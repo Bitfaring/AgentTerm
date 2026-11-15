@@ -7,32 +7,6 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
 
-    private var closeQuestion: String {
-        guard let request = model.pendingCloseRequest else { return "" }
-        let count = model.sessionsEnded(by: request).count
-        let kept = request.keepSession != nil || request.keepFile != nil || request.keepDiff
-        return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
-    }
-
-    // The questions are worked out here rather than where they are asked:
-    // inside the long chain of the window's sheets and dialogs each of them
-    // is one more thing the compiler has to work out at once, and on a slow
-    // machine it gives up.
-    private var saveQuestion: String {
-        let name = files.pendingClose.map { ($0 as NSString).lastPathComponent } ?? ""
-        return "Save changes to \"\(name)\"?"
-    }
-
-    private var endQuestion: String {
-        let name = model.pendingEnd?.displayName ?? "this session"
-        return "End \(name)?"
-    }
-
-    private var pushQuestion: String {
-        guard let push = model.pendingFirstPush else { return "" }
-        return "Push “\(push.branch)” to \(push.remote)?"
-    }
-
     var body: some View {
         HStack(spacing: 0) {
             ActivityBar()
@@ -101,87 +75,144 @@ struct RootView: View {
                 }
             }
         }
-        .sheet(isPresented: $model.showPairing) {
-            PairingView(port: model.hostPort)
-        }
-        .sheet(isPresented: $model.showPairMac) {
-            PairMacSheet()
-        }
-        .sheet(isPresented: $model.showBrowseFolders) {
-            BrowseFoldersSheet()
-        }
-        .sheet(item: $model.installGuide) { guide in
-            AgentInstallSheet(guide: guide)
-        }
-        .confirmationDialog(
-            saveQuestion,
-            isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
-            titleVisibility: .visible, presenting: files.pendingClose
-        ) { path in
-            Button("Save") { files.saveAndClose(path) }
-            Button("Don't Save", role: .destructive) { files.close(path) }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog(
-            endQuestion,
-            isPresented: Binding(get: { model.pendingEnd != nil }, set: { if !$0 { model.pendingEnd = nil } }),
-            titleVisibility: .visible, presenting: model.pendingEnd
-        ) { session in
-            Button("End Session", role: .destructive) { model.close(session.id) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("The program running in it is stopped.")
-        }
-        .confirmationDialog(
-            closeQuestion,
-            isPresented: Binding(get: { model.pendingCloseRequest != nil }, set: { if !$0 { model.pendingCloseRequest = nil } }),
-            titleVisibility: .visible, presenting: model.pendingCloseRequest
-        ) { request in
-            Button("End Sessions and Close", role: .destructive) { model.closeTabsConfirmed(request) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("What is running in the terminals stops. Files with unsaved changes stay open.")
-        }
-        .confirmationDialog(
-            pushQuestion,
-            isPresented: Binding(get: { model.pendingFirstPush != nil }, set: { if !$0 { model.pendingFirstPush = nil } }),
-            titleVisibility: .visible, presenting: model.pendingFirstPush
-        ) { push in
-            Button("Push") { model.pushConfirmed(push) }
-            Button("Cancel", role: .cancel) {}
-        } message: { push in
-            Text("The branch does not follow a branch on a remote yet. It is pushed as \(push.remote)/\(push.branch), which it follows from then on.")
-        }
-        .sheet(item: $model.pendingHandoff) { conversation in
-            HandoffSheet(conversation: conversation)
-        }
-        .sheet(item: $model.panelConversation) { conversation in
-            ConversationSheet(conversation: conversation)
-        }
-        .modifier(DeleteConversationQuestions(store: model.historyStore))
-        .alert("AgentTerm", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(model.notice ?? "")
-        }
-        // The new worktree starts from the last commit (#23).
-        .alert("The folder has changes that are not committed", isPresented: Binding(get: { model.worktreeQuestion != nil }, set: { if !$0 { model.worktreeQuestion = nil } })) {
-            Button("Start in a New Worktree") {
-                let question = model.worktreeQuestion
-                model.worktreeQuestion = nil
-                if case .agent(let agent)? = question { model.launchInWorktree(agent, confirmed: true) } else { model.launchInWorktree(nil, confirmed: true) }
+        .modifier(WindowSheets())
+        .modifier(WindowQuestions())
+        .modifier(WindowAlerts())
+    }
+}
+
+// The window's sheets, questions and alerts, each a chain of its own: in
+// one with the toolbar, the compiler of a slower machine (CodeQL's) gave up.
+
+private struct WindowSheets: ViewModifier {
+    @EnvironmentObject private var model: AppModel
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $model.showPairing) {
+                PairingView(port: model.hostPort)
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(
-                "A new worktree starts from the last commit, without them: the agent there will not see them. Nothing git ignores is brought along either, such as .env or node_modules; a setup command for the folder can bring what is needed."
-            )
-        }
-        .alert("Worktree", isPresented: Binding(get: { model.worktreeSaid != nil }, set: { if !$0 { model.worktreeSaid = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(model.worktreeSaid ?? "")
-        }
+            .sheet(isPresented: $model.showPairMac) {
+                PairMacSheet()
+            }
+            .sheet(isPresented: $model.showBrowseFolders) {
+                BrowseFoldersSheet()
+            }
+            .sheet(item: $model.installGuide) { guide in
+                AgentInstallSheet(guide: guide)
+            }
+            .sheet(item: $model.pendingHandoff) { conversation in
+                HandoffSheet(conversation: conversation)
+            }
+            .sheet(item: $model.panelConversation) { conversation in
+                ConversationSheet(conversation: conversation)
+            }
+    }
+}
+
+private struct WindowQuestions: ViewModifier {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var files: FilesModel
+
+    private var closeQuestion: String {
+        guard let request = model.pendingCloseRequest else { return "" }
+        let count = model.sessionsEnded(by: request).count
+        let kept = request.keepSession != nil || request.keepFile != nil || request.keepDiff
+        return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
+    }
+
+    // The questions are worked out here rather than where they are asked:
+    // inside the long chain of the window's sheets and dialogs each of them
+    // is one more thing the compiler has to work out at once, and on a slow
+    // machine it gives up.
+    private var saveQuestion: String {
+        let name = files.pendingClose.map { ($0 as NSString).lastPathComponent } ?? ""
+        return "Save changes to \"\(name)\"?"
+    }
+
+    private var endQuestion: String {
+        let name = model.pendingEnd?.displayName ?? "this session"
+        return "End \(name)?"
+    }
+
+    private var pushQuestion: String {
+        guard let push = model.pendingFirstPush else { return "" }
+        return "Push “\(push.branch)” to \(push.remote)?"
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                saveQuestion,
+                isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
+                titleVisibility: .visible, presenting: files.pendingClose
+            ) { path in
+                Button("Save") { files.saveAndClose(path) }
+                Button("Don't Save", role: .destructive) { files.close(path) }
+                Button("Cancel", role: .cancel) {}
+            }
+            .confirmationDialog(
+                endQuestion,
+                isPresented: Binding(get: { model.pendingEnd != nil }, set: { if !$0 { model.pendingEnd = nil } }),
+                titleVisibility: .visible, presenting: model.pendingEnd
+            ) { session in
+                Button("End Session", role: .destructive) { model.close(session.id) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("The program running in it is stopped.")
+            }
+            .confirmationDialog(
+                closeQuestion,
+                isPresented: Binding(get: { model.pendingCloseRequest != nil }, set: { if !$0 { model.pendingCloseRequest = nil } }),
+                titleVisibility: .visible, presenting: model.pendingCloseRequest
+            ) { request in
+                Button("End Sessions and Close", role: .destructive) { model.closeTabsConfirmed(request) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("What is running in the terminals stops. Files with unsaved changes stay open.")
+            }
+            .confirmationDialog(
+                pushQuestion,
+                isPresented: Binding(get: { model.pendingFirstPush != nil }, set: { if !$0 { model.pendingFirstPush = nil } }),
+                titleVisibility: .visible, presenting: model.pendingFirstPush
+            ) { push in
+                Button("Push") { model.pushConfirmed(push) }
+                Button("Cancel", role: .cancel) {}
+            } message: { push in
+                Text("The branch does not follow a branch on a remote yet. It is pushed as \(push.remote)/\(push.branch), which it follows from then on.")
+            }
+            .modifier(DeleteConversationQuestions(store: model.historyStore))
+    }
+}
+
+private struct WindowAlerts: ViewModifier {
+    @EnvironmentObject private var model: AppModel
+
+    func body(content: Content) -> some View {
+        content
+            .alert("AgentTerm", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.notice ?? "")
+            }
+            // The new worktree starts from the last commit (#23).
+            .alert("The folder has changes that are not committed", isPresented: Binding(get: { model.worktreeQuestion != nil }, set: { if !$0 { model.worktreeQuestion = nil } })) {
+                Button("Start in a New Worktree") {
+                    let question = model.worktreeQuestion
+                    model.worktreeQuestion = nil
+                    if case .agent(let agent)? = question { model.launchInWorktree(agent, confirmed: true) } else { model.launchInWorktree(nil, confirmed: true) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(
+                    "A new worktree starts from the last commit, without them: the agent there will not see them. Nothing git ignores is brought along either, such as .env or node_modules; a setup command for the folder can bring what is needed."
+                )
+            }
+            .alert("Worktree", isPresented: Binding(get: { model.worktreeSaid != nil }, set: { if !$0 { model.worktreeSaid = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.worktreeSaid ?? "")
+            }
     }
 }
 

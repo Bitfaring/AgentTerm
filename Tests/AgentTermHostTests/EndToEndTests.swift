@@ -131,7 +131,11 @@ final class EndToEndTests: XCTestCase {
         client.connection.send(.create(CreateRequest(command: nil, cwd: "/tmp", title: "Install", typed: "echo typed-$((40+2))")))
         waitUntil("attached") { client.attached != nil }
         let id = client.attached!.id
-        waitUntil("typed at its prompt") { client.text(id).contains("echo typed-$((40+2))") }
+        // Said with what the terminal showed: the login shell is the
+        // machine's, bash with its own profile on CI's runners.
+        let deadline = Date().addingTimeInterval(20)
+        while !client.text(id).contains("echo typed-$((40+2))") && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        XCTAssertTrue(client.text(id).contains("echo typed-$((40+2))"), "not typed at its prompt; the terminal showed: \(client.text(id).debugDescription)")
         RunLoop.main.run(until: Date().addingTimeInterval(1))
         XCTAssertFalse(client.text(id).contains("typed-42"), "it ran without Return being pressed")
         client.type("\r", in: id)
