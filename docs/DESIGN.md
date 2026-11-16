@@ -1187,18 +1187,18 @@ it differs from the last. Not taken while the Mac draws it: for a page
 shown as a device whose pixels are not the screen's, Chromium lays the
 page out again for each picture, a clip or a scale given or not, and the
 Mac shows it in between, the page shaking (#100). A page shown as a device
-whose screen is larger than its pane is drawn smaller to fit
-(`Emulation.setDeviceMetricsOverride`'s `scale`, fitted again when the pane
-changes size, on a dark ground), as Chrome's DevTools do: what the Mac
-draws, and so what is streamed, is then all of the device's screen, in its
-shape, and the size sent with it is the page's. The picture Chromium
-streams of a screen drawn smaller is of the whole screen's surface, the
-page small in its top left corner: only that corner is sent
-(`DevToolsSession.corner`), which has as few pixels as the Mac draws, so
-that a page fitted to a small pane is blurred on the device while the Mac
-shows it (#107; before, the Mac drew
-the screen's top only, and the devices drew that part squeezed into the
-screen's shape). Streamed, a picture is as sharp as the Mac draws it; taken,
+whose screen is taller than its pane has the pane's height
+(`Emulation.setDeviceMetricsOverride`'s `height`, set again when the pane
+changes size; `screenWidth` and `screenHeight` stay the device's), on a
+dark ground beside it: it is as wide as the device's screen, never drawn
+smaller, and what is below is reached by scrolling it. What the Mac draws,
+and so what is streamed, is then the page as it is shown, a pixel to its
+point (what Chromium's screencast gives, whatever the Mac's screen has), and the size sent with it is its own; the devices draw a picture
+in the picture's shape (#107, the owner's decision of 2026-11-16. Before,
+the Mac drew the screen's top only, and the devices drew that part
+squeezed into the screen's shape; then the screen was drawn smaller to
+fit, `scale`, which Chromium streams as the whole surface with the page
+small in a corner, and too few pixels for a device). Streamed, a picture is as sharp as the Mac draws it; taken,
 as sharp as the device asks for. A touch is placed in CSS
 pixels by that size and clicked with `Input.dispatchMouseEvent`; text is
 `Input.insertText`. Acting on an agent's tab from a device makes it the

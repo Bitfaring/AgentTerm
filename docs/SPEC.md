@@ -405,9 +405,11 @@ user sees.
   hints and touch; the page is then as wide and as tall as the device's
   screen, and beside an agent its part gets just that width, though
   never less than its bar needs for its buttons (460 points), and the
-  agent the rest; a screen larger than its room is drawn smaller to fit,
-  all of it in sight, on a dark ground, as Chrome's DevTools do, and the
-  devices watching it are sent all of it), opens Chromium's own Developer Tools
+  agent the rest; a screen taller than its room has the room's height, never
+  drawn smaller: the page is as wide as the device's screen, the rest of
+  it is reached by scrolling, and the page is still told the device's
+  whole screen. The devices watching it are sent what the Mac shows, as
+  sharp, and show it in its own shape, never squeezed into another), opens Chromium's own Developer Tools
   (⌥⌘I) with the console, sends an element to an agent, and closes it. Text is selected, copied
   and pasted as anywhere. A page that opens a window opens a tab instead,
   in the same project and for the same agent. A download goes to the

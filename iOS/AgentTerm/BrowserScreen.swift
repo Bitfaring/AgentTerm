@@ -330,9 +330,13 @@ struct LivePageView: View {
         GeometryReader { room in
             if let frame = model.browserFrames[tabID], frame.width > 0, frame.height > 0 {
                 // The page fitted to the room, top first: its CSS pixels to
-                // this screen's points.
-                let fit = min(room.size.width / frame.width, room.size.height / frame.height)
-                let shown = CGSize(width: frame.width * fit, height: frame.height * fit)
+                // this screen's points. In the picture's own shape, never
+                // squeezed into another: what the Mac shows of the page is
+                // what is here, and the rest is reached by scrolling it.
+                let picture = frame.image.size
+                let high = picture.width > 0 && picture.height > 0 ? frame.width * picture.height / picture.width : frame.height
+                let fit = min(room.size.width / frame.width, room.size.height / high)
+                let shown = CGSize(width: frame.width * fit, height: high * fit)
                 Image(uiImage: frame.image)
                     .resizable()
                     .frame(width: shown.width, height: shown.height)

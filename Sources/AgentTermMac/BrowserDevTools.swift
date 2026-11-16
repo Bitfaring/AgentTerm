@@ -556,29 +556,6 @@ final class DevToolsSession {
         }
     }
 
-    /// How much smaller a device's screen is drawn to fit a pane: 1 when
-    /// it fits as it is.
-    static func fitScale(of device: BrowserDevice, in room: CGSize?) -> CGFloat {
-        guard let room, room.width > 0, room.height > 0, device.width > 0, device.height > 0 else { return 1 }
-        return min(1, room.width / CGFloat(device.width), room.height / CGFloat(device.height))
-    }
-
-    /// The top left part of a streamed picture, `share` of its width and
-    /// of its height: where a screen drawn smaller to fit its pane is. The
-    /// picture Chromium streams is of the whole screen's surface, the page
-    /// small in that corner and its ground over the rest (#107).
-    static func corner(of jpeg: Data, share: CGFloat) -> Data? {
-        guard share > 0, share < 1, let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
-            let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-        else { return nil }
-        let part = CGRect(x: 0, y: 0, width: (CGFloat(image.width) * share).rounded(), height: (CGFloat(image.height) * share).rounded())
-        guard part.width >= 1, part.height >= 1, let cut = image.cropping(to: part) else { return nil }
-        let out = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, cut, [kCGImageDestinationLossyCompressionQuality: 0.7] as CFDictionary)
-        return CGImageDestinationFinalize(destination) ? out as Data : nil
-    }
-
     /// A JPEG made no wider than `width` pixels.
     static func shrunk(_ jpeg: Data, width: Int) -> Data? {
         guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
@@ -651,10 +628,10 @@ final class DevToolsSession {
     }
 
     /// Shows the page as `device` does, or as itself. `room`: the size in
-    /// points of the pane it is shown in. A device whose screen is larger is
-    /// drawn smaller, to fit, as Chrome's DevTools do: all of its screen is
-    /// in sight, on the Mac and in the pictures the devices watching it are
-    /// sent, which are what the Mac draws (#107).
+    /// points of the pane it is shown in. A device whose screen is taller
+    /// has the pane's height, the rest of the page reached by scrolling:
+    /// what the Mac draws is whole and sharp, and so are the pictures the
+    /// devices watching it are sent, which are what the Mac draws (#107).
     func emulate(_ device: BrowserDevice?, room: CGSize?) async throws {
         guard let device else {
             _ = try? await call("Emulation.clearDeviceMetricsOverride")
@@ -686,20 +663,25 @@ final class DevToolsSession {
         }
     }
 
-    /// The pane changed size: the device's screen fitted to it again.
+    /// The pane changed size: the device's screen as tall as it again.
     func fit(_ device: BrowserDevice, in room: CGSize) async {
         guard device.width > 0, device.height > 0 else { return }
         _ = try? await call("Emulation.setDeviceMetricsOverride", Self.metrics(of: device, in: room))
     }
 
-    /// A device's screen as the page is shown in a pane of `room`: its own
-    /// size, made smaller to fit, never larger.
+    /// A device's screen as the page is shown in a pane of `room`: as wide
+    /// as the device's, and as tall as it or as the pane, whichever is
+    /// less, never drawn smaller (the owner's decision, 2026-11-16): what
+    /// is below is reached by scrolling the page, what is drawn has all its
+    /// pixels, and so has what is streamed of it. The page is still told
+    /// the device's whole screen (`screen.width`, `screen.height`).
     static func metrics(of device: BrowserDevice, in room: CGSize?) -> [String: Any] {
-        var metrics: [String: Any] = ["width": device.width, "height": device.height, "deviceScaleFactor": device.scale, "mobile": device.mobile]
-        if let room, room.width > 0, room.height > 0 {
-            metrics["scale"] = Double(fitScale(of: device, in: room))
-        }
-        return metrics
+        var high = device.height
+        if let room, room.height >= 1 { high = min(device.height, Int(room.height.rounded(.down))) }
+        return [
+            "width": device.width, "height": max(high, 1), "deviceScaleFactor": device.scale, "mobile": device.mobile,
+            "screenWidth": device.width, "screenHeight": device.height,
+        ]
     }
 
     // MARK: Picking an element for an agent

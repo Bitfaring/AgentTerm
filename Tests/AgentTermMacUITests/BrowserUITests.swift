@@ -757,22 +757,29 @@ final class BrowserUITests: MacUITestCase {
             let image = try XCTUnwrap(NSBitmapImageRep(data: last.jpeg), "not a picture")
             return (CGSize(width: image.pixelsWide, height: image.pixelsHigh), last.width, last.height, red(image))
         }
-        // (A page that says nothing of its viewport is laid out 980 wide on
-        // a phone, as Safari does: the size sent is that, in the phone's shape.)
-        let screen = Double(phone.width) / Double(phone.height)
+        // As wide as the phone's screen and as tall as the pane, never drawn
+        // smaller: the size sent is that, the picture is in its shape, with
+        // the pixels the Mac draws, and the page fills it to its corner.
         let drawn = try watched(2101)
-        XCTAssertEqual(drawn.width / drawn.height, screen, accuracy: screen * 0.02, "the size sent is not of the phone's screen: \(drawn.width) × \(drawn.height)")
+        XCTAssertEqual(drawn.width, Double(phone.width), accuracy: 1, "the page is not as wide as the phone's screen")
+        XCTAssertLessThanOrEqual(drawn.height, Double(pane.height) + 2, "the page is taller than its pane, \(pane.height)")
+        XCTAssertGreaterThan(drawn.height, Double(pane.height) * 0.8, "the page does not use its pane's height, \(pane.height)")
+        let shape = drawn.width / drawn.height
         XCTAssertEqual(
-            Double(drawn.pixels.width / drawn.pixels.height), screen, accuracy: screen * 0.03,
-            "a picture of \(Int(drawn.pixels.width)) × \(Int(drawn.pixels.height)) pixels for a screen of \(phone.width) × \(phone.height)")
-        // The page fills the picture, to each corner: not drawn small in
-        // one of them, the rest empty (#107, as first fixed).
+            Double(drawn.pixels.width / drawn.pixels.height), shape, accuracy: shape * 0.03,
+            "a picture of \(Int(drawn.pixels.width)) × \(Int(drawn.pixels.height)) pixels for a page of \(drawn.width) × \(drawn.height)")
+        // Chromium streams a pixel to the page's point, whatever the Mac's
+        // screen has (found by trying, CEF 156): no fewer, as when the page
+        // was drawn smaller.
+        XCTAssertGreaterThanOrEqual(Double(drawn.pixels.width), Double(phone.width) * 0.98, "a picture \(Int(drawn.pixels.width)) pixels wide of a page \(phone.width) points wide: drawn smaller")
         XCTAssertEqual(drawn.red, [true, false], "the page does not fill the picture sent while the Mac draws it")
+        // The page is still told the phone's whole screen.
+        XCTAssertEqual(server.text("browser_evaluate", ["tab": tab, "script": "screen.width + 'x' + screen.height"]).text, "\"\(phone.width)x\(phone.height)\"")
 
         app.minimize(true)
         defer { app.minimize(false) }
         let hidden = try watched(2103)
-        XCTAssertEqual(Double(hidden.pixels.width / hidden.pixels.height), screen, accuracy: screen * 0.03, "a picture of \(Int(hidden.pixels.width)) × \(Int(hidden.pixels.height)) pixels")
+        XCTAssertEqual(Double(hidden.pixels.width / hidden.pixels.height), shape, accuracy: shape * 0.03, "a picture of \(Int(hidden.pixels.width)) × \(Int(hidden.pixels.height)) pixels")
         XCTAssertEqual(hidden.red, [true, false], "the page does not fill the picture taken while the Mac does not draw it")
         let wanted = min(Double(asked), Double(phone.width) * phone.scale)
         XCTAssertGreaterThanOrEqual(Double(hidden.pixels.width), wanted * 0.9, "a picture \(Int(hidden.pixels.width)) pixels wide, where \(Int(wanted)) were asked for")

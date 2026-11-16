@@ -166,18 +166,17 @@ final class BrowserTab: ObservableObject, Identifiable {
         container.tab = self
     }
 
-    /// Shows its page as a device, fitted to the pane it is in, or as itself.
+    /// Shows its page as a device, as tall as the pane it is in at most, or as itself.
     func emulate(_ device: BrowserDevice?) async throws {
         try await devtools.emulate(device, room: container.bounds.size)
-        fitted = device.map { DevToolsSession.fitScale(of: $0, in: container.bounds.size) } ?? 1
         emulating = device
         // Around a device's screen, the pane dark, as DevTools have it: on
         // white, where the screen ends would not be seen.
         container.layer?.backgroundColor = (device == nil ? NSColor.white : NSColor(white: 0.16, alpha: 1)).cgColor
     }
 
-    /// The pane it is in changed size: a page shown as a device is fitted
-    /// to it again, once the size has settled (#107).
+    /// The pane it is in changed size: a page shown as a device is as tall
+    /// as it again, once the size has settled (#107).
     func roomChanged() {
         guard let device = emulating else { return }
         refit?.cancel()
@@ -185,11 +184,8 @@ final class BrowserTab: ObservableObject, Identifiable {
             try? await Task.sleep(for: .milliseconds(100))
             guard let self, !Task.isCancelled, self.emulating == device else { return }
             await self.devtools.fit(device, in: self.container.bounds.size)
-            self.fitted = DevToolsSession.fitScale(of: device, in: self.container.bounds.size)
         }
     }
-    /// How much smaller its device's screen is drawn to fit its pane.
-    private(set) var fitted: CGFloat = 1
     private var refit: Task<Void, Never>?
 
     /// Its name in a `TabLayout`.
