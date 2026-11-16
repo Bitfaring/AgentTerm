@@ -462,12 +462,16 @@ user sees.
   agent uses it and what it did last. The user takes it over with Take
   Over, or by clicking in the page; the agent is then refused, told why,
   until the user gives it back ("Let … Go On"). It may still read the page.
-- **Sending part of a page to an agent.** Send to Agent picks an element
-  of the page: its picture, the address, a selector, its HTML and its
+- **Sending part of a page to an agent.** A page has two modes, switched
+  by the Pick button on its bar, in sight beside reload, or Browser > Pick
+  an Element for an Agent: browsing it, and picking its elements. While
+  picking, the button says so ("Picking"), and an element clicked is not
+  clicked but sent: its picture, the address, a selector, its HTML and its
   main styles are shown with a note to write and the agent to send it to,
-  one of the project's. Sent, the picture is saved in the project's
-  `.agentterm/shots/` and the rest is typed into the agent's session, with
-  the picture's path, and submitted.
+  one of the project's, the first picked already. Sent, the picture is
+  saved in the project's `.agentterm/shots/` and the rest is typed into the
+  agent's session, with the picture's path, and submitted. Picking stays
+  on, sent or not, for the next element, until the button turns it off.
 - **What fails is said.** With the app closed, or showing another Mac, an
   agent is told at once that the browser is in the app on that Mac and it
   is not open there. "Agents can use the browser" in Settings > Browser,
@@ -494,8 +498,8 @@ user sees.
   folder can start, opens a page of the user's in it, on the Mac but not
   in front there: with several profiles, in the one picked from its menu,
   or private; with one, in it, and a private one from its own menu. The
-  user's pages open in a sheet. Send to Agent, which
-  picks one element of a page, is the Mac's only (principle 1).
+  user's pages open in a sheet. Picking an element to send to an agent
+  is the Mac's only (principle 1).
 
 ### Usage
 

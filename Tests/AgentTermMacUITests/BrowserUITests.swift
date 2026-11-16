@@ -753,6 +753,50 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertLessThanOrEqual(Set(renderers().keys).intersection(pages.keys).count, 1, "processes of closed pages still running: \(renderers().filter { pages.keys.contains($0.key) })")
     }
 
+    /// BROWSER-29: a page's two modes, in sight on its bar. Picking on, an
+    /// element clicked opens the sheet that sends it to an agent, the
+    /// project's agent picked already; sent, the agent is told what to do
+    /// with it; picking stays on, and the next click opens the sheet again,
+    /// until it is turned off and the page is browsed again.
+    func testPickingSendsElementsToAnAgentUntilTurnedOff() throws {
+        let page = try makeSite()
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
+        // Where the button is, in the page's CSS pixels.
+        let middle = "(() => { const r = document.getElementById('greet').getBoundingClientRect(); return (r.x + r.width / 2) + ',' + (r.y + r.height / 2); })()"
+        let place = server.text("browser_evaluate", ["tab": tab, "script": middle])
+        let point = place.text.split(whereSeparator: { !"0123456789.,".contains($0) }).joined().split(separator: ",").compactMap { Double($0) }
+        XCTAssertEqual(point.count, 2, place.text)
+        let device = try self.device()
+        func click() { device.send(.browserAsk(id: Int.random(in: 3000..<9000), request: .tap(tab: tab, x: point[0], y: point[1]))) }
+
+        XCTAssertTrue(app.exists(.button("Pick an Element for an Agent")), "the mode's button is not on the bar")
+        app.press(.id("browser-pick"))
+        app.wait(for: .button("Stop Picking"))
+        click()
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        XCTAssertTrue(app.exists(.containing("#greet")), "the element sent is not the button")
+        // What the agent's session is typed, a stand-in that echoes it,
+        // read as a device reads it.
+        device.send(.attach(session: agent.id, size: .default))
+        app.write("Make this button blue", into: .id("pick-note"))
+        app.press(.button("Send"))
+        wait("the note typed into the agent's session", timeout: 15) { device.text(agent.id).contains("Make this button blue") }
+        XCTAssertTrue(device.text(agent.id).contains("button#greet"), "the element is not told: \(device.text(agent.id).suffix(400))")
+
+        // Still picking: the next click opens it again.
+        app.wait(for: .button("Stop Picking"))
+        click()
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        app.press(.button("Cancel"))
+        app.press(.id("browser-pick"))
+        app.wait(for: .button("Pick an Element for an Agent"))
+    }
+
     /// BROWSER-20: a device watches and uses an agent's page while the Mac's
     /// window is minimized, as when the user is away from it: pictures come,
     /// and a touch on a field, text typed and a touch on a button reach the

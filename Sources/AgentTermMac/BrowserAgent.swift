@@ -204,6 +204,20 @@ extension AppModel {
 
     // MARK: Sending a part of a page to an agent
 
+    /// Turns a page's picking on, where each element clicked is sent to an
+    /// agent, or off, back to browsing it.
+    func setPicking(_ tab: BrowserTab, _ on: Bool) {
+        tab.picking = on
+        if on { pickForAgent(tab) } else { tab.devtools.stopPicking() }
+    }
+
+    /// The sheet of an element picked was closed, sent or not: the next
+    /// element is picked while picking is still on.
+    func pickDismissed() {
+        guard let tab = lastPicked, tab.picking, tab.browserID != 0 else { return }
+        pickForAgent(tab)
+    }
+
     /// Lets the user point at an element of the page, then asks what to
     /// send and to whom.
     func pickForAgent(_ tab: BrowserTab) {
@@ -214,6 +228,7 @@ extension AppModel {
                 let box = try? await tab.devtools.box(of: node)
                 let png = (try? await tab.devtools.screenshot(clip: box, fullPage: false)) ?? Data()
                 let details = await tab.devtools.describe(node)
+                self.lastPicked = tab
                 self.pendingPick = BrowserPick(tab: tab, png: png, url: tab.url, details: details)
             }
         }

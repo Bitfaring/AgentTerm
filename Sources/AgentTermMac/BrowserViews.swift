@@ -73,6 +73,26 @@ struct BrowserPaneView: View {
             }
             .help(tab.loading ? "Stop" : "Reload (⌘R)")
             .accessibilityLabel(tab.loading ? "Stop" : "Reload")
+            // The page's two modes, in sight: browsing, or picking its
+            // elements to send to an agent with a note.
+            Button {
+                model.setPicking(tab, !tab.picking)
+            } label: {
+                Label(tab.picking ? "Picking" : "Pick", systemImage: "cursorarrow.rays")
+                    .labelStyle(.titleAndIcon)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(tab.picking ? Color.white : Color.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(tab.picking ? Color.accentColor : Color.white.opacity(0.08)))
+            }
+            .help(
+                tab.picking
+                    ? "Picking: click an element of the page to send it to an agent with a note. Press to browse again."
+                    : "Pick an element of the page, a button or a view, to send to an agent with what to do with it"
+            )
+            .accessibilityLabel(tab.picking ? "Stop Picking" : "Pick an Element for an Agent")
+            .accessibilityIdentifier("browser-pick")
             TextField("Address or search", text: $address, onEditingChanged: { editing = $0 })
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12))
@@ -130,8 +150,6 @@ struct BrowserPaneView: View {
                 Button("Actual Size") { tab.setZoom(0) }
                 Divider()
                 Button("Developer Tools") { tab.showDevTools() }
-                Button("Send to Agent…") { model.pickForAgent(tab) }
-                    .disabled(model.agentsInProject(of: tab).isEmpty)
                 Divider()
                 Button("Close Tab") { model.closeBrowserTab(tab) }
             } label: {
@@ -410,6 +428,7 @@ struct SendToAgentSheet: View {
             TextField("What should the agent do with it?", text: $note, axis: .vertical)
                 .lineLimit(2...5)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("pick-note")
             Picker("Agent", selection: $agent) {
                 ForEach(model.agentsInProject(of: pick.tab)) { session in
                     Text(session.displayName).tag(Optional(session.id))

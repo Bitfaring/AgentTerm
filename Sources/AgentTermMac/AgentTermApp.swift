@@ -830,8 +830,8 @@ private struct BrowserCommands: View {
         Button("Developer Tools") { tab?.showDevTools() }
             .keyboardShortcut("i", modifiers: [.command, .option])
             .disabled(tab == nil)
-        Button("Send to Agent…") { if let tab { model.pickForAgent(tab) } }
-            .disabled(tab.map { model.agentsInProject(of: $0).isEmpty } ?? true)
+        Button(tab?.picking == true ? "Stop Picking" : "Pick an Element for an Agent") { if let tab { model.setPicking(tab, !tab.picking) } }
+            .disabled(tab == nil)
     }
 }
 

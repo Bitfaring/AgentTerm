@@ -241,6 +241,8 @@ final class AppModel: ObservableObject {
     @Published var browserFindRequest = 0
     /// What the user picked in a page to send an agent, while its sheet is open.
     @Published var pendingPick: BrowserPick?
+    /// The tab the element sent last was picked in.
+    weak var lastPicked: BrowserTab?
     /// What each agent is told (Settings > Agents): the user's words by
     /// agent, and the default each is told without them, as the host says.
     @Published private(set) var agentPromptsCustom: [String: String] = [:]

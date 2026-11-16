@@ -109,7 +109,7 @@ private struct WindowSheets: ViewModifier {
             .sheet(item: $model.panelConversation) { conversation in
                 ConversationSheet(conversation: conversation)
             }
-            .sheet(item: $model.pendingPick) { pick in
+            .sheet(item: $model.pendingPick, onDismiss: { model.pickDismissed() }) { pick in
                 SendToAgentSheet(pick: pick)
             }
     }
