@@ -1191,7 +1191,12 @@ whose screen is larger than its pane is drawn smaller to fit
 (`Emulation.setDeviceMetricsOverride`'s `scale`, fitted again when the pane
 changes size, on a dark ground), as Chrome's DevTools do: what the Mac
 draws, and so what is streamed, is then all of the device's screen, in its
-shape, and the size sent with it is the page's (#107; before, the Mac drew
+shape, and the size sent with it is the page's. The picture Chromium
+streams of a screen drawn smaller is of the whole screen's surface, the
+page small in its top left corner: only that corner is sent
+(`DevToolsSession.corner`), which has as few pixels as the Mac draws, so
+that a page fitted to a small pane is blurred on the device while the Mac
+shows it (#107; before, the Mac drew
 the screen's top only, and the devices drew that part squeezed into the
 screen's shape). Streamed, a picture is as sharp as the Mac draws it; taken,
 as sharp as the device asks for. A touch is placed in CSS

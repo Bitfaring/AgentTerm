@@ -556,6 +556,29 @@ final class DevToolsSession {
         }
     }
 
+    /// How much smaller a device's screen is drawn to fit a pane: 1 when
+    /// it fits as it is.
+    static func fitScale(of device: BrowserDevice, in room: CGSize?) -> CGFloat {
+        guard let room, room.width > 0, room.height > 0, device.width > 0, device.height > 0 else { return 1 }
+        return min(1, room.width / CGFloat(device.width), room.height / CGFloat(device.height))
+    }
+
+    /// The top left part of a streamed picture, `share` of its width and
+    /// of its height: where a screen drawn smaller to fit its pane is. The
+    /// picture Chromium streams is of the whole screen's surface, the page
+    /// small in that corner and its ground over the rest (#107).
+    static func corner(of jpeg: Data, share: CGFloat) -> Data? {
+        guard share > 0, share < 1, let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
+            let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
+        let part = CGRect(x: 0, y: 0, width: (CGFloat(image.width) * share).rounded(), height: (CGFloat(image.height) * share).rounded())
+        guard part.width >= 1, part.height >= 1, let cut = image.cropping(to: part) else { return nil }
+        let out = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, cut, [kCGImageDestinationLossyCompressionQuality: 0.7] as CFDictionary)
+        return CGImageDestinationFinalize(destination) ? out as Data : nil
+    }
+
     /// A JPEG made no wider than `width` pixels.
     static func shrunk(_ jpeg: Data, width: Int) -> Data? {
         guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
@@ -674,7 +697,7 @@ final class DevToolsSession {
     static func metrics(of device: BrowserDevice, in room: CGSize?) -> [String: Any] {
         var metrics: [String: Any] = ["width": device.width, "height": device.height, "deviceScaleFactor": device.scale, "mobile": device.mobile]
         if let room, room.width > 0, room.height > 0 {
-            metrics["scale"] = Double(min(1, room.width / CGFloat(device.width), room.height / CGFloat(device.height)))
+            metrics["scale"] = Double(fitScale(of: device, in: room))
         }
         return metrics
     }

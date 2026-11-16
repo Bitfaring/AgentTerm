@@ -720,16 +720,30 @@ final class BrowserUITests: MacUITestCase {
         let phone = try XCTUnwrap(BrowserDevice.presets.filter { $0.kind == .phone && $0.scale == 3 }.max { $0.height < $1.height })
         let pane = try XCTUnwrap(app.frame(of: .id("browser-page")))
         XCTAssertGreaterThan(Double(phone.height), pane.height, "the pane is as tall as \(phone.name)")
+        // A page that says its viewport, as a site made for phones does,
+        // with a blue mark in the bottom right corner of what it shows: where
+        // the mark is in a picture says how much of the picture the page fills.
+        let mark =
+            "const m = document.createElement('meta'); m.name = 'viewport'; m.content = 'width=device-width, initial-scale=1'; document.head.appendChild(m); const d = document.createElement('div'); d.style.cssText = 'position:fixed;right:0;bottom:0;width:30vw;height:15vh;background:rgb(20,40,220)'; document.body.appendChild(d); 1"
+        XCTAssertFalse(server.text("browser_evaluate", ["tab": tab, "script": mark]).failed)
         let emulated = server.text("browser_emulate", ["tab": tab, "device": phone.name])
         XCTAssertFalse(emulated.failed, emulated.text)
         RunLoop.current.run(until: Date().addingTimeInterval(2))
         let device = try self.device()
         let asked = 1290
+        /// Whether the page's mark is in a picture's bottom right corner,
+        /// and not at its middle, where it is when the page is drawn small.
+        func red(_ image: NSBitmapImageRep) -> [Bool] {
+            [(0.93, 0.96), (0.5, 0.5)].map { x, y in
+                guard let color = image.colorAt(x: Int(Double(image.pixelsWide) * x), y: Int(Double(image.pixelsHigh) * y))?.usingColorSpace(.sRGB) else { return false }
+                return color.blueComponent > 0.6 && color.redComponent < 0.35 && color.greenComponent < 0.4
+            }
+        }
         func frames() -> [(jpeg: Data, width: Double, height: Double)] {
             device.messages.compactMap { if case .browserFrame(tab, let jpeg, let width, let height) = $0 { return (jpeg, width, height) } else { return nil } }
         }
         /// The last picture of a while of watching, and its size in pixels.
-        func watched(_ id: Int) throws -> (pixels: CGSize, width: Double, height: Double) {
+        func watched(_ id: Int) throws -> (pixels: CGSize, width: Double, height: Double, red: [Bool]) {
             let before = frames().count
             device.send(.browserAsk(id: id, request: .watch(tab: tab, on: true, width: asked)))
             // A page that stays as it is is streamed when it is drawn, and seldom after.
@@ -741,7 +755,7 @@ final class BrowserUITests: MacUITestCase {
                 try? last.jpeg.write(to: URL(fileURLWithPath: folder).appendingPathComponent("BROWSER-27-frame-\(id).jpg"))
             }
             let image = try XCTUnwrap(NSBitmapImageRep(data: last.jpeg), "not a picture")
-            return (CGSize(width: image.pixelsWide, height: image.pixelsHigh), last.width, last.height)
+            return (CGSize(width: image.pixelsWide, height: image.pixelsHigh), last.width, last.height, red(image))
         }
         // (A page that says nothing of its viewport is laid out 980 wide on
         // a phone, as Safari does: the size sent is that, in the phone's shape.)
@@ -751,11 +765,15 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertEqual(
             Double(drawn.pixels.width / drawn.pixels.height), screen, accuracy: screen * 0.03,
             "a picture of \(Int(drawn.pixels.width)) × \(Int(drawn.pixels.height)) pixels for a screen of \(phone.width) × \(phone.height)")
+        // The page fills the picture, to each corner: not drawn small in
+        // one of them, the rest empty (#107, as first fixed).
+        XCTAssertEqual(drawn.red, [true, false], "the page does not fill the picture sent while the Mac draws it")
 
         app.minimize(true)
         defer { app.minimize(false) }
         let hidden = try watched(2103)
         XCTAssertEqual(Double(hidden.pixels.width / hidden.pixels.height), screen, accuracy: screen * 0.03, "a picture of \(Int(hidden.pixels.width)) × \(Int(hidden.pixels.height)) pixels")
+        XCTAssertEqual(hidden.red, [true, false], "the page does not fill the picture taken while the Mac does not draw it")
         let wanted = min(Double(asked), Double(phone.width) * phone.scale)
         XCTAssertGreaterThanOrEqual(Double(hidden.pixels.width), wanted * 0.9, "a picture \(Int(hidden.pixels.width)) pixels wide, where \(Int(wanted)) were asked for")
     }

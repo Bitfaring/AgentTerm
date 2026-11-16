@@ -150,8 +150,13 @@ extension AppModel {
                     // The size of what is shown, by which a touch is placed.
                     let size = try? await tab.devtools.viewport()
                     if tab.isDrawn, let size {
-                        tab.devtools.screencast(width: width) { [weak self, weak tab] jpeg in
+                        // Drawn smaller to fit its pane, the screen is the
+                        // top left of the picture: that part is sent, and
+                        // more pixels are asked for, to have as many of it.
+                        let share = tab.fitted
+                        tab.devtools.screencast(width: share < 1 ? Int((CGFloat(width) / share).rounded()) : width) { [weak self, weak tab] jpeg in
                             guard let self, let tab else { return }
+                            let jpeg = tab.fitted < 1 ? DevToolsSession.corner(of: jpeg, share: tab.fitted) ?? jpeg : jpeg
                             self.connection?.send(.browserFrame(tab: tab.id, jpeg: jpeg, width: size.width, height: size.height))
                         }
                     } else {
