@@ -233,7 +233,7 @@ private struct AgentBar: View {
                 Image(systemName: tab.userHasIt ? "hand.raised.fill" : "sparkles")
                     .foregroundStyle(tab.userHasIt ? Color.orange : Color.accentColor)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(tab.userHasIt ? BrowserWords.userHas(agents) : BrowserWords.agentDrives(agents))
+                    Text(tab.userHasIt ? BrowserWords.userHas : BrowserWords.agentDrives(agents))
                         .font(.system(size: 12, weight: .medium))
                     if let action = tab.agentAction, !tab.userHasIt {
                         Text(action).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)

@@ -153,7 +153,7 @@ struct LivePageView: View {
         VStack(spacing: 0) {
             if let tab, let agent = tab.openedBy.flatMap({ id in model.sessions.first { $0.id == id } }) {
                 HStack {
-                    Text(tab.userHasIt ? BrowserWords.userHas(agent.displayName) : BrowserWords.agentDrives(agent.displayName))
+                    Text(tab.userHasIt ? BrowserWords.userHas : BrowserWords.agentDrives(agent.displayName))
                         .font(.footnote)
                         .lineLimit(2)
                     Spacer()

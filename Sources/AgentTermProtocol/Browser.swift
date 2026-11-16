@@ -485,8 +485,9 @@ public enum BrowserWords {
 
     /// The bar over an agent's tab while it may drive it.
     public static func agentDrives(_ agent: String) -> String { "\(agent) is using this tab" }
-    /// The bar while the user has it.
-    public static func userHas(_ agent: String) -> String { "You have this tab: \(agent) waits until you give it back" }
+    /// The bar while the user has it: the same whichever agent's it is,
+    /// rather than a session's name, which may be long (asked by the owner).
+    public static let userHas = "You have this tab: AgentTerm waits until you give it back"
     public static func giveBack(_ agent: String) -> String { "Let \(agent) Go On" }
     public static let takeOver = "Take Over"
     /// Why a page did not load, for a server of the project that is not running.
