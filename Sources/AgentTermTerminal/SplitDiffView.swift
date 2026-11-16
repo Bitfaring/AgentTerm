@@ -133,7 +133,11 @@ struct SplitDiffTexts: @unchecked Sendable {
     static func metrics(_ fontSize: CGFloat) -> (advance: CGFloat, lineHeight: CGFloat) {
         let font = font(fontSize)
         let advance = ("M" as NSString).size(withAttributes: [.font: font]).width
+        #if os(macOS)
         return (advance, NSLayoutManager().defaultLineHeight(for: font))
+        #else
+        return (advance, font.lineHeight)
+        #endif
     }
 }
 
@@ -216,11 +220,20 @@ private final class SplitDiffSide {
         layout.addTextContainer(container)
     }
 
-    /// Shows a text made off the main thread: the storage it is in takes
-    /// the place of the one shown, which leaves only its layout to be done.
+    /// Shows a text made off the main thread. On the Mac the storage it is
+    /// in takes the place of the one shown, which leaves only its layout to
+    /// be done on the main thread.
     func show(_ text: NSTextStorage) {
+        #if os(macOS)
         layout.replaceTextStorage(text)
         storage = text
+        #else
+        // A UITextView keeps the storage it was made with, whatever its
+        // layout is moved to: a touch then looked for the new text's lines in
+        // the old, empty storage, and the app crashed. The text is put in
+        // that storage.
+        storage.setAttributedString(text)
+        #endif
     }
 }
 
