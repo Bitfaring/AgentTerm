@@ -163,6 +163,28 @@ final class BrowserTab: ObservableObject, Identifiable {
         container.tab = self
     }
 
+    /// Shows its page as a device, fitted to the pane it is in, or as itself.
+    func emulate(_ device: BrowserDevice?) async throws {
+        try await devtools.emulate(device, room: container.bounds.size)
+        emulating = device
+        // Around a device's screen, the pane dark, as DevTools have it: on
+        // white, where the screen ends would not be seen.
+        container.layer?.backgroundColor = (device == nil ? NSColor.white : NSColor(white: 0.16, alpha: 1)).cgColor
+    }
+
+    /// The pane it is in changed size: a page shown as a device is fitted
+    /// to it again, once the size has settled (#107).
+    func roomChanged() {
+        guard let device = emulating else { return }
+        refit?.cancel()
+        refit = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard let self, !Task.isCancelled, self.emulating == device else { return }
+            await self.devtools.fit(device, in: self.container.bounds.size)
+        }
+    }
+    private var refit: Task<Void, Never>?
+
     /// Its name in a `TabLayout`.
     var tabID: String { "b:" + id }
 
@@ -407,6 +429,7 @@ final class BrowserContainerView: NSView {
     override func resizeSubviews(withOldSize oldSize: NSSize) {
         super.resizeSubviews(withOldSize: oldSize)
         for view in subviews { view.frame = bounds }
+        if bounds.size != oldSize { tab?.roomChanged() }
     }
 }
 

@@ -635,6 +635,64 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertTrue(during.allSatisfy { $0 < 0.002 }, "the page shown as \(phone.name) changed while watched: \(during.map { String(format: "%.3f", $0) })")
     }
 
+    /// BROWSER-27 (#107): a page shown as a device whose screen is larger
+    /// than its pane, watched by a device. While the Mac draws it, it is
+    /// drawn smaller to fit, all of it in sight, and each picture a device
+    /// is sent, what the Mac draws, is all of its screen in its shape, not a
+    /// part squeezed into it. While the Mac does not draw it, the pictures
+    /// are as sharp as the device asked for, the page drawn as the device.
+    func testAPageShownAsADeviceIsSentWholeInItsShape() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
+        // A phone taller than the pane, of three pixels to the point.
+        let phone = try XCTUnwrap(BrowserDevice.presets.filter { $0.kind == .phone && $0.scale == 3 }.max { $0.height < $1.height })
+        let pane = try XCTUnwrap(app.frame(of: .id("browser-page")))
+        XCTAssertGreaterThan(Double(phone.height), pane.height, "the pane is as tall as \(phone.name)")
+        let emulated = server.text("browser_emulate", ["tab": tab, "device": phone.name])
+        XCTAssertFalse(emulated.failed, emulated.text)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        let device = try self.device()
+        let asked = 1290
+        func frames() -> [(jpeg: Data, width: Double, height: Double)] {
+            device.messages.compactMap { if case .browserFrame(tab, let jpeg, let width, let height) = $0 { return (jpeg, width, height) } else { return nil } }
+        }
+        /// The last picture of a while of watching, and its size in pixels.
+        func watched(_ id: Int) throws -> (pixels: CGSize, width: Double, height: Double) {
+            let before = frames().count
+            device.send(.browserAsk(id: id, request: .watch(tab: tab, on: true, width: asked)))
+            // A page that stays as it is is streamed when it is drawn, and seldom after.
+            wait("a picture of the page", timeout: 15) { frames().count > before }
+            RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+            device.send(.browserAsk(id: id + 1, request: .watch(tab: tab, on: false, width: 0)))
+            let last = try XCTUnwrap(frames().last)
+            if let folder = ProcessInfo.processInfo.environment["AGENTTERM_SHOT_DIR"] {
+                try? last.jpeg.write(to: URL(fileURLWithPath: folder).appendingPathComponent("BROWSER-27-frame-\(id).jpg"))
+            }
+            let image = try XCTUnwrap(NSBitmapImageRep(data: last.jpeg), "not a picture")
+            return (CGSize(width: image.pixelsWide, height: image.pixelsHigh), last.width, last.height)
+        }
+        // (A page that says nothing of its viewport is laid out 980 wide on
+        // a phone, as Safari does: the size sent is that, in the phone's shape.)
+        let screen = Double(phone.width) / Double(phone.height)
+        let drawn = try watched(2101)
+        XCTAssertEqual(drawn.width / drawn.height, screen, accuracy: screen * 0.02, "the size sent is not of the phone's screen: \(drawn.width) × \(drawn.height)")
+        XCTAssertEqual(
+            Double(drawn.pixels.width / drawn.pixels.height), screen, accuracy: screen * 0.03,
+            "a picture of \(Int(drawn.pixels.width)) × \(Int(drawn.pixels.height)) pixels for a screen of \(phone.width) × \(phone.height)")
+
+        app.minimize(true)
+        defer { app.minimize(false) }
+        let hidden = try watched(2103)
+        XCTAssertEqual(Double(hidden.pixels.width / hidden.pixels.height), screen, accuracy: screen * 0.03, "a picture of \(Int(hidden.pixels.width)) × \(Int(hidden.pixels.height)) pixels")
+        let wanted = min(Double(asked), Double(phone.width) * phone.scale)
+        XCTAssertGreaterThanOrEqual(Double(hidden.pixels.width), wanted * 0.9, "a picture \(Int(hidden.pixels.width)) pixels wide, where \(Int(wanted)) were asked for")
+    }
+
     /// The app's page processes, by number, and their names: Chromium's
     /// renderers, children of the app.
     private func renderers() -> [Int32: String] {

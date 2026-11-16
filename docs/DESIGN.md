@@ -1183,7 +1183,15 @@ stream, and a picture is taken about five times a second
 it differs from the last. Not taken while the Mac draws it: for a page
 shown as a device whose pixels are not the screen's, Chromium lays the
 page out again for each picture, a clip or a scale given or not, and the
-Mac shows it in between, the page shaking (#100). A touch is placed in CSS
+Mac shows it in between, the page shaking (#100). A page shown as a device
+whose screen is larger than its pane is drawn smaller to fit
+(`Emulation.setDeviceMetricsOverride`'s `scale`, fitted again when the pane
+changes size, on a dark ground), as Chrome's DevTools do: what the Mac
+draws, and so what is streamed, is then all of the device's screen, in its
+shape, and the size sent with it is the page's (#107; before, the Mac drew
+the screen's top only, and the devices drew that part squeezed into the
+screen's shape). Streamed, a picture is as sharp as the Mac draws it; taken,
+as sharp as the device asks for. A touch is placed in CSS
 pixels by that size and clicked with `Input.dispatchMouseEvent`; text is
 `Input.insertText`. Acting on an agent's tab from a device makes it the
 user's, as a click on the Mac does.

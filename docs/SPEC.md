@@ -396,7 +396,9 @@ user sees.
   user agent with this Chromium's version, `navigator.platform`, client
   hints and touch; the page is then as wide and as tall as the device's
   screen, and beside an agent its part gets just that width and the
-  agent the rest), opens Chromium's own Developer Tools
+  agent the rest; a screen larger than its room is drawn smaller to fit,
+  all of it in sight, on a dark ground, as Chrome's DevTools do, and the
+  devices watching it are sent all of it), opens Chromium's own Developer Tools
   (⌥⌘I) with the console, sends an element to an agent, and closes it. Text is selected, copied
   and pasted as anywhere. A page that opens a window opens a tab instead,
   in the same project and for the same agent. A download goes to the

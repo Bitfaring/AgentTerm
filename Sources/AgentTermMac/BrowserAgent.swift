@@ -155,8 +155,7 @@ extension AppModel {
     func emulate(_ tab: BrowserTab, _ device: BrowserDevice?) {
         Task { @MainActor in
             guard await tab.ready() else { return }
-            try? await tab.devtools.emulate(device)
-            tab.emulating = device
+            try? await tab.emulate(device)
         }
     }
 
@@ -454,8 +453,7 @@ extension AppModel {
                     return "\(request.method) \(request.url) → \(outcome)" + (request.type.isEmpty ? "" : " (\(request.type))")
                 }.joined(separator: "\n"))
         case .emulate(_, let device):
-            try await devtools.emulate(device)
-            tab.emulating = device
+            try await tab.emulate(device)
             done(device.map { "Shows the page as \($0.name)" } ?? "Shows the page as itself")
             return .text(device.map { "Tab \(tab.id) is shown as \($0.name)" + ($0.width > 0 ? ", \($0.width) × \($0.height)" : "") + "." } ?? "Tab \(tab.id) is shown as itself again.")
         case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles:
@@ -527,8 +525,7 @@ extension AppModel {
             // As the Show As menu does on the Mac: the page stays its agent's.
             guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
             do {
-                try await tab.devtools.emulate(device)
-                tab.emulating = device
+                try await tab.emulate(device)
                 return .tabs(browsers.infos)
             } catch {
                 return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
