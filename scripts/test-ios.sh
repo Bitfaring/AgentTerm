@@ -148,7 +148,12 @@ if [ "${IDLE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_IDLE=1; fi
 # everything before it.
 if [ "${MENU:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_MENU=1; fi
 if [ "${MENU:-}" = after ]; then export TEST_RUNNER_AGENTTERM_MENU_AFTER=1; fi
+# MENU=terminal counts the same on the terminal's menu, with the keyboard up
+# (MENU_KEYBOARD=down: with it down), and nothing else.
+if [ "${MENU:-}" = terminal ]; then export TEST_RUNNER_AGENTTERM_ONLY_TERMINAL_MENU=1 TEST_RUNNER_AGENTTERM_MENU_KEYBOARD="${MENU_KEYBOARD:-up}"; fi
 if [ -n "${MENU:-}" ]; then export TEST_RUNNER_AGENTTERM_MENU_ROUNDS="${MENU_ROUNDS:-20}"; fi
+# TOUCHES=/some/file has the app write down every touch it receives (#83).
+if [ -n "${TOUCHES:-}" ]; then export TEST_RUNNER_AGENTTERM_TOUCH_LOG="$TOUCHES"; fi
 # NOTE=only reads a stand-in agent's note on its row (IOS-9), and nothing else.
 if [ "${NOTE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NOTE=1; fi
 # NARROW=only narrows the iPad's window and looks at the list (IPAD-2), and
@@ -179,6 +184,8 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     grep -q '"Group 1 api"' "$STATE/tabs.json" || { echo "test-ios.sh: the host did not save the arrangement of the sessions" >&2; exit 1; }
     # The test committed and pushed from the phone; the remote has to have it.
     [ "$(git -C "$REMOTE" log -1 --format=%s main)" = "test: add a second line" ] || { echo "test-ios.sh: the push from the phone did not reach the remote" >&2; exit 1; }
+    # A gesture that had to be made again (#83) is said, though the test passed.
+    grep -E "MEASURE gesture" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200 || true
     grep -E "Test Case .* (passed|failed)|Executed [0-9]+ test" "$LOG" | tail -3
     echo "iOS UI test passed."
     rm -f "$LOG"

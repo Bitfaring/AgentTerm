@@ -12,6 +12,9 @@ struct AgentTermApp: App {
     init() {
         // Before anything is shown: the question about crash reports
         // depends on whether this build can report at all.
+        #if DEBUG
+        TouchLog.startIfAsked()
+        #endif
         FirebaseSink.start()
         Telemetry.shared.record(.appOpen)
         _privacy = StateObject(wrappedValue: TelemetryPreferences())

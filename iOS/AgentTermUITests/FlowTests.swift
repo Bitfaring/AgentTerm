@@ -43,10 +43,15 @@ final class FlowTests: XCTestCase {
         }
     }
 
-    private func gesture(until done: () -> Bool, _ make: () -> Void) {
-        for _ in 0..<3 {
+    private func gesture(until done: () -> Bool, _ make: () -> Void, line: UInt = #line) {
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm:ss.SSS"
+        for attempt in 1...3 {
+            let made = clock.string(from: Date())
             make()
             if done() { return }
+            // #83: when, to set beside the app's own log of touches.
+            print("MEASURE gesture at line \(line) lost, attempt \(attempt), made at \(made), given up at \(clock.string(from: Date()))")
         }
     }
 
@@ -120,6 +125,57 @@ final class FlowTests: XCTestCase {
                 sleep(2)
             }
             print(String(format: "MEASURE menu, round %d: %@ (%.1f s)", round, moved ? "moved" : "LOST", Date().timeIntervalSince(started)))
+        }
+        print("MEASURE menu, lost \(lost) of \(rounds)")
+    }
+
+    /// #83, #99: how often a touch on an entry of the terminal's menu is
+    /// lost, with the keyboard up or down (`AGENTTERM_MENU_KEYBOARD=down`).
+    /// Printed as `MEASURE`, with the time of each touch to set beside the
+    /// app's own log of touches; nothing fails on it.
+    private func countTerminalMenuTouches(_ app: XCUIApplication, compose: XCUIElement) {
+        let rounds = Int(environment["AGENTTERM_MENU_ROUNDS"] ?? "") ?? 20
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm:ss.SSS"
+        if environment["AGENTTERM_MENU_KEYBOARD"] == "down" {
+            if app.buttons["hide-keyboard"].firstMatch.exists { app.buttons["hide-keyboard"].firstMatch.tap() }
+        } else if !app.keyboards.firstMatch.exists {
+            compose.tap()
+        }
+        sleep(1)
+        print("MEASURE menu, keyboard up: \(app.keyboards.firstMatch.exists)")
+        var lost = 0
+        for round in 1...rounds {
+            let name = round % 2 == 1 ? "Larger Text" : "Smaller Text"
+            // What the whole test does right before it opens this menu.
+            if environment["AGENTTERM_MENU_KEYBOARD"] == "busy" {
+                compose.typeText("stty size")
+                app.buttons["Send"].tap()
+                sleep(2)
+                app.buttons["key-Up"].tap()
+                app.buttons["Send"].tap()
+                sleep(1)
+            }
+            app.buttons["session-menu"].tap()
+            let entry = app.buttons[name]
+            guard entry.waitForExistence(timeout: 10) else {
+                print("MEASURE menu, round \(round): the menu did not open")
+                continue
+            }
+            let place = entry.frame
+            let touched = clock.string(from: Date())
+            entry.tap()
+            let taken = entry.waitForNonExistence(timeout: 5)
+            if !taken {
+                lost += 1
+                capture("terminal-menu-lost-\(round)")
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
+                sleep(2)
+            }
+            print(
+                String(
+                    format: "MEASURE menu, round %d: %@ at %@, entry at (%.0f, %.0f) %@", round, taken ? "taken" : "LOST", touched, place.midX, place.midY,
+                    clock.string(from: Date())))
         }
         print("MEASURE menu, lost \(lost) of \(rounds)")
     }
@@ -261,6 +317,8 @@ final class FlowTests: XCTestCase {
         let link = try XCTUnwrap(environment["AGENTTERM_PAIR_URL"], "run this test through scripts/test-ios.sh")
         let launchButton = environment["AGENTTERM_LAUNCH"] ?? "Start Shell"
         let app = XCUIApplication()
+        // #83: the app writes down the touches it receives.
+        if let log = environment["AGENTTERM_TOUCH_LOG"] { app.launchEnvironment["AGENTTERM_TOUCH_LOG"] = log }
         app.launch()
 
         // Pair by opening the link, as tapping an agentterm:// link would: the
@@ -336,6 +394,10 @@ final class FlowTests: XCTestCase {
         }
         if environment["AGENTTERM_ONLY_MENU"] != nil {
             measureMenuTouches(app, launchButton: launchButton)
+            return
+        }
+        if environment["AGENTTERM_ONLY_TERMINAL_MENU"] != nil {
+            countTerminalMenuTouches(app, compose: compose)
             return
         }
         if environment["AGENTTERM_ONLY_NOTE"] != nil {
