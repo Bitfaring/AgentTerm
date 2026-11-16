@@ -46,7 +46,7 @@ final class CrossTests: XCTestCase {
     }
 
     private func openSettings(_ pane: String) {
-        app.menu(["AgentTermMacUITest", "Settings…"])
+        app.menu([environment["AGENTTERM_CROSS_APP"] ?? "AgentTerm Dev", "Settings…"])
         app.press(.id("settings-\(pane.lowercased())"))
     }
 
@@ -66,6 +66,23 @@ final class CrossTests: XCTestCase {
         app.wait(for: .button("Show as a flat list"))
         // And the changes the phone is going to commit are listed here.
         app.wait(for: .id("change-notes.txt"))
+
+        // BROWSER-12: an agent with a shell and a page of its own, opened
+        // through AgentTerm's MCP server, for the phone to find under it.
+        let told = URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_CROSS_AGENT_VARIABLE"]))
+        app.press(.id("place-sessions"))
+        app.press(.button("Claude Code"))
+        wait("the agent to start") { FileManager.default.fileExists(atPath: told.path) }
+        let server = try MCPServerProcess(
+            tool: URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_CROSS_TOOL"])), variable: try String(contentsOf: told, encoding: .utf8),
+            state: URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_CROSS_STATE"])))
+        defer { server.stop() }
+        let shell = server.text("shell_open")
+        XCTAssertFalse(shell.failed, shell.text)
+        let page = server.text("browser_open", ["url": try XCTUnwrap(environment["AGENTTERM_CROSS_PAGE"])])
+        XCTAssertFalse(page.failed, page.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        wait("the page shown beside the agent") { self.app.value(of: .id("browser-page")) == "Cross page" }
     }
 
     /// After the iPhone app ran: what it did, shown by the Mac.
@@ -84,9 +101,14 @@ final class CrossTests: XCTestCase {
         wait("the display option the phone switched on") { self.app.first(.button("Keep the display on too"))?.value == "1" }
         XCTAssertEqual(app.first(.id("keep-awake"))?.value, "1")
 
-        // SES-6: the session the phone started is listed here too, in Sessions.
+        // SES-6: the session the phone started is listed here too, in
+        // Sessions: after the Mac's shell, its agent and the agent's shell.
         app.press(.id("place-sessions"))
-        wait("the phone's own session beside the Mac's") { self.app.exists(.id("session-1")) && self.app.exists(.id("session-2")) }
+        wait("the phone's own session beside the Mac's") { self.app.exists(.id("session-1")) && self.app.exists(.id("session-4")) }
+
+        // BROWSER-12: the phone gave the agent's page back, after typing in
+        // it; the page it opened of its own it closed.
+        wait("the page the phone typed in") { self.app.exists(.containing("typed hi")) }
 
         // Who is using a session is checked with the Mac app alone
         // (SessionTests): the iPhone app is closed when its test ends, and

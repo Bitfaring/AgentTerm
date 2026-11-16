@@ -143,10 +143,23 @@ final class PhoneModel: ObservableObject {
     }
 
     /// Uses the page: what an agent's tab the Mac then gives to the user.
-    func useBrowser(_ request: BrowserRequest) {
+    func useBrowser(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
         guard let tab = request.tab else { return }
         askBrowser(request) { [weak self] result in
             if case .refused(let why) = result { self?.browserProblems[tab] = why } else { self?.browserProblems[tab] = nil }
+            done(result)
+        }
+    }
+
+    /// Opens a tab of the user's on the Mac, in a project: `done` gets its
+    /// id, or nil when it could not be opened, and why.
+    func openPage(in project: String, url: String? = nil, _ done: @escaping (String?, String?) -> Void) {
+        askBrowser(.newTab(project: project, url: url)) { result in
+            switch result {
+            case .opened(let tab): done(tab, nil)
+            case .refused(let why): done(nil, why)
+            default: done(nil, "The Mac did not open it.")
+            }
         }
     }
     /// How the sessions are arranged: order, pins and groups. The Mac keeps

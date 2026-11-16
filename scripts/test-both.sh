@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs the Mac app and the iPhone app together on one host, and checks that
 # each shows what the other did: sessions, settings, the Git view, a commit,
-# and who is using a session.
+# who is using a session, and the Mac's browser used from the phone.
 #
 #   ./scripts/test-both.sh                   # the simulator "iPhone Air"
 #   ./scripts/test-both.sh "iPhone 17e"      # a simulator by name, or by UDID
@@ -29,11 +29,15 @@ PROJECT="$ROOT/project"
 FAKE_HOME="$ROOT/home"
 AGENTS="$ROOT/agents"
 LOG="$(mktemp)"
-APP_NAME=AgentTermMacUITest
-mkdir -p "$STATE" "$PROJECT/docs" "$FAKE_HOME" "$AGENTS"
+# The Mac app as a bundle, with its browser (#76), under an identifier of
+# its own: its preferences are not those of an AgentTerm the user runs.
+IDENTIFIER=com.manhpham.agentterm.both
+mkdir -p "$STATE" "$PROJECT/docs" "$FAKE_HOME" "$AGENTS" "$ROOT/site"
 
 swift build --build-tests
 BIN="$(swift build --show-bin-path)"
+IDENTIFIER="$IDENTIFIER" OUT="$ROOT/app" CONFIG=debug CHANNEL=dev ./scripts/bundle-mac.sh > "$LOG" 2>&1 || { tail -20 "$LOG" >&2; echo "test-both.sh: the Mac app did not build" >&2; exit 1; }
+MAC_APP="$ROOT/app/AgentTerm Dev.app/Contents/MacOS/AgentTerm"
 
 # A project with a remote and changes that are not committed yet.
 git -C "$PROJECT" init -q -b main
@@ -48,11 +52,18 @@ git -C "$PROJECT" push -q -u origin main
 printf 'first line\nsecond line\n' > "$PROJECT/notes.txt"
 printf '# Guide\n' > "$PROJECT/docs/guide.md"
 printf '["%s"]' "$PROJECT" > "$STATE/folders.json"
-# Stand-ins for the agents: the installed ones are signed in to someone's accounts.
-for agent in claude codex; do
-    printf '#!/bin/sh\necho "stand-in %s started: $*"\nexec cat\n' "$agent" > "$AGENTS/$agent"
-    chmod +x "$AGENTS/$agent"
-done
+# Stand-ins for the agents: the installed ones are signed in to someone's
+# accounts. Claude's says how to reach AgentTerm's MCP server, for the Mac's
+# part to drive the browser and shells as that agent.
+printf '#!/bin/sh\nprintf "%%s" "$AGENTTERM_MCP" > "%s"\necho "stand-in claude started: $*"\nexec cat\n' "$ROOT/agent-variable" > "$AGENTS/claude"
+printf '#!/bin/sh\necho "stand-in codex started: $*"\nexec cat\n' > "$AGENTS/codex"
+chmod +x "$AGENTS/claude" "$AGENTS/codex"
+# A page whose one field fills it; what is typed in it is its title.
+cat > "$ROOT/site/page.html" <<'HTML'
+<!doctype html>
+<html><head><title>Cross page</title></head>
+<body style="margin:0"><input id="field" aria-label="Field" style="position:fixed;inset:0;width:100%;height:100%;font-size:48px" oninput="document.title = 'typed ' + this.value"></body></html>
+HTML
 
 HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" "$BIN/agenttermd" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
@@ -60,7 +71,7 @@ MAC=""
 cleanup() {
     [ -n "$MAC" ] && kill "$MAC" 2>/dev/null || true
     kill "$DAEMON" 2>/dev/null || true
-    defaults delete "$APP_NAME" >/dev/null 2>&1 || true
+    defaults delete "$IDENTIFIER" >/dev/null 2>&1 || true
     rm -rf "$ROOT"
 }
 trap cleanup EXIT
@@ -79,14 +90,14 @@ if ! "${XCODEBUILD[@]}" build-for-testing > "$LOG" 2>&1; then
     exit 1
 fi
 
-# The Mac app, under a name of its own so its preferences are not those of
-# an AgentTerm run from this build folder, and starting from none.
-[ -e "$BIN/$APP_NAME" ] || ln -s "$BIN/AgentTermMac" "$BIN/$APP_NAME"
-defaults delete "$APP_NAME" >/dev/null 2>&1 || true
-HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" "$BIN/$APP_NAME" > "$STATE/mac.log" 2>&1 &
+# The Mac app, starting from no preferences.
+defaults delete "$IDENTIFIER" >/dev/null 2>&1 || true
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" "$MAC_APP" > "$STATE/mac.log" 2>&1 &
 MAC=$!
 
-export AGENTTERM_CROSS_PID="$MAC" AGENTTERM_CROSS_PROJECT="$PROJECT"
+export AGENTTERM_CROSS_PID="$MAC" AGENTTERM_CROSS_PROJECT="$PROJECT" AGENTTERM_CROSS_APP="AgentTerm Dev"
+export AGENTTERM_CROSS_TOOL="$BIN/agenttermd" AGENTTERM_CROSS_STATE="$STATE" AGENTTERM_CROSS_AGENT_VARIABLE="$ROOT/agent-variable"
+export AGENTTERM_CROSS_PAGE="file://$ROOT/site/page.html" TEST_RUNNER_AGENTTERM_PAGE_URL="file://$ROOT/site/page.html"
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export AGENTTERM_SHOT_DIR="$SHOTS" TEST_RUNNER_AGENTTERM_SHOT_DIR="$SHOTS"; fi
 
 part() {

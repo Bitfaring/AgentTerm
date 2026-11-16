@@ -71,6 +71,9 @@ struct AgentTermApp: App {
             CommandMenu("Browser") {
                 BrowserCommands(model: model)
             }
+            CommandGroup(after: .toolbar) {
+                AgentAreaCommands(model: model)
+            }
             CommandGroup(after: .sidebar) {
                 Button("Bigger Text") { model.changeFontSize(by: 1) }
                     .keyboardShortcut("+")
@@ -763,6 +766,34 @@ private struct TabCommands: View {
         .disabled(model.tabCount < 2)
         Button(model.sessions.isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs(.init(pane: pane)) }
             .disabled(model.tabCount == 0)
+    }
+}
+
+/// Moving about an agent's area, its page and its shells, with the keyboard
+/// alone, and showing one of them alone for a while (#69).
+private struct AgentAreaCommands: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Divider()
+        // Each where it is: the agent on the left, its page on the right,
+        // its shells under both.
+        Button("Keyboard to the Agent") { model.moveKeyboard(to: .agent) }
+            .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+            .disabled(!model.canMoveKeyboard(to: .agent))
+        Button("Keyboard to Its Page") { model.moveKeyboard(to: .browser) }
+            .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+            .disabled(!model.canMoveKeyboard(to: .browser))
+        Button("Keyboard to Its Shells") { model.moveKeyboard(to: .shells) }
+            .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            .disabled(!model.canMoveKeyboard(to: .shells))
+        Toggle(
+            "Show This Part Alone",
+            isOn: Binding(get: { model.agentAreaInFront.flatMap { model.agentAreaAlone[$0] } != nil }, set: { _ in model.toggleAlone() })
+        )
+        .keyboardShortcut(.return, modifiers: [.command, .shift])
+        .disabled(model.agentAreaInFront == nil)
+        Divider()
     }
 }
 

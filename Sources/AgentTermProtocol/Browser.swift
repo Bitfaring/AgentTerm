@@ -354,15 +354,20 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     case tap(tab: String, x: Double, y: Double)
     /// Text typed into what has the keyboard in the page.
     case text(tab: String, text: String)
+    /// A device opens a tab of the user's in a project, at `url` or empty;
+    /// the Mac does not bring it to the front.
+    case newTab(project: String, url: String?)
+    /// Stops loading the page.
+    case stop(tab: String)
 
     /// The tab it is about, when it is about one.
     public var tab: String? {
         switch self {
-        case .open, .tabs: return nil
+        case .open, .tabs, .newTab: return nil
         case .navigate(let tab, _), .history(let tab, _), .snapshot(let tab, _), .screenshot(let tab, _, _), .click(let tab, _, _), .hover(let tab, _),
             .type(let tab, _, _, _, _), .select(let tab, _, _), .press(let tab, _), .scroll(let tab, _, _, _), .wait(let tab, _, _, _),
             .evaluate(let tab, _), .console(let tab, _), .network(let tab, _), .emulate(let tab, _), .close(let tab), .picture(let tab),
-            .takeOver(let tab), .giveBack(let tab), .watch(let tab, _, _), .tap(let tab, _, _), .text(let tab, _):
+            .takeOver(let tab), .giveBack(let tab), .watch(let tab, _, _), .tap(let tab, _, _), .text(let tab, _), .stop(let tab):
             return tab
         }
     }
@@ -371,16 +376,17 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     /// the tab; looking at it is not.
     public var acts: Bool {
         switch self {
-        case .navigate, .history, .click, .hover, .type, .select, .press, .scroll, .evaluate, .emulate, .tap, .text: return true
+        case .navigate, .history, .click, .hover, .type, .select, .press, .scroll, .evaluate, .emulate, .tap, .text, .stop: return true
         default: return false
         }
     }
 
     /// What a device may ask of a tab: the user, who uses the page through
-    /// it (#76). An agent's own tab the device takes over by acting on it.
+    /// it (#76), as on the Mac. An agent's own tab the device takes over by
+    /// acting on its page; showing it as a device, or closing it, does not.
     public var isTheDevices: Bool {
         switch self {
-        case .picture, .takeOver, .giveBack, .watch, .tap, .text, .press, .scroll, .history, .navigate: return true
+        case .picture, .takeOver, .giveBack, .watch, .tap, .text, .press, .scroll, .history, .navigate, .stop, .newTab, .emulate, .close: return true
         default: return false
         }
     }
@@ -395,6 +401,11 @@ public enum BrowserResult: Codable, Equatable, Sendable {
     case tabs([BrowserTabInfo])
     /// Not done, and why, in words for the agent or the user.
     case refused(String)
+    /// A device's touch: whether it gave the keyboard to a field of the
+    /// page, which the device then types into.
+    case touched(field: Bool)
+    /// A device's new tab.
+    case opened(tab: String)
 }
 
 /// What the apps and the agents are told about the browser, in the same

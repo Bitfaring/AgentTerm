@@ -568,6 +568,35 @@ final class DevToolsSession {
         }
     }
 
+    /// Whether what has the keyboard in the page takes text: a field, a
+    /// text area, something editable, or a frame of another site, whose
+    /// insides are not seen.
+    func fieldHasKeyboard() async throws -> Bool {
+        let script = """
+            (() => {
+              let e = document.activeElement;
+              for (;;) {
+                if (e && e.shadowRoot && e.shadowRoot.activeElement) { e = e.shadowRoot.activeElement; continue; }
+                if (e && (e.tagName === 'IFRAME' || e.tagName === 'FRAME')) {
+                  let inner = null;
+                  try { inner = e.contentDocument && e.contentDocument.activeElement; } catch (_) {}
+                  if (!inner) return true;
+                  e = inner; continue;
+                }
+                break;
+              }
+              if (!e || e === document.body) return false;
+              if (e.isContentEditable) return true;
+              if (e.tagName === 'TEXTAREA') return !e.readOnly && !e.disabled;
+              if (e.tagName !== 'INPUT') return false;
+              const kind = (e.type || 'text').toLowerCase();
+              return !e.readOnly && !e.disabled && !['button', 'checkbox', 'radio', 'submit', 'reset', 'file', 'image', 'range', 'color', 'hidden'].includes(kind);
+            })()
+            """
+        let answer = try await call("Runtime.evaluate", ["expression": script, "returnByValue": true], seconds: 5)
+        return ((answer["result"] as? [String: Any])?["value"] as? Bool) ?? false
+    }
+
     /// An element's box in the page, in its points.
     func box(of node: Int) async throws -> CGRect {
         _ = try? await call("DOM.scrollIntoViewIfNeeded", ["backendNodeId": node])

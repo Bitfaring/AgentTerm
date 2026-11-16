@@ -15,7 +15,10 @@ struct TerminalScreen: View {
     @State private var part = Part.agent
     @State private var shellID: SessionID?
     @State private var pageID: String?
+    /// The room the screen has, for the iPad's layout.
+    @State private var room = CGSize.zero
     @Environment(\.verticalSizeClass) private var verticalSize
+    @Environment(\.horizontalSizeClass) private var horizontalSize
     @Environment(\.dismiss) private var dismiss
 
     enum Part: Hashable { case agent, shells, browser }
@@ -25,6 +28,13 @@ struct TerminalScreen: View {
     /// key bar and the message field would take all of it between them, so
     /// there they share one row and the terminal has the rest.
     private var isOnItsSide: Bool { verticalSize == .compact }
+
+    /// An iPad on its side, the app on all of its screen: the agent's page
+    /// beside it, as on the Mac, and its terminal or one of its shells on
+    /// the left (#76). Upright, or sharing the screen, it is as on the iPhone.
+    private var sideBySide: Bool {
+        horizontalSize == .regular && verticalSize == .regular && room.width > room.height && page != nil
+    }
 
     private var companions: (shells: [SessionInfo], pages: [BrowserTabInfo]) { model.companions(of: session) }
 
@@ -44,28 +54,50 @@ struct TerminalScreen: View {
         model.controller?.session == shown ? model.controller : nil
     }
 
-    /// Agent | Shells | Browser, and the tabs of the one picked.
+    /// Agent | Shells | Browser, and the tabs of the one picked; beside
+    /// the page, Agent | Shells only.
     @ViewBuilder private var partBar: some View {
         let (shells, pages) = companions
-        if !shells.isEmpty || !pages.isEmpty {
+        let withPages = !pages.isEmpty && !sideBySide
+        if !shells.isEmpty || withPages {
             VStack(spacing: 6) {
                 Picker("Part", selection: $part) {
                     Text("Agent").tag(Part.agent)
                     if !shells.isEmpty { Text("Shells (\(shells.count))").tag(Part.shells) }
-                    if !pages.isEmpty { Text("Browser (\(pages.count))").tag(Part.browser) }
+                    if withPages { Text("Browser (\(pages.count))").tag(Part.browser) }
                 }
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("agent-parts")
                 if part == .shells, shells.count > 1 {
                     chips(shells.map { ($0.id.description, $0.displayName) }, selected: shown.description) { id in shellID = SessionID(id) }
                 }
-                if part == .browser, pages.count > 1 {
-                    chips(pages.map { ($0.id, $0.displayTitle) }, selected: page ?? "") { id in pageID = id }
+                if part == .browser, withPages, pages.count > 1 {
+                    pageChips
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Palette.panel)
+        }
+    }
+
+    private var pageChips: some View {
+        chips(companions.pages.map { ($0.id, $0.displayTitle) }, selected: page ?? "") { id in pageID = id }
+    }
+
+    /// The agent's page, live, with its tabs over it when it has several.
+    @ViewBuilder private var pageColumn: some View {
+        if let page {
+            VStack(spacing: 0) {
+                if sideBySide, companions.pages.count > 1 {
+                    pageChips
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Palette.panel)
+                }
+                LivePageView(tabID: page)
+                    .id(page)
+            }
         }
     }
 
@@ -146,16 +178,81 @@ struct TerminalScreen: View {
                 .background(Palette.panel)
                 .accessibilityIdentifier("reconnecting")
             }
-            if !isOnItsSide { partBar }
-            if part == .browser, let page {
-                LivePageView(tabID: page)
-                    .id(page)
-            } else if let size = model.foreignSize {
+            if sideBySide {
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        partBar
+                        terminalColumn
+                    }
+                    Palette.hairline.frame(width: 1)
+                    pageColumn
+                        .frame(width: room.width * 0.5)
+                }
+            } else {
+                // On its side, the iPhone has no room for the bar, but for
+                // the way back from a page.
+                if !isOnItsSide || part == .browser { partBar }
+                if part == .browser, page != nil {
+                    pageColumn
+                } else {
+                    terminalColumn
+                }
+            }
+        }
+        .background(Palette.canvas.ignoresSafeArea())
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear { room = geometry.size }
+                    .onChange(of: geometry.size) { _, size in room = size }
+            }
+        }
+        // With what its agent is doing, when that is known (#3).
+        .navigationTitle(model.session(session).map { info in info.state.map { "\(info.displayName) · \($0.name)" } ?? info.displayName } ?? "Session")
+        // The terminal needs the room, and its own bars are under it.
+        .toolbar(.hidden, for: .tabBar)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(isOnItsSide ? .hidden : .visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                sessionMenu
+            }
+        }
+        .confirmationDialog("End this session?", isPresented: $confirmingEnd, titleVisibility: .visible) {
+            Button("End Session", role: .destructive) { model.end(session) }
+        } message: {
+            Text("The program running in it is stopped.")
+        }
+        .onAppear {
+            // Shown first as asked: one of the agent's shells, or pages.
+            if let initial, initial.hasPrefix("s:") {
+                part = .shells
+                shellID = SessionID(initial.dropFirst(2))
+            } else if let initial, initial.hasPrefix("b:") {
+                part = .browser
+                pageID = String(initial.dropFirst(2))
+            }
+            model.open(shown)
+        }
+        .onChange(of: shown) { old, new in
+            // One terminal at a time on the phone: the other one is left.
+            model.leave(old)
+            model.open(new)
+        }
+        .onChange(of: sideBySide) { _, beside in
+            // The page has a side of its own: the left shows the agent.
+            if beside, part == .browser { part = .agent }
+        }
+        .onDisappear { model.leave(shown) }
+    }
+
+    /// The terminal on screen, the agent's or a shell's, with its bars.
+    @ViewBuilder private var terminalColumn: some View {
+        VStack(spacing: 0) {
+            if let size = model.foreignSize {
                 ForeignSizeBanner(size: size)
             }
-            if part == .browser, page != nil {
-                // The page has its own controls.
-            } else if let controller {
+            if let controller {
                 TerminalPane(controller: controller, foreignSize: model.foreignSize)
                     .id(ObjectIdentifier(controller))
                     .accessibilityIdentifier("terminal")
@@ -238,40 +335,6 @@ struct TerminalScreen: View {
                 LoadingView("Opening the session…")
             }
         }
-        .background(Palette.canvas.ignoresSafeArea())
-        // With what its agent is doing, when that is known (#3).
-        .navigationTitle(model.session(session).map { info in info.state.map { "\(info.displayName) · \($0.name)" } ?? info.displayName } ?? "Session")
-        // The terminal needs the room, and its own bars are under it.
-        .toolbar(.hidden, for: .tabBar)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(isOnItsSide ? .hidden : .visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                sessionMenu
-            }
-        }
-        .confirmationDialog("End this session?", isPresented: $confirmingEnd, titleVisibility: .visible) {
-            Button("End Session", role: .destructive) { model.end(session) }
-        } message: {
-            Text("The program running in it is stopped.")
-        }
-        .onAppear {
-            // Shown first as asked: one of the agent's shells, or pages.
-            if let initial, initial.hasPrefix("s:") {
-                part = .shells
-                shellID = SessionID(initial.dropFirst(2))
-            } else if let initial, initial.hasPrefix("b:") {
-                part = .browser
-                pageID = String(initial.dropFirst(2))
-            }
-            model.open(shown)
-        }
-        .onChange(of: shown) { old, new in
-            // One terminal at a time on the phone: the other one is left.
-            model.leave(old)
-            model.open(new)
-        }
-        .onDisappear { model.leave(shown) }
     }
 }
 

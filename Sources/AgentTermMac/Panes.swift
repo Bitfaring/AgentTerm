@@ -136,6 +136,8 @@ extension AppModel {
         // An agent's area that lost its last shell and tab is a plain
         // terminal again; what it remembered is kept for the next one.
         for (agent, focus) in agentAreaFocus where focus != .agent && !hasArea(agent) { agentAreaFocus[agent] = .agent }
+        // A part shown alone that is no longer there: all of them again.
+        for (agent, part) in agentAreaAlone where !hasArea(agent) || !shownParts(of: agent).contains(part) { agentAreaAlone[agent] = nil }
         // A tab put in front before it was there, a file of another Mac
         // whose words were still on their way, comes to the front of its
         // pane once it is.
@@ -229,10 +231,51 @@ extension AppModel {
         if part == .shells { area.shellsHidden = true }
         if part == .browser { area.browserHidden = true }
         agentAreas[agent] = area
+        if agentAreaAlone[agent] == part { agentAreaAlone[agent] = nil }
         if agentAreaFocus[agent] == part {
             agentAreaFocus[agent] = .agent
             adoptFocusedFront()
         }
+    }
+
+    // MARK: Moving about an agent's area (#69)
+
+    /// The agent's area in front, when what is in front is one.
+    var agentAreaInFront: String? {
+        guard let front = paneLayout.focusedPane.front, hasArea(front) else { return nil }
+        return front
+    }
+
+    /// The parts of an agent's area that are shown, or could be: the
+    /// agent, its page unless hidden, its shells unless hidden.
+    func shownParts(of agent: String) -> [AgentAreaPart] {
+        let all = companions
+        let area = agentAreas[agent] ?? AgentArea()
+        var parts: [AgentAreaPart] = [.agent]
+        if !(all.browsers[agent] ?? []).isEmpty, !area.browserHidden { parts.append(.browser) }
+        if !(all.shells[agent] ?? []).isEmpty, !area.shellsHidden { parts.append(.shells) }
+        return parts
+    }
+
+    /// Whether the agent's area in front shows that part.
+    func canMoveKeyboard(to part: AgentAreaPart) -> Bool {
+        agentAreaInFront.map { shownParts(of: $0).contains(part) } ?? false
+    }
+
+    /// Puts the keyboard in a part of the agent's area in front: the agent,
+    /// its page, its shells. Shown alone, that part is shown alone instead.
+    func moveKeyboard(to part: AgentAreaPart) {
+        guard let agent = agentAreaInFront, shownParts(of: agent).contains(part) else { return }
+        if agentAreaAlone[agent] != nil { agentAreaAlone[agent] = part }
+        focusPane(paneLayout.focused, part: part)
+    }
+
+    /// Shows the part the keyboard is in alone, filling the agent's area,
+    /// or all of them again.
+    func toggleAlone() {
+        guard let agent = agentAreaInFront else { return }
+        agentAreaAlone[agent] = agentAreaAlone[agent] == nil ? (agentAreaFocus[agent] ?? .agent) : nil
+        focusKeyboard()
     }
 
     func showAgentPart(_ part: AgentAreaPart, of agent: String) {

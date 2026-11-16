@@ -1122,7 +1122,17 @@ An agent's tab whose agent has ended is the user's.
 
 **The devices.** A device asks with `browserAsk`, for what the user does
 (`BrowserRequest.isTheDevices`: a picture, take over and give back,
-`watch`, `tap`, `text`, `press`, `scroll`, `history`, `navigate`). The
+`watch`, `tap`, `text`, `press`, `scroll`, `history`, `navigate`, `stop`,
+`emulate`, `close`, and `newTab`, a tab of the user's in a project, which
+the Mac does not bring to the front). A `tap` is answered with whether a
+field of the page took the keyboard (`touched`, from the element that has
+it, through shadow roots and frames of the same site; a frame of another
+site counts as a field), and the device's keyboard comes up for it; a
+`newTab` with the new tab's id (`opened`). What a device does to a page
+is done on the Mac in the order it was sent (`BrowserTab.deviceInput`
+chains them), since each answer is awaited in a task of its own. A page
+no pane shows that takes the keyboard while it loads is not brought to
+the front, and the keyboard goes back where it was. The
 host keeps which devices watch which tab (`browserWatchers`), and asks the
 app for a tab's pictures when its first watcher comes and stops it when
 its last goes, a device that goes included. The app sends each picture

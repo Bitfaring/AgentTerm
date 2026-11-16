@@ -458,13 +458,23 @@ user sees.
   the user's pages are in their project's folder, and those of no folder
   under "Browser on the Mac". An agent's screen has Agent, Shells and
   Browser, each with its tabs when it has several: a shell is its
-  terminal, a page is shown live (pictures of it a few times a second,
-  taken on the Mac, so that they come while the Mac does not show it).
-  The page is used by touch: a touch clicks where it lands, a drag
-  scrolls, text is typed into what has the keyboard, with Return, Delete,
-  Back and Reload. An agent's page becomes the user's at the first touch,
-  as a click on the Mac makes it, and Let … Go On gives it back. The
-  user's own pages open the same way, in a sheet.
+  terminal, a page is shown live, about ten pictures a second, which come
+  while the Mac does not show it too. On an iPad on its side, the app on
+  all of its screen, the page is beside the agent, on the right, and the
+  left shows the agent or one of its shells (Agent, Shells); upright, or
+  sharing the screen, it is as on the iPhone. The page is used as on the
+  Mac: a touch clicks where it lands, and on a field brings the keyboard
+  up, whose keys go to the page (a keyboard of the iPad's own too, with
+  its arrows, Tab and Escape); a drag scrolls it; two fingers zoom into
+  the picture, and 1× fits it again. Over it are back, forward, reload or
+  stop, the address bar, which takes an address or words to search for,
+  the keyboard, and a menu with Show As (the Mac's devices) and Close
+  Tab. An agent's page becomes the user's at the first thing done to it,
+  as a click on the Mac makes it, and Let … Go On gives it back; showing
+  it as a device or closing it does not take it. Browser, among what a
+  folder can start, opens a page of the user's in it, on the Mac but not
+  in front there; the user's pages open in a sheet. Send to Agent, which
+  picks one element of a page, is the Mac's only (principle 1).
 
 ### Usage
 
@@ -674,7 +684,11 @@ panel.
   browser (the × of their strip) hides them, and the bar under the area
   shows them again (Show Shells, Show Browser): a shell keeps running and
   stays in the list of sessions. An agent opening a shell or a page does
-  not take the keyboard from where the user types. A shell the user opens
+  not take the keyboard from where the user types. The View menu puts the
+  keyboard in the agent (⌥⌘←), its page (⌥⌘→) or its shells (⌥⌘↓), and
+  Show This Part Alone (⇧⌘Return) has the part the keyboard is in fill the
+  area for a while, a bar under it saying so, until it is chosen again or
+  Show All is clicked; it is not kept when the app quits. A shell the user opens
   is the user's, a tab like any other, and so is a browser tab the user
   opens, and an agent's shell or page once its agent's session has ended.
   An agent's own shells and pages are always shown in its area, never as

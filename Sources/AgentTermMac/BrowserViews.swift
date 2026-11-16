@@ -25,7 +25,7 @@ struct BrowserPaneView: View {
                 // screen, no white beside it. The same views either way, so
                 // that the page's is not made again.
                 let device = tab.emulating.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil }
-                BrowserHost(tab: tab)
+                BrowserHost(tab: tab, focused: focused)
                     .background(PaneFrameReader(place: .page(tab.tabID)))
                     .frame(maxWidth: device.map { CGFloat($0.width) } ?? .infinity, maxHeight: device.map { CGFloat($0.height) } ?? .infinity)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

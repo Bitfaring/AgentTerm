@@ -1,12 +1,13 @@
 import AgentTermProtocol
 import AgentTermTerminal
 import SwiftUI
+import UIKit
 
 /// The pages of the browser in AgentTerm on the Mac (#76) that no folder
 /// shows: an agent's are under it, the user's in their project's folder.
 struct BrowserSection: View {
     @EnvironmentObject private var model: PhoneModel
-    @State private var shown: BrowserTabInfo?
+    @State private var shown: PageSheetID?
 
     var body: some View {
         let pages = model.loosePages
@@ -19,7 +20,7 @@ struct BrowserSection: View {
                 VStack(spacing: 0) {
                     ForEach(pages) { tab in
                         Button {
-                            shown = tab
+                            shown = PageSheetID(id: tab.id)
                         } label: {
                             BrowserTabRow(tab: tab)
                         }
@@ -29,12 +30,17 @@ struct BrowserSection: View {
                 }
                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
             }
-            .sheet(item: $shown) { tab in
-                BrowserTabSheet(tabID: tab.id)
+            .sheet(item: $shown) { page in
+                BrowserTabSheet(tabID: page.id)
             }
             .accessibilityIdentifier("browser-tabs")
         }
     }
+}
+
+/// Which page a sheet shows.
+struct PageSheetID: Identifiable, Hashable {
+    let id: String
 }
 
 /// A page's row in a list: its title, and whose it is unless it is shown
@@ -78,6 +84,9 @@ struct BrowserTabSheet: View {
     @EnvironmentObject private var model: PhoneModel
     @Environment(\.dismiss) private var dismiss
     let tabID: String
+    /// Whether the tab was in the Mac's list once: one just opened is not
+    /// there yet, one that went was closed.
+    @State private var seen = false
 
     private var tab: BrowserTabInfo? { model.browserTabs.first { $0.id == tabID } }
 
@@ -85,9 +94,11 @@ struct BrowserTabSheet: View {
         NavigationStack {
             Group {
                 if tab != nil {
-                    LivePageView(tabID: tabID)
-                } else {
+                    LivePageView(tabID: tabID) { dismiss() }
+                } else if seen {
                     Text("This tab was closed on the Mac.").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    LoadingView("Opening the page on the Mac…").frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .background(Palette.canvas.ignoresSafeArea())
@@ -97,19 +108,38 @@ struct BrowserTabSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
             }
         }
+        .preferredColorScheme(.dark)
+        .onAppear { if tab != nil { seen = true } }
+        .onChange(of: tab != nil) { _, there in if there { seen = true } }
     }
 }
 
-/// A page of the Mac's browser as it is now, sent a few times a second
-/// while it is on screen, and used by touch: a touch is a click where it
-/// lands, a drag scrolls, and text is typed into what has the keyboard. An
-/// agent's tab becomes the user's at the first touch, as a click on the Mac
-/// makes it; its agent waits until it is given back (#76).
+/// A page of the Mac's browser as it is now, sent about ten times a second
+/// while it is on screen, and used by touch, as on the Mac (#76): a touch
+/// clicks where it lands, and on a field brings the keyboard up, whose keys
+/// go to the page; a drag scrolls it; two fingers zoom into the picture.
+/// The address bar, back, forward, reload and stop, Show As and Close Tab
+/// are those of the Mac's browser. An agent's tab becomes the user's at the
+/// first thing done to its page, as a click on the Mac makes it; its agent
+/// waits until it is given back.
 struct LivePageView: View {
     @EnvironmentObject private var model: PhoneModel
     let tabID: String
-    @State private var typed = ""
-    @FocusState private var typing: Bool
+    /// After Close Tab: what shows the page goes.
+    var closed: () -> Void = {}
+
+    /// The keyboard is up for the page.
+    @State private var typing = false
+    @State private var address = ""
+    @FocusState private var editingAddress: Bool
+    /// Into the picture, 1 to 4 times, and moved about while zoomed.
+    @State private var zoom: CGFloat = 1
+    @State private var zoomBefore: CGFloat = 1
+    @State private var pan: CGSize = .zero
+    @State private var panBefore: CGSize = .zero
+    /// What of a drag was already sent to the page as scrolling.
+    @State private var scrolled: CGSize = .zero
+    @State private var typed = TypedText()
 
     private var tab: BrowserTabInfo? { model.browserTabs.first { $0.id == tabID } }
 
@@ -132,38 +162,205 @@ struct LivePageView: View {
                 .padding(.vertical, 8)
                 .background((tab.userHasIt ? Color.orange : Color.accentColor).opacity(0.14))
             }
+            toolbar
             page
             if let problem = model.browserProblems[tabID] {
-                Text(problem).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.vertical, 4)
+                Text(problem)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Palette.panel)
+                    .accessibilityIdentifier("browser-problem")
             }
-            controls
         }
-        .onAppear { model.watch(tabID, true) }
-        .onDisappear { model.watch(tabID, false) }
+        .background {
+            PageKeyInput(active: $typing, text: { typed.add($0) }, key: press)
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .accessibilityIdentifier("browser-keys")
+        }
+        .onAppear {
+            let tab = tabID
+            typed.send = { [weak model] text in model?.useBrowser(.text(tab: tab, text: text)) }
+            model.watch(tabID, true)
+            address = Self.shown(self.tab?.url)
+            // A new tab, empty: where it goes is asked first.
+            if address.isEmpty { editingAddress = true }
+        }
+        .onDisappear {
+            typed.flush()
+            model.watch(tabID, false)
+        }
+        .onChange(of: tab?.url) { _, url in
+            if !editingAddress { address = Self.shown(url) }
+        }
+        .onChange(of: editingAddress) { _, editing in
+            if editing { typing = false } else { address = Self.shown(tab?.url) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { note in
+            // All of the address chosen, as in Safari: what is typed takes its place.
+            guard let field = note.object as? UITextField, field.accessibilityIdentifier == "browser-address" else { return }
+            DispatchQueue.main.async { field.selectAll(nil) }
+        }
     }
+
+    /// The address shown in the bar: none for an empty tab.
+    private static func shown(_ url: String?) -> String {
+        guard let url, url != "about:blank" else { return "" }
+        return url
+    }
+
+    // MARK: The bar
+
+    private var toolbar: some View {
+        HStack(spacing: 2) {
+            barButton("chevron.left", "Back") { model.useBrowser(.history(tab: tabID, step: -1)) }
+            barButton("chevron.right", "Forward") { model.useBrowser(.history(tab: tabID, step: 1)) }
+            if tab?.loading == true {
+                barButton("xmark", "Stop") { model.useBrowser(.stop(tab: tabID)) }
+            } else {
+                barButton("arrow.clockwise", "Reload") { model.useBrowser(.history(tab: tabID, step: 0)) }
+            }
+            TextField("Address or search", text: $address)
+                .font(.callout)
+                .keyboardType(.webSearch)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.go)
+                .focused($editingAddress)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.raised))
+                .onSubmit {
+                    let wanted = address.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !wanted.isEmpty else { return }
+                    model.useBrowser(.navigate(tab: tabID, url: wanted))
+                }
+                .accessibilityIdentifier("browser-address")
+                .padding(.horizontal, 4)
+            barButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide Keyboard" : "Type into the Page") {
+                typing.toggle()
+                if typing { editingAddress = false }
+            }
+            .accessibilityIdentifier("browser-keyboard")
+            Menu {
+                showAs
+                Divider()
+                Button(role: .destructive) {
+                    model.useBrowser(.close(tab: tabID)) { result in
+                        if case .refused = result { return }
+                        closed()
+                    }
+                } label: {
+                    Label("Close Tab", systemImage: "xmark.square")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 17))
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Page Menu")
+            .accessibilityIdentifier("browser-menu")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
+        .background(Palette.panel)
+    }
+
+    private func barButton(_ symbol: String, _ name: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .medium))
+                .frame(width: 34, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(name)
+    }
+
+    /// The devices the page can be shown as, as the Mac's Show As menu has them.
+    @ViewBuilder private var showAs: some View {
+        Menu {
+            Button {
+                emulate(nil)
+            } label: {
+                if tab?.emulating == nil { Label("As Itself", systemImage: "checkmark") } else { Text("As Itself") }
+            }
+            ForEach(BrowserDevice.Kind.allCases, id: \.self) { kind in
+                Section(Self.title(of: kind)) {
+                    ForEach(BrowserDevice.presets.filter { $0.kind == kind }, id: \.name) { device in
+                        Button {
+                            emulate(device)
+                        } label: {
+                            if tab?.emulating == device.name { Label(device.name, systemImage: "checkmark") } else { Text(device.name) }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label(tab?.emulating.map { "Show As: \($0)" } ?? "Show As", systemImage: "iphone")
+        }
+    }
+
+    private static func title(of kind: BrowserDevice.Kind) -> String {
+        switch kind {
+        case .phone: return "Phones"
+        case .tablet: return "Tablets"
+        case .computer: return "Computers"
+        }
+    }
+
+    private func emulate(_ device: BrowserDevice?) {
+        model.useBrowser(.emulate(tab: tabID, device: device))
+    }
+
+    // MARK: The page
 
     private var page: some View {
         GeometryReader { room in
             if let frame = model.browserFrames[tabID], frame.width > 0, frame.height > 0 {
-                // The page fitted to the room, top first; its CSS pixels
-                // to this screen's points.
-                let scale = min(room.size.width / frame.width, room.size.height / frame.height)
+                // The page fitted to the room, top first: its CSS pixels to
+                // this screen's points.
+                let fit = min(room.size.width / frame.width, room.size.height / frame.height)
+                let shown = CGSize(width: frame.width * fit, height: frame.height * fit)
                 Image(uiImage: frame.image)
                     .resizable()
-                    .frame(width: frame.width * scale, height: frame.height * scale)
+                    .frame(width: shown.width, height: shown.height)
                     .contentShape(Rectangle())
-                    .gesture(
-                        SpatialTapGesture().onEnded { touch in
-                            model.useBrowser(.tap(tab: tabID, x: touch.location.x / scale, y: touch.location.y / scale))
+                    // Where it lands on the picture, whatever its zoom.
+                    .gesture(SpatialTapGesture().onEnded { touch in tap(at: touch.location, fit: fit, page: frame) })
+                    .scaleEffect(zoom)
+                    .offset(pan)
+                    .frame(width: room.size.width, height: room.size.height, alignment: .top)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .gesture(drag(fit: fit, shown: shown))
+                    .simultaneousGesture(magnify(shown: shown))
+                    .overlay(alignment: .topTrailing) {
+                        if zoom > 1.01 {
+                            Button("1×") {
+                                withAnimation(.snappy) {
+                                    zoom = 1
+                                    zoomBefore = 1
+                                    pan = .zero
+                                    panBefore = .zero
+                                }
+                            }
+                            .font(.footnote.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(.ultraThinMaterial))
+                            .padding(8)
+                            .accessibilityLabel("Fit the Page")
                         }
-                    )
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 14).onEnded { drag in
-                            model.useBrowser(.scroll(tab: tabID, ref: nil, x: -drag.translation.width / scale, y: -drag.translation.height / scale))
-                        }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    }
+                    .accessibilityElement()
                     .accessibilityLabel("The page, live")
+                    .accessibilityValue("\(Int(frame.width))×\(Int(frame.height))")
                     .accessibilityIdentifier("browser-live")
             } else {
                 LoadingView("Asking the Mac for the page…").frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -172,47 +369,170 @@ struct LivePageView: View {
         .background(Palette.canvas)
     }
 
-    /// Typing, and going back or loading again.
-    private var controls: some View {
-        HStack(spacing: 10) {
-            Button {
-                model.useBrowser(.history(tab: tabID, step: -1))
-            } label: {
-                Image(systemName: "chevron.left")
-            }
-            .accessibilityLabel("Back")
-            Button {
-                model.useBrowser(.history(tab: tabID, step: 0))
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .accessibilityLabel("Reload")
-            TextField("Type into the page", text: $typed)
-                .textFieldStyle(.roundedBorder)
-                .focused($typing)
-                .submitLabel(.send)
-                .onSubmit {
-                    guard !typed.isEmpty else { return }
-                    model.useBrowser(.text(tab: tabID, text: typed))
-                    typed = ""
-                    typing = true
-                }
-                .accessibilityIdentifier("browser-type")
-            Button {
-                model.useBrowser(.press(tab: tabID, key: "Backspace"))
-            } label: {
-                Image(systemName: "delete.left")
-            }
-            .accessibilityLabel("Delete")
-            Button {
-                model.useBrowser(.press(tab: tabID, key: "Enter"))
-            } label: {
-                Image(systemName: "return")
-            }
-            .accessibilityLabel("Return")
+    private func tap(at point: CGPoint, fit: CGFloat, page: PhoneModel.BrowserFrame) {
+        editingAddress = false
+        typed.flush()
+        // A finger a little past the picture's edge, which iOS still counts
+        // as on it, means the edge, not a point outside the page.
+        let x = min(max(point.x / fit, 0), page.width - 1), y = min(max(point.y / fit, 0), page.height - 1)
+        model.useBrowser(.tap(tab: tabID, x: x, y: y)) { result in
+            // A field took the keyboard: this one comes up for it.
+            if case .touched(let field) = result { typing = field }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Palette.panel)
+    }
+
+    /// Scrolls the page as the finger goes; moves the picture when zoomed.
+    private func drag(fit: CGFloat, shown: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { drag in
+                if zoom > 1.01 {
+                    pan = Self.clamped(CGSize(width: panBefore.width + drag.translation.width, height: panBefore.height + drag.translation.height), zoom: zoom, shown: shown)
+                    return
+                }
+                let step = CGSize(width: drag.translation.width - scrolled.width, height: drag.translation.height - scrolled.height)
+                guard abs(step.width) >= 24 || abs(step.height) >= 24 else { return }
+                scrolled = drag.translation
+                model.useBrowser(.scroll(tab: tabID, ref: nil, x: -step.width / fit / zoom, y: -step.height / fit / zoom))
+            }
+            .onEnded { drag in
+                if zoom > 1.01 {
+                    panBefore = pan
+                } else {
+                    let step = CGSize(width: drag.translation.width - scrolled.width, height: drag.translation.height - scrolled.height)
+                    if abs(step.width) >= 1 || abs(step.height) >= 1 {
+                        model.useBrowser(.scroll(tab: tabID, ref: nil, x: -step.width / fit, y: -step.height / fit))
+                    }
+                }
+                scrolled = .zero
+            }
+    }
+
+    private func magnify(shown: CGSize) -> some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                zoom = min(4, max(1, zoomBefore * value.magnification))
+                pan = Self.clamped(pan, zoom: zoom, shown: shown)
+            }
+            .onEnded { _ in
+                zoomBefore = zoom
+                if zoom <= 1.01 {
+                    zoom = 1
+                    zoomBefore = 1
+                    pan = .zero
+                }
+                panBefore = pan
+            }
+    }
+
+    /// Moved no further than the zoomed picture goes past its room.
+    private static func clamped(_ pan: CGSize, zoom: CGFloat, shown: CGSize) -> CGSize {
+        let most = CGSize(width: (zoom - 1) * shown.width / 2, height: (zoom - 1) * shown.height / 2)
+        return CGSize(width: min(most.width, max(-most.width, pan.width)), height: min(most.height, max(-most.height, pan.height)))
+    }
+
+    private func press(_ key: String) {
+        typed.flush()
+        model.useBrowser(.press(tab: tabID, key: key))
+    }
+}
+
+/// What is typed into a page, sent a few characters at a time rather than
+/// one message for each.
+@MainActor
+final class TypedText {
+    var send: ((String) -> Void)?
+    private var pending = ""
+    private var later: DispatchWorkItem?
+
+    func add(_ text: String) {
+        pending += text
+        later?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.flush() }
+        later = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: item)
+    }
+
+    func flush() {
+        later?.cancel()
+        later = nil
+        guard !pending.isEmpty else { return }
+        let text = pending
+        pending = ""
+        send?(text)
+    }
+}
+
+/// The keyboard of the iPhone, or the one of an iPad, for a page: what is
+/// typed goes to what has the keyboard in it, Delete and Return as keys,
+/// and on a keyboard of its own the arrows, Tab and Escape too.
+struct PageKeyInput: UIViewRepresentable {
+    @Binding var active: Bool
+    let text: (String) -> Void
+    let key: (String) -> Void
+
+    func makeUIView(context: Context) -> PageKeyView { PageKeyView() }
+
+    func updateUIView(_ view: PageKeyView, context: Context) {
+        view.onText = text
+        view.onKey = key
+        let active = $active
+        view.onResign = { if active.wrappedValue { active.wrappedValue = false } }
+        if self.active, !view.isFirstResponder {
+            DispatchQueue.main.async { _ = view.becomeFirstResponder() }
+        } else if !self.active, view.isFirstResponder {
+            _ = view.resignFirstResponder()
+        }
+    }
+}
+
+final class PageKeyView: UIView, UIKeyInput {
+    var onText: ((String) -> Void)?
+    var onKey: ((String) -> Void)?
+    var onResign: (() -> Void)?
+
+    // As typed: the page's own field does what it does with it.
+    var autocorrectionType: UITextAutocorrectionType = .no
+    var autocapitalizationType: UITextAutocapitalizationType = .none
+    var spellCheckingType: UITextSpellCheckingType = .no
+    var smartQuotesType: UITextSmartQuotesType = .no
+    var smartDashesType: UITextSmartDashesType = .no
+    var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
+    var keyboardType: UIKeyboardType = .default
+    var returnKeyType: UIReturnKeyType = .default
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    @discardableResult
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { DispatchQueue.main.async { [weak self] in self?.onResign?() } }
+        return resigned
+    }
+
+    /// Always some, so that Delete is always sent: the text is the page's.
+    var hasText: Bool { true }
+
+    func insertText(_ text: String) {
+        if text == "\n" {
+            onKey?("Enter")
+        } else if text == "\t" {
+            onKey?("Tab")
+        } else {
+            onText?(text)
+        }
+    }
+
+    func deleteBackward() { onKey?("Backspace") }
+
+    private static let keys: [UIKeyboardHIDUsage: String] = [
+        .keyboardUpArrow: "ArrowUp", .keyboardDownArrow: "ArrowDown", .keyboardLeftArrow: "ArrowLeft", .keyboardRightArrow: "ArrowRight",
+        .keyboardEscape: "Escape", .keyboardTab: "Tab", .keyboardPageUp: "PageUp", .keyboardPageDown: "PageDown", .keyboardHome: "Home",
+        .keyboardEnd: "End",
+    ]
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let named = presses.compactMap { press in press.key.flatMap { Self.keys[$0.keyCode] } }
+        guard !named.isEmpty else { return super.pressesBegan(presses, with: event) }
+        named.forEach { onKey?($0) }
     }
 }

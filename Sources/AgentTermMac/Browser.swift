@@ -136,6 +136,8 @@ final class BrowserTab: ObservableObject, Identifiable {
     weak var holder: BrowserHolderView?
     /// Sending pictures of the page to the devices that watch it.
     var frames: Task<Void, Never>?
+    /// The last of what devices do to the page, which the next waits for.
+    var deviceInput: Task<Void, Never>?
 
     /// Whether the Mac draws the page now: in a pane of a window that is
     /// on screen and not covered.
@@ -443,11 +445,35 @@ final class BrowserHolderView: NSView {
 
     /// The tab it was last asked to show.
     weak var shownTab: BrowserTab?
+
+    /// The page is to have the keyboard once it is in the window: a part
+    /// of an agent's area shown alone, or again with the others, is a new
+    /// holder that SwiftUI puts in the window later, and the keyboard went
+    /// nowhere when the page left the old one (PANE-19).
+    var keyboardWanted = false
+
+    func giveKeyboard() {
+        keyboardWanted = true
+        DispatchQueue.main.async { [weak self] in self?.takeKeyboardIfInWindow() }
+    }
+
+    private func takeKeyboardIfInWindow() {
+        guard keyboardWanted, window != nil, let tab = shownTab, tab.holder === self, tab.container.superview === self else { return }
+        keyboardWanted = false
+        tab.focus()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        DispatchQueue.main.async { [weak self] in self?.takeKeyboardIfInWindow() }
+    }
 }
 
 /// Shows a tab's page in a pane.
 struct BrowserHost: NSViewRepresentable {
     @ObservedObject var tab: BrowserTab
+    /// Its pane, or its part of an agent's area, has the keyboard.
+    var focused = false
 
     func makeNSView(context: Context) -> BrowserHolderView {
         let holder = BrowserHolderView()
@@ -477,6 +503,8 @@ struct BrowserHost: NSViewRepresentable {
             container.frame = holder.bounds
             container.autoresizingMask = [.width, .height]
             holder.addSubview(container)
+            // Moved where it has the keyboard: it keeps it.
+            if focused { holder.giveKeyboard() }
         }
         if tab.browserID == 0, tab.problem == nil { tab.start() }
     }

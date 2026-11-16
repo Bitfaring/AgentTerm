@@ -226,6 +226,9 @@ final class AppModel: ObservableObject {
     var paneFrames: [PanePlace: CGRect] = [:]
     /// The part of an agent's area the keyboard is in, by the agent's tab.
     @Published var agentAreaFocus: [String: AgentAreaPart] = [:]
+    /// The part of an agent's area shown alone for a while, filling it
+    /// (#69); not kept when the app quits.
+    @Published var agentAreaAlone: [String: AgentAreaPart] = [:]
 
     // The browser (#76).
     /// Whether the agents may use the browser: a switch in Settings, on

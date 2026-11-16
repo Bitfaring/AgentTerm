@@ -606,6 +606,125 @@ final class BrowserUITests: MacUITestCase {
         _ = ask(.watch(tab: tab, on: false, width: 0))
     }
 
+    /// BROWSER-21: what a device does to pages, as the Mac's user does: a
+    /// touch says whether a field took the keyboard; text and keys sent one
+    /// after the other reach the page in that order; it shows the page as a
+    /// device; it opens a tab of the user's in a project, which the Mac does
+    /// not bring to the front, stops it and closes it, and an agent's too.
+    func testADeviceOpensShowsAsAndClosesPages() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        let phone = try device()
+        var asked = 2000
+        func send(_ request: BrowserRequest) -> Int {
+            asked += 1
+            phone.send(.browserAsk(id: asked, request: request))
+            return asked
+        }
+        func answer(_ id: Int) -> BrowserResult? {
+            var answer: BrowserResult?
+            wait("the answer to \(id)") {
+                answer = phone.messages.lazy.compactMap { if case .browserAnswer(id, let result) = $0 { return result } else { return nil } }.first
+                return answer != nil
+            }
+            return answer
+        }
+        func ask(_ request: BrowserRequest) -> BrowserResult? { answer(send(request)) }
+        func center(_ id: String) throws -> (Double, Double) {
+            let rect = server.text("browser_evaluate", ["tab": tab, "script": "(r => [r.x + r.width / 2, r.y + r.height / 2])(document.getElementById('\(id)').getBoundingClientRect())"]).text
+            let numbers = rect.split { !"0123456789.".contains($0) }.compactMap { Double($0) }
+            return (try XCTUnwrap(numbers.first), try XCTUnwrap(numbers.dropFirst().first))
+        }
+        // The tab is the user's after the first touch: the agent can look, not run scripts.
+        func looked() -> String { server.text("browser_snapshot", ["tab": tab]).text }
+        continueAfterFailure = true
+
+        // A touch on the field, and one on the heading.
+        let field = try center("name"), heading = try center("out")
+        XCTAssertEqual(ask(.tap(tab: tab, x: field.0, y: field.1)), .touched(field: true))
+        // Sent without waiting: in this order they reach the page.
+        let sent = [send(.text(tab: tab, text: "ab")), send(.press(tab: tab, key: "Backspace")), send(.text(tab: tab, text: "c"))]
+        sent.forEach { _ = answer($0) }
+        wait("the field to say ac, not \(looked())") {
+            let now = looked()
+            return now.contains("textbox \"Name\"") && now.contains("ac") && !now.contains("abc")
+        }
+        XCTAssertEqual(ask(.tap(tab: tab, x: heading.0, y: heading.1)), .touched(field: false))
+
+        // Shown as a phone, from the device.
+        let phoneDevice = try XCTUnwrap(BrowserDevice.preset(named: "iPhone SE"))
+        if case .tabs(let tabs)? = ask(.emulate(tab: tab, device: phoneDevice)) {
+            XCTAssertEqual(tabs.first { $0.id == tab }?.emulating, "iPhone SE")
+        } else {
+            XCTFail("no tabs after Show As")
+        }
+
+        // A tab of the user's, in the agent's project, not in front on the Mac.
+        let project = try XCTUnwrap(phone.messages.lazy.compactMap { if case .browserTabs(let tabs) = $0 { return tabs.first { $0.id == tab }?.project } else { return nil } }.first)
+        // Empty, then the page typed into its address bar, as the iPhone does.
+        guard case .opened(let own)? = ask(.newTab(project: project, url: nil)) else { return XCTFail("no tab opened") }
+        func lastTabs() -> [BrowserTabInfo] { phone.messages.reversed().lazy.compactMap { if case .browserTabs(let tabs) = $0 { return tabs } else { return nil } }.first ?? [] }
+        wait("the device's tab listed as the user's") { lastTabs().contains { $0.id == own && $0.openedBy == nil && $0.project == project } }
+        if case .refused(let why)? = ask(.navigate(tab: own, url: page.absoluteString)) { XCTFail(why) }
+        wait("the page loaded in the device's tab, not \(lastTabs().first { $0.id == own }?.url ?? "")") {
+            lastTabs().contains { $0.id == own && $0.url == page.absoluteString && $0.title == "Test page" }
+        }
+        shot("device-tab-opened")
+        XCTAssertTrue(app.exists(.id("agent-browser")), "the device's tab was brought to the front on the Mac")
+        if case .refused(let why)? = ask(.stop(tab: own)) { XCTFail(why) }
+
+        // Both closed from the device: the agent has no tab left.
+        for closing in [own, tab] {
+            if case .refused(let why)? = ask(.close(tab: closing)) { XCTFail(why) }
+        }
+        XCTAssertEqual(server.text("browser_tabs").text, "You have no tab. Open one with browser_open.")
+    }
+
+    /// PANE-19 (#69): an agent with its page beside it and a shell under
+    /// both. The View menu's commands (⌥⌘ and ←, → or ↓) put the keyboard in
+    /// its page, its shells and the agent again; the part it is in is shown
+    /// alone, filling the area, and all of them again (⇧⌘Return).
+    func testTheKeyboardMovesAboutAnAgentsArea() throws {
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let page = root.appendingPathComponent("page.html")
+        try "<!doctype html><title>One</title><p>A page</p>".write(to: page, atomically: true, encoding: .utf8)
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let shellOpened = server.text("shell_open")
+        XCTAssertFalse(shellOpened.failed, shellOpened.text)
+        let phone = try device()
+        wait("the agent's shell") { phone.sessions.contains { $0.openedBy == agent.id } }
+        let shell = try XCTUnwrap(phone.sessions.first { $0.openedBy == agent.id })
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait(for: .id("agent-shells"), timeout: 20)
+
+        app.press(.id("session-\(agent.id)"))
+        app.waitForKeyboard(in: "terminal-\(agent.id)", "the agent")
+        app.menu(["View", "Keyboard to Its Page"])
+        app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page")
+        app.menu(["View", "Keyboard to Its Shells"])
+        app.waitForKeyboard(in: "terminal-\(shell.id)", "its shell")
+        shot("keyboard-in-its-shell")
+        app.menu(["View", "Keyboard to the Agent"])
+        app.waitForKeyboard(in: "terminal-\(agent.id)", "the agent again")
+
+        // Its page alone, then all of them.
+        app.menu(["View", "Keyboard to Its Page"])
+        app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page")
+        app.menu(["View", "Show This Part Alone"])
+        app.wait(for: .id("agent-alone"))
+        app.wait("the shells and the agent hidden") { !self.app.exists(.id("agent-shells")) && !self.app.exists(.id("terminal-\(agent.id)")) }
+        app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page, alone")
+        shot("page-alone")
+        app.menu(["View", "Show This Part Alone"])
+        app.wait("all of them again") { self.app.exists(.id("agent-shells")) && self.app.exists(.id("terminal-\(agent.id)")) && !self.app.exists(.id("agent-alone")) }
+    }
+
     /// BROWSER-17 (#94): an agent with its page beside it opens a shell,
     /// which shows under both: the page stays shown, and so does the
     /// agent's terminal.

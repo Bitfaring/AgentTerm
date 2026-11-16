@@ -269,20 +269,39 @@ struct AgentAreaView: View {
     var body: some View {
         let showShells = !shells.isEmpty && !area.shellsHidden
         let showBrowser = !browserTabs.isEmpty && !area.browserHidden
+        let alone = model.agentAreaAlone[agentTab].flatMap { part in model.shownParts(of: agentTab).contains(part) ? part : nil }
         VStack(spacing: 0) {
-            if showShells {
-                SplitContainer(axis: .stacked, fraction: area.down, setFraction: { model.setAgentArea(agentTab, down: $0) }) {
-                    top(showBrowser: showBrowser)
-                } second: {
-                    ShellsPart(agentTab: agentTab, shells: shells, shown: area.shownShell(among: shells), focused: paneFocused && focus == .shells)
+            if let alone {
+                // One part for a while, filling the area (#69).
+                switch alone {
+                case .agent: agentPart
+                case .browser: browserPart
+                case .shells: shellsPart
                 }
+                AloneBar(agentTab: agentTab, part: alone)
             } else {
-                top(showBrowser: showBrowser)
+                if showShells {
+                    SplitContainer(axis: .stacked, fraction: area.down, setFraction: { model.setAgentArea(agentTab, down: $0) }) {
+                        top(showBrowser: showBrowser)
+                    } second: {
+                        shellsPart
+                    }
+                } else {
+                    top(showBrowser: showBrowser)
+                }
+                HiddenPartsBar(agentTab: agentTab, hiddenShells: area.shellsHidden ? shells.count : 0, hiddenBrowser: area.browserHidden ? browserTabs.count : 0)
             }
-            HiddenPartsBar(agentTab: agentTab, hiddenShells: area.shellsHidden ? shells.count : 0, hiddenBrowser: area.browserHidden ? browserTabs.count : 0)
             // What the agent has used, at the very bottom, under its shells.
             SessionUsageBar(session: agent)
         }
+    }
+
+    private var shellsPart: some View {
+        ShellsPart(agentTab: agentTab, shells: shells, shown: area.shownShell(among: shells), focused: paneFocused && focus == .shells)
+    }
+
+    private var browserPart: some View {
+        BrowserPart(agentTab: agentTab, tabs: browserTabs, shown: area.shownBrowser(among: browserTabs), focused: paneFocused && focus == .browser)
     }
 
     /// The page beside the agent, shown as a device: as wide as its screen,
@@ -299,7 +318,7 @@ struct AgentAreaView: View {
             ) {
                 agentPart
             } second: {
-                BrowserPart(agentTab: agentTab, tabs: browserTabs, shown: area.shownBrowser(among: browserTabs), focused: paneFocused && focus == .browser)
+                browserPart
             }
         } else {
             agentPart
@@ -440,6 +459,39 @@ private struct PartTab: View {
 }
 
 /// Under an agent's area, the parts that were closed, to show them again.
+/// Says that one part of an agent's area is shown alone, and gives the
+/// others back (#69).
+private struct AloneBar: View {
+    @EnvironmentObject private var model: AppModel
+    let agentTab: String
+    let part: AgentAreaPart
+
+    private var words: String {
+        switch part {
+        case .agent: return "Only the agent is shown."
+        case .browser: return "Only its page is shown."
+        case .shells: return "Only its shells are shown."
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(words).foregroundStyle(.secondary)
+            Button("Show All") { model.toggleAlone() }
+                .help("Shows the agent, its page and its shells again (⇧⌘Return)")
+            Spacer()
+        }
+        .controlSize(.small)
+        .font(.system(size: 11))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Theme.panel)
+        .overlay(alignment: .top) { Theme.hairline.frame(height: 1) }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent-alone")
+    }
+}
+
 private struct HiddenPartsBar: View {
     @EnvironmentObject private var model: AppModel
     let agentTab: String

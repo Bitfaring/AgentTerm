@@ -34,6 +34,10 @@ extension AppModel {
         }
         browsers.focused = { [weak self] tab in
             guard let self, self.frontTabID != tab.tabID else { return }
+            // A page no pane shows was not clicked into: Chromium gave it the
+            // keyboard as it loaded, a page a device opened for one. It does
+            // not come to the front, and the keyboard goes back.
+            guard tab.holder != nil else { return self.focusKeyboard() }
             self.selectTab(id: tab.tabID)
         }
     }
@@ -429,13 +433,33 @@ extension AppModel {
             tab.emulating = device
             done(device.map { "Shows the page as \($0.name)" } ?? "Shows the page as itself")
             return .text(device.map { "Tab \(tab.id) is shown as \($0.name)" + ($0.width > 0 ? ", \($0.width) × \($0.height)" : "") + "." } ?? "Tab \(tab.id) is shown as itself again.")
-        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text:
+        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop:
             return .refused("That is not for this tab.")
         }
     }
 
     /// What a device asks: a picture of a tab, or taking it over.
-    private func deviceRequest(_ request: BrowserRequest) async -> BrowserResult {
+    private func deviceRequest(_ request: BrowserRequest, inTurn: Bool = false) async -> BrowserResult {
+        // What a device does to a page is done in the order it was sent:
+        // each answer is awaited in a task of its own, and text typed and a
+        // Backspace after it must not change places.
+        if !inTurn, request.acts, let id = request.tab, let tab = browsers.tab(id: id) {
+            let before = tab.deviceInput
+            let turn = Task { @MainActor [weak self] () -> BrowserResult in
+                _ = await before?.value
+                guard let self else { return .refused(BrowserWords.noApp) }
+                return await self.deviceRequest(request, inTurn: true)
+            }
+            tab.deviceInput = Task { _ = await turn.value }
+            return await turn.value
+        }
+        if case .newTab(let project, let url) = request {
+            // The user's, as one opened on the Mac, but not brought to the
+            // front there: they are on the device.
+            let tab = browsers.open(url: url, project: project, owner: nil)
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            return .opened(tab: tab.id)
+        }
         guard let id = request.tab, let tab = browsers.tab(id: id) else { return .refused(BrowserWords.noTab(request.tab ?? "")) }
         switch request {
         case .takeOver:
@@ -454,15 +478,38 @@ extension AppModel {
             if tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }
             do {
                 try await tab.devtools.tap(x: x, y: y)
-                return .text("Touched.")
+                // Whether a field took the keyboard: the device's comes up.
+                return .touched(field: (try? await tab.devtools.fieldHasKeyboard()) ?? false)
             } catch {
                 return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
             }
         case .text(_, let text):
             guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
             if tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }
-            _ = try? await tab.devtools.call("Input.insertText", ["text": text])
-            return .text("Typed.")
+            do {
+                try await tab.devtools.call("Input.insertText", ["text": text])
+                return .text("Typed.")
+            } catch {
+                return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
+            }
+        case .stop:
+            if tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }
+            tab.stop()
+            return .text("Stopped.")
+        case .emulate(_, let device):
+            // As the Show As menu does on the Mac: the page stays its agent's.
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            do {
+                try await tab.devtools.emulate(device)
+                tab.emulating = device
+                return .tabs(browsers.infos)
+            } catch {
+                return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
+            }
+        case .close:
+            // As its close button does on the Mac, an agent's tab too.
+            closeBrowserTab(tab)
+            return .tabs(browsers.infos)
         case .press, .scroll, .history, .navigate:
             guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
             if tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }

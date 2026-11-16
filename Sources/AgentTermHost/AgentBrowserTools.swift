@@ -192,6 +192,11 @@ extension AgentShellsMCP {
             return ([["type": "text", "text": lines.joined(separator: "\n")]], false)
         case .refused(let why):
             return ([["type": "text", "text": why]], true)
+        // A device's, which an agent is not given.
+        case .touched(let field):
+            return ([["type": "text", "text": field ? "Touched a field." : "Touched."]], false)
+        case .opened(let tab):
+            return ([["type": "text", "text": "Opened tab \(tab)."]], false)
         }
     }
 }
