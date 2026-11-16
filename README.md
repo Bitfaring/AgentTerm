@@ -13,7 +13,7 @@ Give them visible shells to work in, and steer the same sessions from your iPhon
 ![Platforms](https://img.shields.io/badge/platforms-macOS%2014%2B%20%7C%20iOS%2017%2B-lightgrey)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/Ksagmsd6j)
 
-<img src="docs/screenshots/mac.png" alt="AgentTerm on macOS: folders, an agent's terminal and the git panel" width="900">
+<img src="docs/screenshots/mac.png" alt="AgentTerm on macOS: an agent beside the page it opened in AgentTerm's browser and the shell it runs commands in" width="900">
 
 </div>
 

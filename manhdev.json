@@ -35,7 +35,7 @@
   "requirements": "macOS 14 Sonoma or later (Apple silicon) · iOS 17 or later for the iPhone app · Tailscale on both devices for remote access",
   "screenshot": {
     "src": "docs/screenshots/mac.png",
-    "alt": "AgentTerm with a Claude Code session, the folder's git changes and the usage band",
+    "alt": "AgentTerm with a Claude Code session beside the page it opened in AgentTerm's browser and the shell it runs commands in",
     "width": 1800,
     "height": 1073,
     "chrome": false
@@ -64,6 +64,14 @@
       "height": 2736,
       "chrome": false,
       "caption": "iPhone: the same session, sized to the phone, with a key bar and a compose field."
+    },
+    {
+      "src": "fastlane/screenshots/en-US/07-browser.png",
+      "alt": "The page an agent opened in AgentTerm's browser, shown live on iPhone",
+      "width": 1260,
+      "height": 2736,
+      "chrome": false,
+      "caption": "The browser on the iPhone: an agent's page, live, used by touch."
     },
     {
       "src": "fastlane/screenshots/en-US/01-sessions.png",
