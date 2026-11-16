@@ -43,6 +43,10 @@ struct SessionsView: View {
                         FolderSection(group: group)
                     }
                     if model.status == .connected {
+                        // The Mac's pages that no folder shows (#76).
+                        BrowserSection()
+                    }
+                    if model.status == .connected {
                         // Any folder on the Mac, not only the listed ones.
                         Button {
                             model.showBrowser = true
@@ -77,6 +81,7 @@ struct SessionsView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 24)
             }
+            .readableWidth()
             .background(Palette.canvas.ignoresSafeArea())
             .navigationTitle(model.pairing?.name ?? "AgentTerm")
             .toolbar {
@@ -95,6 +100,8 @@ struct SessionsView: View {
                 switch route {
                 case .session(let id):
                     TerminalScreen(session: id)
+                case .companion(let agent, let item):
+                    TerminalScreen(session: agent, initial: item)
                 case .folder(let folder):
                     FolderScreen(folder: folder)
                 case .file(let folder, let file, let staged):
@@ -310,6 +317,8 @@ private struct FolderSection: View {
     @State private var newName = ""
     /// Ending a session asks first, as everywhere else.
     @State private var ending: SessionInfo?
+    /// A page of the user's, shown live.
+    @State private var shownPage: BrowserTabInfo?
 
     @ViewBuilder
     private func arrangeMenu(_ session: SessionInfo) -> some View {
@@ -470,37 +479,64 @@ private struct FolderSection: View {
                             .onDrop(of: [.text], delegate: SessionDropDelegate(place: .group(tabGroup.id), model: model, dropTarget: $dropTarget))
                         Palette.hairline.frame(height: 1)
                     case .session(let session):
-                        NavigationLink(value: Route.session(session.id)) {
-                            SessionRow(session: session)
-                        }
-                        .buttonStyle(.plain)
-                        .overlay(alignment: .top) {
-                            // Where a dragged session will land.
-                            if dropTarget == session.layoutID { Palette.tint.frame(height: 2.5) }
-                        }
-                        .onDrag {
-                            model.draggedFolder = nil
-                            model.draggedSession = session.layoutID
-                            return NSItemProvider(object: session.layoutID as NSString)
-                        }
-                        .onDrop(of: [.text], delegate: SessionDropDelegate(place: .before(session.layoutID), model: model, dropTarget: $dropTarget))
-                        .contextMenu {
-                            arrangeMenu(session)
-                            Divider()
-                            if model.canHandOff(session) {
-                                Button {
-                                    model.requestHandoff(session: session)
+                        SessionRowLink(session: session)
+                            .overlay(alignment: .top) {
+                                // Where a dragged session will land.
+                                if dropTarget == session.layoutID { Palette.tint.frame(height: 2.5) }
+                            }
+                            .onDrag {
+                                model.draggedFolder = nil
+                                model.draggedSession = session.layoutID
+                                return NSItemProvider(object: session.layoutID as NSString)
+                            }
+                            .onDrop(of: [.text], delegate: SessionDropDelegate(place: .before(session.layoutID), model: model, dropTarget: $dropTarget))
+                            .contextMenu {
+                                arrangeMenu(session)
+                                Divider()
+                                if model.canHandOff(session) {
+                                    Button {
+                                        model.requestHandoff(session: session)
+                                    } label: {
+                                        Label("Hand Off…", systemImage: "arrowshape.turn.up.right")
+                                    }
+                                }
+                                Button(role: .destructive) {
+                                    ending = session
                                 } label: {
-                                    Label("Hand Off…", systemImage: "arrowshape.turn.up.right")
+                                    Label("End Session…", systemImage: "xmark.circle")
                                 }
                             }
-                            Button(role: .destructive) {
-                                ending = session
-                            } label: {
-                                Label("End Session…", systemImage: "xmark.circle")
+                        Palette.hairline.frame(height: 1).padding(.leading, 38)
+                    case .part(_, let title):
+                        // The agent's own, under it: its shells, its pages.
+                        Text(title.uppercased())
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 50)
+                            .padding(.top, 8)
+                            .padding(.bottom, 2)
+                            .accessibilityAddTraits(.isHeader)
+                    case .shell(let shell):
+                        NavigationLink(value: Route.companion(agent: shell.openedBy ?? shell.id, item: "s:\(shell.id)")) {
+                            SessionRow(session: shell, nested: true)
+                        }
+                        .buttonStyle(.plain)
+                        Palette.hairline.frame(height: 1).padding(.leading, 64)
+                    case .page(let tab, let nested):
+                        Group {
+                            if nested, let agent = tab.openedBy {
+                                NavigationLink(value: Route.companion(agent: agent, item: "b:\(tab.id)")) { BrowserTabRow(tab: tab, nested: true) }
+                            } else {
+                                Button {
+                                    shownPage = tab
+                                } label: {
+                                    BrowserTabRow(tab: tab)
+                                }
                             }
                         }
-                        Palette.hairline.frame(height: 1).padding(.leading, 38)
+                        .buttonStyle(.plain)
+                        Palette.hairline.frame(height: 1).padding(.leading, nested ? 64 : 38)
                     }
                 }
                 LaunchGrid(folder: group.path)
@@ -519,6 +555,11 @@ private struct FolderSection: View {
             }
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .sheet(item: $shownPage) { tab in
+                BrowserTabSheet(tabID: tab.id)
+                    .environmentObject(model)
+                    .preferredColorScheme(.dark)
+            }
             .alert("Rename Group", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
                 TextField("Name", text: $newName)
                 Button("Rename") { if let renaming { model.sessionLayout.rename(renaming.id, to: newName) } }
@@ -549,12 +590,67 @@ private struct StateMark: View {
                 .foregroundStyle(color)
                 .accessibilityLabel(state.name)
                 .accessibilityIdentifier("state-\(session.id)")
-        } else if let note = session.stateNote {
+        }
+        // A note, when the state is not known, is `NoteMark`'s, beside the
+        // row's link rather than in it (`SessionRowLink`).
+    }
+}
+
+/// A session's row: a link to its terminal. When a note says why its
+/// agent's state is not known, the note's mark stands between two parts of
+/// the link, a button of its own: inside the link's label, or laid over the
+/// link, touching the mark opened the session (on the iPhone a button
+/// inside it, on the iPad also one laid over it; tried 2026-11-15, #87, #88).
+private struct SessionRowLink: View {
+    let session: SessionInfo
+
+    var body: some View {
+        if let note = session.stateNote, session.state == nil {
+            HStack(spacing: 12) {
+                NavigationLink(value: Route.session(session.id)) { SessionRow(session: session, part: .main) }
+                NoteMark(note: note, session: session.id)
+                // The same link again, for the rest of the row; said once
+                // to assistive tools.
+                NavigationLink(value: Route.session(session.id)) { SessionRow(session: session, part: .end) }
+                    .accessibilityHidden(true)
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: Route.session(session.id)) { SessionRow(session: session, part: .whole) }
+                .buttonStyle(.plain)
+        }
+    }
+}
+
+/// Why an agent's state is not known, read by touching its mark: what the
+/// Mac shows when the pointer rests on it, in the same words (#87).
+private struct NoteMark: View {
+    let note: String
+    let session: SessionID
+    @State private var shown = false
+
+    var body: some View {
+        Button {
+            shown = true
+        } label: {
             Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-                .accessibilityLabel(note)
-                .accessibilityIdentifier("state-note-\(session.id)")
+                .frame(width: 24)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(note)
+        .accessibilityIdentifier("state-note-\(session)")
+        .popover(isPresented: $shown) {
+            Text(note)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 300, alignment: .leading)
+                .padding()
+                .presentationCompactAdaptation(.popover)
+                .accessibilityIdentifier("state-note-text")
         }
     }
 }
@@ -562,64 +658,82 @@ private struct StateMark: View {
 private struct SessionRow: View {
     @EnvironmentObject private var model: PhoneModel
     let session: SessionInfo
+    /// The whole row, or one of the two parts it has on each side of a
+    /// note's mark (`SessionRowLink`).
+    var part = Part.whole
+    /// Set in under its agent, which it is shown under: it is not named.
+    var nested = false
+
+    enum Part { case whole, main, end }
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: AgentStyle.symbol(for: model.agentID(for: session)))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(AgentStyle.accent(for: model.agentID(for: session)))
-                .frame(width: 18)
-            if model.sessionLayout.isPinned(session.layoutID) {
-                Image(systemName: "pin.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Pinned")
-            }
-            // The conversation's title once the agent has saved one, the
-            // agent's name until then.
-            VStack(alignment: .leading, spacing: 1) {
-                Text(session.displayName)
-                    .font(.body)
-                    .lineLimit(1)
-                if let branch = session.branch {
-                    Label(branch, systemImage: "arrow.triangle.branch")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                if let owner = session.openedByName(among: model.sessions) {
-                    // A shell an agent opened: whose it is (#61).
-                    Label(owner, systemImage: "sparkles")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .accessibilityLabel("Opened by \(owner)")
-                }
-            }
-            Spacer(minLength: 8)
-            if session.schedule != nil {
-                Image(systemName: "calendar.badge.clock")
-                    .font(.system(size: 12))
-                    .foregroundStyle(session.schedulePermissions == .skipAll ? .orange : .secondary)
-                    .accessibilityLabel(session.schedulePermissions == .skipAll ? "A scheduled run, without asking for permission" : "A scheduled run")
-            }
-            StateMark(session: session)
-            Text("\(session.size.cols)×\(session.size.rows)")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.tertiary)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.tertiary)
+            if part != .end { main }
+            if part != .main { end }
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, part == .end ? 0 : (nested ? 38 : 12))
+        .padding(.trailing, part == .main ? 0 : 12)
         .padding(.vertical, 14)
         .contentShape(Rectangle())
         .overlay(alignment: .leading) {
             // The color of the group the session is in.
-            if let tabGroup = model.sessionLayout.group(of: session.layoutID) {
+            if part != .end, let tabGroup = model.sessionLayout.group(of: session.layoutID) {
                 GroupColor.color(tabGroup.color).frame(width: 3)
             }
         }
+    }
+
+    /// The size and the way in.
+    @ViewBuilder private var end: some View {
+        Text("\(session.size.cols)×\(session.size.rows)")
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(.tertiary)
+        Image(systemName: "chevron.right")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.tertiary)
+    }
+
+    /// What the session is, and what its agent is doing.
+    @ViewBuilder private var main: some View {
+        Image(systemName: AgentStyle.symbol(for: model.agentID(for: session)))
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(AgentStyle.accent(for: model.agentID(for: session)))
+            .frame(width: 18)
+        if model.sessionLayout.isPinned(session.layoutID) {
+            Image(systemName: "pin.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Pinned")
+        }
+        // The conversation's title once the agent has saved one, the
+        // agent's name until then.
+        VStack(alignment: .leading, spacing: 1) {
+            Text(session.displayName)
+                .font(.body)
+                .lineLimit(1)
+            if let branch = session.branch {
+                Label(branch, systemImage: "arrow.triangle.branch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if !nested, let owner = session.openedByName(among: model.sessions) {
+                // A shell an agent opened: whose it is (#61).
+                Label(owner, systemImage: "sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .accessibilityLabel("Opened by \(owner)")
+            }
+        }
+        Spacer(minLength: 8)
+        if session.schedule != nil {
+            Image(systemName: "calendar.badge.clock")
+                .font(.system(size: 12))
+                .foregroundStyle(session.schedulePermissions == .skipAll ? .orange : .secondary)
+                .accessibilityLabel(session.schedulePermissions == .skipAll ? "A scheduled run, without asking for permission" : "A scheduled run")
+        }
+        StateMark(session: session)
     }
 }
 

@@ -56,7 +56,7 @@ struct PairView: View {
                 .padding(.top, 8)
 
             VStack(alignment: .leading, spacing: 16) {
-                Step(number: 1, text: "Connect this iPhone and your Mac to Tailscale.")
+                Step(number: 1, text: "Connect this \(ThisDevice.name) and your Mac to Tailscale.")
                 Step(number: 2, text: addingAnother ? "Open AgentTerm on that Mac and choose Pair Device." : "Open AgentTerm on the Mac and choose Pair Device.")
                 Step(number: 3, text: "Scan the code it shows.")
             }

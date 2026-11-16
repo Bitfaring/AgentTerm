@@ -132,6 +132,30 @@ final class PTYProcessTests: XCTestCase {
         XCTAssertTrue(result.output.contains("300300"), String(result.output.suffix(200)))
     }
 
+    /// A script an agent types into a shell at once, as a heredoc's (#91):
+    /// 25 lines of about a hundred characters.
+    private static let script = (1...25).map { "print(\"line \($0): " + String(repeating: "abcdefghij", count: 8) + "\")  # \($0)" }.joined(separator: "\n")
+
+    /// SHELL-5 (#91): a long text of many lines, written at once to an
+    /// interactive zsh (its line editor on, its echo on) at a heredoc,
+    /// reaches the program whole, 20 times out of 20.
+    func testALongHeredocReachesTheProgramWhole() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("pty-heredoc-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var wrong: [String] = []
+        for attempt in 1...20 {
+            let file = folder.appendingPathComponent("\(attempt).txt")
+            let result = try run(executable: "/bin/zsh", arguments: ["zsh", "-f", "-i"]) { process, output in
+                self.waitUntil { output().contains("% ") }
+                process.write(Data(("cat > '\(file.path)' <<'EOF'\n" + Self.script + "\nEOF\nexit\n").utf8))
+            }
+            let got = (try? String(contentsOf: file, encoding: .utf8)) ?? "(no file)"
+            if got != Self.script + "\n" { wrong.append("attempt \(attempt): \(got.count) of \(Self.script.count + 1) characters; the screen:\n\(result.output.suffix(600))") }
+        }
+        XCTAssertEqual(wrong, [], "\(wrong.count) of 20 came wrong")
+    }
+
     func testHangUpEndsTheProgram() throws {
         let result = try run("echo ready; sleep 30") { process, output in
             self.waitUntil { output().contains("ready") }

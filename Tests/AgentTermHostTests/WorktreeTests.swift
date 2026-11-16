@@ -239,8 +239,7 @@ final class WorktreeHostTests: XCTestCase {
         }
 
         var sessions: [SessionInfo] { messages.compactMap { if case .sessions(let list) = $0 { return list } else { return nil } }.last ?? [] }
-        var worktrees: [WorktreeInfo] { messages.compactMap { if case .worktrees(_, let list, _) = $0 { return list } else { return nil } }.last ?? [] }
-        var setups: [String: String]? { messages.compactMap { if case .worktreeSetups(let all) = $0 { return all } else { return nil } }.last }
+        var worktrees: [WorktreeInfo] { messages.compactMap { if case .worktrees(_, let list) = $0 { return list } else { return nil } }.last ?? [] }
         var errors: [String] { messages.compactMap { if case .error(let text) = $0 { return text } else { return nil } } }
     }
 
@@ -281,10 +280,12 @@ final class WorktreeHostTests: XCTestCase {
         XCTAssertTrue(condition(), "timed out waiting for: \(what)")
     }
 
-    /// WT-4: a session started in a new worktree runs there, with its branch,
-    /// after the folder's setup command ran there.
+    /// WT-4: a session started in a new worktree runs there, with its branch;
+    /// nothing git ignores came along, what it needs being done there by its
+    /// user (#75).
     func testASessionInANewWorktreeRunsThereWithItsBranch() throws {
-        client.connection.send(.setWorktreeSetup(folder: project.path, command: "touch set-up"))
+        try "SECRET=1\n".write(to: project.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+        try ".env\n".write(to: project.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
         client.connection.send(.createInWorktree(request: CreateRequest(command: "claude", cwd: project.path, title: "Claude Code"), branch: nil, from: nil))
         waitUntil("the session") { self.client.sessions.count == 1 && self.client.sessions[0].branch != nil }
         let session = try XCTUnwrap(client.sessions.first)
@@ -292,24 +293,15 @@ final class WorktreeHostTests: XCTestCase {
         XCTAssertEqual(session.cwd, path)
         XCTAssertEqual(session.branch, "agentterm/claude-1")
         XCTAssertEqual(session.agent, "claude")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: path + "/set-up"), "the setup command ran in it")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path + "/.env"), "an ignored file came along")
         XCTAssertTrue(WorktreePath.belongs(session.cwd, to: project.path))
         waitUntil("the worktrees") { self.client.worktrees.count == 2 }
         XCTAssertTrue(client.worktrees[1].inUse)
     }
 
-    /// WT-16 (#34, #43): the setup commands are sent to a client that
-    /// connects, before it asked for any folder's worktrees, and again
-    /// when one changes; a session is started in a worktree cut from the
-    /// branch named.
-    func testSetupCommandsAreSentOnConnectingAndASessionStartsFromABranch() throws {
-        waitUntil("the setup commands, none yet") { self.client.setups == [:] }
-        client.connection.send(.setWorktreeSetup(folder: project.path, command: " touch set-up "))
-        waitUntil("the change") { self.client.setups == [self.project.path: "touch set-up"] }
-        let second = Client(port: port, token: token)
-        waitUntil("sent to one that connects") { second.setups == [self.project.path: "touch set-up"] }
-        second.connection.close()
-
+    /// WT-16 (#43): a session is started in a worktree cut from the branch
+    /// named; one from a branch that is not there is refused at once.
+    func testASessionStartsInAWorktreeFromABranch() throws {
         // Each step says why, should it fail: a lock the host took once
         // made the commit fail here, and the test only timed out (#50).
         for arguments in [["-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "second"], ["branch", "older", "HEAD~1"]] {
@@ -324,22 +316,9 @@ final class WorktreeHostTests: XCTestCase {
             String(decoding: Subprocess.run("/usr/bin/git", ["-C", cwd, "rev-parse"] + arguments, timeout: 30)?.output ?? Data(), as: UTF8.self)
         }
         XCTAssertEqual(head("HEAD"), head("older"))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: cwd + "/set-up"))
         // One that cannot be made says why at once.
         client.connection.send(.createInWorktree(request: CreateRequest(command: nil, cwd: project.path), branch: "x", from: "no-such"))
         waitUntil("refused") { self.client.errors.contains { $0.contains("There is no branch “no-such” to start from.") } }
-    }
-
-    /// WT-11: under the tests, the login shell a worktree's setup command
-    /// runs in reads none of the startup files of the person running them:
-    /// it reads them where a session's shell does (TEST-1).
-    func testASetupCommandUnderTheTestsReadsNoneOfTheUsersStartupFiles() throws {
-        let expected = try XCTUnwrap(HostEnvironment.sessionEnvironment()["ZDOTDIR"], "a session's shell is kept off them")
-        client.connection.send(.setWorktreeSetup(folder: project.path, command: "printf %s \"$ZDOTDIR\" > zdotdir"))
-        client.connection.send(.createInWorktree(request: CreateRequest(command: "claude", cwd: project.path), branch: nil, from: nil))
-        waitUntil("the session") { self.client.sessions.count == 1 }
-        let path = project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-1/zdotdir").path
-        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), expected)
     }
 
     /// WT-5: a worktree a session runs in is not removed; one with unmerged

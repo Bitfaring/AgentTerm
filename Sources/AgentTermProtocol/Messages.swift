@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 15
+public let agenttermProtocolVersion = 22
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -407,11 +407,34 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// `agenttermd mcp`, with the key of the agent's session. Answered with
     /// `agentShellResult` to that client only.
     case agentShell(id: Int, key: String, request: AgentShellRequest)
-    /// Installs the MCP server in each agent's configuration, or removes it.
-    case setAgentShells(Bool)
-    /// Asks the agents to run their commands in shells the user sees,
-    /// opened through the MCP server, rather than in their own (on by default).
-    case setAgentsUseShells(Bool)
+    /// An agent's request of the browser (#76): sent by `agenttermd mcp`
+    /// with the key of the agent's session. The host passes it on to the
+    /// app that shows the browser and answers with `agentBrowserResult`.
+    case agentBrowser(id: Int, key: String, request: BrowserRequest)
+    /// The Mac app on the host's own Mac shows the browser, and takes what
+    /// is asked of it (#76): sent once connected, and false when it no
+    /// longer does.
+    case browserProvider(Bool)
+    /// The app's answer to a `browserCall`.
+    case browserReply(id: Int, result: BrowserResult)
+    /// The browser's tabs, from the app that shows them: the host keeps
+    /// them and tells every device.
+    case browserTabs([BrowserTabInfo])
+    /// A device's request of the browser (#76): the iPhone's picture of a
+    /// tab, taking it over and giving it back. Answered with `browserAnswer`.
+    case browserAsk(id: Int, request: BrowserRequest)
+    /// What an agent's new sessions are told, as the user wrote it in
+    /// Settings; nil goes back to AgentTerm's default. Answered with
+    /// `agentPrompts` to every device.
+    case setAgentPrompt(agent: String, text: String?)
+    /// How shells are started (Settings > Shell). Answered with
+    /// `shellSettings` to every device, or an error for a program that does
+    /// not run.
+    case setShellSettings(ShellSettings)
+    /// A picture of a tab's page, from the app that shows the browser,
+    /// for the devices that watch it (`BrowserRequest.watch`): a JPEG, and
+    /// the page's size in CSS pixels, by which a touch is placed.
+    case browserFrame(tab: String, jpeg: Data, width: Double, height: Double)
     /// A reply to an agent where it was told of (#22): typed into the
     /// session, then Return, only while its agent is still in `to`, the
     /// state the reply answers. One that comes after it moved on is dropped.
@@ -464,9 +487,6 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Merges, opens a pull request for, or throws away a worktree, and
     /// removes it (but for a pull request), its branch too when asked.
     case finishWorktree(folder: String, path: String, finish: WorktreeFinish, deleteBranch: Bool)
-    /// The command a folder runs in each new worktree before its agent
-    /// (`npm install`); nil or empty for none.
-    case setWorktreeSetup(folder: String, command: String?)
 }
 
 /// JSON text frames sent by the host.
@@ -588,11 +608,25 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// whenever the list changes.
     case failures([PartFailure])
     case agentShellResult(id: Int, result: AgentShellResult)
-    /// Whether the MCP server is installed in the agents' configuration.
-    /// Not sent by a host that does not install it (a test's, a trial run).
-    case agentShells(Bool)
-    /// Whether the agents are asked to run their commands in shells the user sees.
-    case agentsUseShells(Bool)
+    /// What an agent's `agentBrowser` came to (#76), to that client only.
+    case agentBrowserResult(id: Int, result: BrowserResult)
+    /// To the app that shows the browser: do this, for the agent's session
+    /// `agent`, or for a device when nil, and answer with `browserReply`.
+    case browserCall(id: Int, agent: SessionID?, request: BrowserRequest)
+    /// The browser's tabs, as the app that shows them last said; none when
+    /// no app does.
+    case browserTabs([BrowserTabInfo])
+    /// What a device's `browserAsk` came to.
+    case browserAnswer(id: Int, result: BrowserResult)
+    /// What each agent is told: the user's words, by agent, and the
+    /// default each would be told without them, as the switches stand.
+    /// Sent on connecting and whenever one changes.
+    case agentPrompts(custom: [String: String], defaults: [String: String])
+    /// How shells are started, the user's login shell, and the shells the
+    /// Mac has to pick from. Sent on connecting and whenever it changes.
+    case shellSettings(ShellSettings, loginShell: String, shells: [String])
+    /// A picture of a tab's page, live, for a device that watches it.
+    case browserFrame(tab: String, jpeg: Data, width: Double, height: Double)
     /// What keeps the agents from opening shells although that is on
     /// (#58); none when nothing does. Sent on connecting and whenever it
     /// changes.
@@ -612,8 +646,8 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// What a run printed: its screen and what scrolled by, as text; nil
     /// when nothing was kept of it.
     case scheduleRunOutput(id: String, at: Date, text: String?)
-    /// A folder's worktrees, the folder's own first, and its setup command.
-    case worktrees(folder: String, list: [WorktreeInfo], setup: String?)
+    /// A folder's worktrees, the folder's own first.
+    case worktrees(folder: String, list: [WorktreeInfo])
     /// What became of `finishWorktree`: a pull request's address, or that
     /// it was merged or removed.
     case worktreeFinished(folder: String, path: String, said: String)
@@ -625,10 +659,6 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// A `findText` is over: whether there were more lines than were
     /// given, and why it could not be done, when it could not.
     case searchEnded(search: Int, truncated: Bool, problem: String?)
-    /// The setup command of every folder that has one (#34): sent when a
-    /// client connects and whenever one changes, so that it is known
-    /// before a folder's worktrees were ever asked for.
-    case worktreeSetups([String: String])
 }
 
 public enum MessageCoding {

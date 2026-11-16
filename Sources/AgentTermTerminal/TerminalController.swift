@@ -254,6 +254,24 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         onInput?(Data(bytes))
     }
 
+    /// Whether the program asked for bracketed paste (mode 2004), as the
+    /// emulator has it from what the program wrote, or from the screen the
+    /// host wrote out on attaching, which carries the mode.
+    public var bracketedPasteMode: Bool { view.terminalInputStateSnapshot()?.bracketedPasteMode ?? false }
+
+    /// How the cursor is drawn until the program asks for another, and how
+    /// far back the terminal scrolls (Settings > Shell on the Mac).
+    public func setLooks(cursor: TerminalCursor, blinks: Bool, scrollback: Int) {
+        let style: CursorStyle
+        switch cursor {
+        case .block: style = blinks ? .blinkBlock : .steadyBlock
+        case .underline: style = blinks ? .blinkUnderline : .steadyUnderline
+        case .bar: style = blinks ? .blinkBar : .steadyBar
+        }
+        view.setCursorStyle(style)
+        view.changeScrollback(scrollback)
+    }
+
     public func setFontSize(_ size: CGFloat) {
         view.font = TerminalStyle.font(size: size)
         // The grid's size in points changed with the cells, so a container

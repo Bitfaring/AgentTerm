@@ -134,7 +134,7 @@ private struct StartHere: View {
                     .font(.footnote.weight(.semibold))
                     .disabled(isListed)
             }
-            LaunchGrid(folder: path, labelSuffix: " here", showsSSH: false)
+            LaunchGrid(folder: path, labelSuffix: " here", showsSSH: false, showsBrowser: false)
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)

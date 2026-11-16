@@ -137,7 +137,7 @@ public enum HostEnvironment {
     /// Arguments that start `command` through the login shell, or a plain
     /// login shell when `command` is nil. Going through the shell gives the
     /// program the same PATH the user has in a regular terminal.
-    public static func shellArguments(command: String?) -> [String] {
+    public static func shellArguments(command: String?, shell: String = shell) -> [String] {
         let name = (shell as NSString).lastPathComponent
         guard let command, !command.isEmpty else { return ["-" + name] }
         return [name, "-l", "-i", "-c", command]

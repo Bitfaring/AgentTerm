@@ -48,13 +48,21 @@ if arguments.first == "hook" {
 // the other build included (#57), it offers no tools.
 if arguments.first == "mcp" {
     var ask: AgentShellsMCP.Ask?
+    var askBrowser: AgentShellsMCP.AskBrowser?
     let session = AgentShellsMCP.Session(variable: ProcessInfo.processInfo.environment[HostServer.agentShellsVariable])
     if let session, let token = try? HostEnvironment.loadOrCreateToken() {
         let link = AgentShellsLink(port: session.port, key: session.key, token: token)
         link.start()
         ask = link.ask
+        askBrowser = link.askBrowser
     }
-    let server = AgentShellsMCP(ask: ask, version: AppChannel.current.appName, useShells: session?.useShells ?? false)
+    // What the host worked out for this session's agent, the user's words
+    // in Settings or the default: the server's instructions.
+    let instructions = session?.agent.flatMap { agent in
+        (try? String(contentsOf: HostServer.promptFile(for: agent), encoding: .utf8)).flatMap { $0.isEmpty ? nil : $0 }
+    }
+    let server = AgentShellsMCP(
+        ask: ask, askBrowser: askBrowser, version: AppChannel.current.appName, useShells: session?.useShells ?? false, instructions: instructions)
     // Lines are read in turn, off the main queue, where the connection's
     // answers arrive. Each is answered when its answer is there (#64): a
     // tool that takes long, a `wait`, does not hold up the lines after it.
@@ -196,11 +204,12 @@ do {
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
     configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)
-    // Installs the MCP server in the agents' own configuration, for this
-    // Mac's host only: not for one with a state folder of its own (a test,
-    // a trial run), which must leave the user's agents alone.
+    // Gives the agents' sessions the MCP server, and takes out what earlier
+    // builds put in the agents' own configuration, for this Mac's host
+    // only: not for one with a state folder of its own (a test, a trial
+    // run), which must leave the user's agents alone.
     if (ProcessInfo.processInfo.environment["AGENTTERM_STATE_DIR"] ?? "").isEmpty, agentsDirectory == nil, let tool = Bundle.main.executablePath {
-        configuration.agentShells = AgentShellsInstall(directory: HostEnvironment.supportDirectory, tool: tool)
+        configuration.agentShells = AgentShellsSetup(directory: HostEnvironment.supportDirectory, tool: tool)
     }
     // Notes that it runs, so the next host knows whether this one died.
     configuration.stateDirectory = HostEnvironment.supportDirectory

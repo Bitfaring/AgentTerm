@@ -34,9 +34,17 @@ trading off scope:
 |---|---|---|
 | macOS | Runs the sessions and shows them | macOS 14 |
 | iPhone | Remote control for sessions on the Mac | iOS 17 |
+| iPad | The iPhone app, laid out for the iPad's screen (#88) | iPadOS 17 |
 
 iOS does not allow apps to start processes, so the iPhone never runs an agent
 itself.
+
+The iPad has what the iPhone has (principle 1): the same tabs and screens,
+a session's terminal over the whole screen, one window. What takes careful
+editing stays the Mac's there too. The lists (sessions, History, Schedules,
+Settings) keep a column's width in the middle of its screen; narrowed by
+Split View or Stage Manager it is laid out as the iPhone is. What the app
+says names the device it runs on.
 
 ## Features
 
@@ -82,10 +90,12 @@ itself.
 - A shell has no state. An agent that has just started has none until it
   says something. After Escape or Control C is typed to a working agent,
   its state is not known until the agent says more.
-- Codex runs the hooks AgentTerm gives it without asking (seen with Codex
-  0.169): its session says nothing about trusting them. A Codex from
-  before, which asked to trust them first, shows no state until that is
-  answered.
+- Codex asks to review the hooks AgentTerm gives it when they are new or
+  changed: the first session after AgentTerm is installed, and the first
+  after switching between the released and dev builds (seen with Codex
+  0.169). Until its hooks first report, a Codex session says that its
+  state shows once they run, and to choose "Trust all and continue" if
+  Codex asks; told to go on without them, Codex shows no state.
 - Antigravity does not say when it waits for permission: while it runs a
   tool, its state is not shown, and its session says why.
 
@@ -97,8 +107,9 @@ itself.
   folder's current commit, a git worktree for it in
   `<folder>/.agentterm/worktrees/<branch>`, and starts the session there.
   Nothing is brought along: no uncommitted change, nothing git ignores;
-  with changes not committed, the app asks first. A folder can name a
-  setup command (`npm install`) that is run in each new worktree first.
+  with changes not committed, the app asks first. What the worktree needs
+  (`npm install`, a `.env`) is done in it by its user, or the agent: no
+  command is run in it by AgentTerm (decided on 2026-11-16, #75).
 - The session is listed under its folder with its branch, on the Mac and
   the iPhone. Selecting it, the Git, History and Files tabs show its
   worktree; on the iPhone its menu has "Changes, History and Files",
@@ -116,12 +127,12 @@ itself.
 - **+** makes a new one: the branch's name, suggested and editable, the
   branch it starts from (the folder's own unless another, local or of a
   remote, is picked; the new branch follows none), and what is started
-  there, an agent or a shell. The sheet says which setup command will run,
-  and when the folder has changes that the worktree will not have.
+  there, an agent or a shell. The sheet says when the folder has changes
+  that the worktree will not have.
 - **⋯** is for the worktree on show: merge its branch into the folder's
   and remove it (with its branch, for one AgentTerm made), open a pull
   request with `gh`, or throw it away, which asks first and says what is
-  not merged; and the folder's setup command. A merge that conflicts is
+  not merged; the folder's own chip has none. A merge that conflicts is
   left in the folder to be resolved and continued, or aborted, as any
   other, and the worktree is kept. A worktree a session runs in is not
   removed.
@@ -193,7 +204,7 @@ itself.
   made ready) or was stopped for taking too long is said
   in the top banner of both apps. A pull that stops on conflicts before a
   run is undone, since nobody is there to resolve them, and a worktree
-  whose submodules or setup command failed is kept, to be looked at, with
+  whose submodules failed is kept, to be looked at, with
   no agent started in it. A run skipped as its schedule says
   (nothing changed, nothing pulled, the run before still going) is in the
   list of runs only.
@@ -206,8 +217,8 @@ itself.
   too. A run going when the host stops, or dies, ends with it.
 - **A worktree of its own.** A schedule may have each run in a new
   worktree of the folder, on a branch named after the schedule and the
-  time, with its submodules checked out and the folder's setup command
-  run; the worktree is kept afterwards, in the folder's worktree bar, to
+  time, with its submodules checked out; the worktree is kept afterwards,
+  in the folder's worktree bar, to
   be looked at, merged or thrown away.
 - **The prompt** opens in a larger editor, with the files of the
   schedule's folder beside it, found by name: one that is picked is named
@@ -285,26 +296,40 @@ itself.
   tab, works in it, and the user watches and can type in it too. On the
   Mac it is a tab and a row in its agent's folder, on the iPhone a row,
   marked as opened by an agent.
-- It is done through AgentTerm's MCP server, which AgentTerm installs in
-  the settings of Claude Code, Codex, Copilot CLI and Antigravity for the
-  whole user, by default, the first time it runs. Settings ("Agents can
-  open shells you see", on the Mac and the iPhone) removes it from them,
-  and puts it back.
-- A development build installs a server of its own beside the released
-  app's, under another name (`agentterm-dev`), and each works only in the
-  sessions of its own build: trying a change never takes the shells from
-  the agents of the installed app.
-- Its tools: open a shell (with a command or without), list the shells,
-  read a shell's screen, type into it (text and keys by name), wait until
-  its screen is still or shows a text, close it.
-- Only the agent that opened a shell types into it and closes it. Every
-  agent lists the shells agents opened, told which are its own, and may
-  read any of them; one that has no shell of its own, or whose own is
-  busy, opens another. So what runs in an agent's shell is what that agent
-  started. A shell whose agent's session has ended is left as it is: it
-  stays open for the user, agents still read it, and none types into it.
-  An agent never reaches the user's own sessions, nor an agent's session.
-  It opens shells only, never another agent.
+- It is done through AgentTerm's MCP server, which AgentTerm gives to
+  each session of Claude Code, Codex, Copilot CLI and Antigravity it
+  starts, for that session only, as it gives it its hooks: always, with no
+  switch. Nothing is written into the agents' own settings, and an agent
+  started outside AgentTerm, where the server has nothing to offer, does
+  not have it.
+- Builds before 0.8.0 installed the server in the agents' settings, for
+  the whole user. AgentTerm takes out what it put there with each agent's
+  own command, once for each agent; an agent that refuses is named in the
+  top banner, with how to take it out by hand, and is not asked again.
+- A development build gives its sessions a server of its own, under
+  another name (`agentterm-dev`), and each works only in the sessions of
+  its own build: trying a change never takes the shells from the agents
+  of the installed app.
+- Its tools, all named `shell_…`: open a shell (with a command or
+  without), **run a command in it and be told its exit code and its
+  output once it ends**, in one call, list the shells, read a shell's
+  screen, type into it (text and keys by name), wait until the command
+  that runs ends, its screen shows a text or is still, close it. A
+  command that outlasts the call goes on running, and waiting on it later
+  tells how it ended. For this, a shell an agent opens says when each of
+  its commands starts and ends, with its exit code (zsh is set up for it
+  when it starts, after the user's own startup files; fish says so by
+  itself); in another shell, a command is waited for until the screen is
+  still, and its exit code is not known. The user's own shells are left
+  as they are.
+- An agent sees and uses only the shells it opened: it lists, reads,
+  types into and closes those, and no other. Another agent's shell, the
+  user's own sessions and the agents' sessions it neither sees nor
+  reaches; one that has no shell of its own, or whose own is busy, opens
+  another. So what runs in an agent's shell is what that agent started. A
+  shell whose agent's session has ended is left as it is: it stays open
+  for the user, and no agent sees it. An agent opens shells only, never
+  another agent.
 - A shell's row names the session of the agent that opened it, on the Mac
   and on the iPhone, or says that its agent has ended.
 - When an agent's server cannot reach the host, the agent is told at once
@@ -313,18 +338,162 @@ itself.
   refused, or could not be set up in an agent, both apps say so in a
   banner at the top, with what to do, until it is over or the banner is
   closed.
-- When the agent's session ends, the shells it opened stay, for the user
-  and for the other agents.
+- When the agent's session ends, the shells it opened stay, for the user.
 - Outside a session of AgentTerm (an agent run in another terminal), the
   server offers no tools.
-- **Agents run their commands in shells you see**, on by default, next to
-  the switch above: each agent is asked to run its commands in a shell of
+- **Agents run their commands in shells you see**: each agent is asked to run its commands in a shell of
   the server, one already open if there is one free in its folder, rather
   than in its own out of sight, and to leave it open for the next task. Claude
   Code is told so in its system prompt; Copilot CLI and Antigravity in
   instructions files of AgentTerm's, which they read as they read a
   project's; Codex through the server's instructions, which it follows. An
-  agent still decides for itself.
+  agent still decides for itself. There is no switch for it: the user who
+  wants it otherwise changes what the agent is told (below).
+- Each agent is also told to use AgentTerm's
+  browser, through the server's `browser_` tools, whenever the user asks
+  for anything in a browser ("the browser", "Chrome", a site, localhost),
+  and not another browser tool or extension it may have (such as Claude in
+  Chrome) unless the user names that one.
+- **Settings > Shell** on the Mac. Which program a new shell is (the
+  login shell by default, or one of the Mac's shells, or any other
+  program), here and from the iPhone; a session that runs a command, an
+  agent's, still starts through the login shell. What is run first in a
+  shell: in the user's own, typed at the prompt with Return as the user
+  would; in an agent's, before its first prompt, so that it is not one of
+  the agent's commands. A zsh an agent opens always says when each command
+  ends, with no switch: another shell does not, and there an agent waits
+  for the screen to be still and is not told the exit code. How the terminals look on this Mac: font, size, cursor
+  (block, underline, bar, blinking or not) and how far back they scroll.
+  The host keeps all but the looks.
+- **What the agents are told**, in Settings > Agents on the Mac: one text
+  for each agent (Claude Code, Codex, Copilot CLI, Antigravity), filled
+  with what AgentTerm tells it by default (the two above). The user edits it, saves it (⌘S) or puts the default back
+  (Reset to Default); empty, the agent is told nothing by AgentTerm. The
+  host keeps it, so an agent started from the iPhone or by a schedule is
+  told the same; sessions started after it is saved are told it, those
+  running keep what they were told. It is given where each agent reads it:
+  Claude Code's system prompt, Copilot CLI's and Antigravity's
+  instructions files, and the MCP server's instructions, which Codex
+  reads. It is edited on the Mac only.
+
+### The browser (Mac)
+
+The Mac app has a browser (#76): Chromium itself, embedded with CEF, used
+by the user and by the agents alike. An agent drives the very tab the
+user sees.
+
+- **For the user.** A browser tab is a tab like any other in the panes,
+  started as a shell is: the Browser button next to Shell in the header,
+  on the launch screen, or Browser > New Browser Tab (⌥⌘T). It opens in
+  the project on show,
+  in the profile picked (see Profiles). Its bar has back, forward, reload or stop, the
+  profile it uses, and the
+  address, where words that are not an address are searched for (⌘L to
+  reach it, ⌘R, ⌘[ and ⌘] too). Its menu finds in the page (⌥⌘F), zooms,
+  shows the page as a device does (Show As: some forty phones, tablets
+  and computers, Chrome's DevTools' own, by kind: iPhones, Pixels,
+  Galaxies, iPads, Surfaces, laptops; their screen's size and density,
+  user agent with this Chromium's version, `navigator.platform`, client
+  hints and touch; the page is then as wide and as tall as the device's
+  screen, and beside an agent its part gets just that width and the
+  agent the rest), opens Chromium's own Developer Tools
+  (⌥⌘I) with the console, sends an element to an agent, and closes it. Text is selected, copied
+  and pasted as anywhere. A page that opens a window opens a tab instead,
+  in the same project and for the same agent. A download goes to the
+  Downloads folder and is shown under the page. A page asking for the
+  camera, the microphone, the location, notifications and the like asks
+  the user in a bar over the page; an agent never answers it. A page that
+  did not load says why, and a development server of the Mac that does
+  not answer is said to be maybe not running. The tabs are not kept: the
+  app opens with none, an agent's that still runs included (it opens
+  another when it needs one). A profile keeps its sign-ins and cookies.
+- **Profiles.** The user keeps named profiles in Settings > Browser
+  ("Work", "Personal", "Test account"): each has its own sign-ins,
+  cookies, storage and cache. Each shows what it keeps on disk; a profile
+  is made, renamed, cleared of its data and deleted there (each asked
+  first), the last one is never deleted, and one is the default. With a
+  single profile, every tab uses it. **With several, the Browser button
+  asks which** (a menu of them, the default first, and Private; Browser >
+  New Browser Tab opens one in the default), and so does Browser among
+  what a folder can start on the iPhone. **An agent asks the user in its
+  conversation**: its first `browser_open` that names no profile is
+  answered at once with the profiles' names and asks it to ask the user;
+  the one it then names is its own, and its next tabs use it without
+  naming it (`browser_profiles` lists them). A **private tab** (Browser >
+  New Private Tab, ⇧⌥⌘T; Private in the Browser button's menu, or its
+  own menu with a single profile; `private: true` for an agent, which is
+  not asked) has a profile of its own in memory: it keeps nothing on
+  disk, has none of the profiles' sign-ins, and what it has is gone with
+  the last of its tabs. The user's private tabs share one, each agent's
+  share another of its own. A tab says which profile it uses, or Private,
+  in its bar. A page that opens a window opens it in its own profile.
+  Data that Chromium has open is cleared, or a
+  deleted profile's thrown away, the next time the app opens, and the
+  app says so. The user's own browser's profile is never read. The
+  released and the development builds keep their profiles apart, and
+  their keychain items.
+- **For the agents.** Through AgentTerm's MCP server, with its shells'
+  tools: an agent opens tabs of its own (`browser_open`), which show
+  beside it (see Panes), reads a page as text with a ref for what can be
+  acted on (`browser_snapshot`), clicks, types, picks, presses keys,
+  scrolls and waits (`browser_click`, `browser_type`, `browser_select`,
+  `browser_press`, `browser_scroll`, `browser_wait`), chooses files for a
+  file field (`browser_upload`: files of its project only, so that nothing
+  else of the Mac is sent to a site), looks at it
+  (`browser_screenshot`), reads its console and its requests
+  (`browser_console`, `browser_network`), runs its scripts
+  (`browser_evaluate`), shows it as a device (`browser_emulate`), goes
+  back, forward or reloads, and closes its own tabs. Each action says what
+  came of it: where the page is now, whether it changed, what was
+  downloaded or opened, whether the console has new errors. A ref of a
+  page that changed since is refused with what to do. A snapshot does not
+  read the insides of a page's frames: it names them, with their
+  addresses, to be opened in a tab instead. An agent sees and
+  drives only the tabs it opened: the user's tabs, and another agent's,
+  it is neither listed nor reaches, and no tab is shared with it. To have
+  an agent work on a page, the user asks it to open it; a tab of the same
+  profile has the same sign-ins. An agent's page goes on working while it
+  is not shown (another agent or project on show, the window covered or
+  minimized); Chromium then holds it back as Chrome does a tab in the
+  background, and the page can tell.
+- **Who has the tab.** Over a tab an agent opened, a bar says which
+  agent uses it and what it did last. The user takes it over with Take
+  Over, or by clicking in the page; the agent is then refused, told why,
+  until the user gives it back ("Let … Go On"). It may still read the page.
+- **Sending part of a page to an agent.** Send to Agent picks an element
+  of the page: its picture, the address, a selector, its HTML and its
+  main styles are shown with a note to write and the agent to send it to,
+  one of the project's. Sent, the picture is saved in the project's
+  `.agentterm/shots/` and the rest is typed into the agent's session, with
+  the picture's path, and submitted.
+- **What fails is said.** With the app closed, or showing another Mac, an
+  agent is told at once that the browser is in the app on that Mac and it
+  is not open there. "Agents can use the browser" in Settings > Browser,
+  on unless turned off, refuses the agents with that reason when off.
+- **On the iPhone**, as on the Mac: an agent's own shells and pages are
+  listed right under it, set in, under the headings Shells and Browser;
+  the user's pages are in their project's folder, and those of no folder
+  under "Browser on the Mac". An agent's screen has Agent, Shells and
+  Browser, each with its tabs when it has several: a shell is its
+  terminal, a page is shown live, about ten pictures a second, which come
+  while the Mac does not show it too. On an iPad on its side, the app on
+  all of its screen, the page is beside the agent, on the right, and the
+  left shows the agent or one of its shells (Agent, Shells); upright, or
+  sharing the screen, it is as on the iPhone. The page is used as on the
+  Mac: a touch clicks where it lands, and on a field brings the keyboard
+  up, whose keys go to the page (a keyboard of the iPad's own too, with
+  its arrows, Tab and Escape); a drag scrolls it; two fingers zoom into
+  the picture, and 1× fits it again. Over it are back, forward, reload or
+  stop, the address bar, which takes an address or words to search for,
+  the keyboard, and a menu with Show As (the Mac's devices) and Close
+  Tab. An agent's page becomes the user's at the first thing done to it,
+  as a click on the Mac makes it, and Let … Go On gives it back; showing
+  it as a device or closing it does not take it. Browser, among what a
+  folder can start, opens a page of the user's in it, on the Mac but not
+  in front there: with several profiles, in the one picked from its menu,
+  or private; with one, in it, and a private one from its own menu. The
+  user's pages open in a sheet. Send to Agent, which
+  picks one element of a page, is the Mac's only (principle 1).
 
 ### Usage
 
@@ -498,14 +667,52 @@ panel.
   from its menu; a folder dragged in from the Finder is added. A folder's
   sessions are in the order of their tabs and can be dragged the same way.
 - **Middle: terminal.** The selected session. With no session selected, a
-  launch screen for the selected folder. Above it, every running session is a
-  tab, with a "+" to start another. Command and a number (⌘1 to ⌘9) shows the
-  tab in that place, ⌘⇧] and ⌘⇧[ go to the next and previous, ⌘W ends the
+  launch screen for the selected folder. Above it, every running session of
+  the project on show is a tab; another is started from the header (the
+  agents, Shell, Browser) or the File and Browser menus. Command and a
+  number (⌘1 to ⌘9) shows the tab in that place of the pane the keyboard is
+  in, ⌘⇧] and ⌘⇧[ go to the next and previous, ⌘W ends the
   session on screen. Open files are tabs in the same strip, and so is the
   diff picked in the Git tab. A tab's menu (right click) closes it, the
-  other tabs, every file (terminals stay), or every tab. Whatever would end
-  a session asks first. Files with unsaved changes are never closed
-  without asking.
+  other tabs of its pane, every file of its pane (terminals stay), or every
+  tab of its pane; the Tab menu's do the same for the pane the keyboard is
+  in. Whatever would end a session asks first. Files with unsaved changes
+  are never closed without asking.
+- **Panes** (#69). The user does not split the middle: it has one strip
+  of tabs and shows the tab in front, a session, a file, the diff or a
+  page of the browser. What is shown side by side is an agent's own shells
+  and pages, beside it (below), which the agent opens; a layout split by an
+  earlier build is put back into one. A session is shown in one place
+  only: the window is one device to the host, with one size for each
+  session.
+  **Each project has its own**: the middle shows the
+  project on show, with its tabs only. Picking a folder in the list shows
+  its tabs as they were left; picking a session there, or a notice, shows
+  that session's project, with the session in front. Sessions started in
+  no listed folder have their own too. What is in front is kept by the app
+  on the Mac, for each Mac it shows and each project, and comes back when
+  the window opens again; a tab that ended meanwhile is simply gone.
+  **An agent's own shells and browser are laid out beside it.** When an
+  agent opens shells (see "Shells an agent opens") or browser tabs, picking
+  it shows its area: the agent on the left, its browser on the right, its
+  shells under both, the full width, as tabs of that one pane. These are
+  not tabs of the strip. The area belongs to the agent's session, so
+  picking another agent shows that one's. A shell or page picked in the
+  list of sessions or a notice shows its agent's area with it in front.
+  The dividers are dragged as between panes; closing the shells or the
+  browser (the × of their strip) hides them, and the bar under the area
+  shows them again (Show Shells, Show Browser): a shell keeps running and
+  stays in the list of sessions. An agent opening a shell or a page does
+  not take the keyboard from where the user types. The View menu puts the
+  keyboard in the agent (⌥⌘←), its page (⌥⌘→) or its shells (⌥⌘↓), and
+  Show This Part Alone (⇧⌘Return) has the part the keyboard is in fill the
+  area for a while, a bar under it saying so, until it is chosen again or
+  Show All is clicked; it is not kept when the app quits. A shell the user opens
+  is the user's, a tab like any other, and so is a browser tab the user
+  opens, and an agent's shell or page once its agent's session has ended.
+  An agent's own shells and pages are always shown in its area, never as
+  tabs of their own: they are not dragged, pinned or moved to a pane. In
+  the list at the left they are right under their agent, set in.
   Tabs are arranged by hand. A tab is dragged onto another to go before it
   (or moved from its menu and the Tab menu). A **pinned** tab stays first
   and is left open by the commands that close many tabs. Tabs can be put
@@ -674,8 +881,8 @@ panel.
     commit to which, staged and committed in the folder as a file is.
     Discarding it, asked first, checks out the recorded commit again. A
     submodule inside a submodule is listed the same way under it. A new
-    worktree has its submodules checked out, theirs too, before its setup
-    command runs; when one cannot be fetched the worktree is made all the
+    worktree has its submodules checked out, theirs too, before its
+    session starts; when one cannot be fetched the worktree is made all the
     same, and the banner says so.
     Not part of it:
     choosing a remote, and adding, removing or updating submodules from

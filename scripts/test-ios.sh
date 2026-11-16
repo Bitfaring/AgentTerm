@@ -15,6 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v xcodegen >/dev/null || { echo "test-ios.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
 source scripts/lib-simulator.sh
+source scripts/lib-cleanup.sh
 if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then print_simulators; exit 0; fi
 # The fallback is not the simulator run-ios.sh falls back to: this test
 # resets the simulator's keychain, which unpairs the app you are trying out.
@@ -83,8 +84,15 @@ wait "$DEAD" || true
 printf '{"pid":%s,"startedAt":%s,"sessions":[{"name":"build","cwd":"%s"},{"name":"tests","cwd":"%s"}]}' \
     "$DEAD" "$(date +%s)" "$PROJECT" "$PROJECT" > "$STATE/host-$PORT.json"
 
+# Stand-ins for the agents, as the screenshots have (scripts/demo-agent.py):
+# none of the installed ones is started, and Antigravity's session has the
+# note the test reads (IOS-9).
+AGENTS="$STATE/agents"
+mkdir -p "$AGENTS"
+for agent in claude codex agy copilot; do cp scripts/demo-agent.py "$AGENTS/$agent"; chmod +x "$AGENTS/$agent"; done
+
 # Two hosts with their own state, standing in for two Macs.
-HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" > "$STATE/daemon.log" 2>&1 &
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
 AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only --protocol-version 1 > "$SECOND_STATE/daemon.log" 2>&1 &
@@ -93,7 +101,13 @@ SECOND_DAEMON=$!
 # reach, for the phone to show its settings as they were and not change them.
 ( while ! grep -q '"keepAwake":true' "$SECOND_STATE/settings.json" 2>/dev/null; do sleep 0.3; done; kill "$SECOND_DAEMON" ) &
 GONE_WATCH=$!
-trap 'kill "$DAEMON" "$SECOND_DAEMON" "$GONE_WATCH" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
+TAKEOVER_PID=""
+cleanup() {
+    local status=$?
+    stop_then_remove "$DAEMON $SECOND_DAEMON $GONE_WATCH $TAKEOVER_PID" "$STATE" "$SECOND_STATE"
+    exit "$status"
+}
+trap cleanup EXIT
 for _ in $(seq 1 50); do [ -s "$STATE/token" ] && [ -s "$SECOND_STATE/token" ] && break; sleep 0.1; done
 [ -s "$STATE/token" ] && [ -s "$SECOND_STATE/token" ] || { echo "test-ios.sh: the hosts did not start" >&2; cat "$STATE/daemon.log" "$SECOND_STATE/daemon.log" >&2; exit 1; }
 
@@ -127,6 +141,19 @@ if [ "${SCROLL:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_SCROLL=1; fi
 # IDLE=only measures how long the steps around a session's menu wait for the
 # app to be idle (#65), and nothing else. The figures are in the log.
 if [ "${IDLE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_IDLE=1; fi
+# MENU=only counts how often a touch on an entry of a folder's menu is lost
+# (#83), MENU_ROUNDS times (20 by default), and nothing else. The figures
+# are in the log.
+# MENU=after does the same where the whole test chooses it once, after
+# everything before it.
+if [ "${MENU:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_MENU=1; fi
+if [ "${MENU:-}" = after ]; then export TEST_RUNNER_AGENTTERM_MENU_AFTER=1; fi
+if [ -n "${MENU:-}" ]; then export TEST_RUNNER_AGENTTERM_MENU_ROUNDS="${MENU_ROUNDS:-20}"; fi
+# NOTE=only reads a stand-in agent's note on its row (IOS-9), and nothing else.
+if [ "${NOTE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NOTE=1; fi
+# NARROW=only narrows the iPad's window and looks at the list (IPAD-2), and
+# nothing else. On an iPhone it checks nothing.
+if [ "${NARROW:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NARROW=1; fi
 # PAGES=only checks that a long session's earlier lines come a page at a time.
 if [ "${PAGES:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_HISTORY=1; fi
 # TAKEOVER=1 has something play the Mac: once the phone has a session open,
@@ -137,7 +164,6 @@ if [ -n "${TAKEOVER:-}" ]; then
     [ "$TAKEOVER" = only ] && export TEST_RUNNER_AGENTTERM_ONLY_MAC_TAKEOVER=1
     AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" take-control --port "$PORT" --after 8 --hold 60 --type 'seq 1 400' > "$STATE/takeover.log" 2>&1 &
     TAKEOVER_PID=$!
-    trap 'kill "$DAEMON" "$SECOND_DAEMON" "$GONE_WATCH" "$TAKEOVER_PID" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
 fi
 
 if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
@@ -146,6 +172,9 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${LANDSCAPE:-}" = only ]; then echo "iOS UI test passed (landscape only)."; rm -f "$LOG"; exit 0; fi
     if [ "${PAGES:-}" = only ]; then echo "iOS UI test passed (paged history only)."; rm -f "$LOG"; exit 0; fi
     if [ "${IDLE:-}" = only ]; then grep -E "MEASURE idle" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (idle waits measured)."; rm -f "$LOG"; exit 0; fi
+    if [ "${NOTE:-}" = only ]; then echo "iOS UI test passed (a note read only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${NARROW:-}" = only ]; then grep -E "MEASURE narrow" "$LOG" | sed 's/^.*MEASURE //'; echo "iOS UI test passed (the window narrowed only)."; rm -f "$LOG"; exit 0; fi
+    if [ -n "${MENU:-}" ]; then grep -E "MEASURE menu" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (menu touches counted)."; rm -f "$LOG"; exit 0; fi
     if [ "${SCROLL:-}" = only ]; then grep -E "Measured \[|average:" "$LOG" | cut -c1-300; echo "iOS UI test passed (scrolling measured)."; rm -f "$LOG"; exit 0; fi
     grep -q '"Group 1 api"' "$STATE/tabs.json" || { echo "test-ios.sh: the host did not save the arrangement of the sessions" >&2; exit 1; }
     # The test committed and pushed from the phone; the remote has to have it.

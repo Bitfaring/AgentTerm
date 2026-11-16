@@ -47,6 +47,14 @@ the source yourself sends nothing at all.
 - **Pairing.** A paired iPhone holds a token in its Keychain. The Mac holds only a hash of it, in
   `~/Library/Application Support/AgentTerm`. You can remove a paired device in the Mac app at any time.
 - **Settings.** Your folder list and preferences are stored on the device they belong to.
+- **The browser (Mac).** The Mac app's browser keeps what any browser keeps, cookies, sign-ins,
+  history and caches, on your Mac, in the profiles you name in Settings > Browser, under
+  `~/Library/Application Support/AgentTerm/browser`; each can be cleared or deleted there. Its cookies are encrypted with a key kept in
+  your Mac's keychain, under "AgentTerm Safe Storage". A development build of AgentTerm, built from
+  source, uses a key of Chromium's own instead and never asks for your keychain. Your own browser's profile is never read.
+  Downloads go to your Downloads folder. A picture you send to an agent from a page is saved in that
+  project's `.agentterm/shots/` folder. The iPhone sees the tabs' titles and addresses, and a picture
+  of a page when you ask for one, from your Mac only.
 
 ## 4. Connections the Software makes
 
@@ -65,6 +73,11 @@ the source yourself sends nothing at all.
   with the sign-in git already has for them; nothing in your folder changes, and nothing about it
   goes to the developer. "Fetch automatically" in Settings turns it off, on the Mac and on the
   iPhone alike; the remotes are then asked only when you fetch, pull or push.
+- **The browser (Mac).** The browser loads the pages you, or an agent you allowed, open in it,
+  as any browser does: those sites see a visit from your Mac. Words typed into its address bar that
+  are not an address are searched for on Google. The agents use it through AgentTerm's MCP server, on
+  your Mac only; "Agents can use the browser" in Settings turns that off. No page, no picture and no
+  address goes to the developer.
 - **The agents themselves.** Claude Code, Codex, Antigravity and Copilot CLI are separate programs
   that you install and sign in to. What they send to their providers is governed by those providers'
   policies, not by this one.

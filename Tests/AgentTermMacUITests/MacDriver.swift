@@ -71,6 +71,25 @@ final class MacDriver {
         XCTFail("no window titled \(title) to close", file: file, line: line)
     }
 
+    /// Minimizes the app's main window into the Dock, or brings it back,
+    /// as its yellow button and a click on it in the Dock do.
+    func minimize(_ on: Bool, file: StaticString = #filePath, line: UInt = #line) {
+        var value: CFTypeRef?
+        AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute as CFString, &value)
+        if value == nil {
+            // A minimized window is no longer the main one.
+            AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
+            value = (value as? [AXUIElement])?.first
+        }
+        guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            XCTFail("no window to minimize", file: file, line: line)
+            return
+        }
+        let window = value as! AXUIElement
+        XCTAssertEqual(AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, on as CFBoolean), .success, file: file, line: line)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+    }
+
     func quit() {
         guard let process, process.isRunning else { return }
         process.terminate()
@@ -263,6 +282,111 @@ final class MacDriver {
     }
 
     func value(of query: Query) -> String? { first(query)?.value }
+
+    // MARK: The mouse and the keyboard
+
+    /// Where an element is, in points of the screen from its top left.
+    static func frame(_ element: AXUIElement) -> CGRect? {
+        guard let position = attribute(element, kAXPositionAttribute), let size = attribute(element, kAXSizeAttribute),
+            CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID()
+        else { return nil }
+        var point = CGPoint.zero
+        var extent = CGSize.zero
+        AXValueGetValue(position as! AXValue, .cgPoint, &point)
+        AXValueGetValue(size as! AXValue, .cgSize, &extent)
+        return CGRect(origin: point, size: extent)
+    }
+
+    func frame(of query: Query) -> CGRect? { first(query).flatMap { Self.frame($0.element) } }
+
+    /// Whether an element says it is the one selected, as a row of a list does.
+    func isSelected(_ query: Query) -> Bool {
+        guard let node = first(query) else { return false }
+        return (Self.attribute(node.element, kAXSelectedAttribute) as? Bool) ?? false
+    }
+
+    /// Where the element that has the keyboard is.
+    func keyboardFrame() -> CGRect? { keyboardElement().flatMap(Self.frame) }
+
+    private func keyboardElement() -> AXUIElement? {
+        guard let focused = Self.attribute(app, kAXFocusedUIElementAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
+        return (focused as! AXUIElement)
+    }
+
+    /// What has the keyboard, for a failure's message.
+    func keyboardSummary() -> String {
+        guard let element = keyboardElement() else { return "nothing" }
+        return "\(Self.string(element, kAXRoleAttribute)) id=\(Self.string(element, kAXIdentifierAttribute)) "
+            + "label=\(Self.string(element, kAXDescriptionAttribute)) at \(Self.frame(element).map { "\($0)" } ?? "?")"
+    }
+
+    /// The element with the keyboard: its role, and the identifiers of it
+    /// and of the elements it is in, nearest first. A view that is no
+    /// element of its own is told by the nearest that is.
+    func keyboardPath() -> (role: String, ids: [String]) {
+        guard var element = keyboardElement() else { return ("", []) }
+        let role = Self.string(element, kAXRoleAttribute)
+        var ids: [String] = []
+        for _ in 0..<60 {
+            let id = Self.string(element, kAXIdentifierAttribute)
+            if !id.isEmpty { ids.append(id) }
+            guard let parent = Self.attribute(element, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            element = parent as! AXUIElement
+        }
+        return (role, ids)
+    }
+
+    /// Waits until the keyboard is in the element with that identifier. A
+    /// page has it when what holds it is in the view the page is drawn in
+    /// (`browser-page`) of that tab's pane: Chromium's own elements are not
+    /// linked to the window's, and its view, which has the keyboard, is told
+    /// by that one.
+    func waitForKeyboard(in id: String, page: Bool = false, _ what: String, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
+        func holds() -> Bool {
+            let path = keyboardPath()
+            guard page else { return path.ids.contains(id) }
+            // Chromium's own: no identifier of the app's, in the view the
+            // page is drawn in, below the tab's bar. Chromium's view is a
+            // group until it builds the page's elements.
+            guard path.ids.contains(id), let element = keyboardElement(), Self.string(element, kAXIdentifierAttribute).isEmpty,
+                let frame = frame(of: .id("browser-page")) ?? frame(of: .id(id)), let keyboard = keyboardFrame()
+            else { return false }
+            return frame.insetBy(dx: -1, dy: -1).contains(keyboard)
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if holds() { return }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        }
+        let path = keyboardPath()
+        XCTFail("the keyboard is not in \(what) (\(id)): it is in \(keyboardSummary()) within \(path.ids)", file: file, line: line)
+    }
+
+    /// The rows of the list at the left that say they are selected: one
+    /// at most.
+    func selectedRows() -> [String] {
+        nodes().filter { $0.identifier.hasPrefix("session-") || $0.identifier.hasPrefix("browser-row-") }
+            .filter { (Self.attribute($0.element, kAXSelectedAttribute) as? Bool) ?? false }.map(\.identifier)
+    }
+
+    /// The colour the app's window shows at a point of the screen, from a
+    /// picture of the window: what is drawn there, whatever accessibility
+    /// says is there.
+    func color(at point: CGPoint) -> NSColor? {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        guard
+            let info = windows.first(where: { ($0[kCGWindowOwnerPID as String] as? Int32) == pid && (($0[kCGWindowLayer as String] as? Int) ?? 1) == 0 }),
+            let bounds = (info[kCGWindowBounds as String] as? [String: Any]).flatMap({ CGRect(dictionaryRepresentation: $0 as CFDictionary) })
+        else { return nil }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-window-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: file) }
+        capture(to: file)
+        guard let image = NSImage(contentsOf: file), let picture = image.representations.first as? NSBitmapImageRep, bounds.width > 0 else { return nil }
+        let scale = CGFloat(picture.pixelsWide) / bounds.width
+        let x = Int((point.x - bounds.minX) * scale), y = Int((point.y - bounds.minY) * scale)
+        guard x >= 0, y >= 0, x < picture.pixelsWide, y < picture.pixelsHigh else { return nil }
+        return picture.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+    }
 
     /// A picture of the app's window, for a failure that words do not explain.
     func capture(to url: URL) {

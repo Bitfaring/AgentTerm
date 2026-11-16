@@ -17,6 +17,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 swift build --build-tests
 export AGENTTERM_MAC_UI=1
+# The browser's tests (#76) need the app bundle, where Chromium runs: built
+# here, never into dist/ where a copy may be running, under an identifier
+# of its own so that its preferences are the tests' only.
+# Always: a filter that names one of its tests by itself would skip it.
+TEST_BUNDLE_DIR="$PWD/.build/uitest-app"
+CONFIG=debug OUT="$TEST_BUNDLE_DIR" IDENTIFIER=com.manhpham.agentterm.uitest ./scripts/bundle-mac.sh > /dev/null
+export AGENTTERM_TEST_BUNDLE="$TEST_BUNDLE_DIR/AgentTerm Dev.app"
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export AGENTTERM_SHOT_DIR="$SHOTS"; fi
 if [ -n "${ALL_SHOTS:-}" ]; then export AGENTTERM_SHOT_ALWAYS=1; fi
 # MEASURE=1 runs the measurements of the app's main thread (#21), which the

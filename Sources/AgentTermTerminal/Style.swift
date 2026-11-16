@@ -10,13 +10,24 @@ public typealias PlatformColor = UIColor
 public typealias PlatformFont = UIFont
 #endif
 
+/// How the terminal's cursor is drawn.
+public enum TerminalCursor: String, CaseIterable, Sendable {
+    case block, underline, bar
+}
+
 /// Colors and fonts of the terminal itself, shared by every platform.
 public enum TerminalStyle {
     public static let background = PlatformColor(red: 0.075, green: 0.078, blue: 0.098, alpha: 1)
     public static let foreground = PlatformColor(red: 0.86, green: 0.87, blue: 0.90, alpha: 1)
 
+    /// The font the user picked (Settings > Shell on the Mac), by its
+    /// PostScript name; nil, or one that is not there, for the system's
+    /// monospaced font.
+    nonisolated(unsafe) public static var fontName: String?
+
     public static func font(size: CGFloat) -> PlatformFont {
-        .monospacedSystemFont(ofSize: size, weight: .regular)
+        if let fontName, let picked = PlatformFont(name: fontName, size: size) { return picked }
+        return .monospacedSystemFont(ofSize: size, weight: .regular)
     }
 }
 
@@ -39,6 +50,7 @@ public enum AgentStyle {
         case "agy": return "arrow.up.forward.circle"
         case "copilot": return "airplane"
         case "ssh": return "network"
+        case "browser": return "globe"
         default: return "terminal"
         }
     }

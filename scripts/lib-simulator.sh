@@ -6,13 +6,13 @@
 # terminal, and otherwise takes the booted simulator or the fallback.
 # `SIMULATOR=<name or UDID>` in the environment counts as a given name.
 
-# One line per available iPhone simulator: UDID|name|state|runtime
+# One line per available iPhone or iPad simulator (#88): UDID|name|state|runtime
 list_simulators() {
     xcrun simctl list devices available | awk '
         /^-- / { runtime = $0; gsub(/^-- | --$/, "", runtime); next }
         match($0, /\([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\)/) {
             name = substr($0, 1, RSTART - 1); gsub(/^ +| +$/, "", name)
-            if (name !~ /^iPhone/) next
+            if (name !~ /^iPhone/ && name !~ /^iPad/) next
             udid = substr($0, RSTART + 1, RLENGTH - 2)
             state = ($0 ~ /\(Booted\)/) ? "Booted" : "Shutdown"
             print udid "|" name "|" state "|" runtime
@@ -27,7 +27,7 @@ choose_simulator() {
     local wanted="${1:-${SIMULATOR:-}}" fallback="${2:-iPhone 17}" all line
     all="$(list_simulators)"
     if [ -z "$all" ]; then
-        echo "No iPhone simulator is installed. Add one in Xcode > Settings > Components." >&2
+        echo "No iPhone or iPad simulator is installed. Add one in Xcode > Settings > Components." >&2
         return 1
     fi
 

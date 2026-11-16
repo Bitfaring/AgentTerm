@@ -45,6 +45,7 @@ full log is.
 | The host, the protocol and the shared code | `swift test` | 2 minutes |
 | The Mac app | `scripts/test-mac.sh` | 5 minutes |
 | The iPhone app | `scripts/test-ios.sh "iPhone Air"` | 5 minutes |
+| The iPhone app on an iPad (#88) | `scripts/test-ios.sh "iPad Pro 13-inch (M5)"` | 7 minutes |
 | The iPhone app on its side | `LANDSCAPE=only scripts/test-ios.sh "iPhone Air"` | a few minutes |
 | Both apps on one host | `scripts/test-both.sh "iPhone Air"` | 5 minutes |
 
@@ -62,9 +63,12 @@ which replaces the test runner's own wait while they run. The test went
 from 13 minutes to 5. Should a later Xcode name that wait otherwise,
 nothing is replaced and the steps wait as before; `IDLE=only
 scripts/test-ios.sh` says which waits it found. The grouping steps still
-make four of their gestures again when the first did nothing (`gesture`):
-whether a touch is still lost now and then without the minute-long waits
-is not known yet.
+make four of their gestures again when the first did nothing (`gesture`),
+and they have to (#83): made once, a drag onto a session of a group was
+lost in 2 of 10 runs on 2026-11-15. On the iPad, with the keyboard up, a
+touch on an entry of the terminal's menu was lost too, now and then, and
+the menu stayed open: the test puts the keyboard down before that menu
+there. Why either touch is lost is #83's, still open.
 
 Before a release all of them are run, in that order: the first is the
 quickest to say that something is broken, the last needs everything else
@@ -76,8 +80,8 @@ What they need, once:
   runs in, allowed under System Settings > Privacy & Security >
   Accessibility. Without it the Mac tests are skipped, not failed: a run
   that says "Executed 0 tests" or lists them as skipped checked nothing.
-- For P, L and X: Xcode with an iPhone simulator, and `brew install
-  xcodegen`. Name the simulator: the test resets its keychain, so it should
+- For P, L and X: Xcode with an iPhone simulator (an iPad one too, for the
+  iPad), and `brew install xcodegen`. Name the simulator: the test resets its keychain, so it should
   not be the one an app you use is paired in. `scripts/test-ios.sh --list`
   shows the simulators.
 
@@ -123,13 +127,17 @@ App Store, are taken the same way the apps are tested, by
 KEEP=/tmp/pictures scripts/screenshots.sh   # take them there, to look at first
 scripts/screenshots.sh                      # put them where the pages take them from
 ONLY=mac scripts/screenshots.sh             # only the Mac's three
-ONLY=ios scripts/screenshots.sh             # only the iPhone's six
+ONLY=ios scripts/screenshots.sh             # only the iPhone app's six, on the iPhone and on the iPad
+ONLY=iphone scripts/screenshots.sh          # or ONLY=ipad: on one of them
 ```
 
 It builds the app into a folder of its own, starts a host with a demo
 project, a second folder and stand-in agents (`scripts/demo-agent.py`,
 which draws an agent's screen and reports usage without any account),
-then runs `ScreenshotTests` of the Mac app and of the iPhone app. What a
+then runs `ScreenshotTests` of the Mac app and of the iPhone app, the
+latter on the iPhone Air and on the iPad Pro 13-inch (`IPAD=` names
+another), each paired by a link of its own. The iPad's go beside the
+iPhone's in `fastlane/screenshots/en-US`, named `ipad-*.png` (#88). What a
 picture shows is decided there: the demo project in the script, what the
 agent says in `demo-agent.py`, where each picture is taken in the two
 `ScreenshotTests`. They are taken again whenever a release changes what
@@ -284,6 +292,28 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | TAB-4 | Several tabs, one pinned, one file with unsaved changes | Close Others, Close All | The app asks before ending sessions; the pinned tab and the unsaved file stay | M (Close Others: it asks, and the pinned tab stays) |
 | TAB-5 | A file open and a diff picked | Look at the strip of tabs | The file and the diff are tabs next to the sessions | M (as part of FILE-3 and GIT-4) |
 
+### Panes (#69)
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| PANE-1 | Three tabs in one pane | Move one to a new pane on the right, then show it in the first pane again | It is in one pane at a time; the pane it left closes, its tab gone | U |
+| PANE-2 | Two panes | A new tab comes; a tab is shown | The new one goes into the pane the keyboard is in; showing a tab moves the keyboard to its pane | U |
+| PANE-3 | Three panes, the middle one with tabs | Close it; close panes until one is left | Its tabs join the pane nearest to it, which takes the keyboard; the last pane stays; nothing ends | U, M |
+| PANE-4 | A pane whose front tab ends | The tab goes | The tab before it comes to the front | U |
+| PANE-5 | [ a \| [ b / c ] ] | Move the keyboard left, right, up and down | To the pane on that side, none past the window's edge | U |
+| PANE-6 | Two panes | Show one alone; another takes the keyboard; close the one shown alone | Only it is shown, then all of them again | U |
+| PANE-7 | A layout of two panes | It is kept as JSON and read back; a pane is split after | The same layout; the new pane has a name of its own | U |
+| PANE-8 | A group of three tabs, one in another pane | Look at a pane's strip | The group's label shows where some of its tabs are, counting those | U |
+| PANE-9 | Two shells | Look at the strip, the pane's and a tab's actions, the menu bar | Both in the one pane; no button, action or menu item splits it, starts a tab from the strip, or moves a tab to another pane | M |
+| PANE-11 | Two projects, a shell in each | Pick each folder in turn; pick a session of the other project in the list | Each shows its own panes and none of the other's tabs; the session shows its project | M |
+| PANE-12 | An agent that opens a shell through the MCP server | Look at it; hide its shells; show them; look in Settings | The shell shows under the agent, not as a tab; in the list at the left, right under the agent and set in; hidden, it keeps running and "Show Shells (1)" brings it back; no switch makes it a tab | M |
+| PANE-14 | An agent the user types to | It opens a shell, and a page | The keyboard stays where it was | hand |
+| PANE-15 | An agent and its shell below it, Vietnamese input (Telex) | Type in one, click into the other, type | Each composes in its own terminal | hand |
+| PANE-16 | Two shells | Pick each tab; pick each session in the list | The keyboard goes to the terminal picked, each time | M |
+| PANE-17 | An agent with its page beside it | Pick the page in the list; pick the agent; the agent loads two pages, one with a field that asks for the keyboard | The page's row alone is selected, the page has the keyboard; then the agent's row alone, its terminal has it; the pages the agent loads take neither | M |
+| PANE-19 | An agent with its page and a shell | View > Keyboard to Its Page, to Its Shells, to the Agent; to Its Page and Show This Part Alone; again | The keyboard in each; the page alone, the agent and its shells hidden, a bar that says so, the keyboard in the page; all of them again | M |
+| PANE-18 | Tabs, the browser beside an agent | Click a tab, its close button, a session in the list, the agent's terminal while the page has the keyboard | Each click does what it says at once, and the keyboard goes where it was clicked | hand: the mouse's own events cannot be given to the app without moving the user's pointer |
+
 ### Git
 
 | ID | Input | Action or event | Expected response | Checked by |
@@ -293,7 +323,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | GIT-3a | Two files staged, a message in the field | Press Commit | git has a commit with that message; the committed files leave the list, the others stay, the field is empty | H, P, M |
 | GIT-3b | A pre-commit hook that prints a message and fails | Press Commit | git's own words are shown; no commit is made; the message stays in the field | H, M |
 | GIT-3c | A pre-commit hook that records the environment it is given | Press Commit | The hook sees `GIT_TERMINAL_PROMPT=0`, no `GIT_ASKPASS` and `SSH_ASKPASS_REQUIRE=never`, as push and pull do; the commit has the message as written | H |
-| GIT-4 | `notes.txt` changed | Pick it in the list; switch to two panels and back | Its diff opens as a tab with `+second line`; in two panels the line is on the right without its mark | P, M |
+| GIT-4 | `notes.txt` changed | Pick it in the list; switch to two panels and back | Its diff opens as a tab with `+second line`; in two panels the line is in the text of the right panel, without its mark or its number, and not in the left's | P, M |
 | GIT-5 | Changes in several folders | Press Group by folder | The list becomes a tree; folders fold and show totals | H, P, X |
 | GIT-6 | One panel and a flat list on both devices | Choose two panels, or the tree, on one device | The other device shows the same choice | H, M, X |
 | GIT-7 | One commit that the remote does not have | Press Push | The remote has the commit | H, P, M |
@@ -364,6 +394,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | GIT-72 | A repository; `--output=<file>` named as a branch and as a commit | Log, show, revert, pick, a branch made from it, switched to, renamed, deleted | None of them writes the file or makes a branch; names that are names still work | H |
 | GIT-73 | The iPhone, the fixture project | A branch made without switching to it; renamed from its menu; deleted from its menu | Made; listed under its new name and not the old; asked once (nothing of its own), then gone, as on the Mac (#35) | P |
 | GIT-74 | The iPhone, the fixture project after its commit | Commits; the newest, Revert…, Revert; the revert, the same | Picking is offered too; asked first, in the Mac's words; each revert is the newest commit after it, and the files are as they were (#36) | P |
+| GIT-75 (#82) | A diff with hunks, removed and added lines; one of 20,000 changed lines | Laid out as two panels | Each side is one text with a line for every row, facing the other's, the header on the left; the numbers and the marks are drawn, not in the text, so what is copied is the file's; no row left out, where 2,500 were the most; every row one line of one height; laying out ten times the rows takes less than fifteen times as long | U |
 
 ### History
 
@@ -395,6 +426,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | PERF-7 | A session of 10,000 lines | A client attaches; another asks something meanwhile; the session writes meanwhile | The other is answered at once (measured: `scripts/measure.sh`); what was written follows the screen | H |
 | PERF-8 | The real host, on a state folder of its own | Twenty sessions opened and ended, then 180 more (`scripts/measure.sh`) | `leaks` finds nothing; what it has allocated (`heap`) after 200 is within 15% of what it was after the first 20 | H |
 | PERF-9 | The iPhone app, two sessions listed | A session's menu opened and an entry picked, each step timed, as XCUITest does them and with its wait for the app to be idle left out (`IDLE=only scripts/test-ios.sh`) | The figures: 61 s for the press and 61 s for the pick while the menu is open, 1.5 s and 0.4 s without the wait; a tap with no menu about takes 2 s either way (measured 2026-11-14, #65) | P |
+| PERF-13 | The iPhone app, two listed folders; then the same at the end of the whole test, after its grouping steps, the colors' menu and the second Mac | "Move Down" chosen in the first folder's menu again and again, the order looked at each time (`MENU=only` or `MENU=after scripts/test-ios.sh`, `MENU_ROUNDS` times) | How many touches were lost. 0 of 30 alone and 0 of 20 at the end of the whole test, each round 3.1 to 3.3 s (measured 2026-11-15, #83). The two losses of ten runs made with the repeated gestures taken out were not seen again | P |
 | PERF-10 | The Mac app, told to note when its main thread is held up; a file with 20,000 changed lines, a text file of 5 MB, a session writing 12,000 lines | Each heavy thing done once and the app left alone meanwhile (`MEASURE=1 scripts/test-mac.sh MainThreadMeasurements`) | The figures: how often its main thread took longer than 16 ms to answer, and the longest; in PERFORMANCE.md. Skipped unless asked for | M |
 | PERF-11 | A Swift file of 20 KB, one over 512 KB, plain text | Which is colored, and the text storage made for each | The small one in a known language; the others get a plain storage | U |
 | PERF-12 | The editor made with no text, then given one over 512 KB in a known language; then a small Swift file in it | Whether each is colored | Not the large one, the small one. Before the fix the large one was colored, as on the iPhone, where the file comes after the editor is made | U |
@@ -513,6 +545,11 @@ A second host stands in for the other Mac, with a project of its own.
 | IOS-5 | The Mac's home with folders | Open Another Folder, pick one, start a shell | The shell starts in that folder | H, P |
 | IOS-6 | The History or Settings tab in front | The Mac answers with an error | The message shows over whichever tab is in front | P |
 | IOS-7 | Paired | Look at the three tabs | Sessions, History, Settings, with the settings the Mac's Settings has | P |
+| IPAD-1 | The app on an iPad Pro 13-inch simulator (#88) | The whole of the iPhone's test, `scripts/test-ios.sh "iPad Pro 13-inch (M5)"` | Everything the iPhone does, done the same; the tabs in the bar that floats at the top | P on the iPad |
+| IPAD-2 | The sessions' list on the iPad's screen; then the app narrowed by Split View | Look at it | The list, History, Schedules and Settings keep a column of 760 points in the middle, their background and scroll bar at the edges; narrowed, they fill it as on the iPhone. A terminal and a folder's Git, History and Files take the whole width. Narrowed by the window's handle from 1,032 points to 375, the list went from 728 to 343 (2026-11-15) | P on the iPad (the list's width); `NARROW=only scripts/test-ios.sh "iPad Pro 13-inch (M5)"` narrows the window by its handle, and makes it whole again |
+| IPAD-3 | The app on an iPad | Read Settings, the pairing screen and the messages that name the device | "this iPad", not "this iPhone" | P on the iPad (Settings) |
+| IOS-9 | A stand-in Antigravity's session in the list, its state not known | Touch the mark on its row | A popover with the note in the Mac's words; the session does not open. Before the fix the words were only the mark's accessibility label (#87) | P |
+| IOS-8 | A program that asked for bracketed paste, and one that did not; an agent asking a question | Send a message of more than 64 characters, one of several lines, one of a few characters | The long and the multi-line one go inside bracketed paste, then Return 80 ms later, to the program that asked; everything else typed as it is, lines ended with Return. Before the fix Codex 0.169 kept a single line of 437 characters in its input, the Return a new line in it | H (`SentTextTests`); with the real agents, the same bytes through a throwaway host, on 2026-11-15: 4,000 characters submitted in Claude Code 2.1.325, Codex 0.169.0, Copilot CLI 1.0.112 and Antigravity 1.5.8 |
 
 ### Waiting
 
@@ -532,7 +569,7 @@ A second host stands in for the other Mac, with a project of its own.
 | AGENT-5 | Each agent | Its session starts | It is given hooks for that session only, whose command is the same for every session; Antigravity's trusted folders are the user's and the host's, and the user's settings are not changed | H |
 | AGENT-6 | A stand-in agent telling its hooks through `agenttermd hook`, two devices, and a shell | It works, asks permission, works, ends | Each state is told when it begins, once, to both devices; a device that connects later is told the state as it is; the shell has none | H |
 | AGENT-7 | A working agent | Escape alone, or Control C, is typed | Its state is not known until it says more. An arrow key changes nothing | H |
-| AGENT-8 | A session of Codex and one of Antigravity | They start | Codex's says nothing: its hooks run without being trusted first; Antigravity's says it cannot tell when it waits for permission | H |
+| AGENT-8 | A session of Codex and one of Antigravity | They start; then Codex's hooks report | Codex's says its state shows once AgentTerm's hooks run, and to choose "Trust all and continue" if Codex asks; the note goes when its hooks first report. Antigravity's says it cannot tell when it waits for permission. Before the fix Codex's said nothing, though Codex 0.169 asks to review hooks that are new or changed (tried 2026-11-15) | H |
 | AGENT-9 | A stand-in agent that waits for permission | The Mac app shows it | A mark next to its name in the folder list and on its tab, read as "waiting for permission"; its folder's row says a session waits | M |
 | AGENT-10 | The same | The iPhone shows it | A mark in the sessions list, and the state in the terminal's title | hand, until the iPhone tests cover it |
 | AGENT-11 | A host that does not refresh during the test, a stand-in Claude Code | It saves that it works, then that it is done | Each state is told within two seconds, through the watch of the hooks' folder | H |
@@ -544,22 +581,21 @@ A second host stands in for the other Mac, with a project of its own.
 | WT-1 | A project with a change not committed and an ignored `.env` | A worktree is made for Claude Code; another; one with a name taken | `agentterm/claude-1` in `.agentterm/worktrees`, at the project's commit, without the change or `.env`, not seen by git as a change; then `agentterm/claude-2`; the taken name refused | H |
 | WT-2 | Two worktrees | Each changes the same file; the first is merged before and after committing; the second thrown away without its branch | Neither sees the other's change; listed with what is changed and ahead; not merged with changes not committed; merged, removed with its branch; the second removed, its branch kept | H |
 | WT-3 | A worktree made by hand outside the project, one whose folder is gone | Listed, a session in a folder inside the first | The project's first; the others with their paths, the first in use, the second missing; nothing removed | H |
-| WT-4 | A folder with a setup command | A session is started in a new worktree | It runs in the worktree, with its branch and its agent known; the setup ran there first; the worktree is listed in use | H |
+| WT-4 | A folder with an ignored `.env` | A session is started in a new worktree | It runs in the worktree, with its branch and its agent known; the `.env` did not come along, nothing being run in it but the session; the worktree is listed in use | H |
 | WT-5 | A worktree a session runs in | It is thrown away; the session ends; it is thrown away | Refused; then removed | H |
 | WT-6 | `.agentterm/` in a project | The Files tab lists the project | It is not listed | H |
 | WT-7 | The Mac app, a session in a new worktree with a change of its own | The session is selected | Listed under its project with its branch; the side panel's bar names the branch and the Git tab shows the worktree's change, not the project's | M |
 | WT-8 | The Mac app | Merge, open a pull request, throw away from the bar's ⋯ menu; a folder with uncommitted changes started in a new worktree | Each as WT-2 says; the question before starting | hand, until the UI tests cover it |
 | WT-9 | A worktree whose changes are watched | Its branch is pushed in a terminal (its remote branch written in the repository's own git folder) | The watch sees it, so ahead and behind are read again | H |
 | WT-10 | A folder inside a worktree AgentTerm made | A worktree is made from it; one from the top of the first | Next to the first, the session in the same folder inside it; then at the top of the new one | H |
-| WT-11 | A host started by a test, a folder with a setup command | A session is started in a new worktree | The setup command's login shell reads its startup files where a session's does: none of the person running the tests is read (TEST-1) | H |
 | WT-12 | Worktrees: the folder's own, one AgentTerm made, one made elsewhere at a long path, one whose folder is named as its branch, one that is missing | What the menu's row says of each | The branch, how far ahead, how many changed, in use; for one made elsewhere the name of its folder and never its path, which the tooltip says; a folder named as the branch is not said twice | U; the tooltip by hand |
 | WT-13 | A repository with another branch and a branch of a remote | A worktree cut from each; from nothing named; from a branch that is not there | At that branch's commit; following nothing; at the folder's commit; refused in words, with no branch left behind | H |
 | WT-14 | A worktree made inside the repository by `git worktree add` (`.claude/worktrees`), a new file beside it; another inside the first | The folder's changes; its worktrees; the first's changes | The new file only; both listed, the one inside with its change; its own change only | H |
 | WT-15 | A worktree and the folder changed the same line | Merge from the worktree; take theirs; continue | Said to have stopped on conflicts, the folder left merging with the file listed, the worktree kept; merged, and nothing in the worktree is unmerged | H |
-| WT-16 | A host with a client | A setup command is set, with spaces around it; another client connects; a shell is started in a worktree from an older branch; one from a branch that is not there | Every client is told, trimmed; the one that connects is told without asking; at that branch's commit, the setup run; refused at once with the reason | H |
+| WT-16 | A host with a client | A shell is started in a worktree from an older branch; one from a branch that is not there | At the older branch's commit; refused at once, in words | H |
 | WT-17 | The Mac app, a folder with changes and no worktree but its own | The Git tab; +; Create; a file written in the worktree; the first chip; the second | The bar with the folder's branch; the sheet with "agentterm/claude-1" suggested; a Claude session in that worktree, on show without the folder's changes; its chip says 1 file changed and that a session runs in it; the folder's changes; the worktree's | M |
 | WT-18 | What a chip says, and the panel's other numbers | The folder's own; one with changes and commits ahead; one in use; one that is missing; the questions before one is thrown away; a count of files and of commits | Its branch, or its folder with a detached HEAD; "3 changed · 2 ahead", in words since #50; said in a sentence for a tooltip; "missing"; what is not merged is named; "1 file", "3 files", "1 commit", "2 commits" | U |
-| WT-19 | The Mac app and the iPhone | From another branch and a shell from the sheet; a name taken; ⋯: merge, pull request, throw away, setup command; on the iPhone the chips, +, ⋯, a launch button's menu, a session's "Changes, History and Files" | As WT-2 and WT-13 say; refused in the banner; the iPhone the same as the Mac | hand |
+| WT-19 | The Mac app and the iPhone | From another branch and a shell from the sheet; a name taken; ⋯: merge, pull request, throw away (none on the folder's own chip); on the iPhone the chips, +, ⋯, a launch button's menu, a session's "Changes, History and Files" | As WT-2 and WT-13 say; refused in the banner; the iPhone the same as the Mac | hand |
 | WT-20 | A project with a submodule; then the submodule's origin gone | A new worktree, its submodules checked out; another | The submodule's files are there and nothing is changed; the worktree is made and what git said is returned | H |
 
 ### Schedules
@@ -601,7 +637,6 @@ A second host stands in for the other Mac, with a project of its own.
 | SCHED-33 | A run that waited 20 minutes for the one before it, 30 minutes its longest | 45 minutes after it came due; 51 | Still going; stopped, 31 minutes long. Before the fix it was stopped at once, and said to be 45 minutes long | H |
 | SCHED-34 | A run after a pull, a commit here and one on the remote that change the same line | It comes due | Not started: "the pull stopped on conflicts, and was undone", and the banner says so; the folder as it was, nothing half merged | H |
 | SCHED-35 | A schedule for when a limit starts over, all paused before it does and let go after | The minutes after | No run: nothing is caught up. Before the fix it ran as it was let go | H |
-| SCHED-36 | A run in a worktree of its own whose setup command fails | Run now | Not started, with what the command said last, and the banner says so; the worktree kept and named in the run; no agent started | H |
 
 ### When an agent is done or needs you
 
@@ -621,6 +656,7 @@ A second host stands in for the other Mac, with a project of its own.
 | NOTE-12 | The iPhone, a notification posted for an agent's session | The session is opened in the app; or it is opened on the Mac | The notification goes from Notification Center, and the banner in the app with it | hand: needs a real phone |
 | NOTE-13 | An agent that finished with a long message; one with a short one; a question with choices | What its notice gives; on the Mac, the banner, then Show All, then Show Less | The end of what it said, 300 characters, and all of it to be had; the banner shows the end on up to six lines, opens out to the whole, scrolled when long, and closes again; a long session name gives way in the middle | U, M |
 | NOTE-14 | Claude Code, Copilot CLI and Antigravity asking a question with three choices; a question without; a finished task; a stand-in that writes down what is typed into it | An answer that is the second choice, the first, one in other letters; one that is none of them; an answer to the others | Down for each choice before it, then Return; the user's own words after Down past the choices, with a Return first in Antigravity; text and Return for a prompt; the stand-in is typed Down and Return | H; with the real agents by hand, as on 2026-11-14 |
+| NOTE-15 | A finished task, its agent having asked for bracketed paste; a stand-in that does so and writes down what is typed into it | A next instruction of more than 64 characters; a short one; a long answer to a question | The long instruction inside bracketed paste, then Return; the short one and the answer typed as before. The stand-in gets the paste | H |
 
 ### The Live Activity
 
@@ -635,30 +671,79 @@ A second host stands in for the other Mac, with a project of its own.
 |---|---|---|---|---|
 | MCP-1 | The MCP server outside a session of AgentTerm | It is started, asked for its tools | It answers MCP's handshake and offers no tools | H |
 | MCP-2 | The MCP server in a session, a host standing in | Each tool is called | Each asks the host what it does and says what came of it; a refusal is an error | H |
-| MCP-3 | A screen that changes, then stays | `wait` for a text; `wait` for stillness; `wait` for a text that never comes | Returns when the text is there, when the screen is still, or when the time is up, with the screen | H |
-| MCP-4 | Two agents installed, one not | AgentTerm runs for the first time; again; after its program moved; turned off; on | Each installed agent is asked once with its own `mcp add` for the whole user; nothing the second time; replaced after a move; removed with `mcp remove` when off, and only from those it was installed in | H |
+| MCP-3 | A screen that changes, then stays | `shell_wait` for a text; for stillness; for a text that never comes | Returns when the text is there, when the screen is still, or when the time is up, with the screen | H |
+| MCP-4 | Claude Code, Codex, Copilot CLI and Antigravity; a host and a stand-in agent | Each is given its session's arguments, with the server and without; the host starts the agent's session twice | Each is given the server for its session only, as it takes one: Claude Code `--mcp-config` before `--settings`, Codex its table as `-c` with the session's variable, Copilot CLI `--additional-mcp-config` with every tool, Antigravity `.agents/mcp_config.json` in its folder; nothing is run in the agents to give it; without it, none, and Antigravity's file is gone; the host's sessions get it each time. Tried with the real agents on 2026-11-16 (MCP-25's versions): each started the server from those arguments | H |
 | MCP-5 | A stand-in agent that starts the real `agenttermd mcp` | It opens a shell running `cat`, lists the shells, types into it, waits, reads it | A session in its folder, marked as opened by it, that a second device lists; it lists it as its own; what it types reaches the program and is on the screen it reads | H |
 | MCP-6 | Two agents, one with a shell it opened, and the user's own session | Each reads and types into the user's session and the other agent's session | Refused: an agent never reaches the user's sessions, nor an agent's | H |
 | MCP-7 | An agent | It opens a shell running `claude` | Refused | H |
-| MCP-8 | An agent with a shell it opened | The agent's session ends; a third agent lists the shells, reads the shell, types into it; the second closes it; the user ends it | The shell stays, nobody's: every agent lists it as another's and reads it, none types into it or closes it, and the rows say its agent has ended; ended by the user, none is listed | H |
-| MCP-9 | The Mac app and the iPhone | Settings | A switch, "Agents can open shells you see", that turns the server off and on for every device | hand, until the UI tests cover it |
-| MCP-10 | A stand-in Claude Code | Started with the setting on, as by default; then off | On: its session's variable says `use` and it is asked in its system prompt; the server's instructions say to run commands in its shells. Off: neither | H |
-| MCP-11 | Codex, which gives an MCP server only the variables its configuration names | The server is installed; installed by a host from before; the user named variables of their own | Its table in Codex's configuration names the session's variable, once, next to the user's | H |
+| MCP-8 | An agent with a shell it opened | The agent's session ends; a third agent lists the shells, reads the shell, types into it; the second closes it; the user ends it | The shell stays, the user's: no agent lists it, reads it, types into it or closes it, and the rows say its agent has ended | H |
+| MCP-9 | The Mac app and the iPhone, a host that gives the agents the server | Settings | No switch for the server, for running commands in the shells or for the marks, on either device | M (SHELL-4), hand on the iPhone |
+| MCP-10 | A stand-in Claude Code | Started as by default; then with its words emptied in Settings > Agents | By default: its session's variable says `use` and it is asked in its system prompt; the server's instructions say to run commands in its shells. Emptied: neither, and nothing in its system prompt | H |
+| MCP-11 | Codex, which gives an MCP server only the variables its configuration names | A session's arguments | Its `-c` names the session's variable in `env_vars`; nothing is written into `~/.codex/config.toml` | H |
 | MCP-12 | A shell an agent opened | The Mac shows it | The Mac is the one using it, at its size: the agent's server only asks and is not attached, so nothing says another device uses it | H |
-| MCP-13 | Copilot CLI and Antigravity, "Agents run their commands in shells you see" on, then off | Each is started | Antigravity gets a rule always on in its folder, Copilot CLI a folder of instructions after the user's own; off, neither | H |
+| MCP-13 | Copilot CLI and Antigravity, told by default, then told nothing | Each is started | Antigravity gets a rule always on in its folder, Copilot CLI a folder of instructions after the user's own; told nothing, neither | H |
 | MCP-14 | A session's variable, and the two builds' servers | The variable is written for a build and read by each build's server; the server is asked who it is | It names the port, the key and the build; only that build's server takes it, and one that names no build is the released build's; the server and its instructions go by the build's name | H |
-| MCP-15 | A released build and a development build, the second with a record from before of the name both shared | Each runs for the first time; again; the development build is turned off | Each agent is asked once by each build, under `agentterm` and `agentterm-dev`; the shared name is not removed; nothing the second time; turned off, only `agentterm-dev` is removed. Codex is told to pass the variable to the server of that name | H |
-| MCP-16 | The real `agenttermd mcp`, a host | It is started with the variable of a session of its own build, then of the other build | Its own build's: six tools. The other build's: none, and it does not sign in | H |
+| MCP-15 | A released build and a development build, each with a record of what it installed before 0.8.0, the second's from before the builds had names of their own | Each takes out what is left | The development build takes out nothing under the name both shared; the released build takes out its own, with `mcp remove agentterm`; each gives its sessions the server under its own name | H |
+| MCP-16 | The real `agenttermd mcp`, a host | It is started with the variable of a session of its own build, then of the other build | Its own build's: the seven of the shells and the browser's. The other build's: none, and it does not sign in | H |
 | MCP-17 | The real `agenttermd mcp`, its host stopped | A tool is called | Refused at once, not after fifteen seconds, with words that say the host is not running on its port and what to do | H |
 | MCP-18 | The real `agenttermd mcp` with another copy's token; a client of the host | A tool is called; then by a server with the host's own token | Refused at once, with words that say its sign-in was refused; the host tells the client `agentShellsFaults` with a sign-in fault, and none once a server has signed in | H |
-| MCP-19 | A host and two agents, one that refuses `mcp add`; then one that has the name already | The host starts; the server is turned off and on once the agent takes it; the second is asked | The client is told an install fault naming the agent, and none after; a name the agent has already is removed and added as this build's own. The fault's words, and a cause not known to the build, are read | H, U |
-| MCP-20 | Two agents, the first with a shell it opened | The second lists the shells, reads the first's, types into it, closes it, then opens its own | Listed as another agent's, read only; read; typing and closing refused, with words that say to open one, and nothing reaches the program; its own it types into and closes, and the first cannot | H |
+| MCP-19 | A host whose record says an earlier build installed the server in agents, one of them not installed now, one that refuses `mcp remove` | The host starts; another host starts on the same state; the agent not installed is installed | Each is asked once with its own `mcp remove`, the one not installed when it is; the client is told a leftover fault naming the one that refused; the next host asks none again and tells no fault; the record is gone once nothing is left. The fault's words, and a cause not known to the build, are read | H |
+| MCP-20 | Two agents, the first with a shell it opened | The second lists the shells, reads the first's, waits on it, types into it, closes it, then opens its own | Not listed to it; reading, waiting, typing and closing refused, with words that say it sees only its own and to open one, and nothing reaches the program; its own it types into and closes, and the first neither sees nor reaches it | H |
 | MCP-21 | The Mac app and the iPhone, an agent's shell | The lists of sessions | The row of a shell an agent opened names that agent's session under its title, or says its agent has ended | hand, until the UI tests cover it |
+| PROMPT-1 | Claude Code; the default with both switches on | Started with words, and with none | `--append-system-prompt` gives the words, and is left out with none; the default names the shells' and the browser's tools, the build's server, and says not to use another browser tool such as Claude in Chrome | H |
+| PROMPT-2 | A host, the Mac, a stand-in Claude Code | The Mac saves words for it; it starts and asks its server for its instructions; the Mac goes back to the default | Every device is told; the host keeps them; the server's instructions are those words; back to the default, they are gone | H |
+| PROMPT-3 | A session's variable and the server | The variable names the agent; a server given words | Read back the same; its instructions are those words | U |
+| PROMPT-4 | Settings > Agents on the Mac | Write words for Claude Code, save, reset to the default | "Edited, not saved", then "Your words", told by the host; reset, the default again | M |
+| SHELL-1 | A host and a client | A shell program that does not run is asked for; then a program of the test's, what is run first in the user's shells and in the agents' | Refused with why; then kept and told to every device | H |
+| SHELL-2 | The settings of SHELL-1 | The user opens a shell | The program picked starts, and what is to be run first is typed at its prompt and run | H |
+| SHELL-3 | An agent; what is run first in its shells set | It opens a zsh and runs a command; then a bash, which is not set up to say when a command ends, and runs one | What was run first is in the shell, and the agent's command is told as its own (exit code 0, its output only); in the bash, the screen once still, no exit code | H |
+| SHELL-4 | Settings on the Mac | Look at General, then Shell; save what is run first; a larger size | Shell has the program, what is run first, font, size, cursor and scrollback; no switch of the agents' shells in either; the host keeps what was saved; the size changes | M |
+| SHELL-5 (#91) | An interactive zsh with no startup files, in a pseudo terminal | A heredoc of 25 lines of about a hundred characters written at once, 20 times | Each time the file has the text as it was sent | H |
 | MCP-22 | The Mac app and the iPhone, a host that tells a fault | The window; the banner is dismissed; the fault goes and comes back | A banner at the top says what is wrong and what to do; dismissed, it stays away until the fault has gone and come back | hand, until the UI tests cover it |
-| MCP-23 | A server whose shells do not yet say what two waits are for | Two `wait`s on two shells; then `read_screen`, `send_input` and `list_shells`; the second shell says its text; the first wait is cancelled and its text then comes; a wait after it; cancelling what is over | The three answered while both waits go on; the second wait answered; the first never; the later one answered; nothing; each request answered once, under its id. With calls answered in turn it fails | U |
-| MCP-24 | A host and the real `agenttermd mcp` in an agent's session, a shell running `cat` | A `wait` for a line; `read_screen`, `list_shells` and `send_input` of that line meanwhile; a `wait` cancelled, and its text typed | Each answered at once, and what was typed ends the wait; the cancelled one is not answered, and the first was answered once | H |
-| MCP-25 | Claude Code, Codex, Copilot CLI and Antigravity, each in a session | A long `wait` and another tool of the same server meanwhile | Each takes the answers as they come, out of the order asked | hand |
+| MCP-23 | A server whose shells do not yet say what two waits are for | Two `shell_wait`s on two shells; then `shell_read`, `shell_send` and `shell_list`; the second shell says its text; the first wait is cancelled and its text then comes; a wait after it; cancelling what is over | The three answered while both waits go on; the second wait answered; the first never; the later one answered; nothing; each request answered once, under its id. With calls answered in turn it fails | U |
+| MCP-24 | A host and the real `agenttermd mcp` in an agent's session, a shell running `cat` | A `shell_wait` for a line; `shell_read`, `shell_list` and `shell_send` of that line meanwhile; a `shell_wait` cancelled, and its text typed | Each answered at once, and what was typed ends the wait; the cancelled one is not answered, and the first was answered once | H |
+| MCP-25 (#84) | Claude Code, Codex, Copilot CLI and Antigravity, each with the real `agenttermd mcp` of a host of the test's own | A `shell_wait` of 15 seconds, `shell_list` and `shell_read` asked at the same time; then a `shell_wait` of 120 seconds stopped as the user stops a call | Claude Code, Codex and Copilot CLI send the three at once and take the two answers that come at once, then the wait's 15 seconds later; Antigravity sends one call at a time, so its answers never come out of order. Each sends `notifications/cancelled` for the stopped wait as soon as it is stopped: Escape in Claude Code, Codex and Antigravity, ctrl+c in Copilot CLI. Seen 2026-11-16 with Claude Code 2.1.325, Codex 0.169.0, Copilot CLI 1.0.112 and Antigravity 1.5.9 | hand |
 | MCP-26 | A host, an agent with the real server, a shell it opened and a session the user started, each with 3,000 lines; a shell whose program clears the lines above its screen (`ESC [ 3 J`) | Each opened on a device with 500 lines above the screen; the agent's again while its agent waits on it; the cleared one | Its screen and the lines above it, each time, the agent's shell no later than half a second after the user's (measured 2026-11-14, debug build: 45 to 75 ms each, 47 ms while the agent waits); the cleared one comes without those lines, which the program took away on the host itself | H |
+| MCP-27 | A shell's output with its commands' marks (OSC 133), in pieces | The marks are looked for; one is cut in two; other strings and output without an escape | Each found whole, ended by BEL or by ESC \, with its exit code; nothing else taken for one | U |
+| MCP-28 | The screen of a shell that says its commands | A prompt, a command writing lines and a progress line, more lines than the screen, its end with exit code 2, the next prompt, the next command | The output is what the command wrote as a terminal shows it, its last lines asked for and how many were left out; the exit code kept; the prompt not in it; the next starts with none | U |
+| MCP-29 | The server's tools | Their annotations | The shells' are named `shell_…`; those that only look say so (`readOnlyHint`), those that end something say so (`destructiveHint`) | U |
+| MCP-30 | A host, an agent with the real server, a zsh it opened with the startup files of the test's home | `shell_open`; `shell_run` of a command that ends with 3, of two lines, of a look at `ZDOTDIR`; one longer than the call, another meanwhile, `shell_wait`; one stopped with Control C, `shell_wait` | Ready when answered; exit code 3 and only what it wrote; the two lines as one command; the user's `ZDOTDIR` back, the host's not in it; "Still running", the other refused, the wait ends with exit code 0 and its output; exit code 130 | H |
+
+### The browser (#76)
+
+The Mac's tests of the browser run the app bundle, where Chromium runs:
+`scripts/test-mac.sh` builds it into `.build/uitest-app` under the
+identifier `com.manhpham.agentterm.uitest`, never into `dist/`. The test
+plays the agent: a stand-in agent writes down its session's variable,
+and the test talks to the real `agenttermd mcp` with it.
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| BROWSER-1 | A host, an agent with the real server, no app showing the browser | `browser_open` | Refused at once, in under five seconds, with words that say the browser is in the app on that Mac and it is not open there | H |
+| BROWSER-2 | A host, a client that says it shows the browser, an agent, a device | `browser_tabs`; the device asks for the tabs and to click; `browser_snapshot` that is not answered, then the client goes | The client is asked for the agent's session and its answer reaches the agent; the device gets the tabs from the host and its click is refused; the waiting agent is answered with why, and the device told there are no tabs | H |
+| BROWSER-3 | The real `agenttermd mcp` in a session of its own build | It is asked for its tools | The seven of the shells and the twenty-two of the browser (MCP-16) | H |
+| BROWSER-4 | The MCP server with a browser standing in | Each tool; one with a ref missing; an unknown device; a picture | Each makes its request; what is missing is said without asking; a picture is an image of its type; the instructions name the browser | U |
+| BROWSER-5 | Devices by name; a tab of an agent's, a tab of the user's | Looked up; which agents may drive each | Found whatever their case; only the agent that opened it, and no agent the user's; a look is not an action | U |
+| BROWSER-6 | An agent and a page with a form | Open it, take a snapshot, type, pick, click, wait, read the console and the page's script, take a picture, follow a link, use an old ref, go back | The tab beside the agent, not a tab of the strip; each answered with what came of it; the page shows it; the picture is a PNG; the old ref refused with what to do | M |
+| BROWSER-7 | An agent's tab | The user takes it over; the agent navigates and takes a snapshot; the user gives it back | The navigation refused with why, the snapshot not; after, it navigates | M |
+| BROWSER-8 | An agent's tab, then a tab the user opens | A port nothing answers on; a tab that is not there; `browser_tabs`, and a snapshot, a navigation and a close of the user's tab; shown as an iPhone 16, as a Pixel 9 and as itself; scripts that give a promise, and a function's body; the switch in Settings off and on; the tab closed | Nothing answers, said so; no such tab of the agent's; only its own tab listed, the user's refused as not its own; the screen 393 wide at three times, an iPhone's user agent and platform, the button says so, the page and the agent's page part 393 wide; the Pixel's user agent with this Chromium's version, `Linux armv81`, its client hints (mobile, Android, brands, model, version); itself, `MacIntel` again; the promise waited for (#95), the body run; off refused with why; closed, the tab goes and the window stays | M |
+| BROWSER-17 | An agent with its page beside it (#94) | It opens a shell | The page stays shown, and so does the agent's terminal | M |
+| BROWSER-9 | The user's own tab | Opened from the Browser menu at a page; the app quit and opened again | No tab comes back | M |
+| BROWSER-10 | One profile, then two; an agent; the header's Browser button | `browser_open`; a second profile made; another agent's `browser_open` with no profile, with one that is not there, with "profile 2"; another; `browser_profiles`; the Browser button's menu: Profile 2, then Private | Used without a word; refused with the profiles' names, to ask the user; refused, naming them; opened in Profile 2, which its bar says; the next in it too, which `browser_profiles` says; Chromium made the profile's folder; the user's tab in Profile 2, then a private one | M |
+| BROWSER-22 | An agent, another agent | Private tabs: one keeps something in its storage; a second; a tab in the default profile; the other agent's private tab; both closed, then a new private tab | The second has it; the default's and the other agent's do not; the new one has nothing; no folder of a private profile | M |
+| BROWSER-23 | An agent's page with a file field and a button, a file in the agent's project | `browser_upload` the file, by a path from its folder; one outside the project; one that is not there; the button's ref | The page has the file; refused: not the project's, no file, not a file field | M |
+| BROWSER-24 | A server of the Mac's own: a page that signs in with a cookie, a page that says whether it is | The agent signs in in one tab; opens the other in a second tab, in a private tab, and in a second profile's | Signed in in the second tab; not in the private one nor the other profile's | M |
+| BROWSER-25 | A page with two frames | `browser_snapshot`; `browser_navigate` to a frame's address | The snapshot names the frames and their addresses, their insides not read; the frame's page read in the tab | M |
+| BROWSER-26 | An agent's page | A snapshot; a link clicked to another page; the old ref used; the tab closed by a device; the agent acts on it | Where it went; the old ref refused as from another page; the tab refused as not its, none left | M |
+| BROWSER-12 | The Mac app with an agent that opened a shell and a page through the MCP server; the iPhone | The list; the agent's page; a touch on its field, "hi" typed; Let … Go On; Browser in the folder, an address typed; Show As iPhone SE; Close Tab | The shell and the page under the agent, under Shells and Browser; the page live, the keyboard up for its field, the page typed in and the user's, then the agent's again, titled "typed hi" on both; the new page loaded, shown as iPhone SE, then gone. On an iPad, on its side, the agent's terminal beside the page | X (`CrossTests`) |
+| BROWSER-21 | An agent's page, a device | A touch on its field; "ab", Backspace and "c" sent without waiting; a touch off any field; Show As; a new tab, a page loaded in it; stop; both closed | Touched a field, then not; the field says "ac"; the tab shown as the device; the new one the user's, in the project, the agent's area still in front; the agent has no tab left | M |
+| BROWSER-18 | An agent's page, a device that speaks the protocol | It watches the page; touches a field, types, touches a button; stops watching | Pictures no wider than asked, with the page's size; the page does it; the tab is the user's, the agent waits; no picture after | M |
+| BROWSER-19 | An agent's page shown on the Mac as a phone of three pixels to the point, standing still (#100) | A device watches it; pictures of the window, 14 of them | The page's part of each is as it was before the device watched | M |
+| BROWSER-20 | An agent's page, the Mac's window minimized | A device watches it; touches a field, types, touches a button | Pictures come; the page does it | M |
+| BROWSER-13 | A page asking for the camera, a download, a page that opens a window | The page does it | A bar asks the user, not the agent; the file in Downloads, shown under the page; a tab instead of a window | hand |
+| BROWSER-14 | A tab, Send to Agent | Pick an element; send it with a note | The picture in the project's `.agentterm/shots/`, the address, selector, HTML and styles typed into the agent's session with the note | hand |
+| BROWSER-16 | Two tabs of the user's, a red page and a blue page | Pick one, the other, the first again, the other again | Each time the page on top in the pane is the tab's own (#92) | M |
+| BROWSER-15 | An agent's page with a form | The agent reads it, types, clicks and takes a picture while it is shown; with the browser hidden; with the window minimized; shown again | Each works within seconds, and each picture shows what was just typed | M |
 
 ### Vietnamese input
 

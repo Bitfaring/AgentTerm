@@ -15,7 +15,7 @@ How the owner decides. When one of these answers a question, decide by it and go
 5. **Nothing is guessed that can be tried.** How an agent or a tool behaves is found out by running the real one, at the version in use, before anything is designed around it; what was found, and with which version, is written into the issue. A state that is shown is true, and what is not known is shown as not known.
 6. **Until the official release, anything may change.** The protocol, the formats, what is stored and what is written into the agents' configuration change freely from one build to the next: no migration and no compatibility with an earlier 0.x build are owed. Both apps and the host are of one release, and the protocol's number goes up whenever a message changes. The official release is the one that takes the app out of beta.
 7. **The released build and a development build never share anything.** A name, a port, a folder, a token, an entry in another program's configuration: each build has its own, and neither touches the other's.
-8. **An issue is kept only while it can be acted on.** What cannot be reproduced is closed, to be opened again when it shows. What waits on someone outside (a permission, a review) is closed or put in the backlog, not left open in a release.
+8. **An issue is kept only while it can be acted on.** What cannot be reproduced is closed, to be opened again when it shows: a bug is tried 5 times, in the conditions it was seen in, and when it does not show in any of them, it is closed with a comment that says plainly it could not be reproduced, how it was tried and how many times. What waits on someone outside (a permission, a review) is closed or put in the backlog, not left open in a release.
 9. **Both apps say the same thing in the same words.** A sentence the user reads (a banner, a refusal, a row's label) is written once, in `AgentTermProtocol`, and shown by both.
 
 ## Rules
@@ -31,7 +31,7 @@ A decision matters when it is any of these:
 
 These are always asked, whatever a principle says:
 
-- **Anything outward or hard to undo.** Committing, pushing, opening or merging a pull request, releasing, creating or editing issues and milestones, deploying, deleting. Each is done when asked, and being asked once is not being asked for the next time.
+- **Anything outward or hard to undo.** Committing, pushing, opening or merging a pull request, releasing, creating or editing issues and milestones, deploying, deleting. Each is done when asked, and being asked once is not being asked for the next time, except for what rule 4 allows without asking.
 - **Anything of the user's own.** Their installed app, its sessions, its preferences, its paired devices, their simulators, their accounts, the tools installed on their Mac. This includes every question a tool asks about itself while it is being tried: an update, a sign-in, whether to trust something. Decline it or stop; do not answer it.
 - **Security and privacy.** Dismissing or working around a code scanning alert, widening what a client or a plugin may do, anything that touches tokens, pairing, or what is sent off the machine.
 - **Doing less than was asked.** Leaving part of a task undone, or solving it only in part.
@@ -46,6 +46,7 @@ If a choice was made without asking, say so plainly in the report, with what was
 Nothing is reported as done before it has been tested, and the report says what was run and what came of it.
 
 - **A bug is shown before it is fixed.** Write a test that fails because of the bug, run it and see it fail, fix the bug, run it again and see it pass. The test stays. A bug that cannot be shown by a test is said to be so, with what was done instead.
+- **A bug is closed only when it is fixed at its root.** Its cause is found and taken away. What only bears it (a retry, a longer wait, a test that repeats a step until it works) does not close it: the issue stays open, saying what was done meanwhile and what is still not known. The one other way to close a bug is principle 8's: not reproduced in 5 tries.
 - **Every layer the change touches is run**, as `docs/TESTING.md` says under "Running them":
 
   | Changed | Run |
@@ -57,6 +58,7 @@ Nothing is reported as done before it has been tested, and the report says what 
   | What a picture shows (toolbar, lists, the terminal) | `scripts/screenshots.sh`, and look at each picture |
 
   Before a release, all of them.
+- **When they are run.** While working, only the tests of what is being changed are run: `swift test --filter <suite or test>`, `scripts/test-mac.sh <test>`, a mode of `scripts/test-ios.sh`. Several fixes or changes are made first, and the layers of the table are run once for all of them, before they are committed, not after each one: the UI layers alone take about a quarter of an hour. A report given before that run says plainly that the full tests have not been run yet, and asks whether to run them.
 - **A change to what is seen is looked at.** Take a picture of the window (`SHOTS=... ALL_SHOTS=1 scripts/test-mac.sh <test>`) and look at it; a build that compiles has not been seen.
 - **A new behaviour gets a case** in `docs/TESTING.md` and a test that names it.
 - **The report is true.** Which commands ran, which passed and which failed, with the failing output. What was not run is said, with why: "not tested on the iPhone" is an acceptable sentence, silence about it is not. A check that is skipped ("Executed 0 tests", tests listed as skipped) checked nothing and is not reported as passing.
@@ -69,6 +71,12 @@ Nothing is reported as done before it has been tested, and the report says what 
 - What a test throws away goes to a folder of its own (`AGENTTERM_TRASH_DIR`), never into the user's Trash.
 - The iPhone tests reset the keychain of the simulator they run in: use "iPhone Air", not a simulator an app is paired in.
 - No pairing code, token or other secret is printed.
+
+### 4. Done without asking, as the owner decided (2026-11-15)
+
+- **A bug found during a session** gets an issue at once, labelled `bug`, in the milestone being worked on, saying what was seen, what was tried and what is not known yet.
+- **Work that is done and tested** (rule 2) is committed on the milestone's branch and pushed, without asking. Then CI is run on the branch, which it does by itself only for pull requests and `main` (`gh workflow run ci.yml --ref <branch>`, then `gh run watch`), and what fails is fixed, shown and committed the same way, until it is green. A check that cannot be made green without a decision (rule 1) is reported and asked about.
+- What stays asked: opening and merging a pull request, releasing, deploying, deleting, closing an issue that is not a fixed bug, and planning (rule 1).
 
 ## Conventions
 

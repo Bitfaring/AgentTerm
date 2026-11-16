@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 
 struct SidebarView: View {
     @EnvironmentObject private var model: AppModel
+    /// The browser's pages, listed under their projects (#76).
+    @EnvironmentObject private var browsers: BrowserModel
     /// What a dragged folder is over: a folder's path, or "end".
     @State private var dropTarget: String?
 
@@ -48,10 +50,7 @@ struct SidebarView: View {
                                 return provider
                             }
                             .onDrop(of: [.data, .fileURL], delegate: FolderDropDelegate(before: folder.path, model: model, dropTarget: $dropTarget))
-                        ForEach(model.sessions(in: folder)) { session in
-                            SessionRow(session: session)
-                                .modifier(SessionArranging(session: session, dropTarget: $dropTarget))
-                        }
+                        rows(sessions: model.sessions(in: folder), pages: browsers.tabs.filter { $0.project == folder.path }, loose: false)
                     }
                     if !model.folders.isEmpty {
                         // Room under the last folder to drop one at the end.
@@ -62,17 +61,15 @@ struct SidebarView: View {
                             .contentShape(Rectangle())
                             .onDrop(of: [.data, .fileURL], delegate: FolderDropDelegate(before: nil, model: model, dropTarget: $dropTarget))
                     }
-                    if !model.looseSessions.isEmpty {
+                    let looseTabs = browsers.tabs.filter { tab in !model.folders.contains { $0.path == tab.project } }
+                    if !model.looseSessions.isEmpty || !looseTabs.isEmpty {
                         Text("OTHER")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6)
                             .padding(.top, 14)
                             .padding(.bottom, 4)
-                        ForEach(model.inTabOrder(model.looseSessions)) { session in
-                            SessionRow(session: session, showsPath: true)
-                                .modifier(SessionArranging(session: session, dropTarget: $dropTarget))
-                        }
+                        rows(sessions: model.inTabOrder(model.looseSessions), pages: looseTabs, loose: true)
                     }
                     if model.folders.isEmpty && model.looseSessions.isEmpty {
                         Text("No folders yet.\nAdd one to keep its agents and changes together.")
@@ -90,6 +87,30 @@ struct SidebarView: View {
         // A folder dragged in from the Finder is added to the list.
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             FolderDropDelegate.addFolders(from: providers, to: model)
+        }
+    }
+
+    /// A folder's rows, or those of no folder: its sessions in the order of
+    /// their tabs, each agent with its own shells and pages right under it,
+    /// set in, as they are its own and not tabs; then the user's pages.
+    @ViewBuilder
+    private func rows(sessions: [SessionInfo], pages: [BrowserTab], loose: Bool) -> some View {
+        let companions = model.companions
+        let inner: CGFloat = (loose ? 8 : 24) + 16
+        ForEach(sessions.filter { companions.owner[TabID.session($0)] == nil }) { session in
+            SessionRow(session: session, showsPath: loose)
+                .modifier(SessionArranging(session: session, dropTarget: $dropTarget))
+            let tab = TabID.session(session)
+            ForEach((companions.shells[tab] ?? []).compactMap { model.session(forTab: $0) }) { shell in
+                SessionRow(session: shell, leading: inner)
+            }
+            ForEach((companions.browsers[tab] ?? []).compactMap { browsers.tab(forTab: $0) }) { page in
+                BrowserRow(tab: page, leading: inner)
+            }
+        }
+        // The project's pages that are the user's (#76).
+        ForEach(pages.filter { companions.owner[$0.tabID] == nil }) { tab in
+            BrowserRow(tab: tab, loose: loose)
         }
     }
 }
@@ -229,9 +250,9 @@ struct FolderRow: View {
 
     private func select() {
         model.selectedFolder = folder.path
-        // Jump to this folder's most recent session, or its launch screen.
-        model.selectedSession = model.sessions.last { $0.cwd == folder.path }?.id
         model.shownWorktree = nil
+        // Its panes, as they were left (#69), or its launch screen.
+        model.showProject(folder.path)
     }
 
     private var isSelected: Bool { model.selectedFolder == folder.path && model.selectedSession == nil }
@@ -286,13 +307,87 @@ struct FolderRow: View {
     }
 }
 
+/// A page of the browser in the list (#76), under its project: whose it is
+/// and which profile it uses. Picking it shows it, beside its agent when an
+/// agent opened it.
+struct BrowserRow: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var profiles: BrowserProfiles
+    @ObservedObject var tab: BrowserTab
+    var loose = false
+    /// Set in under its agent, which it is shown under: it is not named.
+    var leading: CGFloat?
+    @State private var hovering = false
+
+    private var agent: SessionInfo? { tab.owner.flatMap { id in model.sessions.first { $0.id == id } } }
+    private var selected: Bool { model.browserInFront == tab.tabID }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: tab.loading ? "arrow.triangle.2.circlepath" : "globe")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(agent != nil ? Color.accentColor : .secondary)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tab.displayTitle)
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HStack(spacing: 6) {
+                    if let agent, leading == nil {
+                        Label(agent.displayName, systemImage: "sparkles").lineLimit(1).truncationMode(.tail)
+                    }
+                    Text(profiles.profile(tab.profile)?.name ?? "").lineLimit(1)
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if tab.userHasIt {
+                Image(systemName: "hand.raised.fill").font(.system(size: 9.5)).foregroundStyle(.orange).help("You have it: its agent waits")
+            }
+            if hovering {
+                Button {
+                    model.closeBrowserTab(tab)
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Close this tab")
+            }
+        }
+        .padding(.leading, leading ?? (loose ? 8 : 24))
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .modifier(RowBackground(selected: selected, hovering: hovering))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { model.selectTab(id: tab.tabID) }
+        .help(tab.url)
+        .contextMenu {
+            Button("Close Tab") { model.closeBrowserTab(tab) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(tab.displayTitle), page" + (agent.map { ", opened by \($0.displayName)" } ?? ""))
+        .accessibilityIdentifier("browser-row-\(tab.id)")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { model.selectTab(id: tab.tabID) }
+    }
+}
+
 struct SessionRow: View {
     @EnvironmentObject private var model: AppModel
     let session: SessionInfo
     var showsPath = false
+    /// Set in under its agent, which it is shown under: it is not named.
+    var leading: CGFloat?
     @State private var hovering = false
 
     private var agentID: String { session.agent ?? "shell" }
+    /// One row of the list is selected at a time: a page in front is its
+    /// own row's, not the session's that was in front before it (PANE-17).
+    private var selected: Bool { model.selectedSession == session.id && model.browserInFront == nil }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -315,7 +410,7 @@ struct SessionRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                if let owner = session.openedByName(among: model.sessions) {
+                if leading == nil, let owner = session.openedByName(among: model.sessions) {
                     // A shell an agent opened: whose it is, since only that
                     // agent types into it (#61).
                     Label(owner, systemImage: "sparkles")
@@ -372,10 +467,10 @@ struct SessionRow: View {
                 .help("End this session")
             }
         }
-        .padding(.leading, showsPath ? 8 : 24)
+        .padding(.leading, leading ?? (showsPath ? 8 : 24))
         .padding(.trailing, 8)
         .padding(.vertical, 5)
-        .modifier(RowBackground(selected: model.selectedSession == session.id, hovering: hovering))
+        .modifier(RowBackground(selected: selected, hovering: hovering))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { model.select(session: session) }
@@ -387,7 +482,7 @@ struct SessionRow: View {
                 session)
         )
         .accessibilityIdentifier("session-\(session.id)")
-        .accessibilityAddTraits(model.selectedSession == session.id ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.select(session: session) }
     }
 }

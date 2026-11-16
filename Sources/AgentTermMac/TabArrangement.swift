@@ -53,9 +53,11 @@ extension AppModel {
         if let data = try? JSONEncoder().encode(tabLayout) { UserDefaults.standard.set(data, forKey: Self.tabLayoutKey) }
     }
 
-    /// Every tab there is: the sessions, the open files and the diff.
+    /// Every tab there is: the sessions, the open files, the diff and the
+    /// browser's pages.
     var liveTabIDs: [String] {
         sessions.map(TabID.session) + files.documents.map { TabID.file($0.path) } + (diffTabFile == nil ? [] : [TabID.diff])
+            + browsers.tabs.map(\.tabID)
     }
 
     /// Brings the arrangement up to date with the tabs that exist.
@@ -66,20 +68,20 @@ extension AppModel {
         var layout = tabLayout
         layout.sync(with: liveTabIDs)
         if layout != tabLayout { tabLayout = layout }
+        syncPanes()
     }
 
     /// The tab shown in the middle pane.
     var frontTabID: String? {
+        if let browser = browserInFront, browsers.tab(forTab: browser) != nil { return browser }
         if diffInFront, diffTabFile != nil { return TabID.diff }
         if let path = files.active, files.documents.contains(where: { $0.path == path }) { return TabID.file(path) }
         return sessions.first { $0.id == selectedSession }.map(TabID.session)
     }
 
-    /// The tabs on show, in the order of the strip.
-    var visibleTabs: [String] {
-        let live = Set(liveTabIDs)
-        return tabLayout.visibleTabs(front: frontTabID).filter(live.contains)
-    }
+    /// The tabs on show in the pane the keyboard is in, in the order of
+    /// its strip: what Command and a number counts (#69).
+    var visibleTabs: [String] { stripTabs(of: paneLayout.focusedPane) }
 
     func session(forTab id: String) -> SessionInfo? { sessions.first { TabID.session($0) == id } }
 
@@ -93,6 +95,7 @@ extension AppModel {
         if let session = session(forTab: id) { return session.displayName }
         if let document = document(forTab: id) { return document.name }
         if id == TabID.diff, let file = diffTabFile { return "Diff of " + (file.path as NSString).lastPathComponent }
+        if let browser = browsers.tab(forTab: id) { return browser.displayTitle }
         return "Tab"
     }
 
@@ -100,9 +103,18 @@ extension AppModel {
         if let session = session(forTab: id) {
             select(session: session)
         } else if let document = document(forTab: id) {
+            browserInFront = nil
+            if files.active == document.path { frontChanged() }
             files.active = document.path
         } else if id == TabID.diff {
             showDiffTab()
+        } else if browsers.tab(forTab: id) != nil {
+            files.active = nil
+            showingNoDiff()
+            if browserInFront == id { frontChanged() }
+            browserInFront = id
+            // Picked by the user: its page takes the keyboard (PANE-17).
+            focusKeyboard()
         }
     }
 
@@ -112,8 +124,21 @@ extension AppModel {
         tabLayout.move(id, before: target)
     }
 
+    /// Moves a tab one place left or right among the tabs of its pane's
+    /// strip (#69), past none of another pane's.
     func moveTab(_ id: String, by offset: Int) {
-        tabLayout.move(id, by: offset, front: frontTabID)
+        let visible = stripTabs(of: paneLayout.pane(containing: id))
+        guard let index = visible.firstIndex(of: id), visible.indices.contains(index + offset) else { return }
+        let neighbor = visible[index + offset]
+        if offset < 0 { tabLayout.move(id, before: neighbor) } else { tabLayout.move(id, after: neighbor) }
+    }
+
+    /// A pane's tabs on show, in the order of its strip.
+    func stripTabs(of pane: PaneLayout.Pane?) -> [String] {
+        guard let pane else { return [] }
+        let here = Set(pane.tabs)
+        let live = Set(liveTabIDs)
+        return tabLayout.visibleTabs(front: pane.front).filter { here.contains($0) && live.contains($0) }
     }
 
     func setTabPinned(_ id: String, _ pinned: Bool) {

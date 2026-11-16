@@ -155,7 +155,7 @@ final class AgentStateTests: XCTestCase {
 
     /// MCP-13: Copilot CLI and Antigravity are told to run their commands in
     /// shells the user sees as Claude Code is, through instructions files of
-    /// the host's, which they read; not when it is off.
+    /// the host's, which they read; not when they are told nothing.
     func testCopilotAndAntigravityAreToldToUseTheShells() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-told-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -163,24 +163,49 @@ final class AgentStateTests: XCTestCase {
         let tool = "/Apps/AgentTerm.app/agenttermd"
 
         // Antigravity: a rule always on, in the folder it is given.
-        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, useShells: true)
+        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, prompt: AgentShellsInstructions.useShells)
         let rule = hooks.appendingPathComponent("antigravity/.agents/rules/agentterm.md")
         let text = try String(contentsOf: rule, encoding: .utf8)
         XCTAssertTrue(text.hasPrefix("---\ntrigger: always_on\n---\n"), text)
         XCTAssertTrue(text.contains(AgentShellsInstructions.useShells))
-        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, useShells: false)
+        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, prompt: nil)
         XCTAssertFalse(FileManager.default.fileExists(atPath: rule.path), "turned off, the rule is still there")
 
         // Copilot CLI: a folder of instructions it is told of, next to any
         // the user's own environment names.
-        let environment = try AgentHooks.instructionsEnvironment(agent: "copilot", directory: hooks, useShells: true, current: ["COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "/mine"])
+        let environment = try AgentHooks.instructionsEnvironment(agent: "copilot", directory: hooks, prompt: AgentShellsInstructions.useShells, current: ["COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "/mine"])
         let folder = hooks.appendingPathComponent("copilot-instructions").path
         XCTAssertEqual(environment, ["COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "/mine," + folder])
         let instructions = try String(contentsOfFile: folder + "/instructions/agentterm.instructions.md", encoding: .utf8)
         XCTAssertTrue(instructions.hasPrefix("---\napplyTo: \"**\"\n---\n"), instructions)
         XCTAssertTrue(instructions.contains(AgentShellsInstructions.useShells))
-        XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "copilot", directory: hooks, useShells: false, current: [:]), [:])
-        XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "claude", directory: hooks, useShells: true, current: [:]), [:])
+        XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "copilot", directory: hooks, prompt: nil, current: [:]), [:])
+        XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "claude", directory: hooks, prompt: AgentShellsInstructions.useShells, current: [:]), [:])
+    }
+
+    /// PROMPT-1: Claude Code is told what AgentTerm says in its system
+    /// prompt, the user's words or the default, and nothing when there is
+    /// nothing to say; the default names the browser's tools and the
+    /// server they are of.
+    func testClaudeIsToldInItsSystemPrompt() throws {
+        func words(_ arguments: String) -> [String] {
+            let result = Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' x" + arguments])
+            return String(decoding: result?.output ?? Data(), as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).map(String.init).dropFirst()
+                .filter { !$0.isEmpty }
+        }
+        let tool = "/Apps/AgentTerm.app/agenttermd"
+        let told = words(try AgentHooks.launchArguments(agent: "claude", tool: tool, usageFile: nil, directory: nil, home: "/tmp", prompt: "Use AgentTerm's browser."))
+        let at = try XCTUnwrap(told.firstIndex(of: "--append-system-prompt"))
+        XCTAssertEqual(told[at + 1], "Use AgentTerm's browser.")
+        let silent = words(try AgentHooks.launchArguments(agent: "claude", tool: tool, usageFile: nil, directory: nil, home: "/tmp", prompt: nil))
+        XCTAssertFalse(silent.contains("--append-system-prompt"))
+
+        let both = try XCTUnwrap(AgentShellsInstructions.told(useShells: true, browser: true, server: "agentterm-dev"))
+        XCTAssertTrue(both.contains("shell_open") && both.contains("browser_open"), both)
+        XCTAssertTrue(both.contains("the agentterm-dev MCP server"), both)
+        XCTAssertTrue(both.contains("Claude in Chrome"), "the other way to a browser is not named: \(both)")
+        XCTAssertEqual(AgentShellsInstructions.told(useShells: false, browser: true, server: "x"), AgentShellsInstructions.browser(server: "x"))
+        XCTAssertNil(AgentShellsInstructions.told(useShells: false, browser: false))
     }
 
     func testWhatMayStopATurn() {
@@ -337,21 +362,39 @@ final class AgentStateHostTests: XCTestCase {
         waitUntil("not known after Escape") { mac.sessions.first { $0.id == agent.id }.map { $0.state == nil } ?? false }
     }
 
-    /// AGENT-8: a Codex session says nothing of its hooks, which Codex runs
-    /// without being asked to trust them (#59); an Antigravity session
+    /// AGENT-8: a Codex session says, until its hooks first report, that
+    /// they have to be trusted for its state to be known: Codex 0.169 asks
+    /// to review hooks that are new or changed, and runs none of them when
+    /// told to go on without (tried 2026-11-15). An Antigravity session
     /// always says what it cannot tell.
     func testWhatIsSaidOfAnAgentWhoseStateCannotAllBeKnown() throws {
         let client = Client(port: port, token: token, name: "mac")
         waitUntil("connected") { !client.messages.isEmpty }
-        for agent in ["codex", "agy"] {
+        let hook = Handoff.shellQuote(tool.path) + " hook codex"
+        let prompt = #"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#
+        let scripts = [
+            // Its hooks report once something is typed into it.
+            "codex": "#!/bin/sh\nstty raw -echo\nhead -c 1 > /dev/null\nprintf '%s' '\(prompt)' | \(hook) UserPromptSubmit\nexec sleep 600\n",
+            "agy": "#!/bin/sh\nexec sleep 600\n",
+        ]
+        for (agent, text) in scripts {
             let script = root.appendingPathComponent(agent)
-            try "#!/bin/sh\nexec sleep 600\n".write(to: script, atomically: true, encoding: .utf8)
+            try text.write(to: script, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
             client.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: agent)))
         }
         waitUntil("both sessions") { client.sessions.count == 2 }
-        XCTAssertNil(client.sessions.first { $0.title == "codex" }?.stateNote)
+        let codex = try XCTUnwrap(client.sessions.first { $0.title == "codex" })
+        XCTAssertEqual(codex.stateNote?.contains("Trust all and continue"), true, codex.stateNote ?? "no note")
         XCTAssertEqual(client.sessions.first { $0.title == "agy" }?.stateNote?.contains("does not say when it waits for permission"), true)
+
+        // Its hooks report: the note goes.
+        client.connection.send(.attach(session: codex.id, size: TermSize(cols: 80, rows: 24)))
+        client.connection.sendInput(Data("\r".utf8), to: codex.id)
+        waitUntil("working, the note gone") {
+            let now = client.sessions.first { $0.id == codex.id }
+            return now?.state?.isWorking == true && now?.stateNote == nil
+        }
     }
 
     /// AWAKE-5: with "only while an agent is working", the Mac is held
@@ -444,6 +487,53 @@ final class AgentStateHostTests: XCTestCase {
         XCTAssertEqual(AgentAnswer.steps(agent: "claude", state: .waitingForAnswer(AgentQuestion(text: "Why?")), text: "Because"), ["Because", "\r"])
         XCTAssertEqual(AgentAnswer.steps(agent: "claude", state: .done(said: "ok"), text: "Green"), ["Green", "\r"])
         XCTAssertEqual(AgentAnswer.steps(agent: nil, state: asked, text: "Green"), ["Green", "\r"])
+    }
+
+    /// NOTE-15: a finished task's next instruction, long, goes as a paste
+    /// to an agent that asked for bracketed paste, so that its Return
+    /// submits it (Codex 0.169 kept one of 437 characters typed as it was,
+    /// the Return a new line in it). Short, or to a question, it is typed
+    /// as before.
+    func testALongNextInstructionIsPastedWhenTheAgentAsksForIt() {
+        let long = String(repeating: "Write the tests first. ", count: 20)
+        let done = AgentState.done(said: "ok")
+        XCTAssertEqual(AgentAnswer.steps(agent: "codex", state: done, text: long, bracketedPaste: true), ["\u{1b}[200~" + long + "\u{1b}[201~", "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: "codex", state: done, text: long, bracketedPaste: false), [long, "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: "codex", state: done, text: "go on", bracketedPaste: true), ["go on", "\r"])
+        // A question's own words are typed as they were tried.
+        let why = AgentState.waitingForAnswer(AgentQuestion(text: "Why?"))
+        XCTAssertEqual(AgentAnswer.steps(agent: "claude", state: why, text: long, bracketedPaste: true), [long, "\r"])
+    }
+
+    /// NOTE-15: the host knows the session asked for bracketed paste, and
+    /// what it types for a long next instruction reaches the session as one.
+    func testALongNextInstructionReachesTheSessionAsAPaste() throws {
+        let typed = root.appendingPathComponent("typed")
+        let script = root.appendingPathComponent("codex")
+        let hook = Handoff.shellQuote(tool.path) + " hook codex"
+        let stop = #"{"hook_event_name":"Stop","last_assistant_message":"Done."}"#
+        let long = String(repeating: "Write the tests first. ", count: 20)
+        let expected = "\u{1b}[200~" + long + "\u{1b}[201~\r"
+        // It says it is done, asks for bracketed paste, then writes down
+        // what is typed into it.
+        try """
+        #!/bin/sh
+        stty raw -echo
+        printf '\\033[?2004h'
+        printf '%s' '\(stop)' | \(hook) Stop
+        head -c \(expected.utf8.count) > '\(typed.path)'
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let phone = Client(port: port, token: token, name: "phone")
+        waitUntil("connected") { !phone.messages.isEmpty }
+        phone.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        let done = AgentState.done(said: "Done.")
+        waitUntil("done") { phone.sessions.first?.state == done }
+        let agent = try XCTUnwrap(phone.sessions.first)
+        phone.connection.send(.answer(session: agent.id, to: done, text: long))
+        waitUntil("the instruction to be typed") { (try? Data(contentsOf: typed))?.count == expected.utf8.count }
+        XCTAssertEqual(String(decoding: try Data(contentsOf: typed), as: UTF8.self), expected)
     }
 
     /// NOTE-14: what the host types for a choice reaches the agent's

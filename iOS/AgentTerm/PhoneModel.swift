@@ -15,6 +15,9 @@ enum LinkStatus: Equatable {
 /// A screen that can be pushed onto the navigation stack.
 enum Route: Hashable {
     case session(SessionID)
+    /// An agent's screen with one of its own shells ("s:<id>") or pages
+    /// ("b:<id>") in front.
+    case companion(agent: SessionID, item: String)
     /// A folder's changes and history.
     case folder(String)
     /// The diff of one changed file.
@@ -74,6 +77,103 @@ final class PhoneModel: ObservableObject {
         didSet { if status != oldValue { updateLiveActivity() } }
     }
     @Published private(set) var sessions: [SessionInfo] = []
+    /// The tabs of the browser in AgentTerm on the Mac (#76). The phone
+    /// does not browse: it looks at a tab, and takes it from its agent or
+    /// gives it back.
+    @Published private(set) var browserTabs: [BrowserTabInfo] = []
+    /// What the Mac answered about a tab: a picture of it, or why there is none.
+    @Published private(set) var browserPictures: [String: Data] = [:]
+    @Published private(set) var browserProblems: [String: String] = [:]
+    private var browserAsks: [Int: (BrowserResult) -> Void] = [:]
+    private var nextBrowserAsk = 1
+
+    /// Asks the browser on the Mac, through its host.
+    func askBrowser(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
+        let id = nextBrowserAsk
+        nextBrowserAsk += 1
+        browserAsks[id] = done
+        connection?.send(.browserAsk(id: id, request: request))
+    }
+
+    func browserAnswered(id: Int, result: BrowserResult) {
+        browserAsks.removeValue(forKey: id)?(result)
+    }
+
+    /// Asks for a picture of a tab as it is now.
+    func refreshPicture(of tab: String) {
+        askBrowser(.picture(tab: tab)) { [weak self] result in
+            switch result {
+            case .image(let data, _):
+                self?.browserPictures[tab] = data
+                self?.browserProblems[tab] = nil
+            case .refused(let why):
+                self?.browserProblems[tab] = why
+            default:
+                break
+            }
+        }
+    }
+
+    /// Takes a tab from its agent, or gives it back.
+    func setUserHas(_ tab: String, _ has: Bool) {
+        askBrowser(has ? .takeOver(tab: tab) : .giveBack(tab: tab)) { [weak self] result in
+            if case .refused(let why) = result { self?.browserProblems[tab] = why }
+        }
+    }
+
+    // MARK: A page, live (#76)
+
+    /// The last picture of a page this iPhone watches, and the page's size
+    /// in CSS pixels, by which a touch on it is placed.
+    struct BrowserFrame {
+        let image: UIImage
+        let width: Double
+        let height: Double
+    }
+
+    @Published private(set) var browserFrames: [String: BrowserFrame] = [:]
+
+    /// Starts or stops being sent a page's pictures, as wide as this
+    /// screen's pixels.
+    func watch(_ tab: String, _ on: Bool) {
+        askBrowser(.watch(tab: tab, on: on, width: on ? 1290 : 0)) { [weak self] result in
+            if case .refused(let why) = result { self?.browserProblems[tab] = why }
+        }
+        if !on { browserFrames[tab] = nil }
+    }
+
+    /// Uses the page: what an agent's tab the Mac then gives to the user.
+    func useBrowser(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
+        guard let tab = request.tab else { return }
+        askBrowser(request) { [weak self] result in
+            if case .refused(let why) = result { self?.browserProblems[tab] = why } else { self?.browserProblems[tab] = nil }
+            done(result)
+        }
+    }
+
+    /// The Mac's browser profiles, the default first: with several, a page
+    /// of the user's is opened in the one picked (#76).
+    @Published private(set) var browserProfiles: [BrowserProfileInfo] = []
+
+    func loadBrowserProfiles() {
+        guard status == .connected else { return }
+        askBrowser(.profiles) { [weak self] result in
+            if case .profiles(let list) = result { self?.browserProfiles = list }
+        }
+    }
+
+    /// Opens a tab of the user's on the Mac, in a project, in a profile
+    /// (its id), the default, or private: `done` gets its id, or nil when
+    /// it could not be opened, and why.
+    func openPage(in project: String, url: String? = nil, profile: String? = nil, isPrivate: Bool = false, _ done: @escaping (String?, String?) -> Void) {
+        askBrowser(.newTab(project: project, url: url, profile: profile, private: isPrivate)) { result in
+            switch result {
+            case .opened(let tab): done(tab, nil)
+            case .refused(let why): done(nil, why)
+            default: done(nil, "The Mac did not open it.")
+            }
+        }
+    }
     /// How the sessions are arranged: order, pins and groups. The Mac keeps
     /// it, and its window and every phone show the same.
     @Published var sessionLayout = TabLayout() {
@@ -89,12 +189,6 @@ final class PhoneModel: ObservableObject {
     /// Whether the Mac's host starts when its user logs in. Nil from a Mac
     /// that cannot do that, or that has not said yet.
     @Published private(set) var startAtLogin: Bool?
-    /// Whether agents may open shells the user sees, through AgentTerm's
-    /// MCP server installed in their configuration (#10). Nil when the
-    /// host does not install it.
-    @Published private(set) var agentShells: Bool?
-    /// Whether the agents are asked to run their commands in shells the user sees.
-    @Published private(set) var agentsUseShells: Bool?
     /// What keeps the agents from opening shells although that is on (#58),
     /// as the host says it, and those of them the user has closed here.
     @Published private(set) var agentShellsFaults: [AgentShellsFault] = []
@@ -108,16 +202,6 @@ final class PhoneModel: ObservableObject {
     private func took(_ faults: [AgentShellsFault]) {
         agentShellsFaults = faults
         closedShellsFaults.formIntersection(faults.map(\.id))
-    }
-
-    func setAgentsUseShells(_ on: Bool) {
-        agentsUseShells = on
-        connection?.send(.setAgentsUseShells(on))
-    }
-
-    func setAgentShells(_ on: Bool) {
-        agentShells = on
-        connection?.send(.setAgentShells(on))
     }
 
     func setStartAtLogin(_ on: Bool) {
@@ -511,7 +595,6 @@ final class PhoneModel: ObservableObject {
 
     /// Each folder's git worktrees (#23, #33), as its host lists them.
     @Published private(set) var worktrees: [String: [WorktreeInfo]] = [:]
-    @Published private(set) var worktreeSetups: [String: String] = [:]
     /// What became of the last worktree that was finished.
     @Published var worktreeSaid: String?
 
@@ -519,7 +602,6 @@ final class PhoneModel: ObservableObject {
     func finishWorktree(_ worktree: WorktreeInfo, of folder: String, _ finish: WorktreeFinish, deleteBranch: Bool) {
         connection?.send(.finishWorktree(folder: folder, path: worktree.path, finish: finish, deleteBranch: deleteBranch))
     }
-    func setWorktreeSetup(_ command: String?, for folder: String) { connection?.send(.setWorktreeSetup(folder: folder, command: command)) }
     func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
 
@@ -680,13 +762,50 @@ final class PhoneModel: ObservableObject {
     enum SessionItem: Identifiable {
         case label(TabGroup, count: Int)
         case session(SessionInfo)
+        /// The heading of an agent's own shells or pages, under it: "Shells", "Browser".
+        case part(agent: SessionID, title: String)
+        /// A shell an agent opened, under it.
+        case shell(SessionInfo)
+        /// A page of the Mac's browser: an agent's under it, or the user's.
+        case page(BrowserTabInfo, nested: Bool)
 
         var id: String {
             switch self {
             case .label(let group, _): return "g:" + group.id
             case .session(let session): return session.layoutID
+            case .part(let agent, let title): return "p:\(agent):\(title)"
+            case .shell(let shell): return "s:" + shell.layoutID
+            case .page(let tab, _): return "b:" + tab.id
             }
         }
+    }
+
+    /// Whether a session is a shell an agent opened that still runs: shown
+    /// under its agent, as on the Mac, not on its own.
+    private func isCompanion(_ session: SessionInfo) -> Bool {
+        session.openedBy.map { agent in sessions.contains { $0.id == agent } } ?? false
+    }
+
+    /// An agent's own shells and pages, in the order of the tabs.
+    func companions(of agent: SessionID) -> (shells: [SessionInfo], pages: [BrowserTabInfo]) {
+        let order = Dictionary(sessionLayout.order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let shells = sessions.filter { $0.openedBy == agent }.sorted { (order[$0.layoutID] ?? .max, $0.id) < (order[$1.layoutID] ?? .max, $1.id) }
+        return (shells, browserTabs.filter { $0.openedBy == agent })
+    }
+
+    private func companionItems(of agent: SessionInfo) -> [SessionItem] {
+        let (shells, pages) = companions(of: agent.id)
+        var items: [SessionItem] = []
+        if !shells.isEmpty { items += [.part(agent: agent.id, title: "Shells")] + shells.map(SessionItem.shell) }
+        if !pages.isEmpty { items += [.part(agent: agent.id, title: "Browser")] + pages.map { .page($0, nested: true) } }
+        return items
+    }
+
+    /// The pages of the user's, and of agents that ended, that no folder shows.
+    var loosePages: [BrowserTabInfo] {
+        let paths = Set(groups.compactMap(\.path))
+        let running = Set(sessions.map(\.id))
+        return browserTabs.filter { tab in !(tab.openedBy.map(running.contains) ?? false) && !paths.contains(tab.project) }
     }
 
     func items(for group: FolderGroup) -> [SessionItem] {
@@ -694,7 +813,7 @@ final class PhoneModel: ObservableObject {
         var items: [SessionItem] = []
         var announced: Set<String> = []
         for id in sessionLayout.order {
-            guard let session = own[id] else { continue }
+            guard let session = own[id], !isCompanion(session) else { continue }
             if let tabGroup = sessionLayout.group(of: id) {
                 if announced.insert(tabGroup.id).inserted {
                     let count = sessionLayout.members(of: tabGroup.id).filter { own[$0] != nil }.count
@@ -703,10 +822,17 @@ final class PhoneModel: ObservableObject {
                 if tabGroup.isCollapsed { continue }
             }
             items.append(.session(session))
+            items += companionItems(of: session)
         }
         // Sessions the arrangement has not heard of yet.
         let known = Set(sessionLayout.order)
-        items += group.sessions.filter { !known.contains($0.layoutID) }.map(SessionItem.session)
+        for session in group.sessions where !known.contains(session.layoutID) && !isCompanion(session) {
+            items.append(.session(session))
+            items += companionItems(of: session)
+        }
+        // The user's pages of the folder, after its sessions, as on the Mac.
+        let running = Set(sessions.map(\.id))
+        items += browserTabs.filter { tab in !(tab.openedBy.map(running.contains) ?? false) && tab.project == group.path }.map { .page($0, nested: false) }
         return items
     }
 
@@ -904,14 +1030,11 @@ final class PhoneModel: ObservableObject {
     private func clearHostState() {
         keepAwake = nil
         startAtLogin = nil
-        agentShells = nil
-        agentsUseShells = nil
         took([])
         keepAwakeOptions = KeepAwakeOptions()
         commitWriter = CommitWriterSettings()
         schedules = []
         worktrees = [:]
-        worktreeSetups = [:]
         writingCommitMessage = []
         syncing = [:]
         sshHosts = []
@@ -1016,7 +1139,7 @@ final class PhoneModel: ObservableObject {
                 isPairing = false
                 pendingPairing = nil
                 if message == nil {
-                    message = "Could not reach the Mac. Check that Tailscale is connected on this iPhone and on the Mac, then try again."
+                    message = "Could not reach the Mac. Check that Tailscale is connected on this \(ThisDevice.name) and on the Mac, then try again."
                 }
                 // Back to the Mac that was on screen before, if there was one.
                 if pairing != nil { connect() }
@@ -1094,19 +1217,23 @@ final class PhoneModel: ObservableObject {
             agentsLoaded = true
         case .startAtLogin(let on):
             startAtLogin = on
-        case .agentShells(let on):
-            agentShells = on
-        case .agentsUseShells(let on):
-            agentsUseShells = on
         case .agentShellsFaults(let faults):
             took(faults)
         case .noticeSeen(let session, let state):
             // Seen on the Mac, or on another device.
             if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
             if let mac = pairing?.id, sessions.first(where: { $0.id == session })?.state == state { notifications.remove(mac: mac, session: session) }
-        case .agentShellResult:
-            // For `agenttermd mcp`, not for an app.
+        case .browserFrame(let tab, let jpeg, let width, let height):
+            if let image = UIImage(data: jpeg) { browserFrames[tab] = BrowserFrame(image: image, width: width, height: height) }
+        case .agentShellResult, .agentBrowserResult, .browserCall, .agentPrompts, .shellSettings:
+            // What the agents are told is written on the Mac only (principle 1).
+            // For `agenttermd mcp`, and for the Mac app that shows the browser.
             break
+        case .browserTabs(let tabs):
+            // The browser's tabs, on the Mac (#76).
+            browserTabs = tabs
+        case .browserAnswer(let id, let result):
+            browserAnswered(id: id, result: result)
         case .macInUse(let inUse):
             macInUse = inUse
             updateLiveActivity()
@@ -1116,9 +1243,8 @@ final class PhoneModel: ObservableObject {
             schedulesPaused = paused
         case .scheduleRunOutput(let id, let at, let text):
             runOutputs[ScheduleOverview.Run.id(schedule: id, at: at)] = .some(text)
-        case .worktrees(let folder, let list, let setup):
+        case .worktrees(let folder, let list):
             worktrees[folder] = list
-            worktreeSetups[folder] = setup
         case .historyMarks(let pinned, let hidden):
             pinnedConversations = Set(pinned)
             hiddenConversations = Set(hidden)
@@ -1160,8 +1286,6 @@ final class PhoneModel: ObservableObject {
             isSearching = false
             searchTruncated = truncated
             searchProblem = problem
-        case .worktreeSetups(let setups):
-            worktreeSetups = setups
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
         case .keepAwake(let on):
@@ -1260,7 +1384,7 @@ final class PhoneModel: ObservableObject {
             if text == "invalid token" {
                 let name = pairing?.name ?? "The Mac"
                 forgetMac()
-                self.message = "\(name) removed this iPhone from its paired devices. Pair it again to reconnect."
+                self.message = "\(name) removed this \(ThisDevice.name) from its paired devices. Pair it again to reconnect."
             } else if text == "invalid pairing code" {
                 self.message = "That pairing code has expired or was already used. Show a new one on the Mac and try again."
             } else if text == "malformed message" {

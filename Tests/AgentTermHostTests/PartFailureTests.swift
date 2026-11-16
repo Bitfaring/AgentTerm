@@ -107,7 +107,9 @@ final class PartFailureTests: XCTestCase {
         let stubborn = Int.random(in: 610_000..<690_000)
         client.connection.send(.create(CreateRequest(command: "trap '' HUP; exec sleep \(stubborn)", cwd: root.path, title: "stubborn")))
         waitUntil("its program to run") { !self.pids(of: stubborn).isEmpty }
-        let id = try XCTUnwrap(client.sessions.first { $0.title == "stubborn" }?.id)
+        // Listed to the client: its program may run before the list says so.
+        waitUntil("the session listed") { self.client.sessions.contains { $0.title == "stubborn" } }
+        let id = try XCTUnwrap(client.sessions.first { $0.title == "stubborn" }?.id, "listed: \(client.sessions.map(\.title))")
         client.connection.send(.kill(session: id))
         waitUntil("the closed session to be gone", timeout: 15) { !self.client.sessions.contains { $0.id == id } }
 

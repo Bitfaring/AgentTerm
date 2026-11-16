@@ -1,51 +1,91 @@
 import Foundation
 
-/// What an agent asks of the shells agents opened through MCP (#10), sent
-/// by `agenttermd mcp` on its behalf with the key of its session. An agent
-/// types into and closes only the shells it opened itself, and reads those
-/// any agent opened (#61); it never reaches the user's own sessions, and
-/// opens shells only, never another agent.
+/// What an agent asks of the shells it opened through MCP (#10), sent by
+/// `agenttermd mcp` on its behalf with the key of its session. An agent
+/// sees, reads, types into and closes only the shells it opened itself; it
+/// never reaches another agent's, nor the user's own sessions, and opens
+/// shells only, never another agent.
 public enum AgentShellRequest: Codable, Equatable, Sendable {
     /// Starts a shell in the agent's folder, running `command` when given.
     case open(command: String?, title: String?)
-    /// The shells agents opened that still run, with which are this agent's.
+    /// The shells this agent opened that still run.
     case list
-    /// The screen as text, with as many lines above it as asked for. Of any
-    /// shell an agent opened.
+    /// The screen as text, with as many lines above it as asked for. Of a
+    /// shell this agent opened only.
     case read(session: SessionID, linesAbove: Int)
     /// Text, then keys by name ("Return", "Control C", "Up"), as typed.
     /// Into a shell this agent opened only.
     case send(session: SessionID, text: String?, keys: [String])
     /// Ends a shell this agent opened.
     case close(session: SessionID)
+    /// Types a command at the shell's prompt and Return, as a paste when
+    /// the shell takes one so that a command of many lines is one command.
+    /// Refused while a command the shell said started has not ended.
+    /// Answered with `ran`, the commands as they stood before it.
+    case run(session: SessionID, command: String)
+    /// The commands of the shell as they stand, with the output of the
+    /// running or last one, at most its last `lines` lines.
+    case command(session: SessionID, lines: Int)
 }
 
 public enum AgentShellResult: Codable, Equatable, Sendable {
     case opened(SessionInfo)
-    /// Every shell an agent opened; `own` are the asking agent's, which it
-    /// may type into, the others it may only read.
-    case shells([SessionInfo], own: [SessionID])
+    /// The shells the asking agent opened.
+    case shells([SessionInfo])
     case screen(String)
     case done
     /// Not done, and why, in words for the agent.
     case refused(String)
+    /// A command was typed; the commands as they stood before it.
+    case ran(AgentCommand)
+    case command(AgentCommand)
+}
+
+/// What a shell said of its commands (OSC 133), as the host saw it.
+public struct AgentCommand: Codable, Equatable, Sendable {
+    /// The shell says when its commands start and end.
+    public var integrated: Bool
+    /// It was set up to say so (`ShellIntegration`), whether it has said
+    /// anything yet or not: a shell still starting has not.
+    public var prepared: Bool
+    /// How many commands have started.
+    public var started: Int
+    public var running: Bool
+    /// The last command's exit code, once it ended.
+    public var exitCode: Int32?
+    /// The running or last command's output, its last lines.
+    public var output: String
+    /// How many lines before those were left out.
+    public var linesLeftOut: Int
+
+    public init(
+        integrated: Bool = false, prepared: Bool = false, started: Int = 0, running: Bool = false, exitCode: Int32? = nil, output: String = "",
+        linesLeftOut: Int = 0
+    ) {
+        self.integrated = integrated
+        self.prepared = prepared
+        self.started = started
+        self.running = running
+        self.exitCode = exitCode
+        self.output = output
+        self.linesLeftOut = linesLeftOut
+    }
 }
 
 extension SessionInfo {
     /// Whose shell this is, for the lists: the name of the session of the
     /// agent that opened it, or that its agent has ended. Nil for a session
-    /// no agent opened. Only that agent types into it (#61).
+    /// no agent opened. Only that agent sees it and types into it (#61).
     public func openedByName(among sessions: [SessionInfo]) -> String? {
         guard let openedBy else { return nil }
         return sessions.first { $0.id == openedBy }?.displayName ?? "an agent that has ended"
     }
 }
 
-/// Something that keeps the agents from opening shells the user sees,
-/// although "Agents can open shells you see" is on (#58). The host tells
-/// every client, for as long as it lasts, and the apps warn of it in their
-/// top banner: without it, the switch says on while no agent can open a
-/// shell, and the agents run their commands out of sight.
+/// Something wrong with AgentTerm's MCP server in the agents (#58). The
+/// host tells every client, for as long as it lasts, and the apps warn of it
+/// in their top banner: without it, the agents could not open shells, or
+/// keep a server of an earlier build, and nobody would know.
 public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Sendable {
     /// What is wrong. Text rather than a closed list, so that a client
     /// still reads a cause that was added after it was built.
@@ -53,8 +93,9 @@ public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Send
         public var rawValue: String
         public init(rawValue: String) { self.rawValue = rawValue }
 
-        /// The server could not be added to an agent's configuration.
-        public static let install = Cause(rawValue: "install")
+        /// An agent kept the server an earlier build had put in its own
+        /// configuration: it refused to take it out, and is not asked again.
+        public static let leftOver = Cause(rawValue: "leftOver")
         /// An agent's server was refused when it signed in to the host.
         public static let signIn = Cause(rawValue: "signIn")
     }
@@ -76,9 +117,9 @@ public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Send
     public func headline(on mac: String? = nil) -> String {
         let onMac = mac.map { " on \($0)" } ?? ""
         switch cause {
-        case .install:
+        case .leftOver:
             let named = agents.isEmpty ? "an agent" : Self.list(agents)
-            return "AgentTerm's shells could not be set up in \(named)\(onMac)."
+            return "The MCP server an earlier AgentTerm put in the settings of \(named)\(onMac) could not be taken out."
         case .signIn:
             return "An agent's MCP server was refused by the AgentTerm host\(onMac)."
         default:
@@ -89,12 +130,14 @@ public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Send
     /// What follows from it and what to do about it.
     public var advice: String {
         switch cause {
-        case .install:
-            return "Agents started there cannot open shells you see. Turning “Agents can open shells you see” off and on in Settings tries again."
+        case .leftOver:
+            let server = AppChannel.current.mcpServerName
+            return
+                "AgentTerm now gives its server to the sessions it starts only, and this one is still in those settings, for every session. Take it out with “mcp remove \(server)” of each of those agents."
         case .signIn:
             return "Its agent cannot open shells you see: it was started by another copy of AgentTerm, or before the host was set up again. Start that agent's session again."
         default:
-            return "Turning “Agents can open shells you see” off and on in Settings sets it up again."
+            return "Start the agent's session again; if it stays, a newer AgentTerm says more."
         }
     }
 
@@ -135,6 +178,24 @@ public enum AgentShellsInstructions {
     /// - Parameter server: The name the MCP server has in the agent's
     ///   configuration, which differs between the builds (#57).
     public static func useShells(server: String) -> String {
-        "You run inside AgentTerm, where the user watches what you do. Run shell commands in a shell of the \(server) MCP server rather than with your own command tool. Open a shell of your own with open_shell, and keep using it: type each command with send_input and the Return key, wait for it with wait, and read the result with read_screen. Only the agent that opened a shell may type into it: list_shells says which are yours, and another agent's you may read but not type into. Open another of your own only while yours runs something that keeps running, such as a dev server. Leave a shell open for the next task rather than close it, unless it runs something that should end."
+        "You run inside AgentTerm, where the user watches what you do. Run shell commands in a shell of the \(server) MCP server rather than with your own command tool. Open a shell of your own with shell_open, and keep using it: run each command with shell_run, which waits until it ends and returns its exit code and its output. For a command still running when shell_run returns, wait with shell_wait or stop it with shell_send and Control C; for a program that asks questions or keeps running (a REPL, a dev server), type into it with shell_send and look with shell_read. You see and use only the shells you opened: shell_list lists them. Open another of your own only while yours runs something that keeps running, such as a dev server. Leave a shell open for the next task rather than close it, unless it runs something that should end."
+    }
+
+    /// What the agents are told of AgentTerm's browser (#76), as this
+    /// build says it. Said plainly, because an agent is often given other
+    /// ways to a browser too (an extension that drives the user's Chrome, a
+    /// headless browser) and took one of those when the user said
+    /// "browser" or "Chrome" (seen on 2026-11-15).
+    public static var browser: String { browser(server: AppChannel.current.mcpServerName) }
+
+    public static func browser(server: String) -> String {
+        "AgentTerm has a browser of its own, Chromium, shown beside you where the user sees it. When the user asks you to open, look at, use or test anything in a browser (a web page, a site, a URL, localhost or a development server, \"the browser\", \"Chrome\" or \"Chromium\"), use AgentTerm's browser through the browser_ tools of the \(server) MCP server: browser_open to open a tab of your own, browser_snapshot to read the page and get the refs of what you can act on, browser_click, browser_type, browser_select and browser_press to act, browser_screenshot to look, browser_console and browser_network for errors. You see and use only the tabs you opened, not the user's. When browser_open says there are several profiles, ask the user which one to use and open it with that profile; for a clean session with none of the user's sign-ins, open a private tab. Do not use another browser tool, extension or MCP server for it (such as Claude in Chrome or a headless browser), nor `open`, curl or a script, unless the user names that other one. If the browser_ tools are not loaded yet, load them by name first. The user may take a tab over; then wait, or open another."
+    }
+
+    /// Everything an agent is told by AgentTerm, for its system prompt or
+    /// its instructions files; nil when it is told nothing.
+    public static func told(useShells: Bool, browser: Bool, server: String = AppChannel.current.mcpServerName) -> String? {
+        let parts = (useShells ? [Self.useShells(server: server)] : []) + (browser ? [Self.browser(server: server)] : [])
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 }

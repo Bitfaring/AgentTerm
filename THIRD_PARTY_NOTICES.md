@@ -29,5 +29,18 @@ others listed in `Package.resolved`.
 | `highlight.js`, inside Highlightr | [highlight.js](https://highlightjs.org), the syntax highlighter Highlightr runs | BSD 3-Clause |
 | `Sources/AgentTermEditor/Resources/mermaid.min.js` | [Mermaid](https://github.com/mermaid-js/mermaid) 11.4.1, draws diagrams from text; the unmodified build | MIT |
 
+## The browser (Mac app)
+
+The Mac app ships the [Chromium Embedded Framework](https://github.com/chromiumembedded/cef)
+(CEF) 156.0.30, built on [Chromium](https://www.chromium.org) 156.0.8078.96,
+for its browser (#76). Nothing of it is kept in this repository:
+`scripts/fetch-cef.sh` fetches the binary distribution, pinned with its
+checksum, from `cef-builds.spotifycdn.com`.
+
+| Part | License |
+|---|---|
+| CEF: its framework, headers and helper code | BSD 3-Clause (`LICENSE.txt` of the distribution) |
+| Chromium and the software it includes | BSD 3-Clause, with parts under other licenses, each listed in Chromium's own credits, which the browser shows at `about:credits` |
+
 The full text of each license is in that project's repository, at the links
 above.

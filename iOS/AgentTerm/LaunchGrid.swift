@@ -12,6 +12,10 @@ struct LaunchGrid: View {
     var labelSuffix = ""
     /// SSH sessions do not belong to a folder, so the folder picker leaves them out.
     var showsSSH = true
+    /// A page of the Mac's browser in the folder (#76); not in the folder picker.
+    var showsBrowser = true
+    @State private var newPage: PageSheetID?
+    @State private var pageProblem: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -33,6 +37,42 @@ struct LaunchGrid: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Start Shell\(labelSuffix)")
             .contextMenu { worktreeItem(Launch(agent: nil)) }
+            if showsBrowser {
+                // A tab of the user's in the Mac's browser, shown here live:
+                // with several profiles, in the one picked, or private.
+                if model.browserProfiles.count > 1 {
+                    Menu {
+                        ForEach(model.browserProfiles) { profile in
+                            Button(profile.isDefault ? "\(profile.name) (default)" : profile.name) { openPage(profile: profile.id) }
+                        }
+                        Divider()
+                        Button {
+                            openPage(isPrivate: true)
+                        } label: {
+                            Label(BrowserWords.privateProfile, systemImage: "eye.slash")
+                        }
+                    } label: {
+                        item("Browser", id: "browser")
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityLabel("Open a Page\(labelSuffix)")
+                } else {
+                    Button {
+                        openPage()
+                    } label: {
+                        item("Browser", id: "browser")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open a Page\(labelSuffix)")
+                    .contextMenu {
+                        Button {
+                            openPage(isPrivate: true)
+                        } label: {
+                            Label("Open a Private Page", systemImage: "eye.slash")
+                        }
+                    }
+                }
+            }
             if showsSSH, !model.sshHosts.isEmpty {
                 // The hosts of the Mac's SSH configuration: the session
                 // runs on the Mac, which is the way to that host.
@@ -52,8 +92,17 @@ struct LaunchGrid: View {
         }
         .disabled(model.status != .connected)
         .opacity(model.status == .connected ? 1 : 0.45)
+        .onAppear { if showsBrowser { model.loadBrowserProfiles() } }
         .sheet(item: $inWorktree) { launch in
             if let folder { NewWorktreeSheet(project: folder, main: model.worktrees[folder]?.first, start: launch.agent, shell: launch.agent == nil) }
+        }
+        .sheet(item: $newPage) { page in
+            BrowserTabSheet(tabID: page.id)
+        }
+        .alert("The page was not opened", isPresented: Binding(get: { pageProblem != nil }, set: { if !$0 { pageProblem = nil } })) {
+            Button("OK") { pageProblem = nil }
+        } message: {
+            Text(pageProblem ?? "")
         }
     }
 
@@ -63,6 +112,12 @@ struct LaunchGrid: View {
         var id: String { agent?.id ?? "" }
     }
     @State private var inWorktree: Launch?
+
+    private func openPage(profile: String? = nil, isPrivate: Bool = false) {
+        model.openPage(in: folder ?? "", profile: profile, isPrivate: isPrivate) { tab, why in
+            if let tab { newPage = PageSheetID(id: tab) } else { pageProblem = why }
+        }
+    }
 
     /// "Start in a New Worktree…", in the menu of what can be started in a
     /// folder (#34). Not where there is no folder to make one of.

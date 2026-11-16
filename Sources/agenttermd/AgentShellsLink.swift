@@ -31,6 +31,8 @@ final class AgentShellsLink {
     /// The protocol the host speaks, once it has taken the server in.
     private var hostVersion: Int?
     private var answers: [Int: AgentShellResult] = [:]
+    /// The browser's answers (#76), under the same numbers.
+    private var browserAnswers: [Int: BrowserResult] = [:]
     private var waiting: [Int: DispatchSemaphore] = [:]
     private var next = 0
 
@@ -74,6 +76,33 @@ final class AgentShellsLink {
         return .refused(why)
     }
 
+    /// Asks the browser through the host (#76), and waits for its answer:
+    /// as long as the request may take, a `wait` longer, and a little more.
+    func askBrowser(_ request: BrowserRequest) -> BrowserResult {
+        lock.lock()
+        let connection = self.connection ?? connect()
+        next += 1
+        let id = next
+        let semaphore = DispatchSemaphore(value: 0)
+        waiting[id] = semaphore
+        lock.unlock()
+        let key = self.key
+        var patience: TimeInterval = 75
+        if case .wait(_, _, _, let seconds) = request { patience = min(max(seconds, 0), 600) + 45 }
+        DispatchQueue.main.async { connection.send(.agentBrowser(id: id, key: key, request: request)) }
+        let answered = semaphore.wait(timeout: .now() + patience) == .success
+        lock.lock()
+        defer { lock.unlock() }
+        waiting[id] = nil
+        if let answer = browserAnswers.removeValue(forKey: id) { return answer }
+        if let down { return .refused(down) }
+        var why = answered ? "AgentTerm's host gave no answer." : "AgentTerm's host did not answer within \(Int(patience)) seconds."
+        if let hostVersion, hostVersion != agenttermProtocolVersion {
+            why += " It speaks protocol \(hostVersion) and this server protocol \(agenttermProtocolVersion): restart the host from AgentTerm's Settings."
+        }
+        return .refused(why)
+    }
+
     /// Starts a connection. Called with the lock held.
     private func connect() -> AgentTermConnection {
         let connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: HostServer.agentShellsClient)
@@ -93,6 +122,9 @@ final class AgentShellsLink {
                 self.refusal = said
             case .agentShellResult(let id, let result):
                 self.answers[id] = result
+                self.waiting.removeValue(forKey: id)?.signal()
+            case .agentBrowserResult(let id, let result):
+                self.browserAnswers[id] = result
                 self.waiting.removeValue(forKey: id)?.signal()
             default:
                 break

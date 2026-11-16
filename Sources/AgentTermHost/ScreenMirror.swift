@@ -30,7 +30,73 @@ final class ScreenMirror: TerminalDelegate {
     func feed(_ data: Data) {
         written = nil
         tracker.consume(data)
-        terminal.feed(byteArray: [UInt8](data))
+        let bytes = [UInt8](data)
+        // The marks of a shell's commands (OSC 133) part the output: what
+        // comes while a command runs is its output as well.
+        var from = 0
+        for mark in marks.scan(bytes) {
+            feedScreen(bytes[from..<mark.end])
+            commandStarted(mark)
+            from = mark.end
+        }
+        feedScreen(bytes[from...])
+    }
+
+    private func feedScreen(_ bytes: ArraySlice<UInt8>) {
+        guard !bytes.isEmpty else { return }
+        terminal.feed(buffer: bytes)
+        if commands.running { output?.feed(buffer: bytes) }
+    }
+
+    // MARK: Commands (OSC 133)
+
+    /// What a shell says of its commands through the marks of OSC 133, as a
+    /// shell an agent opened is set up to (`ShellIntegration`), and as fish
+    /// does by itself: a prompt is shown (A), a command starts (C), and it
+    /// ends with its exit code (D).
+    private(set) var commands = AgentCommand()
+    /// The output of the running command, or of the last one, drawn on a
+    /// terminal of its own that saw nothing else: its text is what the
+    /// command wrote, as a terminal shows it, whatever it did with the
+    /// cursor meanwhile.
+    private var output: Terminal?
+    private var marks = CommandMarks()
+    private let outputScrollback = 5000
+
+    private func commandStarted(_ mark: CommandMarks.Mark) {
+        switch mark.kind {
+        case "A":
+            commands.integrated = true
+        case "C":
+            commands.integrated = true
+            commands.started += 1
+            commands.running = true
+            commands.exitCode = nil
+            output = Terminal(delegate: self, options: TerminalOptions(cols: terminal.cols, rows: terminal.rows, scrollback: outputScrollback))
+        case "D":
+            commands.integrated = true
+            guard commands.running else { return }
+            commands.running = false
+            commands.exitCode = Int32(mark.parameter.prefix { $0 != ";" })
+        default:
+            break
+        }
+    }
+
+    /// The commands as they stand, with the output of the running one or
+    /// of the last: at most its last `lines` lines, without blank lines
+    /// before and after.
+    func command(lines: Int) -> AgentCommand {
+        var state = commands
+        guard let output else { return state }
+        var rows = output.contentSnapshot(region: .history(maximumScrollbackRows: outputScrollback)).rows.map {
+            $0.text.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+        }
+        while rows.last?.isEmpty == true { rows.removeLast() }
+        while rows.first?.isEmpty == true { rows.removeFirst() }
+        state.linesLeftOut = max(0, rows.count - lines)
+        state.output = rows.suffix(lines).joined(separator: "\n")
+        return state
     }
 
     /// The screen as text, with up to `linesAbove` of the lines above it,
@@ -47,7 +113,12 @@ final class ScreenMirror: TerminalDelegate {
         guard size.cols != terminal.cols || size.rows != terminal.rows else { return }
         written = nil
         terminal.resize(cols: size.cols, rows: size.rows)
+        output?.resize(cols: size.cols, rows: size.rows)
     }
+
+    /// Whether the program asked for bracketed paste (mode 2004), as it is
+    /// now. Text sent to it as a whole goes as a paste then (`SentText`).
+    var bracketedPasteMode: Bool { terminal.bracketedPasteMode }
 
     /// The emulator answers what programs ask a terminal. Those answers are
     /// the clients' to give, not this one's.

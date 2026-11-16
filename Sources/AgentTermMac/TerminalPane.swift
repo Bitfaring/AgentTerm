@@ -3,18 +3,21 @@ import AgentTermTerminal
 import AppKit
 import SwiftUI
 
-/// Hosts the terminal view of whichever session is selected.
+/// Hosts the terminal view of a session, in the pane that shows it.
 struct TerminalPane: NSViewRepresentable {
     let controller: TerminalController
     /// The grid another device imposed, while it drives the session.
     let foreignSize: TermSize?
+    /// Whether the keyboard is to be here: with several terminals on show
+    /// (#69), only the one in front of the pane the keyboard is in.
+    var focused = true
 
     func makeNSView(context: Context) -> TerminalContainerView {
         TerminalContainerView()
     }
 
     func updateNSView(_ container: TerminalContainerView, context: Context) {
-        container.show(controller, foreignSize: foreignSize)
+        container.show(controller, foreignSize: foreignSize, focused: focused)
     }
 }
 
@@ -56,9 +59,38 @@ final class TerminalContainerView: NSView {
         fatalError("not used")
     }
 
-    func show(_ controller: TerminalController, foreignSize: TermSize?) {
+    /// Whether the keyboard was to be here, the last time it was asked.
+    private var wasFocused = false
+
+    /// The container last asked to show each terminal, which has it. One
+    /// on its way out, asked once more after a new one took the terminal (a
+    /// part of the agent's area shown), took it back and went with it, and
+    /// the agent's terminal was left blank (#94).
+    private static let owners = NSMapTable<TerminalController, TerminalContainerView>.weakToWeakObjects()
+    private weak var shownController: TerminalController?
+
+    // Whether it shows its terminal, for the tests (#94): told by its value.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityLabel() -> String? { "Terminal" }
+    override func accessibilityIdentifier() -> String { "terminal-view" }
+    override func accessibilityValue() -> Any? { controller.map { $0.view.superview === self } == true ? "shown" : "empty" }
+
+    func show(_ controller: TerminalController, foreignSize: TermSize?, focused: Bool = true) {
+        if shownController !== controller || Self.owners.object(forKey: controller) == nil {
+            shownController = controller
+            Self.owners.setObject(self, forKey: controller)
+        }
+        guard Self.owners.object(forKey: controller) === self else { return }
         let terminal = controller.view
         if terminal.superview !== self {
+            // A terminal moved to another pane, or into an agent's area,
+            // keeps the keyboard it had (#69): an agent opening a shell
+            // does not take it from where the user types.
+            let hadKeyboard =
+                terminal.window.map { window in
+                    (window.firstResponder as? NSView).map { $0 === terminal || $0.isDescendant(of: terminal) } ?? false
+                } ?? false
             subviews.forEach { $0.removeFromSuperview() }
             // Positioned in `layout`, not by autoresizing: its origin moves
             // while another device's grid is shown.
@@ -68,12 +100,36 @@ final class TerminalContainerView: NSView {
             // Looking at a session is not using it: the Mac app shows every
             // session, including ones a phone is typing in. The size comes
             // here when the user types, or asks for it in the banner.
-            DispatchQueue.main.async {
-                terminal.window?.makeFirstResponder(terminal)
-            }
+            if focused || hadKeyboard { giveKeyboard() }
+        } else if focused && !wasFocused {
+            // Its pane took the keyboard.
+            giveKeyboard()
         }
+        wasFocused = focused
         self.foreignSize = foreignSize
         needsLayout = true
+    }
+
+    /// The keyboard is to go to the terminal, once it is in the window: a
+    /// session picked in place of another is shown by a view that SwiftUI
+    /// puts in the window later, and the keyboard then went nowhere when the
+    /// other's terminal left (PANE-16).
+    private var keyboardWanted = false
+
+    private func giveKeyboard() {
+        keyboardWanted = true
+        DispatchQueue.main.async { [weak self] in self?.takeKeyboardIfInWindow() }
+    }
+
+    private func takeKeyboardIfInWindow() {
+        guard keyboardWanted, let terminal = controller?.view, terminal.superview === self, let window else { return }
+        keyboardWanted = false
+        window.makeFirstResponder(terminal)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        DispatchQueue.main.async { [weak self] in self?.takeKeyboardIfInWindow() }
     }
 
     override func layout() {

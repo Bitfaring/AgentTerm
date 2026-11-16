@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "AgentTermHost", targets: ["AgentTermHost"]),
         .executable(name: "agenttermd", targets: ["agenttermd"]),
         .executable(name: "AgentTermMac", targets: ["AgentTermMac"]),
+        .executable(name: "AgentTermBrowserHelper", targets: ["AgentTermBrowserHelper"]),
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
@@ -69,9 +70,26 @@ let package = Package(
             dependencies: ["AgentTermProtocol", "CAgentTermPTY", .product(name: "SwiftTerm", package: "SwiftTerm")]
         ),
         .executableTarget(name: "agenttermd", dependencies: ["AgentTermHost", "AgentTermClient"]),
+        // The Mac app's browser (#76): Chromium, through the C API of the
+        // Chromium Embedded Framework. Its headers and the framework are
+        // fetched by scripts/fetch-cef.sh into .build/cef; built without
+        // them, the browser says it is not in the build. The API version is
+        // pinned, so a later build of CEF with the same API is taken without
+        // a change here.
+        .target(
+            name: "CAgentTermCEF",
+            cSettings: [
+                .headerSearchPath("../../.build/cef/current"),
+                .define("CEF_API_VERSION", to: "15600"),
+            ],
+            linkerSettings: [.linkedFramework("AppKit")]
+        ),
+        // Chromium's other processes, as "<App> Helper.app" and its variants.
+        .executableTarget(name: "AgentTermBrowserHelper", dependencies: ["CAgentTermCEF"]),
         .executableTarget(
             name: "AgentTermMac",
             dependencies: [
+                "CAgentTermCEF",
                 "AgentTermClient",
                 "AgentTermEditor",
                 "AgentTermFirebase",

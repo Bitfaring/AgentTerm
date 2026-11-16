@@ -14,6 +14,8 @@ import Foundation
 public final class AgentShellsMCP {
     /// Asks the host, and waits for its answer.
     public typealias Ask = (AgentShellRequest) -> AgentShellResult
+    /// Asks the browser, through the host (#76), and waits for its answer.
+    public typealias AskBrowser = (BrowserRequest) -> BrowserResult
 
     /// What a session's variable tells its agent's server: the host to ask,
     /// as which session, and whether the agent is to run its commands in
@@ -22,16 +24,19 @@ public final class AgentShellsMCP {
         public var port: UInt16
         public var key: String
         public var useShells: Bool
+        /// The agent the session is of, whose instructions the server gives.
+        public var agent: String?
 
-        public init(port: UInt16, key: String, useShells: Bool) {
+        public init(port: UInt16, key: String, useShells: Bool, agent: String? = nil) {
             self.port = port
             self.key = key
             self.useShells = useShells
+            self.agent = agent
         }
 
         /// The variable's value, for a session of the build `channel`.
         public func variable(channel: AppChannel = .current) -> String {
-            "\(port) \(key) \(channel.rawValue)" + (useShells ? " use" : "")
+            "\(port) \(key) \(channel.rawValue)" + (useShells ? " use" : "") + (agent.map { " agent:" + $0 } ?? "")
         }
 
         /// What the variable says, or nil when it names no session, or one
@@ -45,11 +50,15 @@ public final class AgentShellsMCP {
             let rest = words.dropFirst(2)
             let named = rest.compactMap(AppChannel.init(rawValue:)).first ?? .release
             guard named == channel else { return nil }
-            self.init(port: port, key: words[1], useShells: rest.contains("use"))
+            let agent = rest.first { $0.hasPrefix("agent:") }.map { String($0.dropFirst(6)) }
+            self.init(port: port, key: words[1], useShells: rest.contains("use"), agent: agent)
         }
     }
 
     private let ask: Ask?
+    private let askBrowser: AskBrowser?
+    /// For the browser's tools, in their own file.
+    var browserAsker: AskBrowser? { askBrowser }
     private let name: String
     private let version: String
     /// The agent is to run its commands in these shells.
@@ -65,6 +74,22 @@ public final class AgentShellsMCP {
     /// were cancelled: a cancelled one ends, and is not answered.
     private var running: Set<String> = []
     private var cancelled: Set<String> = []
+    /// The commands `shell_run` left running, by shell: what a later
+    /// `shell_wait` tells the end of, also when it ended in between. The
+    /// number is the count of commands started before it.
+    private var unfinished: [SessionID: Int] = [:]
+
+    private func unfinished(_ session: SessionID) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return unfinished[session]
+    }
+
+    private func setUnfinished(_ session: SessionID, _ after: Int?) {
+        lock.lock()
+        unfinished[session] = after
+        lock.unlock()
+    }
 
     /// A request's id as the key it is kept under: a number or a string.
     private static func key(_ id: Any) -> String { id is String ? "s:\(id)" : "n:\(id)" }
@@ -78,8 +103,18 @@ public final class AgentShellsMCP {
     /// - Parameters:
     ///   - ask: Nil outside a session of this build of AgentTerm: no tools then.
     ///   - name: The server's name in the agents' configuration.
-    public init(ask: Ask?, name: String = AppChannel.current.mcpServerName, version: String, useShells: Bool = false) {
+    /// What the user wrote in Settings for the agent, or the default the
+    /// host worked out, as the host left it for the agent's server: given
+    /// as the server's instructions in place of its own.
+    private let instructions: String?
+
+    public init(
+        ask: Ask?, askBrowser: AskBrowser? = nil, name: String = AppChannel.current.mcpServerName, version: String, useShells: Bool = false,
+        instructions: String? = nil
+    ) {
         self.ask = ask
+        self.askBrowser = askBrowser
+        self.instructions = instructions
         self.name = name
         self.version = version
         self.useShells = useShells
@@ -142,18 +177,24 @@ public final class AgentShellsMCP {
                 "serverInfo": ["name": name, "version": version],
                 "instructions": ask == nil
                     ? "Not in a session of AgentTerm: no tools."
-                    : useShells
-                        ? AgentShellsInstructions.useShells(server: name)
-                        : "Open shells the user can see in AgentTerm, next to your session, and work in them. Use them for what keeps running or what the user should watch: an SSH session, a dev server, a REPL. Only the agent that opened a shell may type into it: list_shells says which are yours, and another agent's you may read but not type into."
+                    : instructions
+                        ?? (useShells
+                            ? AgentShellsInstructions.useShells(server: name)
+                            : "Open shells the user can see in AgentTerm, next to your session, and work in them: shell_open, then shell_run for each command, which returns its exit code and output once it ends. Use them for what keeps running or what the user should watch: an SSH session, a dev server, a REPL. You see and use only the shells you opened: shell_list lists them.")
+                            + (askBrowser == nil ? "" : "\n\n" + AgentShellsInstructions.browser(server: name))
                     ,
             ])
         case "ping":
             return result([:])
         case "tools/list":
-            return result(["tools": ask == nil ? [] : Self.tools])
+            return result(["tools": ask == nil ? [] : Self.tools + (askBrowser == nil ? [] : Self.browserTools)])
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
+            if name.hasPrefix("browser_") {
+                let (content, failed) = callBrowser(name, arguments)
+                return result(["content": content, "isError": failed])
+            }
             let (text, failed) = call(name, arguments, isCancelled: isCancelled)
             return result(["content": [["type": "text", "text": text]], "isError": failed])
         default:
@@ -163,37 +204,59 @@ public final class AgentShellsMCP {
 
     // MARK: The tools
 
+    /// The shells' tools, named alike as the browser's are, so that an agent
+    /// that looks its tools up by name finds them together.
     static let tools: [[String: Any]] = [
         tool(
-            "open_shell",
-            "Opens a shell in a new AgentTerm tab, in your folder, that the user sees and can type in. With a command (`ssh build-server`, `npm run dev`) it runs that; without, a login shell. Starting an agent is refused.",
-            ["command": string("The command to run; none for a plain login shell"), "title": string("The tab's name")], required: []),
+            "shell_open",
+            "Opens a shell in a new AgentTerm tab, in your folder, that the user sees and can type in, and returns its number once it is ready. Without a command it is a login shell, to run commands in with shell_run; with one (`npm run dev`, `ssh build-server`) it runs that program, to type into with shell_send. Starting an agent is refused.",
+            ["command": string("A program to run instead of a shell prompt; none for a shell"), "title": string("The tab's name")], required: [],
+            title: "Open a shell"),
         tool(
-            "list_shells",
-            "The shells open in AgentTerm that agents opened, with their numbers and folders, and whose each is: you may type into yours, and only read another agent's.",
-            [:], required: []),
+            "shell_run",
+            "Runs a command in a shell you opened, as typed at its prompt, waits until it ends, and returns its exit code and its output, only what it wrote. A command still running when the time is up keeps running: shell_wait waits for it to end, shell_send with the key Control C stops it. For a program that asks questions or keeps running (a REPL, a dev server), type into it with shell_send instead.",
+            [
+                "session": integer("The shell's number"), "command": string("The command, as typed at the prompt; several lines are one command"),
+                "timeout_seconds": number("At most this long; 60 by default"),
+            ],
+            required: ["session", "command"], title: "Run a command"),
         tool(
-            "read_screen", "The screen as text of a shell any agent opened, with lines above it when asked.",
+            "shell_list",
+            "The shells you opened that are still open, with their numbers and folders. Another agent's, and the user's own, you do not see.",
+            [:], required: [], title: "List your shells", readOnly: true),
+        tool(
+            "shell_read", "The screen as text of a shell you opened, with lines above it when asked.",
             ["session": integer("The shell's number"), "lines_above": integer("How many lines above the screen to include; 0 by default")],
-            required: ["session"]),
+            required: ["session"], title: "Read a shell's screen", readOnly: true),
         tool(
-            "send_input",
-            "Types into a shell you opened: text, then keys by name, as a person would. Another agent's shell is refused. Keys: Return, Tab, Escape, Backspace, Up, Down, Left, Right, Home, End, Page Up, Page Down, Delete, Control A to Control Z.",
+            "shell_send",
+            "Types into a shell you opened: text, then keys by name, as a person would, without waiting. For a program that asks something, a REPL, or to stop a command with Control C. Keys: Return, Tab, Escape, Backspace, Up, Down, Left, Right, Home, End, Page Up, Page Down, Delete, Control A to Control Z.",
             ["session": integer("The shell's number"), "text": string("Text to type"), "keys": ["type": "array", "items": ["type": "string"], "description": "Keys to press after the text"]],
-            required: ["session"]),
+            required: ["session"], title: "Type into a shell"),
         tool(
-            "wait",
-            "Waits until the shell's screen has been still for a moment, or a text appears on it, or the time is up, and returns the screen.",
+            "shell_wait",
+            "Waits, and returns what came of it. With a text, until it is on the screen. Without, until the command running in the shell ends, with its exit code and output; when none runs, until the screen has been still for a moment.",
             [
                 "session": integer("The shell's number"), "until_text": string("Wait until this text is on the screen"),
-                "quiet_seconds": number("How long the screen must stay the same; 1 by default"), "timeout_seconds": number("At most this long; 30 by default"),
+                "quiet_seconds": number("How long the screen must stay the same, when no command is waited for; 1 by default"),
+                "timeout_seconds": number("At most this long; 60 by default"),
             ],
-            required: ["session"]),
-        tool("close_shell", "Ends a shell you opened, when you no longer need it. Another agent's shell is refused.", ["session": integer("The shell's number")], required: ["session"]),
+            required: ["session"], title: "Wait on a shell", readOnly: true),
+        tool(
+            "shell_close", "Ends a shell you opened, when you no longer need it.", ["session": integer("The shell's number")], required: ["session"],
+            title: "Close a shell", destructive: true),
     ]
 
-    private static func tool(_ name: String, _ description: String, _ properties: [String: Any], required: [String]) -> [String: Any] {
-        ["name": name, "description": description, "inputSchema": ["type": "object", "properties": properties, "required": required]]
+    private static func tool(
+        _ name: String, _ description: String, _ properties: [String: Any], required: [String], title: String, readOnly: Bool = false,
+        destructive: Bool = false
+    ) -> [String: Any] {
+        var annotations: [String: Any] = ["title": title, "readOnlyHint": readOnly, "openWorldHint": false]
+        if !readOnly { annotations["destructiveHint"] = destructive }
+        return [
+            "name": name, "title": title, "description": description, "inputSchema": ["type": "object", "properties": properties, "required": required],
+            "annotations": annotations,
+        ]
     }
     private static func string(_ description: String) -> [String: Any] { ["type": "string", "description": description] }
     private static func integer(_ description: String) -> [String: Any] { ["type": "integer", "description": description] }
@@ -205,30 +268,138 @@ public final class AgentShellsMCP {
         let session = (arguments["session"] as? NSNumber).map { SessionID(truncatingIfNeeded: $0.intValue) }
         func needsSession() -> (String, Bool) { ("Which shell: give its number as `session`.", true) }
         let result: AgentShellResult
+        let timeout = (arguments["timeout_seconds"] as? NSNumber)?.doubleValue ?? 60
         switch name {
-        case "open_shell":
-            result = ask(.open(command: (arguments["command"] as? String).flatMap { $0.isEmpty ? nil : $0 }, title: arguments["title"] as? String))
-        case "list_shells":
+        case "shell_open":
+            let command = (arguments["command"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            result = ask(.open(command: command, title: arguments["title"] as? String))
+            if case .opened(let shell) = result {
+                guard command == nil else { return (Self.words(result).0 + " It runs that program: type into it with shell_send.", false) }
+                ready(shell.id, isCancelled: isCancelled)
+                return (Self.words(result).0 + " Run commands in it with shell_run.", false)
+            }
+        case "shell_run":
+            guard let session else { return needsSession() }
+            guard let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return ("Which command: give it as `command`.", true)
+            }
+            return run(command, in: session, timeout: timeout, isCancelled: isCancelled)
+        case "shell_list":
             result = ask(.list)
-        case "read_screen":
+        case "shell_read":
             guard let session else { return needsSession() }
             result = ask(.read(session: session, linesAbove: (arguments["lines_above"] as? NSNumber)?.intValue ?? 0))
-        case "send_input":
+        case "shell_send":
             guard let session else { return needsSession() }
             result = ask(.send(session: session, text: arguments["text"] as? String, keys: arguments["keys"] as? [String] ?? []))
-        case "wait":
+        case "shell_wait":
             guard let session else { return needsSession() }
-            return wait(
-                session: session, until: arguments["until_text"] as? String,
-                quiet: (arguments["quiet_seconds"] as? NSNumber)?.doubleValue ?? 1, timeout: (arguments["timeout_seconds"] as? NSNumber)?.doubleValue ?? 30,
-                isCancelled: isCancelled)
-        case "close_shell":
+            let until = (arguments["until_text"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let quiet = (arguments["quiet_seconds"] as? NSNumber)?.doubleValue
+            // The command shell_run left running, also once it ended, or
+            // the one that runs, when nothing else is asked for.
+            if until == nil, quiet == nil {
+                if let after = unfinished(session) {
+                    return awaitCommand(in: session, after: after, timeout: timeout, isCancelled: isCancelled)
+                }
+                if case .command(let state) = ask(.command(session: session, lines: 0)), state.integrated, state.running {
+                    return awaitCommand(in: session, after: state.started - 1, timeout: timeout, isCancelled: isCancelled)
+                }
+            }
+            return wait(session: session, until: until, quiet: quiet ?? 1, timeout: timeout, isCancelled: isCancelled)
+        case "shell_close":
             guard let session else { return needsSession() }
             result = ask(.close(session: session))
         default:
             return ("There is no tool called \(name).", true)
         }
         return Self.words(result)
+    }
+
+    /// How many lines of a command's output are given, its last.
+    static let outputLines = 300
+
+    /// Until a shell that was set up to say when its commands end has shown
+    /// its first prompt, or, for one that says nothing, its screen is still:
+    /// a command typed sooner is still run, but would not be known to start.
+    private func ready(_ session: SessionID, isCancelled: () -> Bool) {
+        let started = Date()
+        while Date().timeIntervalSince(started) < 15, !isCancelled() {
+            guard case .command(let state) = ask?(.command(session: session, lines: 0)) else { return }
+            if state.integrated { return }
+            if !state.prepared {
+                _ = wait(session: session, until: nil, quiet: 0.5, timeout: 5, isCancelled: isCancelled)
+                return
+            }
+            Thread.sleep(forTimeInterval: pollInterval)
+        }
+    }
+
+    /// Types a command and waits for it to end: its exit code and output,
+    /// or, from a shell that does not say when its commands end, its screen
+    /// once it is still.
+    private func run(_ command: String, in session: SessionID, timeout: TimeInterval, isCancelled: () -> Bool) -> (String, Bool) {
+        guard let ask else { return ("", true) }
+        // A shell still starting says nothing yet: it is waited for.
+        if case .command(let state) = ask(.command(session: session, lines: 0)), state.prepared, !state.integrated {
+            ready(session, isCancelled: isCancelled)
+        }
+        let typed = ask(.run(session: session, command: command))
+        guard case .ran(let before) = typed else { return Self.words(typed) }
+        guard before.integrated else {
+            let (screen, failed) = wait(session: session, until: nil, quiet: 1, timeout: timeout, isCancelled: isCancelled)
+            return (
+                "This shell does not say when a command ends, nor its exit code (it is not zsh, or it runs a program): its screen once it was still.\n\n"
+                    + screen, failed
+            )
+        }
+        return awaitCommand(in: session, after: before.started, timeout: timeout, isCancelled: isCancelled)
+    }
+
+    /// Waits until a command after the `after`th has started and ended.
+    private func awaitCommand(in session: SessionID, after: Int, timeout: TimeInterval, isCancelled: () -> Bool) -> (String, Bool) {
+        guard let ask else { return ("", true) }
+        let started = Date()
+        while true {
+            if isCancelled() { return ("Cancelled.", true) }
+            let asked = ask(.command(session: session, lines: Self.outputLines))
+            guard case .command(let state) = asked else {
+                setUnfinished(session, nil)
+                return Self.words(asked)
+            }
+            if state.started > after, !state.running {
+                setUnfinished(session, nil)
+                return (Self.ended(state), false)
+            }
+            if Date().timeIntervalSince(started) >= timeout {
+                setUnfinished(session, after)
+                guard state.started > after else {
+                    let screen = Self.words(ask(.read(session: session, linesAbove: 0))).0
+                    return (
+                        "No command started in \(Self.seconds(timeout)): the shell may be in a program that waits for input. Its screen:\n\n\(screen)",
+                        false
+                    )
+                }
+                return (
+                    "Still running after \(Self.seconds(Date().timeIntervalSince(started))). "
+                        + Self.output(state, empty: "No output yet.", heading: "The output so far")
+                        + "\n\nWait for it to end with shell_wait, or stop it with shell_send and the key Control C.", false
+                )
+            }
+            Thread.sleep(forTimeInterval: pollInterval)
+        }
+    }
+
+    /// A command that ended, in words for the agent.
+    static func ended(_ state: AgentCommand) -> String {
+        "Exit code \(state.exitCode.map(String.init) ?? "not known")." + " " + output(state, empty: "No output.", heading: "Its output")
+    }
+
+    private static func output(_ state: AgentCommand, empty: String, heading: String) -> String {
+        guard !state.output.isEmpty else { return empty }
+        let lines = state.output.split(separator: "\n", omittingEmptySubsequences: false).count
+        let left = state.linesLeftOut > 0 ? ", its last \(lines) of \(lines + state.linesLeftOut) lines (shell_read with lines_above shows more)" : ""
+        return "\(heading)\(left):\n\n\(state.output)"
     }
 
     /// Reads the screen until it says `until`, or has stayed the same for
@@ -266,13 +437,14 @@ public final class AgentShellsMCP {
     static func words(_ result: AgentShellResult) -> (String, Bool) {
         switch result {
         case .opened(let shell): return ("Opened shell \(shell.id), “\(shell.title)”, in \(shell.cwd).", false)
-        case .shells(let list, let own):
-            if list.isEmpty { return ("No agent has a shell open.", false) }
-            let lines = list.map { "\($0.id): \($0.title), in \($0.cwd) (\(own.contains($0.id) ? "yours" : "another agent's: read only"))" }
-            return (lines.joined(separator: "\n"), false)
+        case .shells(let list):
+            if list.isEmpty { return ("You have no shell open: open one with shell_open.", false) }
+            return (list.map { "\($0.id): \($0.title), in \($0.cwd)" }.joined(separator: "\n"), false)
         case .screen(let text): return (text, false)
         case .done: return ("Done.", false)
         case .refused(let why): return (why, true)
+        case .ran: return ("Typed.", false)
+        case .command(let state): return (state.running ? output(state, empty: "Running, no output yet.", heading: "Running; its output") : ended(state), false)
         }
     }
 

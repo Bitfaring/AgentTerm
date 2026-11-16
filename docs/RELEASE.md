@@ -90,6 +90,10 @@ make store-metadata      # send the listing; "What's New" is the version's relea
 make store-screenshots   # send fastlane/screenshots/en-US
 ```
 
+That folder holds the iPhone's pictures (1260 x 2736) and the iPad's
+(`ipad-*.png`, 2064 x 2752, #88); fastlane tells them apart by their size
+and sends each to its device's place in the listing.
+
 The "Store listing" workflow on GitHub does the same from CI, run by hand
 (`gh workflow run metadata.yml`, with `-f screenshots=true` for the
 screenshots too). Neither submits anything for review. App Store Connect takes the contact
@@ -131,8 +135,9 @@ silicon Mac). There is no universal build yet.
   `NOTES=0` skips the waiting and the notes.
 
 - The pictures show the apps as they are released: `scripts/screenshots.sh`
-  takes them again (see `TESTING.md`), `make store-screenshots` sends the
-  iPhone's to App Store Connect.
+  takes them again (see `TESTING.md`), on the iPhone and the iPad, and
+  `make store-screenshots` sends both to App Store Connect. An app that
+  runs on the iPad is not taken without the iPad's.
 - The tests have been run, all of them, as `TESTING.md` says under
   "Running them".
 

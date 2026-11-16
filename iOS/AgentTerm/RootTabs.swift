@@ -15,6 +15,7 @@ struct RootTabs: View {
                 .tag("sessions")
             NavigationStack {
                 HistoryList(folder: nil)
+                    .readableWidth()
                     .background(Palette.canvas.ignoresSafeArea())
                     .navigationTitle("History")
             }
@@ -23,10 +24,12 @@ struct RootTabs: View {
             // A place of its own, as on the Mac, not a row of Settings.
             NavigationStack {
                 SchedulesScreen()
+                    .readableWidth()
             }
             .tabItem { Label("Schedules", systemImage: "calendar.badge.clock") }
             .tag("schedules")
             SettingsTab()
+                .readableWidth()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag("settings")
         }
@@ -116,15 +119,6 @@ private struct SettingsTab: View {
                             Toggle("Start at Login", isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) }))
                                 .accessibilityIdentifier("start-at-login")
                         }
-                        if let agentShells = model.agentShells {
-                            Toggle("Agents can open shells you see", isOn: Binding(get: { agentShells }, set: { model.setAgentShells($0) }))
-                                .accessibilityIdentifier("agent-shells")
-                            if let useShells = model.agentsUseShells {
-                                Toggle("Agents run their commands there", isOn: Binding(get: { useShells }, set: { model.setAgentsUseShells($0) }))
-                                    .disabled(!agentShells)
-                                    .accessibilityIdentifier("agents-use-shells")
-                            }
-                        }
                         Picker("Temperature", selection: Binding(get: { temperatureUnit }, set: { unit in model.setDisplay { $0.temperatureUnit = unit } })) {
                             Text("Celsius (°C)").tag(SystemStats.celsius)
                             Text("Fahrenheit (°F)").tag(SystemStats.fahrenheit)
@@ -138,7 +132,7 @@ private struct SettingsTab: View {
                     Text(
                         (online ? "" : "Not connected to \(macName): these are as it last said, and can be changed once it is reached. ")
                             + (model.keepAwake == true ? model.keepAwakeOptions.until.map { "Awake until \($0.formatted(date: .omitted, time: .shortened)). " } ?? "" : "")
-                            + "While a session is open \(macName) does not go to sleep by itself, so agents keep working and this iPhone can still reach them. Closing its lid still puts it to sleep."
+                            + "While a session is open \(macName) does not go to sleep by itself, so agents keep working and this \(ThisDevice.name) can still reach them. Closing its lid still puts it to sleep."
                             + (model.startAtLogin == nil ? "" : " With Start at Login, \(macName) can be reached after it restarts without AgentTerm being opened there first.")
                     )
                 }
@@ -152,7 +146,7 @@ private struct SettingsTab: View {
                     Text("Agents")
                 } footer: {
                     Text(
-                        "While you work from this iPhone: a banner in the app, and a notification just after you leave it. Once iOS puts the app to sleep, after a short while, nothing arrives until you open it again. Nothing is told while someone is at \(macName). What an agent said shows on the lock screen only if iOS shows previews there."
+                        "While you work from this \(ThisDevice.name): a banner in the app, and a notification just after you leave it. Once iOS puts the app to sleep, after a short while, nothing arrives until you open it again. Nothing is told while someone is at \(macName). What an agent said shows on the lock screen only if iOS shows previews there."
                     )
                 }
 
@@ -189,7 +183,7 @@ private struct SettingsTab: View {
                     Text("Git")
                 } footer: {
                     Text(
-                        "Which agent writes a commit message, on which model, and what it is told. These, and the settings of \(macName) above, are shared with it; the notifications, the Live Activity and Privacy are this iPhone's own."
+                        "Which agent writes a commit message, on which model, and what it is told. These, and the settings of \(macName) above, are shared with it; the notifications, the Live Activity and Privacy are this \(ThisDevice.name)'s own."
                     )
                 }
 
