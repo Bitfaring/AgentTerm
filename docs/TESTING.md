@@ -752,6 +752,7 @@ and the test talks to the real `agenttermd mcp` with it.
 | BROWSER-14 | A tab, picking on | Pick an element; send it with a note | The picture in the project's `.agentterm/shots/`, the address, selector, HTML and styles typed into the agent's session with the note | hand |
 | BROWSER-16 | Two tabs of the user's, a red page and a blue page | Pick one, the other, the first again, the other again | Each time the page on top in the pane is the tab's own (#92) | M |
 | BROWSER-15 | An agent's page with a form | The agent reads it, types, clicks and takes a picture while it is shown; with the browser hidden; with the window minimized; shown again | Each works within seconds, and each picture shows what was just typed | M |
+| BROWSER-34 | Three pages of the user's of three sites and one with nothing loaded, in the Browser tab | Close Tab on the empty one and on the first; Close Browser for the rest | Their processes end within 20 seconds, one spare at most kept by Chromium: a closed page is not made again by the pane that showed it | M |
 
 ### Vietnamese input
 

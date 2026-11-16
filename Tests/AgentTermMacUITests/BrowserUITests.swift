@@ -845,6 +845,50 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertLessThanOrEqual(Set(renderers().keys).intersection(pages.keys).count, 1, "processes of closed pages still running: \(renderers().filter { pages.keys.contains($0.key) })")
     }
 
+    /// BROWSER-34: the user's own pages, closed by the user, let their
+    /// processes go too: one by one with Close Tab, the rest with the
+    /// Browser tab, and one closed before anything was loaded in it.
+    func testTheUsersClosedPagesProcessesEnd() throws {
+        let page = try makeSite()
+        let server = Process()
+        server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        let port = Int.random(in: 20_000..<40_000)
+        server.arguments = ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", page.deletingLastPathComponent().path]
+        server.standardOutput = FileHandle.nullDevice
+        server.standardError = FileHandle.nullDevice
+        try server.run()
+        defer { server.terminate() }
+        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("tab-b") } }
+        let before = Set(renderers().keys)
+        let urls = ["http://127.0.0.1:\(port)/\(page.lastPathComponent)", "http://localhost:\(port)/\(page.lastPathComponent)", page.absoluteString]
+        for (index, url) in urls.enumerated() {
+            if index == 0 { app.menu(["Browser", "New Browser Tab"]) } else { app.press(.id("browser-new-page")) }
+            app.wait("page \(index + 1)") { pages().count == index + 1 }
+            app.wait(for: .id("browser-address"), timeout: 20)
+            app.write(url, into: .id("browser-address"), confirm: true)
+            app.wait(for: .text("Test page"), timeout: 20)
+        }
+        // One more, with nothing loaded in it.
+        app.press(.id("browser-new-page"))
+        app.wait("a fourth page") { pages().count == 4 }
+        wait("a process for each page", timeout: 20) { Set(self.renderers().keys).subtracting(before).count >= 3 }
+        let opened = renderers().filter { !before.contains($0.key) }
+
+        let all = pages()
+        app.perform("Close Tab", on: .id(all[3]))
+        app.wait("three pages left") { pages().count == 3 }
+        app.perform("Close Tab", on: .id(all[0]))
+        app.wait("two pages left") { pages().count == 2 }
+        app.perform("Close Browser", on: .id("strip-browser"))
+        app.press(.button("Close 2 Pages"))
+        app.wait("the Browser tab gone") { pages().isEmpty && !self.app.exists(.id("strip-browser")) }
+        // Chromium may keep one spare, for the next page.
+        let deadline = Date().addingTimeInterval(20)
+        while Set(renderers().keys).subtracting(before).count > 1, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+        let left = renderers().filter { !before.contains($0.key) }
+        XCTAssertLessThanOrEqual(left.count, 1, "\(left.count) processes of \(opened.count) closed pages still running: \(left.keys.sorted())")
+    }
+
     /// BROWSER-29: a page's two modes, in sight on its bar. Picking on, an
     /// element clicked opens the sheet that sends it to an agent, the
     /// project's agent picked already; sent, the agent is told what to do
