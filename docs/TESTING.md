@@ -253,6 +253,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SIZE-6 | A session open on the iPhone | Turn the phone on its side, bring up the keyboard | The terminal keeps a usable height; one row holds back, the keys, the message field and the menu | L |
 | SIZE-7 | The Mac's launch screen, its line of figures shown | Start a shell | It starts at the size its pane shows it at, not one it is made smaller to afterwards | M |
 | SIZE-8 | A session the Mac and the iPhone show, the iPhone using it | The iPhone goes; the Mac's window is resized; the Mac app is used; the Mac types in it | The session stays at the iPhone's size and nobody drives until the Mac types, then it takes the Mac's; an iPhone coming back takes its own at once, without a button | H |
+| SIZE-9 | A session started on the Mac, in a pane smaller than an iPad's grid | A second device takes control at 300 × 100 | The Mac shows the whole grid, scaled down to fit its pane, as the iPhone shows the Mac's: the last rows, where the prompt is, are not cut off; taken back, it fills the pane again | M |
 
 ### Quick launch and SSH
 
@@ -753,6 +754,7 @@ and the test talks to the real `agenttermd mcp` with it.
 | BROWSER-16 | Two tabs of the user's, a red page and a blue page | Pick one, the other, the first again, the other again | Each time the page on top in the pane is the tab's own (#92) | M |
 | BROWSER-15 | An agent's page with a form | The agent reads it, types, clicks and takes a picture while it is shown; with the browser hidden; with the window minimized; shown again | Each works within seconds, and each picture shows what was just typed | M |
 | BROWSER-34 | Three pages of the user's of three sites and one with nothing loaded, in the Browser tab | Close Tab on the empty one and on the first; Close Browser for the rest | Their processes end within 20 seconds, one spare at most kept by Chromium: a closed page is not made again by the pane that showed it | M |
+| BROWSER-35 (#117) | A page of the user's shown | Close it, the last one; open one again; close it | No page process is left 20 seconds after, none kept in reserve by Chromium; the page opened again loads | M |
 
 ### Vietnamese input
 

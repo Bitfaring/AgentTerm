@@ -889,6 +889,24 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertLessThanOrEqual(left.count, 1, "\(left.count) processes of \(opened.count) closed pages still running: \(left.keys.sorted())")
     }
 
+    /// BROWSER-35 (#117): with the last page closed, no page process is
+    /// left, not one kept in reserve either; a page opened later loads.
+    func testNoPageProcessIsLeftWithTheLastPageClosed() throws {
+        let page = try makeSite()
+        for round in 1...2 {
+            app.menu(["Browser", "New Browser Tab"])
+            app.wait(for: .id("browser-address"), timeout: 30)
+            app.write(page.absoluteString, into: .id("browser-address"), confirm: true)
+            app.wait(for: .text("Test page"), timeout: 30)
+            XCTAssertFalse(renderers().isEmpty, "round \(round): a page is shown by no process")
+            app.perform("Close Browser", on: .id("strip-browser"))
+            app.wait("the Browser tab gone") { !self.app.exists(.id("strip-browser")) }
+            let deadline = Date().addingTimeInterval(20)
+            while !renderers().isEmpty, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+            XCTAssertEqual(renderers().keys.sorted(), [], "round \(round): page processes still running with no page open")
+        }
+    }
+
     /// BROWSER-29: a page's two modes, in sight on its bar. Picking on, an
     /// element clicked opens the sheet that sends it to an agent, the
     /// project's agent picked already; sent, the agent is told what to do
