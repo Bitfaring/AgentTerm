@@ -554,13 +554,16 @@ final class FlowTests: XCTestCase {
             app.buttons["diff-layout"].tap()
             XCTAssertTrue(app.descendants(matching: .any)["split-diff-after"].firstMatch.waitForExistence(timeout: 10), "the diff is not shown as two panels")
             capture("7b1a-diff-two-panels")
-            // Each panel scrolls sideways on its own.
+            // Each panel is a text, which its panel scrolls sideways on its
+            // own; the line is in the text of what it is now, without its mark.
             let after = app.descendants(matching: .any)["split-diff-after"].firstMatch
-            let changed = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'second line'")).firstMatch
-            XCTAssertTrue(changed.waitForExistence(timeout: 5), "the two panels do not show the changed line")
-            let before = changed.frame.minX
+            let text = after.textViews.firstMatch
+            XCTAssertTrue(text.waitForExistence(timeout: 5), "the panel of what it is now has no text")
+            let shown = text.value as? String ?? ""
+            XCTAssertTrue(shown.contains("second line") && !shown.contains("+second line"), "the two panels do not show the changed line")
+            let before = text.frame.minX
             after.swipeLeft()
-            XCTAssertLessThan(changed.frame.minX, before, "the panel of what it is now does not scroll sideways")
+            XCTAssertLessThan(text.frame.minX, before, "the panel of what it is now does not scroll sideways")
             after.swipeRight()
             app.buttons["diff-layout"].tap()
             XCTAssertTrue(app.descendants(matching: .any)["patch"].firstMatch.waitForExistence(timeout: 10))

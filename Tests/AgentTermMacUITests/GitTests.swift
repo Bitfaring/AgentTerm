@@ -437,10 +437,16 @@ final class GitTests: MacUITestCase {
         // GIT-4: picking a change shows its diff as a tab in the middle.
         app.press(.id("change-notes.txt"))
         app.wait(for: .containing("+second line"))
-        // In two panels the line is on the side of what the file is now, without its mark.
+        // In two panels the line is on the side of what the file is now,
+        // without its mark, and its number is not in the text.
         app.press(.button("Show side by side"))
         app.wait(for: .id("split-diff"))
-        app.wait(for: .text("second line"))
+        app.wait("the line in the panel of what it is now") { (self.app.value(of: .id("split-diff-after")) ?? "").contains("second line") }
+        let after = app.value(of: .id("split-diff-after")) ?? ""
+        XCTAssertFalse(after.contains("+second line"), after)
+        XCTAssertFalse(after.contains("2second line") || after.contains("2 second line"), after)
+        XCTAssertFalse((app.value(of: .id("split-diff-before")) ?? "").contains("second line"), "the line is on the left too")
+        shot("split-diff")
         app.press(.button("Show in one panel"))
         app.wait(for: .containing("+second line"))
     }

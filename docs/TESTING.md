@@ -323,7 +323,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | GIT-3a | Two files staged, a message in the field | Press Commit | git has a commit with that message; the committed files leave the list, the others stay, the field is empty | H, P, M |
 | GIT-3b | A pre-commit hook that prints a message and fails | Press Commit | git's own words are shown; no commit is made; the message stays in the field | H, M |
 | GIT-3c | A pre-commit hook that records the environment it is given | Press Commit | The hook sees `GIT_TERMINAL_PROMPT=0`, no `GIT_ASKPASS` and `SSH_ASKPASS_REQUIRE=never`, as push and pull do; the commit has the message as written | H |
-| GIT-4 | `notes.txt` changed | Pick it in the list; switch to two panels and back | Its diff opens as a tab with `+second line`; in two panels the line is on the right without its mark | P, M |
+| GIT-4 | `notes.txt` changed | Pick it in the list; switch to two panels and back | Its diff opens as a tab with `+second line`; in two panels the line is in the text of the right panel, without its mark or its number, and not in the left's | P, M |
 | GIT-5 | Changes in several folders | Press Group by folder | The list becomes a tree; folders fold and show totals | H, P, X |
 | GIT-6 | One panel and a flat list on both devices | Choose two panels, or the tree, on one device | The other device shows the same choice | H, M, X |
 | GIT-7 | One commit that the remote does not have | Press Push | The remote has the commit | H, P, M |
@@ -394,6 +394,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | GIT-72 | A repository; `--output=<file>` named as a branch and as a commit | Log, show, revert, pick, a branch made from it, switched to, renamed, deleted | None of them writes the file or makes a branch; names that are names still work | H |
 | GIT-73 | The iPhone, the fixture project | A branch made without switching to it; renamed from its menu; deleted from its menu | Made; listed under its new name and not the old; asked once (nothing of its own), then gone, as on the Mac (#35) | P |
 | GIT-74 | The iPhone, the fixture project after its commit | Commits; the newest, Revert…, Revert; the revert, the same | Picking is offered too; asked first, in the Mac's words; each revert is the newest commit after it, and the files are as they were (#36) | P |
+| GIT-75 (#82) | A diff with hunks, removed and added lines; one of 20,000 changed lines | Laid out as two panels | Each side is one text with a line for every row, facing the other's, the header on the left; the numbers and the marks are drawn, not in the text, so what is copied is the file's; no row left out, where 2,500 were the most; every row one line of one height; laying out ten times the rows takes less than fifteen times as long | U |
 
 ### History
 

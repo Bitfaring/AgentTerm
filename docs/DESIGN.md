@@ -354,11 +354,22 @@ The two-panel view is laid out by `SplitDiff.rows` (in `AgentTermProtocol`)
 from the same unified patch: lines both sides share are one row, a run of
 removed lines followed by added ones is paired line by line, and what one
 side has more of faces an empty row. Line numbers come from the hunk
-headers. `SplitDiffView` (in `AgentTermTerminal`) draws it for both apps: one
-vertical scroll view holding two horizontal ones, so the panels move down
-together and sideways apart. Its rows are not lazy, since a lazy stack
-inside the sideways scroll would have no height to be lazy in, so it shows
-at most 2,500 rows and says when it left some out.
+headers. `SplitDiffView` (in `AgentTermTerminal`) draws it for both apps,
+as one TextKit 1 text for each side (#82), worked out off the main thread
+(`SplitDiffTexts`) and laid out a piece at a time between which the window
+answers, the whole diff, where rows of SwiftUI views stopped at 2,500. Each
+row is one line on both sides, the empty side's an empty line, every line
+of one height (its paragraph's least and greatest line height) and never
+wrapped (`byClipping`), so that both texts are as high and the same height
+shows the same row on both. A line's number and its tint are attributes,
+drawn by the layout manager (`SplitDiffLayout`) before the line and across
+the panel, not put in the text: what is selected and copied is the file's.
+On the Mac each text is in a scroll view of its own and one follows the
+other down (`boundsDidChangeNotification`); both have their sideways
+scroll bar always, so that both see as much of their height and the rows
+still face at the bottom. On the iPhone each text scrolls itself down,
+and a scroll view around it scrolls it sideways; one follows the other
+down (`scrollViewDidScroll`).
 
 `GitDiff` shells out to `git`: `diff --cached` for what is staged, `diff` for
 what is not, and `ls-files --others` plus `diff --no-index` for untracked
@@ -1619,8 +1630,8 @@ the main queue, so that the scroll bar is exact a moment later. A diff of
 the same file that changes is put in by replacing only the characters
 that differ, and the line at the top of the pane is scrolled back to
 where it was. The text view is kept as wide as the pane at least, and
-its scroll bars show only when there is something to scroll to. The two-panel diff is still rows of
-SwiftUI views (`SplitDiffView`, shared with the iPhone). `MainThreadWatch`
+its scroll bars show only when there is something to scroll to. The two-panel diff is a text
+view for each side in the same way (`SplitDiffView`, shared with the iPhone, #82). `MainThreadWatch`
 notes stalls of the main thread, only when `AGENTTERM_MEASURE_MAIN` names
 a file to write them to (#21).
 
