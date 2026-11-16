@@ -950,7 +950,9 @@ tool is done, under its request's id, so that a `shell_wait` or a
 `shell_run`, which may take as long as the agent lets it, does not hold up
 the calls that follow it, nor another on another shell.
 `notifications/cancelled` with a request's id ends a wait that is going
-on, and that request is then not answered. An answer is one line, written whole. The line to the host
+on, and that request is then not answered: each of the four agents sends it when the user stops
+a call (MCP-25). Antigravity sends its calls one at a time, so a long wait holds up its other calls
+by its own choice, not the server's. An answer is one line, written whole. The line to the host
 (`AgentShellsLink.ask`) already took requests side by side.
 
 **Which session's agent it is.** The host gives every agent's session a key
