@@ -44,6 +44,10 @@ final class MacDriver {
         let process = Process()
         process.executableURL = executable
         process.environment = environment
+        // Its windows as when first opened, not as macOS saved them when an
+        // earlier test's copy quit: a window minimized then would come
+        // back minimized, and its sheets wait for it (#110).
+        process.arguments = ["-ApplePersistenceIgnoreState", "YES"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
