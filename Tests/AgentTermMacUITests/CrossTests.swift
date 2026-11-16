@@ -77,8 +77,13 @@ final class CrossTests: XCTestCase {
             tool: URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_CROSS_TOOL"])), variable: try String(contentsOf: told, encoding: .utf8),
             state: URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_CROSS_STATE"])))
         defer { server.stop() }
-        let shell = server.text("shell_open")
+        let shell = server.text("shell_open", ["title": "agent-shell"])
         XCTAssertFalse(shell.failed, shell.text)
+        // #108: lines written while the shell has the Mac's width, longer
+        // than the phone's, for the phone to show all of.
+        let number = try XCTUnwrap(shell.text.range(of: #"shell \d+"#, options: .regularExpression).flatMap { Int(shell.text[$0].dropFirst(6)) }, shell.text)
+        let ran = server.text("shell_run", ["session": number, "command": "echo wide-line-$(printf 'x%.0s' $(seq 1 70))-end"])
+        XCTAssertFalse(ran.failed, ran.text)
         let page = server.text("browser_open", ["url": try XCTUnwrap(environment["AGENTTERM_CROSS_PAGE"])])
         XCTAssertFalse(page.failed, page.text)
         app.wait(for: .id("agent-browser"), timeout: 20)

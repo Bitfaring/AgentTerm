@@ -96,6 +96,27 @@ final class CrossTests: XCTestCase {
         let pageURL = try XCTUnwrap(environment["AGENTTERM_PAGE_URL"])
         XCTAssertTrue(app.staticTexts["SHELLS"].waitForExistence(timeout: 15), "the agent's shell is not under it")
         XCTAssertTrue(app.staticTexts["BROWSER"].exists, "the agent's page is not under it")
+
+        // #108: the agent's shell, opened here, takes the phone's size, not
+        // the Mac's agent's area's, so that none of its characters are cut
+        // off. Its row says its size.
+        func size(_ row: XCUIElement) -> (cols: Int, rows: Int)? {
+            guard let range = row.label.range(of: #"\d+×\d+"#, options: .regularExpression) else { return nil }
+            let parts = row.label[range].split(separator: "×").compactMap { Int($0) }
+            return parts.count == 2 ? (parts[0], parts[1]) : nil
+        }
+        let shellRow = app.buttons.matching(NSPredicate(format: "label CONTAINS 'agent-shell'")).firstMatch
+        XCTAssertTrue(shellRow.waitForExistence(timeout: 10), "the agent's shell has no row")
+        let macs = try XCTUnwrap(size(shellRow), shellRow.label)
+        shellRow.tap()
+        XCTAssertTrue(app.segmentedControls["agent-parts"].waitForExistence(timeout: 10))
+        sleep(3)
+        capture("6a-agents-shell")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(shellRow.waitForExistence(timeout: 10))
+        sleep(2)
+        let phones = try XCTUnwrap(size(shellRow), shellRow.label)
+        XCTAssertTrue(phones.cols < macs.cols && phones.cols <= 50, "the agent's shell is \(phones.cols) × \(phones.rows) after the phone showed it, the Mac's \(macs.cols) × \(macs.rows)")
         let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'browser-tab-'"))
         let agentsPage = rows.firstMatch
         XCTAssertTrue(agentsPage.waitForExistence(timeout: 10))
