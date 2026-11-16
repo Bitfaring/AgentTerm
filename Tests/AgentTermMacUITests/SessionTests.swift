@@ -269,6 +269,31 @@ final class SessionTests: MacUITestCase {
         wait("the Mac's size again") { (phone.size(of: id)?.cols ?? 0) > 40 }
     }
 
+    /// SIZE-9: a session another device uses at a grid larger than its
+    /// pane here, an iPad's, is shown whole, scaled down to fit: its last
+    /// rows, where the prompt is, are not cut off under the pane.
+    func testALargerDevicesSessionIsShownWhole() throws {
+        let pad = try device("iPad")
+        app.press(.button("Shell"))
+        wait("the shell") { pad.sessions.count == 1 }
+        let id = pad.sessions[0].id
+        let large = TermSize(cols: 300, rows: 100)
+        pad.send(.attach(session: id, size: large))
+        pad.send(.takeControl(session: id, size: large))
+        wait("the iPad's size") { pad.size(of: id) == large }
+        app.wait(for: .button("Use This Window's Size"), timeout: 15)
+        app.wait(for: .containing("300 × 100"))
+        // Something on the last row, to look at in the picture.
+        pad.connection.sendInput(Data("clear; tput cup 99 0; printf LAST-ROW\n".utf8), to: id)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        shot("larger-device")
+        XCTAssertEqual(app.first(.id("terminal-view"))?.help, "whole grid in sight")
+        // Taken back, it fills the pane again.
+        app.press(.button("Use This Window's Size"))
+        app.waitGone(.button("Use This Window's Size"), timeout: 15)
+        app.wait("the terminal whole at the window's size") { self.app.first(.id("terminal-view"))?.help == "whole grid in sight" }
+    }
+
     func testTheSSHMenuListsTheHostsOfTheConfiguration() throws {
         // LAUNCH-2: the hosts, without the patterns.
         app.press(.button("SSH"))
