@@ -382,7 +382,8 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertEqual(server.text("browser_evaluate", ["tab": tab, "script": "window.devicePixelRatio"]).text, "3")
         XCTAssertTrue(server.text("browser_evaluate", ["tab": tab, "script": "navigator.userAgent"]).text.contains("iPhone"))
         XCTAssertEqual(server.text("browser_evaluate", ["tab": tab, "script": "navigator.platform"]).text, "\"iPhone\"")
-        app.wait(for: .button("iPhone 16"))
+        // The bar's Show As names it.
+        app.wait("the bar to name the device, not \(app.value(of: .id("browser-show-as")) ?? "nothing")") { self.app.value(of: .id("browser-show-as")) == "iPhone 16" }
         // The page as wide as the phone's screen, and the agent the rest.
         app.wait("the page as wide as the phone, not \(app.frame(of: .id("browser-page"))?.width ?? 0)") {
             abs((self.app.frame(of: .id("browser-page"))?.width ?? 0) - 393) < 1.5
