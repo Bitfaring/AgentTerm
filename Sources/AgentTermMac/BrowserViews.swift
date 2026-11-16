@@ -13,6 +13,9 @@ struct BrowserPaneView: View {
     @State private var finding = false
     @State private var findText = ""
 
+    /// The least width its bar's buttons, address and names are whole in.
+    static let barWidth: CGFloat = 460
+
     var body: some View {
         VStack(spacing: 0) {
             toolbar
@@ -73,6 +76,26 @@ struct BrowserPaneView: View {
             }
             .help(tab.loading ? "Stop" : "Reload (⌘R)")
             .accessibilityLabel(tab.loading ? "Stop" : "Reload")
+            // The page's two modes, in sight: browsing, or picking its
+            // elements to send to an agent with a note.
+            Button {
+                model.setPicking(tab, !tab.picking)
+            } label: {
+                Label(tab.picking ? "Picking" : "Pick", systemImage: "cursorarrow.rays")
+                    .labelStyle(.titleAndIcon)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(tab.picking ? Color.white : Color.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(tab.picking ? Color.accentColor : Color.white.opacity(0.08)))
+            }
+            .help(
+                tab.picking
+                    ? "Picking: click an element of the page to send it to an agent with a note. Press to browse again."
+                    : "Pick an element of the page, a button or a view, to send to an agent with what to do with it"
+            )
+            .accessibilityLabel(tab.picking ? "Stop Picking" : "Pick an Element for an Agent")
+            .accessibilityIdentifier("browser-pick")
             TextField("Address or search", text: $address, onEditingChanged: { editing = $0 })
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12))
@@ -101,28 +124,8 @@ struct BrowserPaneView: View {
                 .accessibilityLabel(profileName)
                 .accessibilityValue(profileName)
                 .accessibilityIdentifier("browser-profile")
-            if let device = tab.emulating {
-                Button {
-                    model.emulate(tab, nil)
-                } label: {
-                    Label(device.name, systemImage: "iphone").labelStyle(.titleAndIcon).font(.system(size: 11))
-                }
-                .help("Shown as \(device.name). Press to show it as itself again.")
-            }
+            ShowAsButton(tab: tab)
             Menu {
-                Menu("Show As") {
-                    ForEach([("Phones", BrowserDevice.Kind.phone), ("Tablets", .tablet), ("Computers", .computer)], id: \.0) { title, kind in
-                        Menu(title) {
-                            ForEach(BrowserDevice.presets.filter { $0.kind == kind }, id: \.name) { device in
-                                Button("\(device.name)  \(device.width)×\(device.height)") { model.emulate(tab, device) }
-                            }
-                        }
-                    }
-                    if tab.emulating != nil {
-                        Divider()
-                        Button("This Mac") { model.emulate(tab, nil) }
-                    }
-                }
                 Button("Find in Page…") { finding = true }
                 Divider()
                 Button("Zoom In") { tab.setZoom(tab.zoom + 0.5) }
@@ -130,8 +133,6 @@ struct BrowserPaneView: View {
                 Button("Actual Size") { tab.setZoom(0) }
                 Divider()
                 Button("Developer Tools") { tab.showDevTools() }
-                Button("Send to Agent…") { model.pickForAgent(tab) }
-                    .disabled(model.agentsInProject(of: tab).isEmpty)
                 Divider()
                 Button("Close Tab") { model.closeBrowserTab(tab) }
             } label: {
@@ -233,7 +234,7 @@ private struct AgentBar: View {
                 Image(systemName: tab.userHasIt ? "hand.raised.fill" : "sparkles")
                     .foregroundStyle(tab.userHasIt ? Color.orange : Color.accentColor)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(tab.userHasIt ? BrowserWords.userHas(agents) : BrowserWords.agentDrives(agents))
+                    Text(tab.userHasIt ? BrowserWords.userHas : BrowserWords.agentDrives(agents))
                         .font(.system(size: 12, weight: .medium))
                     if let action = tab.agentAction, !tab.userHasIt {
                         Text(action).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
@@ -314,9 +315,135 @@ private struct DownloadsBar: View {
     }
 }
 
-/// The tab's label in a strip.
+/// Which device the page is shown as, on its bar, in sight: pressed, the
+/// devices by kind, with their screens, the one in use marked, and the Mac
+/// itself first. Picking one shows the page as it at once.
+struct ShowAsButton: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var tab: BrowserTab
+    @State private var choosing = false
+    @State private var search = ""
+
+    private static func symbol(_ kind: BrowserDevice.Kind?) -> String {
+        switch kind {
+        case .phone: return "iphone"
+        case .tablet: return "ipad"
+        case .computer: return "laptopcomputer"
+        case nil: return "macbook.and.iphone"
+        }
+    }
+
+    var body: some View {
+        let device = tab.emulating
+        Button {
+            choosing.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: Self.symbol(device?.kind)).font(.system(size: 10.5, weight: .semibold))
+                if let device {
+                    Text(device.name).font(.system(size: 10.5, weight: .medium)).lineLimit(1).fixedSize()
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(device != nil ? Color.accentColor.opacity(0.32) : Color.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+        .help(device.map { "Shown as \($0.name), \($0.width) × \($0.height). Press to show it as another device, or as this Mac." } ?? "Show the page as a phone, a tablet or another computer")
+        .accessibilityLabel("Show As")
+        .accessibilityValue(device?.name ?? "This Mac")
+        .accessibilityIdentifier("browser-show-as")
+        .popover(isPresented: $choosing, arrowEdge: .bottom) { list }
+    }
+
+    private var list: some View {
+        let words = search.trimmingCharacters(in: .whitespaces).lowercased()
+        return VStack(alignment: .leading, spacing: 0) {
+            TextField("Device", text: $search)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+                .padding(8)
+            Theme.hairline.frame(height: 1)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if words.isEmpty {
+                        row("This Mac", detail: "the page as it is", symbol: "macbook", chosen: tab.emulating == nil, id: "show-as-this-mac") { pick(nil) }
+                    }
+                    ForEach([("Phones", BrowserDevice.Kind.phone), ("Tablets", .tablet), ("Computers", .computer)], id: \.0) { title, kind in
+                        let devices = BrowserDevice.presets.filter { $0.kind == kind && (words.isEmpty || $0.name.lowercased().contains(words)) }
+                        if !devices.isEmpty {
+                            Text(title.uppercased())
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 10)
+                                .padding(.top, 8)
+                                .padding(.bottom, 2)
+                            ForEach(devices, id: \.name) { device in
+                                row(
+                                    device.name, detail: "\(device.width) × \(device.height)", symbol: Self.symbol(kind), chosen: tab.emulating?.name == device.name,
+                                    id: "show-as-\(device.name)"
+                                ) { pick(device) }
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .frame(width: 270, height: 380)
+    }
+
+    private func pick(_ device: BrowserDevice?) {
+        model.emulate(tab, device)
+        choosing = false
+        search = ""
+    }
+
+    private func row(_ name: String, detail: String, symbol: String, chosen: Bool, id: String, action: @escaping () -> Void) -> some View {
+        ShowAsRow(name: name, detail: detail, symbol: symbol, chosen: chosen, action: action)
+            .accessibilityIdentifier(id)
+    }
+}
+
+private struct ShowAsRow: View {
+    let name: String
+    let detail: String
+    let symbol: String
+    let chosen: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: chosen ? "checkmark" : symbol)
+                    .font(.system(size: 10.5, weight: chosen ? .bold : .regular))
+                    .foregroundStyle(chosen ? Color.accentColor : .secondary)
+                    .frame(width: 16)
+                Text(name).font(.system(size: 12, weight: chosen ? .medium : .regular))
+                Spacer(minLength: 8)
+                Text(detail).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(hovering ? Color.white.opacity(0.07) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(name)
+        .accessibilityValue(chosen ? "shown" : "")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { action() }
+    }
+}
+
+/// The Browser tab's label in a strip: the user's pages of the project,
+/// all in this one tab, as a window of Chrome holds its tabs.
 struct BrowserTabLabel: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var browsers: BrowserModel
     @ObservedObject var tab: BrowserTab
     let number: Int
     @State private var hovering = false
@@ -326,30 +453,30 @@ struct BrowserTabLabel: View {
     private var selected: Bool { paneFront == tab.tabID }
 
     var body: some View {
+        let pages = model.userPages(in: tab.project)
+        let loading = pages.contains { $0.loading }
         HStack(spacing: 6) {
-            Image(systemName: tab.loading ? "arrow.triangle.2.circlepath" : "globe")
+            Image(systemName: loading ? "arrow.triangle.2.circlepath" : "globe")
                 .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(tab.owner != nil ? Color.accentColor : .secondary)
-            Text(tab.displayTitle)
+                .foregroundStyle(.secondary)
+            Text(pages.count > 1 ? "Browser (\(pages.count))" : "Browser")
                 .font(.system(size: 12, weight: selected ? .medium : .regular))
                 .foregroundStyle(selected ? .primary : .secondary)
                 .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 190, alignment: .leading)
                 .fixedSize(horizontal: true, vertical: false)
             ZStack {
                 if number <= 9, !hovering {
                     Text("⌘\(number)").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.tertiary)
                 }
                 Button {
-                    model.closeBrowserTab(tab)
+                    model.requestCloseBrowser(in: tab.project)
                 } label: {
                     Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .opacity(hovering ? 1 : 0)
-                .help("Close this tab")
+                .help(pages.count > 1 ? "Close the browser's \(pages.count) pages" : "Close the browser")
             }
             .frame(minWidth: 22)
         }
@@ -362,13 +489,109 @@ struct BrowserTabLabel: View {
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture { model.selectTab(id: tab.tabID) }
-        .help(tab.url)
+        .onTapGesture { model.selectStripTab(tab.tabID) }
+        .help(model.shownPage(in: tab.project)?.displayTitle ?? "Browser")
         .contextMenu {
             TabArrangeMenu(id: tab.tabID)
             Divider()
-            Button("Close Tab") { model.closeBrowserTab(tab) }
+            Button("New Page") { model.openBrowserTab() }
+            Button("Close Browser") { model.requestCloseBrowser(in: tab.project) }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(pages.count > 1 ? "Browser, \(pages.count) pages" : "Browser")
+        .accessibilityIdentifier("strip-browser")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { model.selectStripTab(tab.tabID) }
+        .accessibilityAction(named: "Close Browser") { model.requestCloseBrowser(in: tab.project) }
+    }
+}
+
+/// The Browser tab of a project: a row of the user's pages there, with a
+/// button for one more, and the page picked.
+struct UserBrowserView: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var browsers: BrowserModel
+    let project: String
+    let focused: Bool
+
+    var body: some View {
+        let pages = model.userPages(in: project)
+        let shown = model.shownPage(in: project)
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(pages) { page in
+                            PageTab(tab: page, selected: page === shown)
+                        }
+                    }
+                }
+                .fixedSize(horizontal: pages.count < 6, vertical: false)
+                Button {
+                    model.openBrowserTab()
+                } label: {
+                    Image(systemName: "plus").font(.system(size: 10.5, weight: .semibold)).frame(width: 22, height: 20)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("New page")
+                .accessibilityLabel("New Page")
+                .accessibilityIdentifier("browser-new-page")
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 30)
+            .background(Theme.panel)
+            .overlay(alignment: .bottom) { Theme.hairline.frame(height: 1) }
+            if let shown {
+                BrowserPaneView(tab: shown, focused: focused).id(shown.id)
+            } else {
+                Theme.canvas
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("user-browser")
+    }
+}
+
+/// One page in the Browser tab's row.
+private struct PageTab: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var tab: BrowserTab
+    let selected: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: tab.loading ? "arrow.triangle.2.circlepath" : "globe")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(tab.displayTitle)
+                .font(.system(size: 11.5, weight: selected ? .medium : .regular))
+                .foregroundStyle(selected ? .primary : .secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 170, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+            Button {
+                model.closeBrowserTab(tab)
+            } label: {
+                Image(systemName: "xmark").font(.system(size: 8.5, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .opacity(hovering || selected ? 1 : 0)
+            .help("Close this page")
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(selected ? Color.white.opacity(0.12) : (hovering ? Color.white.opacity(0.05) : .clear)))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { model.selectTab(id: tab.tabID) }
+        .help(tab.url)
+        .contextMenu { Button("Close Page") { model.closeBrowserTab(tab) } }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(tab.displayTitle)
         .accessibilityIdentifier("tab-b\(tab.id)")
@@ -410,6 +633,7 @@ struct SendToAgentSheet: View {
             TextField("What should the agent do with it?", text: $note, axis: .vertical)
                 .lineLimit(2...5)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("pick-note")
             Picker("Agent", selection: $agent) {
                 ForEach(model.agentsInProject(of: pick.tab)) { session in
                     Text(session.displayName).tag(Optional(session.id))
@@ -422,8 +646,14 @@ struct SendToAgentSheet: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Send") {
-                    if let agent { model.send(pick, note: note, to: agent) }
-                    dismiss()
+                    // A word still being composed (Vietnamese, Japanese) is
+                    // not in the note yet: ending the editing commits it,
+                    // and the note is read once it has.
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                    DispatchQueue.main.async {
+                        if let agent { model.send(pick, note: note, to: agent) }
+                        dismiss()
+                    }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(agent == nil)

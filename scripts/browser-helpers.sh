@@ -2,7 +2,7 @@
 # Which entitlements each helper app of the browser (#76) is signed with,
 # for scripts/bundle-mac.sh and the release lane alike:
 #
-#   ./scripts/browser-helpers.sh entitlements "AgentTerm Helper (GPU).app"
+#   ./scripts/browser-helpers.sh entitlements "AgentTerm Browser (Chromium) (GPU).app"
 #
 # Chromium's pages run JavaScript compiled as they go, which the hardened
 # runtime refuses without allow-jit: the renderer, the GPU process (its

@@ -109,7 +109,7 @@ private struct WindowSheets: ViewModifier {
             .sheet(item: $model.panelConversation) { conversation in
                 ConversationSheet(conversation: conversation)
             }
-            .sheet(item: $model.pendingPick) { pick in
+            .sheet(item: $model.pendingPick, onDismiss: { model.pickDismissed() }) { pick in
                 SendToAgentSheet(pick: pick)
             }
     }
@@ -187,6 +187,27 @@ private struct WindowQuestions: ViewModifier {
                 Text("The branch does not follow a branch on a remote yet. It is pushed as \(push.remote)/\(push.branch), which it follows from then on.")
             }
             .modifier(DeleteConversationQuestions(store: model.historyStore))
+            .modifier(CloseBrowserQuestion())
+    }
+}
+
+/// Closing a Browser tab of several pages is asked first.
+private struct CloseBrowserQuestion: ViewModifier {
+    @EnvironmentObject private var model: AppModel
+
+    func body(content: Content) -> some View {
+        let count = model.pendingBrowserClose.map { model.userPages(in: $0).count } ?? 0
+        content
+            .confirmationDialog(
+                "Close \(count) pages?",
+                isPresented: Binding(get: { model.pendingBrowserClose != nil }, set: { if !$0 { model.pendingBrowserClose = nil } }),
+                titleVisibility: .visible, presenting: model.pendingBrowserClose
+            ) { project in
+                Button("Close \(count) Pages", role: .destructive) { model.closeBrowser(in: project) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("Every page of the Browser tab is closed.")
+            }
     }
 }
 
@@ -605,7 +626,7 @@ private struct AgentNoticeBanner: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-notice")
         // Another notice starts as short as the first did.
-        .onChange(of: notice) { _ in openedOut = false }
+        .onChange(of: notice) { _, _ in openedOut = false }
     }
 }
 

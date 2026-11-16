@@ -348,10 +348,18 @@ static void CEF_CALLBACK on_after_created(cef_life_span_handler_t *self, cef_bro
 
 static int CEF_CALLBACK do_close(cef_life_span_handler_t *self, cef_browser_t *browser) {
     (void)self;
-    ATC_RELEASE(browser);
     // Handled here: 0 would have CEF send `performClose:` to the window the
-    // page is in, which is the app's own window (seen with CEF 156). The
-    // browser is destroyed all the same, and its view goes with it.
+    // page is in, which is the app's own window (seen with CEF 156). CEF
+    // then destroys the browser once its view is gone, and not before: its
+    // page's process kept running, its memory held, for as long as the view
+    // stayed in the app's (#109). It is taken out here.
+    cef_browser_host_t *host = browser->get_host(browser);
+    if (host) {
+        NSView *view = (__bridge NSView *)host->get_window_handle(host);
+        [view removeFromSuperview];
+        ATC_RELEASE(host);
+    }
+    ATC_RELEASE(browser);
     return 1;
 }
 
@@ -1059,24 +1067,24 @@ static NSString *atc_executable_folder(void) {
 int atc_helper_main(int argc, char **argv) {
     @autoreleasepool {
         NSString *folder = atc_executable_folder();
-        // "<App>.app/Contents/Frameworks/<App> Helper.app/Contents/MacOS".
+        // "<App>.app/Contents/Frameworks/<App> Browser (Chromium).app/Contents/MacOS".
         NSString *frameworks = folder.stringByDeletingLastPathComponent.stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
         NSString *framework = [frameworks stringByAppendingPathComponent:@"Chromium Embedded Framework.framework"];
         // The sandbox is entered before the framework is loaded.
         NSString *sandboxPath = [framework stringByAppendingPathComponent:@"Libraries/libcef_sandbox.dylib"];
         void *sandbox = dlopen(sandboxPath.UTF8String, RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST);
         if (!sandbox) {
-            fprintf(stderr, "AgentTerm Helper: %s\n", dlerror());
+            fprintf(stderr, "AgentTerm Browser: %s\n", dlerror());
             return 1;
         }
         __typeof__(&cef_sandbox_initialize) initialize = (__typeof__(&cef_sandbox_initialize))dlsym(sandbox, "cef_sandbox_initialize");
         if (!initialize || !initialize(argc, argv)) {
-            fprintf(stderr, "AgentTerm Helper: the sandbox could not be entered\n");
+            fprintf(stderr, "AgentTerm Browser: the sandbox could not be entered\n");
             return 1;
         }
         NSString *failed = atc_load_library([framework stringByAppendingPathComponent:@"Chromium Embedded Framework"].UTF8String);
         if (failed) {
-            fprintf(stderr, "AgentTerm Helper: %s\n", failed.UTF8String);
+            fprintf(stderr, "AgentTerm Browser: %s\n", failed.UTF8String);
             return 1;
         }
     }
@@ -1120,7 +1128,7 @@ void atc_cancel_download(int download) { (void)download; }
 int atc_chrome_major(void) { return 0; }
 int atc_helper_main(int argc, char **argv) {
     (void)argc, (void)argv;
-    fprintf(stderr, "AgentTerm Helper: built without Chromium\n");
+    fprintf(stderr, "AgentTerm Browser: built without Chromium\n");
     return 1;
 }
 

@@ -134,8 +134,8 @@ final class BrowserProfiles: ObservableObject {
     }
 }
 
-/// Settings > Browser (#76): the profiles, the default one, and whether the
-/// agents may use the browser.
+/// Settings > Browser (#76): the profiles and the default one. The agents
+/// always have the browser, as they have their shells: no switch.
 struct BrowserSettingsView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var profiles: BrowserProfiles
@@ -147,14 +147,6 @@ struct BrowserSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             SettingsHeader(symbol: "globe", tint: .blue, title: "Browser", subtitle: "Chromium in \(AppChannel.current.appName), for you and the agents.")
-            SettingsCard {
-                SettingSwitch(
-                    "Agents can use the browser", id: "agents-use-browser",
-                    detail: "An agent can open tabs of its own in the browser, beside it, and use the tabs you share with it.",
-                    help:
-                        "Through AgentTerm's MCP server. An agent loads pages, reads them, clicks and types in them, takes pictures of them and reads their console. It never answers what a page asks you, and a tab you take over waits for you.",
-                    isOn: $model.agentsUseBrowser)
-            }
             SettingsCard {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {

@@ -76,7 +76,7 @@ the source yourself sends nothing at all.
 - **The browser (Mac).** The browser loads the pages you, or an agent you allowed, open in it,
   as any browser does: those sites see a visit from your Mac. Words typed into its address bar that
   are not an address are searched for on Google. The agents use it through AgentTerm's MCP server, on
-  your Mac only; "Agents can use the browser" in Settings turns that off. No page, no picture and no
+  your Mac only, always: there is no switch for it. No page, no picture and no
   address goes to the developer.
 - **The agents themselves.** Claude Code, Codex, Antigravity and Copilot CLI are separate programs
   that you install and sign in to. What they send to their providers is governed by those providers'

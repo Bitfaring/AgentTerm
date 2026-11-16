@@ -231,16 +231,18 @@ final class AppModel: ObservableObject {
     @Published var agentAreaAlone: [String: AgentAreaPart] = [:]
 
     // The browser (#76).
-    /// Whether the agents may use the browser: a switch in Settings, on
-    /// unless turned off (principle 4).
-    @Published var agentsUseBrowser = UserDefaults.standard.object(forKey: "agentsUseBrowser") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(agentsUseBrowser, forKey: "agentsUseBrowser") }
-    }
     /// ⌘L and ⌥⌘F ask the browser in front for its address field and its find bar.
     @Published var browserAddressRequest = 0
     @Published var browserFindRequest = 0
     /// What the user picked in a page to send an agent, while its sheet is open.
     @Published var pendingPick: BrowserPick?
+    /// The page the Browser tab of each project shows, of the user's
+    /// pages there, by the project's folder.
+    @Published var browserShown: [String: String] = [:]
+    /// The project whose Browser tab, of several pages, is asked to close.
+    @Published var pendingBrowserClose: String?
+    /// The tab the element sent last was picked in.
+    weak var lastPicked: BrowserTab?
     /// What each agent is told (Settings > Agents): the user's words by
     /// agent, and the default each is told without them, as the host says.
     @Published private(set) var agentPromptsCustom: [String: String] = [:]
@@ -1488,10 +1490,12 @@ final class AppModel: ObservableObject {
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
             if selectNextAttached || selectedSession == nil {
                 // A session that was just started comes to the front, also
-                // when a file was showing.
+                // when a file, the diff or a page of the browser was showing
+                // (BROWSER-33: the page stayed in front, the session unseen).
                 if selectNextAttached {
                     files.active = nil
                     diffInFront = false
+                    browserInFront = nil
                     // Started from the header, a menu or History: the
                     // session is looked at in Sessions, wherever the window was.
                     show(.sessions, toggling: false)
@@ -1908,15 +1912,15 @@ final class AppModel: ObservableObject {
     /// Shows the tab in the given place of the strip, counted from 1.
     func selectTab(number: Int) {
         let tabs = visibleTabs
-        if tabs.indices.contains(number - 1) { selectTab(id: tabs[number - 1]) }
+        if tabs.indices.contains(number - 1) { selectStripTab(tabs[number - 1]) }
     }
 
     /// Shows the tab `offset` places after the one in front, wrapping.
     func selectTab(offset: Int) {
         let tabs = visibleTabs
         guard !tabs.isEmpty else { return }
-        let current = frontTabID.flatMap { tabs.firstIndex(of: $0) } ?? (offset > 0 ? -1 : 0)
-        selectTab(id: tabs[(current + offset + tabs.count) % tabs.count])
+        let current = frontStripTab.flatMap { tabs.firstIndex(of: $0) } ?? (offset > 0 ? -1 : 0)
+        selectStripTab(tabs[(current + offset + tabs.count) % tabs.count])
     }
 
     /// Closes the tabs of files and the diff, leaving the terminals. A file
@@ -1960,7 +1964,9 @@ final class AppModel: ObservableObject {
 
     /// Closes the tab in front: a file is closed, a session is ended.
     func closeFrontTab() {
-        if diffInFront {
+        if let id = browserInFront, let tab = browsers.tab(forTab: id) {
+            closeBrowserTab(tab)
+        } else if diffInFront {
             closeDiffTab()
         } else if let path = files.active {
             files.requestClose(path)
@@ -2347,7 +2353,7 @@ final class AppModel: ObservableObject {
     }
 
     /// How many commits are asked for at a time.
-    static let commitsPage = 50
+    nonisolated static let commitsPage = 50
     /// Tells an answer for the list as it is from one for a list since replaced.
     private var commitsGeneration = 0
 

@@ -382,21 +382,34 @@ The Mac app has a browser (#76): Chromium itself, embedded with CEF, used
 by the user and by the agents alike. An agent drives the very tab the
 user sees.
 
-- **For the user.** A browser tab is a tab like any other in the panes,
-  started as a shell is: the Browser button next to Shell in the header,
-  on the launch screen, or Browser > New Browser Tab (⌥⌘T). It opens in
+- **For the user.** The user's pages of a project are one tab of its
+  strip, Browser, as a window of Chrome holds its tabs: inside it a row of
+  the pages, each shown when picked and closed by its ×, and a + for one
+  more. The tab says how many pages it holds; a page closed shows the one
+  beside it, the last one closed closes the tab, and closing the tab while
+  it holds several is asked first. A page is started as a shell is: the
+  Browser button next to Shell in the header, on the launch screen, the +
+  of the row, or Browser > New Browser Tab (⌥⌘T). It opens in
   the project on show,
   in the profile picked (see Profiles). Its bar has back, forward, reload or stop, the
   profile it uses, and the
   address, where words that are not an address are searched for (⌘L to
-  reach it, ⌘R, ⌘[ and ⌘] too). Its menu finds in the page (⌥⌘F), zooms,
-  shows the page as a device does (Show As: some forty phones, tablets
+  reach it, ⌘R, ⌘[ and ⌘] too). Show As, a button of the bar that names the device
+  in use, lists the devices by kind with their screens, the one in use
+  marked and this Mac first, with a field to find one by name; a device
+  that cannot be shown is said, with why. Its menu finds in the page (⌥⌘F), zooms. Shown as a device
+  (Show As: some forty phones, tablets
   and computers, Chrome's DevTools' own, by kind: iPhones, Pixels,
   Galaxies, iPads, Surfaces, laptops; their screen's size and density,
   user agent with this Chromium's version, `navigator.platform`, client
   hints and touch; the page is then as wide and as tall as the device's
-  screen, and beside an agent its part gets just that width and the
-  agent the rest), opens Chromium's own Developer Tools
+  screen, and beside an agent its part gets just that width, though
+  never less than its bar needs for its buttons (460 points), and the
+  agent the rest; a screen taller than its room has the room's height, never
+  drawn smaller: the page is as wide as the device's screen, the rest of
+  it is reached by scrolling, and the page is still told the device's
+  whole screen. The devices watching it are sent what the Mac shows, as
+  sharp, and show it in its own shape, never squeezed into another), opens Chromium's own Developer Tools
   (⌥⌘I) with the console, sends an element to an agent, and closes it. Text is selected, copied
   and pasted as anywhere. A page that opens a window opens a tab instead,
   in the same project and for the same agent. A download goes to the
@@ -460,16 +473,21 @@ user sees.
   agent uses it and what it did last. The user takes it over with Take
   Over, or by clicking in the page; the agent is then refused, told why,
   until the user gives it back ("Let … Go On"). It may still read the page.
-- **Sending part of a page to an agent.** Send to Agent picks an element
-  of the page: its picture, the address, a selector, its HTML and its
+- **Sending part of a page to an agent.** A page has two modes, switched
+  by the Pick button on its bar, in sight beside reload, or Browser > Pick
+  an Element for an Agent: browsing it, and picking its elements. While
+  picking, the button says so ("Picking"), and an element clicked is not
+  clicked but sent: its picture, the address, a selector, its HTML and its
   main styles are shown with a note to write and the agent to send it to,
-  one of the project's. Sent, the picture is saved in the project's
-  `.agentterm/shots/` and the rest is typed into the agent's session, with
-  the picture's path, and submitted.
+  one of the project's, the first picked already. Sent, the picture is
+  saved in the project's `.agentterm/shots/` and the rest is typed into the
+  agent's session, with the picture's path, and submitted. Picking stays
+  on, sent or not, for the next element, until the button turns it off.
 - **What fails is said.** With the app closed, or showing another Mac, an
   agent is told at once that the browser is in the app on that Mac and it
-  is not open there. "Agents can use the browser" in Settings > Browser,
-  on unless turned off, refuses the agents with that reason when off.
+  is not open there. The agents always have the browser, as they have
+  their shells: Settings has no switch for it (the owner's decision,
+  2026-11-16, as for the shells' three).
 - **On the iPhone**, as on the Mac: an agent's own shells and pages are
   listed right under it, set in, under the headings Shells and Browser;
   the user's pages are in their project's folder, and those of no folder
@@ -492,8 +510,8 @@ user sees.
   folder can start, opens a page of the user's in it, on the Mac but not
   in front there: with several profiles, in the one picked from its menu,
   or private; with one, in it, and a private one from its own menu. The
-  user's pages open in a sheet. Send to Agent, which
-  picks one element of a page, is the Mac's only (principle 1).
+  user's pages open in a sheet. Picking an element to send to an agent
+  is the Mac's only (principle 1).
 
 ### Usage
 

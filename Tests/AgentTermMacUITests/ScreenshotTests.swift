@@ -100,7 +100,52 @@ final class ScreenshotTests: XCTestCase {
         try data.write(to: history.appendingPathComponent(UUID().uuidString.lowercased() + ".jsonl"))
     }
 
-    /// With the Mac app running: its three pictures.
+    /// The first Claude Code's MCP server, started as the agent starts it:
+    /// the stand-in agent writes down its session's variable.
+    private func agentServer() throws -> MCPServerProcess {
+        let told = URL(fileURLWithPath: home).appendingPathComponent(".demo-agent/claude")
+        wait("the agent's variable") { FileManager.default.fileExists(atPath: told.path) }
+        let first = try String(contentsOf: told, encoding: .utf8).split(separator: "\n").first.map(String.init)
+        let tool = URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_SHOTS_TOOL"]))
+        let state = URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_SHOTS_STATE"]))
+        return try MCPServerProcess(tool: tool, variable: try XCTUnwrap(first), state: state)
+    }
+
+    /// The agent opens the demo project's page in AgentTerm's browser, as
+    /// an agent does through its server; with `shell`, a shell first, in
+    /// which it runs a command.
+    @discardableResult
+    private func openTheAgentsPage(shell: Bool) throws -> MCPServerProcess {
+        let server = try agentServer()
+        if shell {
+            let opened = server.text("shell_open", ["title": "git"])
+            XCTAssertFalse(opened.failed, opened.text)
+            let found = opened.text.range(of: #"shell \d+"#, options: .regularExpression).flatMap { Int(opened.text[$0].dropFirst(6)) }
+            let number = try XCTUnwrap(found, opened.text)
+            let ran = server.text("shell_run", ["session": number, "command": "git --no-pager diff --stat"])
+            XCTAssertFalse(ran.failed, ran.text)
+        }
+        // Served as a development server serves a page, so that its address
+        // says nothing of the Mac taking the pictures. Refused until the Mac
+        // app, which shows the browser, is up: asked again until it is.
+        let page = try XCTUnwrap(environment["AGENTTERM_SHOTS_PAGE"])
+        var shown = server.text("browser_open", ["url": page])
+        let deadline = Date().addingTimeInterval(60)
+        while shown.failed && Date() < deadline {
+            pause(1)
+            shown = server.text("browser_open", ["url": page])
+        }
+        XCTAssertFalse(shown.failed, shown.text)
+        // Kept for the agent to show the page as a device (part 4).
+        let tab = try XCTUnwrap(shown.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(shown.text[$0].dropFirst(4)) }, shown.text)
+        try tab.write(to: agentTab, atomically: true, encoding: .utf8)
+        return server
+    }
+
+    /// Where the number of the agent's tab is kept between the parts.
+    private var agentTab: URL { URL(fileURLWithPath: environment["AGENTTERM_SHOTS_STATE"] ?? "").appendingPathComponent("agent-tab") }
+
+    /// With the Mac app running: its three pictures, the agent's area first.
     func testPart1TheMacsPictures() throws {
         let pid = try XCTUnwrap(environment["AGENTTERM_SHOTS_PID"].flatMap { pid_t($0) })
         try XCTSkipUnless(MacDriver.isAllowed, "allow this terminal under System Settings > Privacy & Security > Accessibility")
@@ -116,10 +161,6 @@ final class ScreenshotTests: XCTestCase {
         app.wait(for: .id("session-1"), timeout: 20)
         app.wait(for: .containing("Fable 5.2"), timeout: 60)
         app.wait(for: .containing("Parser.swift"), timeout: 20)
-        // What the terminal draws cannot be read from here: time for the
-        // agent to have drawn its screen for the window's size.
-        pause(4)
-        capture("mac.png")
 
         // A change's diff, as a tab next to the session.
         app.press(.id("staged-src/Parser.swift"), timeout: 15)
@@ -136,6 +177,39 @@ final class ScreenshotTests: XCTestCase {
         pause(2)
         capture("mac-files.png")
 
+        // The agent's area, the first picture: the agent, the page it
+        // opened in AgentTerm's browser and the shell it ran a command in,
+        // beside it (#69, #76).
+        let server = try openTheAgentsPage(shell: true)
+        defer { server.stop() }
+        app.press(.id("tab-1"), timeout: 15)
+        app.wait(for: .id("agent-browser"), timeout: 30)
+        app.wait(for: .id("agent-shells"), timeout: 30)
+        // What the terminals and the page draw cannot be read from here:
+        // time for the agent to draw its screen for its narrower room.
+        pause(5)
+        capture("mac.png")
+    }
+
+    /// With the Mac app started again, after the iPhone's other pictures:
+    /// the agent's page, which the iPhone and the iPad show live. The shell
+    /// it opened before is still there; the page went with the app.
+    func testPart3TheAgentsPageForTheiPhone() throws {
+        try connect()
+        try openTheAgentsPage(shell: false).stop()
+    }
+
+    /// The agent shows its page as the device about to take its picture
+    /// does (`AGENTTERM_SHOTS_DEVICE`): laid out for that screen, and sent
+    /// to it as sharp as it is drawn there.
+    func testPart4TheAgentsPageShownAsTheDevice() throws {
+        let device = try XCTUnwrap(environment["AGENTTERM_SHOTS_DEVICE"], "run through scripts/screenshots.sh")
+        let tab = try String(contentsOf: agentTab, encoding: .utf8)
+        let server = try agentServer()
+        defer { server.stop() }
+        let shown = server.text("browser_emulate", ["tab": tab, "device": device])
+        XCTAssertFalse(shown.failed, shown.text)
+        pause(2)
     }
 
     /// With the Mac app closed, so that no session is at its size: more

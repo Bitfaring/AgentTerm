@@ -70,4 +70,27 @@ final class ScreenshotTests: XCTestCase {
         sleep(1)
         try capture("06-files")
     }
+
+    /// The agent's page, live from the Mac's browser, which
+    /// `scripts/screenshots.sh` has the agent open once the pictures above
+    /// are taken, with the Mac app started again to show it.
+    func testTheAgentsPage() throws {
+        try XCTSkipUnless(environment["AGENTTERM_SCREENSHOTS"] != nil, "run this test through scripts/screenshots.sh")
+        let app = XCUIApplication()
+        app.launch()
+        // Paired by the pictures above; else by the link.
+        let pinned = app.staticTexts["Fix the flaky parser tests"].firstMatch
+        if !pinned.waitForExistence(timeout: 15), let link = environment["AGENTTERM_PAIR_URL"].flatMap(URL.init(string:)) {
+            app.open(link)
+        }
+        XCTAssertTrue(pinned.waitForExistence(timeout: 30), "the demo sessions are not listed")
+        // Under its agent; opened, its screen shows the page live.
+        let page = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'browser-tab-'")).firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 30), "the agent's page is not listed")
+        page.tap()
+        let live = app.descendants(matching: .any)["browser-live"].firstMatch
+        XCTAssertTrue(live.waitForExistence(timeout: 30), "no picture of the page came")
+        sleep(4)
+        try capture("07-browser")
+    }
 }

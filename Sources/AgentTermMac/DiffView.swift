@@ -1015,7 +1015,7 @@ struct DiffDocumentView: View {
                 .environmentObject(model)
         }
         // Nothing left of the change: nothing left to pick from.
-        .onChange(of: model.diffTabFile == nil) { gone in if gone { pickingParts = false } }
+        .onChange(of: model.diffTabFile == nil) { _, gone in if gone { pickingParts = false } }
     }
 }
 

@@ -107,6 +107,56 @@ extension AppModel {
         return all.shells[agentTab] != nil || all.browsers[agentTab] != nil
     }
 
+    // MARK: The user's pages, one Browser tab a project
+
+    /// The user's pages of a project, in the order they were opened: the
+    /// pages no agent has beside it.
+    func userPages(in project: String) -> [BrowserTab] {
+        let owner = companions.owner
+        return browsers.tabs.filter { $0.project == project && owner[$0.tabID] == nil }
+    }
+
+    /// The tab that stands in a pane's strip for a tab: for a page of the
+    /// user's, the first of its project's, the one Browser tab that holds
+    /// them all, as a window of Chrome holds its tabs; itself otherwise.
+    func stripTab(of id: String) -> String {
+        guard let tab = browsers.tab(forTab: id), companions.owner[id] == nil else { return id }
+        return userPages(in: tab.project).first?.tabID ?? id
+    }
+
+    /// The tab in front, as its pane's strip has it.
+    var frontStripTab: String? { frontTabID.map(stripTab) }
+
+    /// The page the Browser tab of a project shows.
+    func shownPage(in project: String) -> BrowserTab? {
+        let pages = userPages(in: project)
+        return pages.first { $0.tabID == browserShown[project] } ?? pages.first
+    }
+
+    /// Picks a tab of a strip: the Browser tab shows the page it showed.
+    func selectStripTab(_ id: String) {
+        if let tab = browsers.tab(forTab: id), companions.owner[id] == nil, let shown = shownPage(in: tab.project) {
+            selectTab(id: shown.tabID)
+        } else {
+            selectTab(id: id)
+        }
+    }
+
+    /// Closes a project's Browser tab, all of its pages: asked first when
+    /// there are several.
+    func requestCloseBrowser(in project: String) {
+        let pages = userPages(in: project)
+        if pages.count > 1 { pendingBrowserClose = project } else { pages.forEach(closeBrowserTab) }
+    }
+
+    func closeBrowser(in project: String) {
+        for page in userPages(in: project) { browsers.close(page) }
+        browserShown[project] = nil
+        if let front = browserInFront, browsers.tab(forTab: front) == nil { browserInFront = nil }
+        syncTabs()
+        adoptFocusedFront()
+    }
+
     // MARK: Keeping up with the tabs
 
     /// Puts each tab in a pane of its project's layout, takes out those
@@ -116,7 +166,11 @@ extension AppModel {
         let owner = companions.owner
         let live = Set(liveTabIDs)
         var byProject: [String: [String]] = [:]
+        // The user's pages of a project are one tab of its strip.
+        var holders: [String: String] = [:]
+        for tab in browsers.tabs where owner[tab.tabID] == nil && holders[tab.project] == nil { holders[tab.project] = tab.tabID }
         for id in tabLayout.order where live.contains(id) && owner[id] == nil {
+            if let page = browsers.tab(forTab: id), holders[page.project] != id { continue }
             byProject[project(ofTab: id), default: []].append(id)
         }
         var all = workspaces
@@ -143,7 +197,8 @@ extension AppModel {
         // pane once it is.
         if let front = frontTabID, owner[front] == nil, live.contains(front) {
             let layout = workspaces[project(ofTab: front)]
-            if layout?.pane(containing: front)?.front != front || layout?.pane(containing: front)?.id != layout?.focused { place(front) }
+            let inStrip = browsers.tab(forTab: front).flatMap { holders[$0.project] } ?? front
+            if layout?.pane(containing: inStrip)?.front != inStrip || layout?.pane(containing: inStrip)?.id != layout?.focused { place(front) }
         }
     }
 
@@ -175,6 +230,10 @@ extension AppModel {
             target = agent
         } else if hasArea(tab), selectedSession.map({ id in sessions.first { $0.id == id }.map(TabID.session) }) == tab {
             agentAreaFocus[tab] = .agent
+        } else if let page = browsers.tab(forTab: tab) {
+            // A page of the user's: shown by its project's Browser tab.
+            if browserShown[page.project] != tab { browserShown[page.project] = tab }
+            target = stripTab(of: tab)
         }
         let project = project(ofTab: target)
         if shownProject != project { shownProject = project }
@@ -203,7 +262,7 @@ extension AppModel {
                 return
             }
         }
-        selectTab(id: front)
+        selectStripTab(front)
     }
 
     /// Shows a project's panes, as they were left: picking its folder.

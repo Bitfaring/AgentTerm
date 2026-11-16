@@ -627,7 +627,12 @@ final class DevToolsSession {
         return CGRect(x: xs.min()! + offset[0], y: ys.min()! + offset[1], width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
     }
 
-    func emulate(_ device: BrowserDevice?) async throws {
+    /// Shows the page as `device` does, or as itself. `room`: the size in
+    /// points of the pane it is shown in. A device whose screen is taller
+    /// has the pane's height, the rest of the page reached by scrolling:
+    /// what the Mac draws is whole and sharp, and so are the pictures the
+    /// devices watching it are sent, which are what the Mac draws (#107).
+    func emulate(_ device: BrowserDevice?, room: CGSize?) async throws {
         guard let device else {
             _ = try? await call("Emulation.clearDeviceMetricsOverride")
             _ = try? await call("Emulation.setUserAgentOverride", ["userAgent": ""])
@@ -636,9 +641,7 @@ final class DevToolsSession {
             return
         }
         if device.width > 0, device.height > 0 {
-            try await call(
-                "Emulation.setDeviceMetricsOverride",
-                ["width": device.width, "height": device.height, "deviceScaleFactor": device.scale, "mobile": device.mobile])
+            try await call("Emulation.setDeviceMetricsOverride", Self.metrics(of: device, in: room))
         }
         // The user agent with what goes with it, as the device gives it:
         // its client hints, as Chrome's DevTools give them, and
@@ -658,6 +661,27 @@ final class DevToolsSession {
         if let latitude = device.latitude, let longitude = device.longitude {
             try await call("Emulation.setGeolocationOverride", ["latitude": latitude, "longitude": longitude, "accuracy": 50])
         }
+    }
+
+    /// The pane changed size: the device's screen as tall as it again.
+    func fit(_ device: BrowserDevice, in room: CGSize) async {
+        guard device.width > 0, device.height > 0 else { return }
+        _ = try? await call("Emulation.setDeviceMetricsOverride", Self.metrics(of: device, in: room))
+    }
+
+    /// A device's screen as the page is shown in a pane of `room`: as wide
+    /// as the device's, and as tall as it or as the pane, whichever is
+    /// less, never drawn smaller (the owner's decision, 2026-11-16): what
+    /// is below is reached by scrolling the page, what is drawn has all its
+    /// pixels, and so has what is streamed of it. The page is still told
+    /// the device's whole screen (`screen.width`, `screen.height`).
+    static func metrics(of device: BrowserDevice, in room: CGSize?) -> [String: Any] {
+        var high = device.height
+        if let room, room.height >= 1 { high = min(device.height, Int(room.height.rounded(.down))) }
+        return [
+            "width": device.width, "height": max(high, 1), "deviceScaleFactor": device.scale, "mobile": device.mobile,
+            "screenWidth": device.width, "screenHeight": device.height,
+        ]
     }
 
     // MARK: Picking an element for an agent

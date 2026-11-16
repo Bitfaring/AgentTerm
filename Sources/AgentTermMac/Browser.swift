@@ -124,6 +124,9 @@ final class BrowserTab: ObservableObject, Identifiable {
     /// What an agent did last in it, for the bar over it.
     @Published var agentAction: String?
     @Published var emulating: BrowserDevice? { didSet { model?.tabChanged() } }
+    /// Its page's two modes: browsing, or picking its elements to send to
+    /// an agent, one after another, until turned off.
+    @Published var picking = false
     /// A page asking for a permission: the number to answer, who, and what.
     @Published var permission: (id: Int32, origin: String, what: String)?
     @Published var downloads: [BrowserDownload] = []
@@ -162,6 +165,28 @@ final class BrowserTab: ObservableObject, Identifiable {
         self.model = model
         container.tab = self
     }
+
+    /// Shows its page as a device, as tall as the pane it is in at most, or as itself.
+    func emulate(_ device: BrowserDevice?) async throws {
+        try await devtools.emulate(device, room: container.bounds.size)
+        emulating = device
+        // Around a device's screen, the pane dark, as DevTools have it: on
+        // white, where the screen ends would not be seen.
+        container.layer?.backgroundColor = (device == nil ? NSColor.white : NSColor(white: 0.16, alpha: 1)).cgColor
+    }
+
+    /// The pane it is in changed size: a page shown as a device is as tall
+    /// as it again, once the size has settled (#107).
+    func roomChanged() {
+        guard let device = emulating else { return }
+        refit?.cancel()
+        refit = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard let self, !Task.isCancelled, self.emulating == device else { return }
+            await self.devtools.fit(device, in: self.container.bounds.size)
+        }
+    }
+    private var refit: Task<Void, Never>?
 
     /// Its name in a `TabLayout`.
     var tabID: String { "b:" + id }
@@ -407,6 +432,7 @@ final class BrowserContainerView: NSView {
     override func resizeSubviews(withOldSize oldSize: NSSize) {
         super.resizeSubviews(withOldSize: oldSize)
         for view in subviews { view.frame = bounds }
+        if bounds.size != oldSize { tab?.roomChanged() }
     }
 }
 

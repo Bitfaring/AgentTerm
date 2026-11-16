@@ -909,7 +909,10 @@ signs it with a profile of its own from `match`.
 AgentTerm's MCP server is `agenttermd mcp` (`AgentShellsMCP`): JSON-RPC, one
 message to a line, on standard input and output. Its shells' tools are
 named alike, as the browser's are: `shell_open`, `shell_run`, `shell_list`,
-`shell_read`, `shell_send`, `shell_wait` and `shell_close`. Each says in
+`shell_read`, `shell_send`, `shell_wait`, `shell_stop` and `shell_close`.
+`shell_stop` types Control C in the shell and waits, five seconds unless
+told, for what runs to end: one call for what an agent does when the user
+says stop, rather than `shell_send` with a key to look up. Each says in
 its annotations whether it only looks (`readOnlyHint`: `shell_list`,
 `shell_read`, `shell_wait`, and the browser's that only look) and whether
 it ends something (`destructiveHint`: `shell_close`, `browser_close`).
@@ -1105,8 +1108,9 @@ answers that it is handled; answered otherwise, CEF sends `performClose:`
 to the window the page is in, the app's own.
 
 **The processes.** The pages, the GPU and the network run in the helper
-apps of the bundle's Frameworks folder, "<App> Helper.app" and its four
-variants, all one program (`AgentTermBrowserHelper`), which enters
+apps of the bundle's Frameworks folder, "<App> Browser (Chromium).app"
+and its four variants, named so for Activity Monitor, where the pages'
+memory is then seen to be the browser's, all one program (`AgentTermBrowserHelper`), which enters
 Chromium's sandbox (`libcef_sandbox.dylib`, `cef_sandbox_initialize`)
 before it loads the framework, then runs `cef_execute_process`. The
 browser runs in the app bundle only: `scripts/bundle-mac.sh` puts the
@@ -1182,7 +1186,20 @@ stream, and a picture is taken about five times a second
 it differs from the last. Not taken while the Mac draws it: for a page
 shown as a device whose pixels are not the screen's, Chromium lays the
 page out again for each picture, a clip or a scale given or not, and the
-Mac shows it in between, the page shaking (#100). A touch is placed in CSS
+Mac shows it in between, the page shaking (#100). A page shown as a device
+whose screen is taller than its pane has the pane's height
+(`Emulation.setDeviceMetricsOverride`'s `height`, set again when the pane
+changes size; `screenWidth` and `screenHeight` stay the device's), on a
+dark ground beside it: it is as wide as the device's screen, never drawn
+smaller, and what is below is reached by scrolling it. What the Mac draws,
+and so what is streamed, is then the page as it is shown, a pixel to its
+point (what Chromium's screencast gives, whatever the Mac's screen has), and the size sent with it is its own; the devices draw a picture
+in the picture's shape (#107, the owner's decision of 2026-11-16. Before,
+the Mac drew the screen's top only, and the devices drew that part
+squeezed into the screen's shape; then the screen was drawn smaller to
+fit, `scale`, which Chromium streams as the whole surface with the page
+small in a corner, and too few pixels for a device). Streamed, a picture is as sharp as the Mac draws it; taken,
+as sharp as the device asks for. A touch is placed in CSS
 pixels by that size and clicked with `Input.dispatchMouseEvent`; text is
 `Input.insertText`. Acting on an agent's tab from a device makes it the
 user's, as a click on the Mac does.
@@ -1387,6 +1404,15 @@ part closed, the shell and page in front) is an `AgentArea`, by the agent's
 tab id, in `agentAreas`; which part has the keyboard is `agentAreaFocus`.
 Picking a companion brings its agent's area, with it in front and its part
 shown. When the agent's session ends, its shells are tabs again.
+
+**The user's pages.** The pages no agent has beside it are, for each
+project, one tab of its pane's strip: the first of them stands for all in
+the pane's layout (`stripTab(of:)`), the others are in no pane, and the
+pane shows `UserBrowserView`, a row of the pages over the one shown
+(`browserShown`, by project). The tab in front is still the page itself
+(`browserInFront`), so what acts on the page in front does not change;
+what acts on a strip (the number shortcuts, pinning, moving) takes
+`frontStripTab`.
 
 ## A part that stopped
 

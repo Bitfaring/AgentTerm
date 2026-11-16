@@ -444,8 +444,6 @@ public enum BrowserWords {
     /// No app shows the browser of the Mac whose agent asks.
     public static let noApp =
         "The browser runs in the AgentTerm app on this Mac, and that app is not connected to this Mac's host: it is closed, or it shows another Mac. Ask the user to open it on this Mac."
-    public static let turnedOff =
-        "The user turned off “Agents can use the browser” in AgentTerm's Settings."
     public static let notInBuild = "This build of AgentTerm has no browser."
     /// The name a private tab's profile goes by.
     public static let privateProfile = "Private"
@@ -485,8 +483,9 @@ public enum BrowserWords {
 
     /// The bar over an agent's tab while it may drive it.
     public static func agentDrives(_ agent: String) -> String { "\(agent) is using this tab" }
-    /// The bar while the user has it.
-    public static func userHas(_ agent: String) -> String { "You have this tab: \(agent) waits until you give it back" }
+    /// The bar while the user has it: the same whichever agent's it is,
+    /// rather than a session's name, which may be long (asked by the owner).
+    public static let userHas = "You have this tab: AgentTerm waits until you give it back"
     public static func giveBack(_ agent: String) -> String { "Let \(agent) Go On" }
     public static let takeOver = "Take Over"
     /// Why a page did not load, for a server of the project that is not running.

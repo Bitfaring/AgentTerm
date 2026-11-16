@@ -86,12 +86,33 @@ extension AppModel {
         if url == nil { browserAddressRequest += 1 }
     }
 
+    /// A new page beside an agent, opened by the user with the + of the
+    /// agent's Browser part: the agent's, in the profile its pages use,
+    /// and the user's to use until given back, so that the agent types
+    /// nothing in it meanwhile.
+    func openBrowserTab(besideAgent agentTab: String) {
+        guard !isRemote, let agent = session(forTab: agentTab) else { return }
+        let beside = (companions.browsers[agentTab] ?? []).compactMap { browsers.tab(forTab: $0) }
+        let project = beside.first?.project ?? project(ofTab: agentTab)
+        let tab = browsers.open(url: nil, project: project, owner: agent, profile: beside.last?.profile)
+        setUserHas(tab, true)
+        selectTab(id: tab.tabID)
+        browserAddressRequest += 1
+    }
+
     func closeBrowserTab(_ tab: BrowserTab) {
+        // A page of the Browser tab: the one beside it is shown instead,
+        // and the tab closes with its last page, as Chrome's window does.
+        let pages = userPages(in: tab.project)
+        let next = pages.firstIndex { $0 === tab }.flatMap { index in pages.indices.contains(index + 1) ? pages[index + 1] : (index > 0 ? pages[index - 1] : nil) }
+        let wasFront = browserInFront == tab.tabID
+        let wasShown = shownPage(in: tab.project) === tab
         browsers.close(tab)
-        if browserInFront == tab.tabID {
+        if wasShown { browserShown[tab.project] = next?.tabID }
+        if wasFront {
             browserInFront = nil
             syncTabs()
-            adoptFocusedFront()
+            if let next { selectTab(id: next.tabID) } else { adoptFocusedFront() }
         }
     }
 
@@ -154,9 +175,18 @@ extension AppModel {
 
     func emulate(_ tab: BrowserTab, _ device: BrowserDevice?) {
         Task { @MainActor in
-            guard await tab.ready() else { return }
-            try? await tab.devtools.emulate(device)
-            tab.emulating = device
+            guard await tab.ready() else {
+                self.notice = tab.problem ?? BrowserWords.notInBuild
+                return
+            }
+            do {
+                try await tab.emulate(device)
+            } catch {
+                // Said, not swallowed: the bar would go on naming the
+                // device before, and the page stay as it was.
+                let why = (error as? DevToolsSession.Failure)?.text ?? error.localizedDescription
+                self.notice = "The page could not be shown as \(device?.name ?? "this Mac"): \(why)"
+            }
         }
     }
 
@@ -205,6 +235,20 @@ extension AppModel {
 
     // MARK: Sending a part of a page to an agent
 
+    /// Turns a page's picking on, where each element clicked is sent to an
+    /// agent, or off, back to browsing it.
+    func setPicking(_ tab: BrowserTab, _ on: Bool) {
+        tab.picking = on
+        if on { pickForAgent(tab) } else { tab.devtools.stopPicking() }
+    }
+
+    /// The sheet of an element picked was closed, sent or not: the next
+    /// element is picked while picking is still on.
+    func pickDismissed() {
+        guard let tab = lastPicked, tab.picking, tab.browserID != 0 else { return }
+        pickForAgent(tab)
+    }
+
     /// Lets the user point at an element of the page, then asks what to
     /// send and to whom.
     func pickForAgent(_ tab: BrowserTab) {
@@ -215,6 +259,7 @@ extension AppModel {
                 let box = try? await tab.devtools.box(of: node)
                 let png = (try? await tab.devtools.screenshot(clip: box, fullPage: false)) ?? Data()
                 let details = await tab.devtools.describe(node)
+                self.lastPicked = tab
                 self.pendingPick = BrowserPick(tab: tab, png: png, url: tab.url, details: details)
             }
         }
@@ -255,7 +300,6 @@ extension AppModel {
 
     private func browserResult(agent: SessionID?, request: BrowserRequest) async -> BrowserResult {
         if isRemote { return .refused(BrowserWords.noApp) }
-        if agent != nil, !agentsUseBrowser { return .refused(BrowserWords.turnedOff) }
         guard let agent else { return await deviceRequest(request) }
         guard let session = sessions.first(where: { $0.id == agent }) else {
             return .refused("This is not the session of an agent AgentTerm started, or that session has ended.")
@@ -454,8 +498,7 @@ extension AppModel {
                     return "\(request.method) \(request.url) → \(outcome)" + (request.type.isEmpty ? "" : " (\(request.type))")
                 }.joined(separator: "\n"))
         case .emulate(_, let device):
-            try await devtools.emulate(device)
-            tab.emulating = device
+            try await tab.emulate(device)
             done(device.map { "Shows the page as \($0.name)" } ?? "Shows the page as itself")
             return .text(device.map { "Tab \(tab.id) is shown as \($0.name)" + ($0.width > 0 ? ", \($0.width) × \($0.height)" : "") + "." } ?? "Tab \(tab.id) is shown as itself again.")
         case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles:
@@ -527,8 +570,7 @@ extension AppModel {
             // As the Show As menu does on the Mac: the page stays its agent's.
             guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
             do {
-                try await tab.devtools.emulate(device)
-                tab.emulating = device
+                try await tab.emulate(device)
                 return .tabs(browsers.infos)
             } catch {
                 return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)

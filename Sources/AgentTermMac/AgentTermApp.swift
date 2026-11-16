@@ -730,7 +730,7 @@ private struct TabCommands: View {
             .keyboardShortcut("[", modifiers: [.command, .shift])
             .disabled(model.tabCount < 2)
         Divider()
-        let front = model.frontTabID
+        let front = model.frontStripTab
         Button(front.map(model.tabLayout.isPinned) == true ? "Unpin Tab" : "Pin Tab") {
             if let front { model.setTabPinned(front, !model.tabLayout.isPinned(front)) }
         }
@@ -830,8 +830,8 @@ private struct BrowserCommands: View {
         Button("Developer Tools") { tab?.showDevTools() }
             .keyboardShortcut("i", modifiers: [.command, .option])
             .disabled(tab == nil)
-        Button("Send to Agent…") { if let tab { model.pickForAgent(tab) } }
-            .disabled(tab.map { model.agentsInProject(of: $0).isEmpty } ?? true)
+        Button(tab?.picking == true ? "Stop Picking" : "Pick an Element for an Agent") { if let tab { model.setPicking(tab, !tab.picking) } }
+            .disabled(tab == nil)
     }
 }
 
