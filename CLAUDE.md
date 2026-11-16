@@ -15,7 +15,7 @@ How the owner decides. When one of these answers a question, decide by it and go
 5. **Nothing is guessed that can be tried.** How an agent or a tool behaves is found out by running the real one, at the version in use, before anything is designed around it; what was found, and with which version, is written into the issue. A state that is shown is true, and what is not known is shown as not known.
 6. **Until the official release, anything may change.** The protocol, the formats, what is stored and what is written into the agents' configuration change freely from one build to the next: no migration and no compatibility with an earlier 0.x build are owed. Both apps and the host are of one release, and the protocol's number goes up whenever a message changes. The official release is the one that takes the app out of beta.
 7. **The released build and a development build never share anything.** A name, a port, a folder, a token, an entry in another program's configuration: each build has its own, and neither touches the other's.
-8. **An issue is kept only while it can be acted on.** What cannot be reproduced is closed, to be opened again when it shows: a bug is tried 20 times, in the conditions it was seen in, and when it does not show in any of them, it is closed with a comment that says plainly it could not be reproduced, how it was tried and how many times. What waits on someone outside (a permission, a review) is closed or put in the backlog, not left open in a release.
+8. **An issue is kept only while it can be acted on.** What cannot be reproduced is closed, to be opened again when it shows: a bug is tried 5 times, in the conditions it was seen in, and when it does not show in any of them, it is closed with a comment that says plainly it could not be reproduced, how it was tried and how many times. What waits on someone outside (a permission, a review) is closed or put in the backlog, not left open in a release.
 9. **Both apps say the same thing in the same words.** A sentence the user reads (a banner, a refusal, a row's label) is written once, in `AgentTermProtocol`, and shown by both.
 
 ## Rules
@@ -46,7 +46,7 @@ If a choice was made without asking, say so plainly in the report, with what was
 Nothing is reported as done before it has been tested, and the report says what was run and what came of it.
 
 - **A bug is shown before it is fixed.** Write a test that fails because of the bug, run it and see it fail, fix the bug, run it again and see it pass. The test stays. A bug that cannot be shown by a test is said to be so, with what was done instead.
-- **A bug is closed only when it is fixed at its root.** Its cause is found and taken away. What only bears it (a retry, a longer wait, a test that repeats a step until it works) does not close it: the issue stays open, saying what was done meanwhile and what is still not known. The one other way to close a bug is principle 8's: not reproduced in 20 tries.
+- **A bug is closed only when it is fixed at its root.** Its cause is found and taken away. What only bears it (a retry, a longer wait, a test that repeats a step until it works) does not close it: the issue stays open, saying what was done meanwhile and what is still not known. The one other way to close a bug is principle 8's: not reproduced in 5 tries.
 - **Every layer the change touches is run**, as `docs/TESTING.md` says under "Running them":
 
   | Changed | Run |
