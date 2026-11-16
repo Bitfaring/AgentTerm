@@ -89,8 +89,8 @@ struct StashesList: View {
             }
         }
         .onAppear { model.loadStashes() }
-        .onChange(of: model.panelFolder) { _ in model.loadStashes() }
-        .onChange(of: model.diff?.branch) { _ in model.loadStashes() }
+        .onChange(of: model.panelFolder) { _, _ in model.loadStashes() }
+        .onChange(of: model.diff?.branch) { _, _ in model.loadStashes() }
     }
 }
 

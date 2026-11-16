@@ -386,7 +386,7 @@ final class ProtocolTests: XCTestCase {
         var snapshot = DiffSnapshot(isRepository: true, branch: "main", files: [moved])
         snapshot.submodules = [submodule]
         let message = ServerMessage.diff(path: "/code/project", snapshot: snapshot)
-        XCTAssertEqual(try MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message)), message)
+        XCTAssertEqual(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message)), message)
         XCTAssertEqual(snapshot.withoutPatches.submodules.first?.changes.files.map(\.patch), [""])
         XCTAssertEqual(snapshot.withoutPatches.submodules.first?.changes.files.map(\.path), ["l.txt"])
     }

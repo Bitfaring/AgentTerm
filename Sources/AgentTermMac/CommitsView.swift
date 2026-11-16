@@ -64,11 +64,11 @@ struct CommitsList: View {
             model.loadCommits()
         }
         // A commit, a pull, a revert or another branch: the history is another.
-        .onChange(of: model.diff?.branch) { _ in model.loadCommits() }
-        .onChange(of: model.diff?.ahead) { _ in model.loadCommits() }
-        .onChange(of: model.diff?.behind) { _ in model.loadCommits() }
-        .onChange(of: model.panelFolder) { _ in model.loadCommits() }
-        .onChange(of: model.isCommitting) { committing in if !committing { model.loadCommits() } }
+        .onChange(of: model.diff?.branch) { _, _ in model.loadCommits() }
+        .onChange(of: model.diff?.ahead) { _, _ in model.loadCommits() }
+        .onChange(of: model.diff?.behind) { _, _ in model.loadCommits() }
+        .onChange(of: model.panelFolder) { _, _ in model.loadCommits() }
+        .onChange(of: model.isCommitting) { _, committing in if !committing { model.loadCommits() } }
         // A pull or a push that ended: the remote's branches the list names
         // may be elsewhere now. Not a fetch, as one is made every few
         // minutes: the list would start again from its first page under
