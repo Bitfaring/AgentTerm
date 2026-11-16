@@ -214,7 +214,7 @@ public final class AgentShellsMCP {
             title: "Open a shell"),
         tool(
             "shell_run",
-            "Runs a command in a shell you opened, as typed at its prompt, waits until it ends, and returns its exit code and its output, only what it wrote. A command still running when the time is up keeps running: shell_wait waits for it to end, shell_send with the key Control C stops it. For a program that asks questions or keeps running (a REPL, a dev server), type into it with shell_send instead.",
+            "Runs a command in a shell you opened, as typed at its prompt, waits until it ends, and returns its exit code and its output, only what it wrote. A command still running when the time is up keeps running: shell_wait waits for it to end, shell_stop stops it. For a program that asks questions or keeps running (a REPL, a dev server), type into it with shell_send instead.",
             [
                 "session": integer("The shell's number"), "command": string("The command, as typed at the prompt; several lines are one command"),
                 "timeout_seconds": number("At most this long; 60 by default"),
@@ -242,6 +242,11 @@ public final class AgentShellsMCP {
                 "timeout_seconds": number("At most this long; 60 by default"),
             ],
             required: ["session"], title: "Wait on a shell", readOnly: true),
+        tool(
+            "shell_stop",
+            "Stops what runs in a shell you opened, as Control C does, and says how it ended, with its exit code and output. The shell stays open for the next command. When nothing runs, it says so.",
+            ["session": integer("The shell's number"), "timeout_seconds": number("How long to wait for it to end; 5 by default")],
+            required: ["session"], title: "Stop a command"),
         tool(
             "shell_close", "Ends a shell you opened, when you no longer need it.", ["session": integer("The shell's number")], required: ["session"],
             title: "Close a shell", destructive: true),
@@ -307,6 +312,9 @@ public final class AgentShellsMCP {
                 }
             }
             return wait(session: session, until: until, quiet: quiet ?? 1, timeout: timeout, isCancelled: isCancelled)
+        case "shell_stop":
+            guard let session else { return needsSession() }
+            return stop(session, timeout: (arguments["timeout_seconds"] as? NSNumber)?.doubleValue ?? 5, isCancelled: isCancelled)
         case "shell_close":
             guard let session else { return needsSession() }
             result = ask(.close(session: session))
@@ -314,6 +322,47 @@ public final class AgentShellsMCP {
             return ("There is no tool called \(name).", true)
         }
         return Self.words(result)
+    }
+
+    /// Stops what runs in a shell, as Control C typed in it does, and waits
+    /// for it to end: what an agent is asked to do when the user says stop.
+    private func stop(_ session: SessionID, timeout: TimeInterval, isCancelled: () -> Bool) -> (String, Bool) {
+        guard let ask else { return ("", true) }
+        let asked = ask(.command(session: session, lines: 0))
+        guard case .command(let before) = asked else { return Self.words(asked) }
+        // A shell that says when its commands end, and none runs.
+        if before.integrated, !before.running {
+            setUnfinished(session, nil)
+            return ("Nothing runs in shell \(session): it is at its prompt.", false)
+        }
+        let sent = ask(.send(session: session, text: nil, keys: ["Control C"]))
+        guard case .done = sent else { return Self.words(sent) }
+        guard before.integrated else {
+            // A program, or a shell that does not say: its screen tells.
+            Thread.sleep(forTimeInterval: min(max(pollInterval * 3, 0.3), 1))
+            let screen = Self.words(ask(.read(session: session, linesAbove: 0))).0
+            return ("Control C was typed in shell \(session), which does not say when a command ends. Its screen:\n\n\(screen)", false)
+        }
+        let started = Date()
+        while true {
+            if isCancelled() { return ("Cancelled.", true) }
+            let now = ask(.command(session: session, lines: Self.outputLines))
+            guard case .command(let state) = now else {
+                setUnfinished(session, nil)
+                return Self.words(now)
+            }
+            if !state.running {
+                setUnfinished(session, nil)
+                return ("Stopped. " + Self.ended(state), false)
+            }
+            if Date().timeIntervalSince(started) >= timeout {
+                return (
+                    "Control C was typed, and the command still runs after \(Self.seconds(timeout)): it may take it as input, or ignore it. "
+                        + "Look with shell_read, stop it again, or end the shell with shell_close.", true
+                )
+            }
+            Thread.sleep(forTimeInterval: pollInterval)
+        }
     }
 
     /// How many lines of a command's output are given, its last.
@@ -383,7 +432,7 @@ public final class AgentShellsMCP {
                 return (
                     "Still running after \(Self.seconds(Date().timeIntervalSince(started))). "
                         + Self.output(state, empty: "No output yet.", heading: "The output so far")
-                        + "\n\nWait for it to end with shell_wait, or stop it with shell_send and the key Control C.", false
+                        + "\n\nWait for it to end with shell_wait, or stop it with shell_stop.", false
                 )
             }
             Thread.sleep(forTimeInterval: pollInterval)

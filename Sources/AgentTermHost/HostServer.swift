@@ -2933,7 +2933,7 @@ public final class HostServer {
             let mirror = shell.mirror
             let prepared = shell.marksPrepared
             // As the screen stands once what came before is fed to it.
-            shell.mirrorQueue.async { [weak self] in
+            shell.mirrorQueue.async { [weak self, weak shell] in
                 var before = mirror.command(lines: 0)
                 before.prepared = prepared
                 let paste = mirror.bracketedPasteMode
@@ -2942,7 +2942,7 @@ public final class HostServer {
                     if before.integrated, before.running {
                         return answer(
                             .refused(
-                                "Shell \(session) is still running a command. Wait for it to end with shell_wait, stop it with shell_send and the key Control C, or open another shell with shell_open."
+                                "Shell \(session) is still running a command. Wait for it to end with shell_wait, stop it with shell_stop, or open another shell with shell_open."
                             ))
                     }
                     shell.process.write(Data((SentText.text(command, bracketedPaste: paste) + "\r").utf8))

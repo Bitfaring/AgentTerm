@@ -554,7 +554,14 @@ final class AgentShellsHostTests: XCTestCase {
         // Read off the main thread, which the host under test answers on.
         var read: Data?
         DispatchQueue.global().async {
-            let data = output.fileHandleForReading.availableData
+            // The answer is one line, which may come in several pieces:
+            // the list of tools is longer than a pipe gives at once.
+            var data = Data()
+            while !data.contains(UInt8(ascii: "\n")) {
+                let piece = output.fileHandleForReading.availableData
+                if piece.isEmpty { break }
+                data += piece
+            }
             DispatchQueue.main.async { read = data }
         }
         waitUntil("the MCP server's answer", timeout: 40) { read != nil }
@@ -618,7 +625,7 @@ final class AgentShellsHostTests: XCTestCase {
     /// other build's offers none, and does not sign in to a host that is
     /// not its own (#57).
     func testInASessionOnlyItsOwnBuildsServerOffersTools() throws {
-        // The shells' six, and the browser's (#76).
+        // The shells' eight, and the browser's (#76).
         XCTAssertEqual(
             try toolsOffered(variable: AgentShellsMCP.Session(port: port, key: "a-key", useShells: false).variable()), AgentShellsMCP.tools.count + AgentShellsMCP.browserTools.count,
             "its own build's session")
@@ -800,8 +807,14 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertFalse(first.tool("shell_read", ["session": shell.id], in: self).text.contains("again"))
         XCTAssertTrue(mac.sessions.contains { $0.id == shell.id })
         // It opens one of its own instead, which the first does not reach.
-        XCTAssertFalse(second.tool("shell_open", ["command": "cat", "title": "other"], in: self).failed)
+        // Its program says which process it is, to see it end (#109).
+        let processFile = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-shell-\(UUID().uuidString.prefix(8)).pid")
+        defer { try? FileManager.default.removeItem(at: processFile) }
+        XCTAssertFalse(second.tool("shell_open", ["command": "sh -c 'echo $$ > \(processFile.path); exec cat'", "title": "other"], in: self).failed)
         waitUntil("the second's shell") { mac.sessions.contains { $0.title == "other" } }
+        waitUntil("its program to say which process it is") { (try? String(contentsOf: processFile, encoding: .utf8))?.hasSuffix("\n") == true }
+        let process = try XCTUnwrap(Int32(try String(contentsOf: processFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        XCTAssertEqual(kill(process, 0), 0, "the shell's program is not running")
         let other = try XCTUnwrap(mac.sessions.first { $0.title == "other" })
         XCTAssertFalse(second.tool("shell_send", ["session": other.id, "text": "mine", "keys": ["Return"]], in: self).failed)
         XCTAssertTrue(first.tool("shell_send", ["session": other.id, "text": "no"], in: self).failed)
@@ -809,6 +822,8 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertEqual(first.tool("shell_list", in: self).text, "\(shell.id): echo, in \(shell.cwd)")
         XCTAssertFalse(second.tool("shell_close", ["session": other.id], in: self).failed)
         waitUntil("the second's shell to be closed", timeout: 15) { !mac.sessions.contains { $0.id == other.id } }
+        // Closed is freed: its program is no longer running (#109).
+        waitUntil("the closed shell's program to end", timeout: 10) { kill(process, 0) != 0 }
 
         // MCP-7: starting an agent is refused.
         let agent = first.tool("shell_open", ["command": "claude --resume x"], in: self)
@@ -936,6 +951,56 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertFalse(agent.tool("shell_send", ["session": shell, "keys": ["Control C"]], in: self).failed)
         let stopped = agent.tool("shell_wait", ["session": shell, "timeout_seconds": 10], in: self)
         XCTAssertTrue(stopped.text.hasPrefix("Exit code 130."), stopped.text)
+    }
+
+    /// MCP-31: `shell_stop` stops what runs in an agent's shell, as Control C
+    /// does, in one call, and says how it ended; the shell stays, for the
+    /// next command. With nothing running it says so; a program that takes
+    /// Control C as nothing is said to still run; another agent's shell is
+    /// refused.
+    func testAnAgentStopsWhatRunsInItsShell() throws {
+        let mac = Client(port: port, token: token)
+        waitUntil("connected") { !mac.messages.isEmpty }
+        mac.connection.send(.setShellSettings(ShellSettings(program: "/bin/zsh")))
+        waitUntil("told") { mac.messages.contains { if case .shellSettings(let told, _, _) = $0 { return told.program == "/bin/zsh" } else { return false } } }
+        let (agent, _) = try startAgent("claude", title: "stopper", client: mac)
+        let opened = agent.tool("shell_open", ["title": "work"], in: self)
+        let shell = try XCTUnwrap(opened.text.range(of: #"shell \d+"#, options: .regularExpression).map { SessionID(opened.text[$0].dropFirst(6))! }, opened.text)
+
+        // Nothing runs.
+        let idle = agent.tool("shell_stop", ["session": shell], in: self)
+        XCTAssertFalse(idle.failed, idle.text)
+        XCTAssertEqual(idle.text, "Nothing runs in shell \(shell): it is at its prompt.")
+
+        // A command that outlasted its call, which says so.
+        let long = agent.tool("shell_run", ["session": shell, "command": "echo started; sleep 30", "timeout_seconds": 1], in: self)
+        XCTAssertTrue(long.text.hasPrefix("Still running"), long.text)
+        XCTAssertTrue(long.text.contains("shell_stop"), long.text)
+        let began = Date()
+        let stopped = agent.tool("shell_stop", ["session": shell], in: self)
+        XCTAssertFalse(stopped.failed, stopped.text)
+        XCTAssertTrue(stopped.text.hasPrefix("Stopped. Exit code 130."), stopped.text)
+        XCTAssertTrue(stopped.text.contains("started"), stopped.text)
+        XCTAssertLessThan(Date().timeIntervalSince(began), 5, "the stop waited for the command")
+        // The shell is there for the next command.
+        let next = agent.tool("shell_run", ["session": shell, "command": "echo after"], in: self)
+        XCTAssertTrue(next.text.hasPrefix("Exit code 0."), next.text)
+        XCTAssertTrue(next.text.hasSuffix("after"), next.text)
+
+        // One that ignores Control C still runs, and that is said.
+        let deaf = agent.tool("shell_run", ["session": shell, "command": "trap '' INT; sleep 6", "timeout_seconds": 1], in: self)
+        XCTAssertTrue(deaf.text.hasPrefix("Still running"), deaf.text)
+        let ignored = agent.tool("shell_stop", ["session": shell, "timeout_seconds": 1], in: self)
+        XCTAssertTrue(ignored.failed, ignored.text)
+        XCTAssertTrue(ignored.text.contains("still runs") && ignored.text.contains("shell_close"), ignored.text)
+        XCTAssertTrue(agent.tool("shell_wait", ["session": shell, "timeout_seconds": 20], in: self).text.hasPrefix("Exit code"))
+
+        // Another agent's shell is not its to stop.
+        let (other, _) = try startAgent("codex", title: "other", client: mac)
+        let refused = other.tool("shell_stop", ["session": shell], in: self)
+        XCTAssertTrue(refused.failed, refused.text)
+        XCTAssertTrue(refused.text.contains("only the shells you opened"), refused.text)
+        XCTAssertTrue(agent.tool("shell_list", in: self).text.hasPrefix("\(shell):"), "the shell is still open")
     }
 }
 
