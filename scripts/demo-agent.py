@@ -137,6 +137,15 @@ def main():
         return
     if NAME == "claude":
         report_usage()
+    # The screenshots drive the agent's MCP server as the agent would, to
+    # open a shell and a page beside it: they find its session's variable
+    # here, a line for each session of this agent, the first first.
+    variable = os.environ.get("AGENTTERM_MCP")
+    if variable:
+        folder = os.path.expanduser("~/.demo-agent")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, NAME), "a") as told:
+            told.write(variable + "\n")
     os.system("stty -echo 2>/dev/null")
     # Drawn again whenever the terminal has another size. Looked at now and
     # then rather than on the signal: a signal in the middle of drawing
