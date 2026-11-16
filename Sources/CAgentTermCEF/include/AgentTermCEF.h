@@ -52,7 +52,7 @@ typedef void (*atc_event_fn)(void *context, const atc_event *event);
 typedef struct {
     /// "Chromium Embedded Framework.framework" itself.
     const char *framework_path;
-    /// The helper app's executable, "<App> Helper.app/Contents/MacOS/<App> Helper".
+    /// The helper app's executable, "<App> Browser (Chromium).app/Contents/MacOS/<App> Browser (Chromium)".
     const char *helper_path;
     /// The app bundle.
     const char *main_bundle_path;

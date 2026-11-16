@@ -260,7 +260,7 @@ platform :mac do
       plain = ["--force", "--options", "runtime", "--timestamp", "--keychain", path, "--sign", identity]
       Dir.glob(File.join(cef, "Versions/A/Libraries/*.dylib")).each { |library| sh("codesign", *plain, library) }
       sh("codesign", *plain, cef)
-      Dir.glob(File.join(frameworks, "* Helper*.app")).each do |helper|
+      Dir.glob(File.join(frameworks, "* Browser (Chromium)*.app")).each do |helper|
         helper_entitlements = sh(File.join(ROOT, "scripts/browser-helpers.sh"), "entitlements", helper, log: false).strip
         sh("codesign", *plain, "--entitlements", helper_entitlements, helper)
       end

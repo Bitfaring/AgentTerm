@@ -133,20 +133,23 @@ done
 # The helper apps Chromium starts its other processes from: one program,
 # under the five names Chromium looks for (scripts/browser-helpers.sh
 # says which entitlements each gets when the app is signed for release).
+# Named for the browser, as Activity Monitor lists them: the memory of the
+# pages open is then seen to be the browser's, not the terminal's.
+HELPER_NAME="$NAME Browser (Chromium)"
 for kind in "" " (GPU)" " (Renderer)" " (Plugin)" " (Alerts)"; do
-    HELPER="$FRAMEWORKS/$NAME Helper$kind.app"
+    HELPER="$FRAMEWORKS/$HELPER_NAME$kind.app"
     suffix="$(echo "$kind" | tr -d ' ()' | tr '[:upper:]' '[:lower:]')"
     mkdir -p "$HELPER/Contents/MacOS"
-    cp "$BIN/AgentTermBrowserHelper" "$HELPER/Contents/MacOS/$NAME Helper$kind"
+    cp "$BIN/AgentTermBrowserHelper" "$HELPER/Contents/MacOS/$HELPER_NAME$kind"
     cat > "$HELPER/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>${NAME} Helper${kind}</string>
-    <key>CFBundleDisplayName</key><string>${NAME} Helper${kind}</string>
+    <key>CFBundleName</key><string>${HELPER_NAME}${kind}</string>
+    <key>CFBundleDisplayName</key><string>${HELPER_NAME}${kind}</string>
     <key>CFBundleIdentifier</key><string>${BUNDLE_ID}.helper${suffix:+.$suffix}</string>
-    <key>CFBundleExecutable</key><string>${NAME} Helper${kind}</string>
+    <key>CFBundleExecutable</key><string>${HELPER_NAME}${kind}</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>
@@ -163,7 +166,7 @@ for library in "$CEF_FRAMEWORK/Versions/A/Libraries/"*.dylib; do
     codesign --force --sign - "$library"
 done
 codesign --force --sign - "$CEF_FRAMEWORK"
-for HELPER in "$FRAMEWORKS/$NAME Helper"*.app; do
+for HELPER in "$FRAMEWORKS/$HELPER_NAME"*.app; do
     codesign --force --sign - --entitlements "$(./scripts/browser-helpers.sh entitlements "$HELPER")" "$HELPER"
 done
 codesign --force --sign - --entitlements assets/AgentTerm.entitlements "$APP/Contents/MacOS/agenttermd"

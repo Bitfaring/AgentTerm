@@ -635,6 +635,66 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertTrue(during.allSatisfy { $0 < 0.002 }, "the page shown as \(phone.name) changed while watched: \(during.map { String(format: "%.3f", $0) })")
     }
 
+    /// The app's page processes, by number, and their names: Chromium's
+    /// renderers, children of the app.
+    private func renderers() -> [Int32: String] {
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-axo", "pid=,ppid=,args="]
+        let pipe = Pipe()
+        ps.standardOutput = pipe
+        try? ps.run()
+        let text = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        ps.waitUntilExit()
+        var found: [Int32: String] = [:]
+        for line in text.split(separator: "\n") {
+            let words = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard words.count == 3, let pid = Int32(words[0]), Int32(words[1]) == app.pid, words[2].contains("--type=renderer") else { continue }
+            found[pid] = String(words[2].split(separator: "/").last { $0.contains("(Chromium)") } ?? "")
+        }
+        return found
+    }
+
+    /// BROWSER-28: the processes of the pages are named for the browser, as
+    /// Activity Monitor lists them; and a tab closed lets its page's go, its
+    /// memory with it. Three tabs of three sites, each in a process of its own.
+    func testAClosedTabsPageProcessEndsAndPagesAreNamedForTheBrowser() throws {
+        let page = try makeSite()
+        let server = Process()
+        server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        let port = Int.random(in: 20_000..<40_000)
+        server.arguments = ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", page.deletingLastPathComponent().path]
+        server.standardOutput = FileHandle.nullDevice
+        server.standardError = FileHandle.nullDevice
+        try server.run()
+        defer { server.terminate() }
+        let (agent, _) = try startAgent()
+        defer { agent.stop() }
+        let before = Set(renderers().keys)
+        var tabs: [String] = []
+        for url in ["http://127.0.0.1:\(port)/\(page.lastPathComponent)", "http://localhost:\(port)/\(page.lastPathComponent)", page.absoluteString] {
+            var opened = agent.text("browser_open", ["url": url])
+            // The little server may still be starting.
+            for _ in 0..<10 where opened.failed || opened.text.contains("could not") {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                opened = agent.text("browser_open", ["url": url])
+            }
+            XCTAssertFalse(opened.failed, opened.text)
+            tabs.append(try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text))
+        }
+        wait("a process for each page", timeout: 20) { Set(self.renderers().keys).subtracting(before).count >= 3 }
+        let pages = renderers().filter { !before.contains($0.key) }
+        for (_, name) in pages {
+            XCTAssertTrue(name.contains("Browser (Chromium)"), "a page's process is named \(name)")
+        }
+
+        for tab in tabs { XCTAssertFalse(agent.text("browser_close", ["tab": tab]).failed) }
+        // Chromium may keep one spare, for the next page.
+        let deadline = Date().addingTimeInterval(20)
+        while Set(renderers().keys).intersection(pages.keys).count > 1, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+        XCTAssertLessThanOrEqual(Set(renderers().keys).intersection(pages.keys).count, 1, "processes of closed pages still running: \(renderers().filter { pages.keys.contains($0.key) })")
+    }
+
     /// BROWSER-20: a device watches and uses an agent's page while the Mac's
     /// window is minimized, as when the user is away from it: pictures come,
     /// and a touch on a field, text typed and a touch on a button reach the

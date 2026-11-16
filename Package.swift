@@ -84,7 +84,7 @@ let package = Package(
             ],
             linkerSettings: [.linkedFramework("AppKit")]
         ),
-        // Chromium's other processes, as "<App> Helper.app" and its variants.
+        // Chromium's other processes, as "<App> Browser (Chromium).app" and its variants.
         .executableTarget(name: "AgentTermBrowserHelper", dependencies: ["CAgentTermCEF"]),
         .executableTarget(
             name: "AgentTermMac",

@@ -1105,8 +1105,9 @@ answers that it is handled; answered otherwise, CEF sends `performClose:`
 to the window the page is in, the app's own.
 
 **The processes.** The pages, the GPU and the network run in the helper
-apps of the bundle's Frameworks folder, "<App> Helper.app" and its four
-variants, all one program (`AgentTermBrowserHelper`), which enters
+apps of the bundle's Frameworks folder, "<App> Browser (Chromium).app"
+and its four variants, named so for Activity Monitor, where the pages'
+memory is then seen to be the browser's, all one program (`AgentTermBrowserHelper`), which enters
 Chromium's sandbox (`libcef_sandbox.dylib`, `cef_sandbox_initialize`)
 before it loads the framework, then runs `cef_execute_process`. The
 browser runs in the app bundle only: `scripts/bundle-mac.sh` puts the

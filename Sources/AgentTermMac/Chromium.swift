@@ -81,7 +81,8 @@ final class Chromium {
         }
         let name = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String ?? AppChannel.current.appName
         let framework = frameworks.appendingPathComponent("Chromium Embedded Framework.framework")
-        let helper = frameworks.appendingPathComponent("\(name) Helper.app/Contents/MacOS/\(name) Helper")
+        // Named for the browser, as Activity Monitor lists its processes.
+        let helper = frameworks.appendingPathComponent("\(name) Browser (Chromium).app/Contents/MacOS/\(name) Browser (Chromium)")
         guard FileManager.default.fileExists(atPath: framework.path), FileManager.default.fileExists(atPath: helper.path) else {
             problem = "Chromium is missing from the app: it was built without it."
             return false
