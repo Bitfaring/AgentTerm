@@ -1295,6 +1295,60 @@ final class BrowserUITests: MacUITestCase {
         app.wait("gone again") { pages().isEmpty && !self.app.exists(.id("strip-browser")) }
     }
 
+    /// BROWSER-33 (#111): the user's pages and an agent's are never mixed,
+    /// whichever is opened first, though both use one profile: the user's
+    /// are in the Browser tab and the agent does not list them; the agent's
+    /// are beside it and not in the Browser tab.
+    func testTheUsersPagesAndAnAgentsAreNotMixed() throws {
+        func page(_ name: String) throws -> URL {
+            let file = root.appendingPathComponent("\(name).html")
+            try "<!doctype html><title>\(name)</title><body>\(name)</body>".write(to: file, atomically: true, encoding: .utf8)
+            return file
+        }
+        /// The pages of a part of the window, by their names.
+        func pages(in part: String) -> [String] {
+            let all = app.nodes()
+            guard let start = all.firstIndex(where: { $0.identifier == part }) else { return [] }
+            let depth = all[start].depth
+            return all[(start + 1)...].prefix { $0.depth > depth }.filter { $0.role == "AXButton" && ["Mine", "Mine too", "Agents", "Agents too"].contains($0.label) }.map(\.label)
+        }
+        // The user's first, in the project the agent will be started in:
+        // each project has a Browser tab of its own.
+        app.press(.id("folder-\(project.path)"))
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait(for: .id("browser-address"), timeout: 20)
+        app.write(try page("Mine").absoluteString, into: .id("browser-address"), confirm: true)
+        app.wait("the user's page") { self.app.value(of: .id("browser-page")) == "Mine" }
+        // Then an agent's.
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        // The agent is in front, started just now.
+        app.wait(for: .id("tab-1"), timeout: 10)
+        let opened = server.text("browser_open", ["url": try page("Agents").absoluteString])
+        XCTAssertFalse(opened.failed, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the agent's page beside it") { pages(in: "agent-browser") == ["Agents"] }
+        XCTAssertEqual(server.text("browser_tabs").text.split(separator: "\n").count, 1, "the agent lists a page that is not its own")
+        XCTAssertTrue(server.text("browser_tabs").text.contains("Agents"))
+        // One more of the user's, from the header, while the agent's area is in front.
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait("a second page of the user's") { self.app.nodes().filter { $0.identifier.hasPrefix("tab-b") }.count == 2 }
+        app.write(try page("Mine too").absoluteString, into: .id("browser-address"), confirm: true)
+        app.wait("the user's second page") { self.app.value(of: .id("browser-page")) == "Mine too" }
+        XCTAssertEqual(pages(in: "user-browser"), ["Mine", "Mine too"], "the user's Browser tab")
+        // And one more of the agent's.
+        XCTAssertFalse(server.text("browser_open", ["url": try page("Agents too").absoluteString]).failed)
+        wait("the agent to list its two") { server.text("browser_tabs").text.split(separator: "\n").count == 2 }
+        let listed = server.text("browser_tabs").text
+        XCTAssertFalse(listed.contains("Mine"), "the agent lists the user's page: \(listed)")
+        // Back to the agent: its two beside it, none of the user's.
+        app.press(.id("tab-1"))
+        app.wait("the agent's two pages beside it, not \(pages(in: "agent-browser"))") { Set(pages(in: "agent-browser")) == ["Agents", "Agents too"] }
+        app.press(.id("strip-browser"))
+        app.wait("the user's two pages in the Browser tab, not \(pages(in: "user-browser"))") { pages(in: "user-browser") == ["Mine", "Mine too"] }
+        XCTAssertEqual(app.first(.id("strip-browser"))?.label, "Browser, 2 pages")
+    }
+
     /// BROWSER-9: the tabs are not kept: the app opens again with none.
     func testNoTabComesBack() throws {
         let page = try makeSite()

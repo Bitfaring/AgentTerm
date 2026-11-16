@@ -1490,10 +1490,12 @@ final class AppModel: ObservableObject {
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
             if selectNextAttached || selectedSession == nil {
                 // A session that was just started comes to the front, also
-                // when a file was showing.
+                // when a file, the diff or a page of the browser was showing
+                // (BROWSER-33: the page stayed in front, the session unseen).
                 if selectNextAttached {
                     files.active = nil
                     diffInFront = false
+                    browserInFront = nil
                     // Started from the header, a menu or History: the
                     // session is looked at in Sessions, wherever the window was.
                     show(.sessions, toggling: false)
