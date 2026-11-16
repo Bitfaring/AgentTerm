@@ -204,11 +204,12 @@ do {
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
     configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)
-    // Installs the MCP server in the agents' own configuration, for this
-    // Mac's host only: not for one with a state folder of its own (a test,
-    // a trial run), which must leave the user's agents alone.
+    // Gives the agents' sessions the MCP server, and takes out what earlier
+    // builds put in the agents' own configuration, for this Mac's host
+    // only: not for one with a state folder of its own (a test, a trial
+    // run), which must leave the user's agents alone.
     if (ProcessInfo.processInfo.environment["AGENTTERM_STATE_DIR"] ?? "").isEmpty, agentsDirectory == nil, let tool = Bundle.main.executablePath {
-        configuration.agentShells = AgentShellsInstall(directory: HostEnvironment.supportDirectory, tool: tool)
+        configuration.agentShells = AgentShellsSetup(directory: HostEnvironment.supportDirectory, tool: tool)
     }
     // Notes that it runs, so the next host knows whether this one died.
     configuration.stateDirectory = HostEnvironment.supportDirectory

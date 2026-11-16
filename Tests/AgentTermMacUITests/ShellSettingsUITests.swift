@@ -3,24 +3,21 @@ import XCTest
 
 /// Settings > Shell (SHELL-4 in docs/TESTING.md).
 final class ShellSettingsUITests: MacUITestCase {
-    /// SHELL-4: the shells' switches are in Settings > Shell, not General;
-    /// what is run first is saved to the host; the terminal's size is set
-    /// there.
+    /// SHELL-4: Settings > Shell has the program, what is run first, saved
+    /// to the host, and the terminal's looks, its size set there; no switch
+    /// of the agents' shells is left, in General or there.
     func testTheShellsSettings() throws {
         let phone = try device()
         app.press(.id("place-settings"))
         app.press(.id("settings-general"))
         app.wait(for: .id("menu-bar"))
-        for id in ["agent-shells", "agents-use-shells", "shell-marks"] {
-            XCTAssertFalse(app.exists(.id(id)), "\(id) is still in General")
-        }
         app.press(.id("settings-shell"))
         app.wait(for: .id("shell-program"))
-        // The switches of the agents' shells are there when the host has
-        // AgentTerm's MCP server set up, which the host of the tests does
-        // not; the marks' switch is always there.
-        for id in ["shell-marks", "terminal-font", "terminal-cursor", "terminal-scrollback"] {
+        for id in ["terminal-font", "terminal-cursor", "terminal-scrollback"] {
             app.wait(for: .id(id))
+        }
+        for id in ["agent-shells", "agents-use-shells", "shell-marks"] {
+            XCTAssertFalse(app.exists(.id(id)), "\(id) is still there")
         }
         app.write("export FROM_SETTINGS=1", into: .id("shell-startup"))
         app.press(.id("shell-startup-save"))

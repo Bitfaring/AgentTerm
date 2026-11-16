@@ -324,12 +324,14 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(second, Data(repeating: 1, count: 300_000))
     }
 
-    /// MCP-19: what keeps the agents from opening shells, in words, and a
-    /// cause this build does not know still read.
+    /// MCP-19: what is wrong with the agents' server, in words, and a cause
+    /// this build does not know still read.
     func testAnAgentShellsFaultInWords() throws {
-        let install = AgentShellsFault(cause: .install, agents: ["Codex", "Copilot CLI"])
-        XCTAssertEqual(install.headline(), "AgentTerm's shells could not be set up in Codex and Copilot CLI.")
-        XCTAssertEqual(install.headline(on: "Studio"), "AgentTerm's shells could not be set up in Codex and Copilot CLI on Studio.")
+        let install = AgentShellsFault(cause: .leftOver, agents: ["Codex", "Copilot CLI"])
+        XCTAssertEqual(install.headline(), "The MCP server an earlier AgentTerm put in the settings of Codex and Copilot CLI could not be taken out.")
+        XCTAssertEqual(
+            install.headline(on: "Studio"), "The MCP server an earlier AgentTerm put in the settings of Codex and Copilot CLI on Studio could not be taken out.")
+        XCTAssertTrue(install.advice.contains("mcp remove \(AppChannel.current.mcpServerName)"), install.advice)
         XCTAssertEqual(AgentShellsFault(cause: .signIn).headline(), "An agent's MCP server was refused by the AgentTerm host.")
         XCTAssertTrue(AgentShellsFault(cause: .signIn).advice.contains("Start that agent's session again"))
         let message = ServerMessage.agentShellsFaults([install, AgentShellsFault(cause: .init(rawValue: "later"))])

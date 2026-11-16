@@ -968,19 +968,19 @@ of the other build: a released build and a development build each install
 a server of their own (below), so an agent has both, and the one whose
 build the variable does not name stays out rather than sign in to a host
 with another host's token. A variable that names no build is from a host
-of 0.6, and is the released build's. With "agents run their
-commands in shells you see" on (the host's `agentsUseShells`, on by
-default) the variable ends with `use`, and it names the session's agent
-(`agent:claude`).
+of 0.6, and is the released build's. While the agent is told anything
+(its words in Settings > Agents are not empty) the variable ends with
+`use`, and it names the session's agent (`agent:claude`).
 
 **What an agent is told.** The host works out one text for each agent:
 what the user saved for it in Settings > Agents (`setAgentPrompt`, kept in
 `agent-prompts.json` of the host's folder and told to every device with
 `agentPrompts`, with each agent's default), or else the default:
-`AgentShellsInstructions.useShells` while "agents run their commands in
-shells you see" is on, and `AgentShellsInstructions.browser` while the
-server is set up (`AgentShellsInstructions.told`). An empty text tells
-nothing. When it starts an agent's session the host writes that text to
+`AgentShellsInstructions.useShells` and `AgentShellsInstructions.browser`,
+whenever the host gives the server (`AgentShellsInstructions.told`), with
+no switch since 2026-11-16 (the owner's decision): the words are the
+switch. An empty text tells nothing, the server's instructions included:
+without `use` the server says only what its shells are. When it starts an agent's session the host writes that text to
 `prompts/<agent>.md` of its folder, which the session's server gives as
 its instructions, and gives it where each agent reads it (MCP-13,
 PROMPT-1 to PROMPT-4): Claude Code is started with
@@ -1018,35 +1018,51 @@ token")` and closes), or the connection was lost. Each later call tries
 the host once more, so it fails as fast while the host is gone and works
 again once it is back; only a host that is up and silent is waited for,
 fifteen seconds. The host notes a sign-in it refused from a client on this
-Mac named `MCP`, and the agents `AgentShellsInstall.ensure` could not add
-the server to, and tells every client `agentShellsFaults`: an
-`AgentShellsFault` per cause (`install`, with the agents' names; `signIn`),
-none when nothing is wrong. A sign-in fault lasts until an `MCP` client
-signs in or the server is set up again; an install fault until `ensure`
-succeeds. Both apps show each in their top banner until it is over or it
-is closed there, and a closed one comes back only after it went away. A
-host that is not running cannot say so itself: that one is the agent's to
-tell. An agent that refuses `mcp add` because it has the name already has
-the entry removed and added again as this build's own.
+Mac named `MCP`, and the agents `AgentShellsSetup.removeLeftovers` could
+not take an earlier build's server out of, and tells every client
+`agentShellsFaults`: an `AgentShellsFault` per cause (`leftOver`, with the
+agents' names; `signIn`), none when nothing is wrong. A sign-in fault lasts
+until an `MCP` client signs in or the server is set up again; a leftover
+fault for as long as the host that found it runs. Both apps show each in their
+top banner until it is over or it is closed there, and a closed one comes
+back only after it went away. A host that is not running cannot say so
+itself: that one is the agent's to tell.
 
-**Installed in the agents.** `AgentShellsInstall` runs each installed agent's
-own command, through the login shell: `claude mcp add --scope user
-agentterm -- <agenttermd> mcp`, `codex mcp add agentterm -- …`, `copilot
-mcp add agentterm -- …`, `agy mcp add agentterm -- …`, and `mcp remove
-agentterm` to take it out. The name is the build's
-(`AppChannel.mcpServerName`): `agentterm` for the released build,
-`agentterm-dev` for a development build, so that both are installed side
-by side and each installs, repairs and removes only its own; the
-instructions an agent is given name its build's server.
-`agent-shells.json` in the state folder keeps whether it is on (on unless
-turned off), the name, and which agents have it, with the program it
-names: only those are ever removed, and an agent is asked again when the
-host's program moved. What a development build of 0.6 installed under
-`agentterm` is not counted as its own any more and is left as it is: it is
-put right by hand (`<agent> mcp remove agentterm`, then the released app
-started again). The host does it at start and on
-`setAgentShells`, off its queue, and tells every client `agentShells(Bool)`.
-A host with a state folder of its own (a test, a trial run) never does.
+**Given to each session.** A session's agent is given the server on its
+command line, with its hooks (`AgentHooks.launchArguments`, `server`), for
+that session only; nothing is written into the agent's own configuration,
+and an agent started outside AgentTerm does not get it:
+
+| Agent | Given by |
+|---|---|
+| Claude Code | `--mcp-config '{"mcpServers":{"agentterm":{"type":"stdio","command":"<agenttermd>","args":["mcp"]}}}'`, before `--settings`, since it takes every word after it up to the next option |
+| Codex | `-c mcp_servers.agentterm.command=…`, `….args=["mcp"]` and `….env_vars=["AGENTTERM_MCP"]`: Codex gives a server only a few variables of its own and those `env_vars` names, and without the session's the server offers no tools |
+| Copilot CLI | `--additional-mcp-config '{"mcpServers":{"agentterm":{"type":"local",…,"tools":["*"]}}}'` |
+| Antigravity | `.agents/mcp_config.json` in the folder of the host's it is given with `--add-dir`, which it reads as a project's; it takes no server on its command line (`--settings` refuses `mcpServers`) |
+
+Each was tried with the real agent on 2026-11-16 (Claude Code 2.1.325,
+Codex 0.169.0, Copilot CLI 1.0.112, Antigravity 1.5.9), with the very
+arguments `launchArguments` writes: each started the server and listed its
+tools. The name is the build's (`AppChannel.mcpServerName`): `agentterm`
+for the released build, `agentterm-dev` for a development build; the
+instructions an agent is given name its build's server. It is always
+given, as the hooks are, with no switch (decided by the owner on
+2026-11-16): `AgentShellsSetup.server`.
+
+**What earlier builds left.** Builds before 0.8.0 installed the server in
+each agent's configuration, for the whole user, with `<agent> mcp add`, and
+recorded in `agent-shells.json` which agents have it under which name. The
+host takes out what is recorded under its own name when it starts, off
+its queue, with each agent's own command through the login shell (`claude
+mcp remove --scope user <name>`, `<agent> mcp remove <name>` for the
+others), once for each agent: it forgets each, whether the agent took it
+out or refused, so that one taken out by hand is not asked again and
+warned of for ever; one that refused is a `leftOver` fault for as long as
+that host runs. One that is not installed now is left for when it is, and
+the record is deleted once nothing is left in it. What a development build of 0.6
+installed under the name every build shared is the released build's to
+take out. A host with a state folder of its own (a test, a trial run)
+neither gives the server nor takes anything out.
 
 ## The browser
 

@@ -189,12 +189,6 @@ final class PhoneModel: ObservableObject {
     /// Whether the Mac's host starts when its user logs in. Nil from a Mac
     /// that cannot do that, or that has not said yet.
     @Published private(set) var startAtLogin: Bool?
-    /// Whether agents may open shells the user sees, through AgentTerm's
-    /// MCP server installed in their configuration (#10). Nil when the
-    /// host does not install it.
-    @Published private(set) var agentShells: Bool?
-    /// Whether the agents are asked to run their commands in shells the user sees.
-    @Published private(set) var agentsUseShells: Bool?
     /// What keeps the agents from opening shells although that is on (#58),
     /// as the host says it, and those of them the user has closed here.
     @Published private(set) var agentShellsFaults: [AgentShellsFault] = []
@@ -208,16 +202,6 @@ final class PhoneModel: ObservableObject {
     private func took(_ faults: [AgentShellsFault]) {
         agentShellsFaults = faults
         closedShellsFaults.formIntersection(faults.map(\.id))
-    }
-
-    func setAgentsUseShells(_ on: Bool) {
-        agentsUseShells = on
-        connection?.send(.setAgentsUseShells(on))
-    }
-
-    func setAgentShells(_ on: Bool) {
-        agentShells = on
-        connection?.send(.setAgentShells(on))
     }
 
     func setStartAtLogin(_ on: Bool) {
@@ -1046,8 +1030,6 @@ final class PhoneModel: ObservableObject {
     private func clearHostState() {
         keepAwake = nil
         startAtLogin = nil
-        agentShells = nil
-        agentsUseShells = nil
         took([])
         keepAwakeOptions = KeepAwakeOptions()
         commitWriter = CommitWriterSettings()
@@ -1235,10 +1217,6 @@ final class PhoneModel: ObservableObject {
             agentsLoaded = true
         case .startAtLogin(let on):
             startAtLogin = on
-        case .agentShells(let on):
-            agentShells = on
-        case .agentsUseShells(let on):
-            agentsUseShells = on
         case .agentShellsFaults(let faults):
             took(faults)
         case .noticeSeen(let session, let state):

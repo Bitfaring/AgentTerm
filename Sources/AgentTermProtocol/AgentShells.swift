@@ -82,11 +82,10 @@ extension SessionInfo {
     }
 }
 
-/// Something that keeps the agents from opening shells the user sees,
-/// although "Agents can open shells you see" is on (#58). The host tells
-/// every client, for as long as it lasts, and the apps warn of it in their
-/// top banner: without it, the switch says on while no agent can open a
-/// shell, and the agents run their commands out of sight.
+/// Something wrong with AgentTerm's MCP server in the agents (#58). The
+/// host tells every client, for as long as it lasts, and the apps warn of it
+/// in their top banner: without it, the agents could not open shells, or
+/// keep a server of an earlier build, and nobody would know.
 public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Sendable {
     /// What is wrong. Text rather than a closed list, so that a client
     /// still reads a cause that was added after it was built.
@@ -94,8 +93,9 @@ public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Send
         public var rawValue: String
         public init(rawValue: String) { self.rawValue = rawValue }
 
-        /// The server could not be added to an agent's configuration.
-        public static let install = Cause(rawValue: "install")
+        /// An agent kept the server an earlier build had put in its own
+        /// configuration: it refused to take it out, and is not asked again.
+        public static let leftOver = Cause(rawValue: "leftOver")
         /// An agent's server was refused when it signed in to the host.
         public static let signIn = Cause(rawValue: "signIn")
     }
@@ -117,9 +117,9 @@ public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Send
     public func headline(on mac: String? = nil) -> String {
         let onMac = mac.map { " on \($0)" } ?? ""
         switch cause {
-        case .install:
+        case .leftOver:
             let named = agents.isEmpty ? "an agent" : Self.list(agents)
-            return "AgentTerm's shells could not be set up in \(named)\(onMac)."
+            return "The MCP server an earlier AgentTerm put in the settings of \(named)\(onMac) could not be taken out."
         case .signIn:
             return "An agent's MCP server was refused by the AgentTerm host\(onMac)."
         default:
@@ -130,12 +130,14 @@ public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Send
     /// What follows from it and what to do about it.
     public var advice: String {
         switch cause {
-        case .install:
-            return "Agents started there cannot open shells you see. Turning “Agents can open shells you see” off and on in Settings tries again."
+        case .leftOver:
+            let server = AppChannel.current.mcpServerName
+            return
+                "AgentTerm now gives its server to the sessions it starts only, and this one is still in those settings, for every session. Take it out with “mcp remove \(server)” of each of those agents."
         case .signIn:
             return "Its agent cannot open shells you see: it was started by another copy of AgentTerm, or before the host was set up again. Start that agent's session again."
         default:
-            return "Turning “Agents can open shells you see” off and on in Settings sets it up again."
+            return "Start the agent's session again; if it stays, a newer AgentTerm says more."
         }
     }
 

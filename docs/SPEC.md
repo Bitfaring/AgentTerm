@@ -296,15 +296,20 @@ says names the device it runs on.
   tab, works in it, and the user watches and can type in it too. On the
   Mac it is a tab and a row in its agent's folder, on the iPhone a row,
   marked as opened by an agent.
-- It is done through AgentTerm's MCP server, which AgentTerm installs in
-  the settings of Claude Code, Codex, Copilot CLI and Antigravity for the
-  whole user, by default, the first time it runs. Settings ("Agents can
-  open shells you see", on the Mac and the iPhone) removes it from them,
-  and puts it back.
-- A development build installs a server of its own beside the released
-  app's, under another name (`agentterm-dev`), and each works only in the
-  sessions of its own build: trying a change never takes the shells from
-  the agents of the installed app.
+- It is done through AgentTerm's MCP server, which AgentTerm gives to
+  each session of Claude Code, Codex, Copilot CLI and Antigravity it
+  starts, for that session only, as it gives it its hooks: always, with no
+  switch. Nothing is written into the agents' own settings, and an agent
+  started outside AgentTerm, where the server has nothing to offer, does
+  not have it.
+- Builds before 0.8.0 installed the server in the agents' settings, for
+  the whole user. AgentTerm takes out what it put there with each agent's
+  own command, once for each agent; an agent that refuses is named in the
+  top banner, with how to take it out by hand, and is not asked again.
+- A development build gives its sessions a server of its own, under
+  another name (`agentterm-dev`), and each works only in the sessions of
+  its own build: trying a change never takes the shells from the agents
+  of the installed app.
 - Its tools, all named `shell_…`: open a shell (with a command or
   without), **run a command in it and be told its exit code and its
   output once it ends**, in one call, list the shells, read a shell's
@@ -336,15 +341,15 @@ says names the device it runs on.
 - When the agent's session ends, the shells it opened stay, for the user.
 - Outside a session of AgentTerm (an agent run in another terminal), the
   server offers no tools.
-- **Agents run their commands in shells you see**, on by default, next to
-  the switch above: each agent is asked to run its commands in a shell of
+- **Agents run their commands in shells you see**: each agent is asked to run its commands in a shell of
   the server, one already open if there is one free in its folder, rather
   than in its own out of sight, and to leave it open for the next task. Claude
   Code is told so in its system prompt; Copilot CLI and Antigravity in
   instructions files of AgentTerm's, which they read as they read a
   project's; Codex through the server's instructions, which it follows. An
-  agent still decides for itself.
-- While the server is set up, each agent is also told to use AgentTerm's
+  agent still decides for itself. There is no switch for it: the user who
+  wants it otherwise changes what the agent is told (below).
+- Each agent is also told to use AgentTerm's
   browser, through the server's `browser_` tools, whenever the user asks
   for anything in a browser ("the browser", "Chrome", a site, localhost),
   and not another browser tool or extension it may have (such as Claude in
@@ -355,16 +360,14 @@ says names the device it runs on.
   agent's, still starts through the login shell. What is run first in a
   shell: in the user's own, typed at the prompt with Return as the user
   would; in an agent's, before its first prompt, so that it is not one of
-  the agent's commands. The switches of the agents' shells (open shells
-  you see, run their commands in them, and say when a command ends: on by
-  default, off an agent waits for the screen to be still and is not told
-  the exit code). How the terminals look on this Mac: font, size, cursor
+  the agent's commands. A zsh an agent opens always says when each command
+  ends, with no switch: another shell does not, and there an agent waits
+  for the screen to be still and is not told the exit code. How the terminals look on this Mac: font, size, cursor
   (block, underline, bar, blinking or not) and how far back they scroll.
   The host keeps all but the looks.
 - **What the agents are told**, in Settings > Agents on the Mac: one text
   for each agent (Claude Code, Codex, Copilot CLI, Antigravity), filled
-  with what AgentTerm tells it by default (the two above, as the switches
-  stand). The user edits it, saves it (⌘S) or puts the default back
+  with what AgentTerm tells it by default (the two above). The user edits it, saves it (⌘S) or puts the default back
   (Reset to Default); empty, the agent is told nothing by AgentTerm. The
   host keeps it, so an agent started from the iPhone or by a schedule is
   told the same; sessions started after it is saved are told it, those

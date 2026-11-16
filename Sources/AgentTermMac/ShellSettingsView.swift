@@ -19,7 +19,6 @@ struct ShellSettingsView: View {
                 SettingsCard { program(settings) }
                 SettingsCard { startupCommands(settings) }
             }
-            SettingsCard { agents }
             SettingsCard { looks }
         }
         .padding(24)
@@ -119,46 +118,6 @@ struct ShellSettingsView: View {
                 Button("Save") { save(text.wrappedValue) }
                     .disabled(text.wrappedValue == saved)
                     .accessibilityIdentifier(id + "-save")
-            }
-        }
-    }
-
-    // MARK: Agents' shells
-
-    @ViewBuilder
-    private var agents: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let agentShells = model.agentShells {
-                SettingSwitch(
-                    "Agents can open shells you see", id: "agent-shells",
-                    detail: "An agent can open a shell beside it here, and reaches only the shells it opened.",
-                    help:
-                        "Through AgentTerm's MCP server, put in the settings of Claude Code, Codex, Copilot CLI and Antigravity; turning this off takes it out. An agent opens shells only, never another agent.",
-                    isOn: Binding(get: { agentShells }, set: { model.setAgentShells($0) }))
-                if let useShells = model.agentsUseShells {
-                    Divider()
-                    SettingSwitch(
-                        "Agents run their commands in shells you see", id: "agents-use-shells",
-                        detail: "They are asked to use those shells rather than their own.",
-                        help:
-                            "Claude Code is told in its system prompt, Copilot CLI and Antigravity in instructions files of AgentTerm's, Codex through the MCP server's instructions. An agent still decides for itself.",
-                        isOn: Binding(get: { useShells }, set: { model.setAgentsUseShells($0) })
-                    )
-                    .disabled(!agentShells)
-                }
-                Divider()
-            }
-            if let settings = model.shellSettings {
-                SettingSwitch(
-                    "Agents' shells say when a command ends", id: "shell-marks",
-                    detail: settings.marks
-                        ? "An agent runs a command and is told its exit code and its output, in one step."
-                        : "An agent types a command and waits for the screen to be still; its exit code is not known.",
-                    help:
-                        "A zsh an agent opens reads your startup files, then writes a mark when each command starts and ends (OSC 133), which you do not see. Your own shells are left as they are.",
-                    isOn: Binding(get: { settings.marks }, set: { on in save { $0.marks = on } })
-                )
-                .disabled(model.agentShells == false)
             }
         }
     }

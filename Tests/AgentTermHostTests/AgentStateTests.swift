@@ -155,7 +155,7 @@ final class AgentStateTests: XCTestCase {
 
     /// MCP-13: Copilot CLI and Antigravity are told to run their commands in
     /// shells the user sees as Claude Code is, through instructions files of
-    /// the host's, which they read; not when it is off.
+    /// the host's, which they read; not when they are told nothing.
     func testCopilotAndAntigravityAreToldToUseTheShells() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-told-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }

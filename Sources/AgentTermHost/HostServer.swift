@@ -46,9 +46,10 @@ public final class HostServer {
         /// Where the host keeps what it gives Copilot CLI and Antigravity
         /// for their hooks: a plugin, a folder. Nil gives those two none.
         public var hooksDirectory: URL?
-        /// Installs the MCP server in the agents' configuration (#10). Nil
-        /// installs nothing: a test's host, a trial run.
-        public var agentShells: AgentShellsInstall?
+        /// The MCP server the agents' sessions are given (#10), and what
+        /// earlier builds left of it in the agents' configuration. Nil gives
+        /// none and takes nothing out: a test's host, a trial run.
+        public var agentShells: AgentShellsSetup?
         /// How long since a key or the pointer was used on the Mac, in
         /// seconds; nil when that is not known. A test stands one in.
         public var idleSeconds: () -> TimeInterval? = { MacUse.idleSeconds() }
@@ -285,8 +286,9 @@ public final class HostServer {
     /// Parts that stopped without being asked to, until the user has seen
     /// them on one of the clients.
     private var failures: [PartFailure] = []
-    /// The agents the MCP server could not be installed in, by name.
-    private var agentShellsNotInstalled: [String] = []
+    /// The agents an earlier build's MCP server could not be taken out of,
+    /// by name, for as long as this host runs: each is tried once.
+    private var agentShellsLeftOver: [String] = []
     /// An agent's MCP server was refused when it signed in, and none has
     /// signed in since.
     private var agentShellsRefused = false
@@ -325,7 +327,6 @@ public final class HostServer {
             commitWriter = saved.commitWriter ?? CommitWriterSettings()
             displaySettings = saved.display
             startAtLoginChosen = saved.startAtLoginChosen ?? false
-            agentsUseShells = saved.agentsUseShells ?? true
             shellSettings = saved.shell ?? ShellSettings()
         }
         if let file = tabLayoutFile, let data = try? Data(contentsOf: file),
@@ -384,8 +385,6 @@ public final class HostServer {
         /// The user turned Start at Login on or off once: from then on it
         /// is theirs. Until then it is turned on, the default.
         var startAtLoginChosen: Bool?
-        /// Whether the agents are asked to use shells the user sees; on when unset.
-        var agentsUseShells: Bool?
         /// How shells are started (Settings > Shell).
         var shell: ShellSettings?
     }
@@ -419,11 +418,6 @@ public final class HostServer {
 
     /// Whether the user has turned Start at Login on or off.
     private var startAtLoginChosen = false
-    /// Whether the agents are asked to run their commands in shells the
-    /// user sees (on by default).
-    private var agentsUseShells = true
-    /// Asked only where the agents can open them: the MCP server is installed.
-    private var asksToUseShells: Bool { agentsUseShells && (configuration.agentShells?.isOn ?? false) }
 
     /// Start at Login is on by default: turned on the first time a host
     /// that can be started at login runs, until the user has chosen.
@@ -444,7 +438,7 @@ public final class HostServer {
         guard let file = settingsFile else { return }
         let settings = Settings(
             keepAwake: keepAwake, keepAwakeOptions: keepAwakeOptions, commitWriter: commitWriter, display: displaySettings,
-            startAtLoginChosen: startAtLoginChosen, agentsUseShells: agentsUseShells, shell: shellSettings)
+            startAtLoginChosen: startAtLoginChosen, shell: shellSettings)
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? MessageCoding.encode(settings).write(to: file, options: .atomic)
     }
@@ -569,8 +563,8 @@ public final class HostServer {
         queue.sync {
             summaryTimer = summaries
             watchEvents()
-            // Installed by default the first time, and again after the app moved.
-            setAgentShells(nil)
+            // What earlier builds put in the agents' configuration taken out.
+            removeAgentShellsLeftovers()
             loadSchedules()
             loadHistoryMarks()
             startAtLoginByDefault()
@@ -1866,14 +1860,6 @@ public final class HostServer {
             guard sessions[id]?.info.state == state else { return }
             noticesSeen[id] = state
             for other in clients.values where other.authenticated && other !== client { send(.noticeSeen(session: id, state: state), to: other) }
-        case .setAgentShells(let on):
-            setAgentShells(on)
-        case .setAgentsUseShells(let on):
-            agentsUseShells = on
-            saveSettings()
-            for other in clients.values where other.authenticated { send(.agentsUseShells(on), to: other) }
-            // What the agents are told by default follows it.
-            broadcastAgentPrompts()
         case .answer(let id, let state, let text):
             // Only while the agent still asks what the reply answers: one
             // that comes later is not typed into what it asks next.
@@ -2635,10 +2621,6 @@ public final class HostServer {
         send(.tabLayout(tabLayout), to: client)
         send(.keepAwake(keepAwake), to: client)
         send(.keepAwakeOptions(keepAwakeOptions), to: client)
-        if let install = configuration.agentShells {
-            send(.agentShells(install.isOn), to: client)
-            send(.agentsUseShells(agentsUseShells), to: client)
-        }
         if configuration.agentShells != nil || !agentShellsFaults.isEmpty { send(.agentShellsFaults(agentShellsFaults), to: client) }
         send(.macInUse(macInUse), to: client)
         // What was seen on another device while this one was away, as far
@@ -2766,7 +2748,7 @@ public final class HostServer {
             for file in [usage, events].compactMap({ $0 }) { try? FileManager.default.removeItem(at: file) }
             if let more = try? AgentHooks.launchArguments(
                 agent: agent, tool: tool, usageFile: usage?.path, directory: configuration.hooksDirectory, home: configuration.home,
-                trust: run.map { [$0.folder] } ?? [], prompt: prompt)
+                trust: run.map { [$0.folder] } ?? [], prompt: prompt, server: configuration.agentShells?.server)
             {
                 command = (command ?? "") + more
                 environment[AgentHooks.eventsVariable] = events.path
@@ -2798,7 +2780,7 @@ public final class HostServer {
             startup = openedBy == nil ? shellSettings.startup : shellSettings.agentStartup
             if startup?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { startup = nil }
         }
-        if openedBy != nil, isShell, shellSettings.marks,
+        if openedBy != nil, isShell,
             let integration = ShellIntegration.environment(shell: program, current: environment, startup: startup)
         {
             environment.merge(integration) { _, new in new }
@@ -2808,7 +2790,9 @@ public final class HostServer {
         // The agent's MCP server tells the host which session's it is.
         let agentKey = agent.map { _ in UUID().uuidString + UUID().uuidString }
         if let agentKey {
-            environment[Self.agentShellsVariable] = AgentShellsMCP.Session(port: boundPort, key: agentKey, useShells: asksToUseShells, agent: agent).variable()
+            // Without words of its own, the server tells the agent of the
+            // shells and asks nothing of it: the user emptied what it is told.
+            environment[Self.agentShellsVariable] = AgentShellsMCP.Session(port: boundPort, key: agentKey, useShells: prompt != nil, agent: agent).variable()
         }
         let process: PTYProcess
         do {
@@ -2996,11 +2980,12 @@ public final class HostServer {
 
     public static var agentPromptsFile: URL { HostEnvironment.supportDirectory.appendingPathComponent("agent-prompts.json") }
 
-    /// What AgentTerm tells an agent by default: to run its commands in the
-    /// shells the user sees, when that is on, and to use AgentTerm's
-    /// browser, while the MCP server is set up.
+    /// What AgentTerm tells an agent by default, when it gives it the MCP
+    /// server: to run its commands in the shells the user sees, and to use
+    /// AgentTerm's browser. Always, with no switch (decided by the owner on
+    /// 2026-11-16): the user who wants it otherwise changes the words.
     private func defaultPrompt(for agent: String) -> String? {
-        AgentShellsInstructions.told(useShells: asksToUseShells, browser: configuration.agentShells?.isOn ?? false)
+        AgentShellsInstructions.told(useShells: configuration.agentShells != nil, browser: configuration.agentShells != nil)
     }
 
     func agentPrompt(for agent: String) -> String? {
@@ -3159,23 +3144,19 @@ public final class HostServer {
         }
     }
 
-    /// Installs or removes the MCP server, off the queue the sessions use,
-    /// and tells every client.
-    private func setAgentShells(_ on: Bool?) {
-        guard let install = configuration.agentShells else { return }
+    /// Takes out what earlier builds left in the agents' configuration, off
+    /// the queue the sessions use, and tells every client of the agents that
+    /// refused.
+    private func removeAgentShellsLeftovers() {
+        guard let agentShells = configuration.agentShells else { return }
         let known = agents
         let detect = configuration.detectAgents
         workQueue.async { [weak self] in
-            let installed = known ?? detect()
-            let failed = on.map { install.set(on: $0, agents: installed) } ?? install.ensure(agents: installed)
-            let isOn = install.isOn
+            let refused = agentShells.removeLeftovers(agents: known ?? detect())
+            guard !refused.isEmpty else { return }
             self?.queue.async {
                 guard let self else { return }
-                for client in self.clients.values where client.authenticated { self.send(.agentShells(isOn), to: client) }
-                self.broadcastAgentPrompts()
-                // Set up again: what was refused before is not known to be still.
-                if on != nil { self.agentShellsRefused = false }
-                self.agentShellsNotInstalled = failed.map(\.name)
+                self.agentShellsLeftOver = refused.map(\.name)
                 self.broadcastAgentShellsFaults()
             }
         }
@@ -3186,7 +3167,7 @@ public final class HostServer {
 
     /// What keeps the agents from opening shells, for the apps to warn of.
     private var agentShellsFaults: [AgentShellsFault] {
-        (agentShellsNotInstalled.isEmpty ? [] : [AgentShellsFault(cause: .install, agents: agentShellsNotInstalled)])
+        (agentShellsLeftOver.isEmpty ? [] : [AgentShellsFault(cause: .leftOver, agents: agentShellsLeftOver)])
             + (agentShellsRefused ? [AgentShellsFault(cause: .signIn)] : [])
     }
 

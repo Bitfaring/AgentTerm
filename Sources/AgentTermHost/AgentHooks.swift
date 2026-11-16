@@ -6,14 +6,15 @@ import Foundation
 /// agent itself, through its hooks, never from what is on the screen.
 ///
 /// Each agent is given hooks for one session only, without a change to the
-/// user's own configuration of it, in the way that agent takes them:
+/// user's own configuration of it, in the way that agent takes them, and
+/// AgentTerm's MCP server the same way (`Server`):
 ///
-/// | Agent | Given by |
-/// |---|---|
-/// | Claude Code | `--settings`, with the status line |
-/// | Codex | `-c hooks.<Event>=...` |
-/// | Copilot CLI | `--plugin-dir`, a plugin of the host's holding `hooks.json` |
-/// | Antigravity | `--add-dir`, a folder of the host's holding `.agents/hooks.json`, trusted for the session by `--settings` |
+/// | Agent | Hooks given by | The MCP server given by |
+/// |---|---|---|
+/// | Claude Code | `--settings`, with the status line | `--mcp-config` |
+/// | Codex | `-c hooks.<Event>=...` | `-c mcp_servers.<name>.…`, with the session's variable |
+/// | Copilot CLI | `--plugin-dir`, a plugin of the host's holding `hooks.json` | `--additional-mcp-config` |
+/// | Antigravity | `--add-dir`, a folder of the host's holding `.agents/hooks.json`, trusted for the session by `--settings` | `.agents/mcp_config.json` in that folder |
 ///
 /// Every hook runs `agenttermd hook <agent> <event>`, which saves what it is
 /// told in the file `AGENTTERM_EVENTS` names, set in the session's
@@ -27,6 +28,19 @@ public enum AgentHooks {
     static let codexEvents = ["UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "Interrupt"]
     static let copilotEvents = ["userPromptSubmitted", "preToolUse", "permissionRequest", "postToolUse", "postToolUseFailure", "agentStop"]
     static let antigravityEvents = ["PreInvocation", "PreToolUse", "PostToolUse", "Stop"]
+
+    /// AgentTerm's MCP server, as a session's agent is given it: its name,
+    /// the build's (`AppChannel.mcpServerName`), and the host's program,
+    /// which it runs as `<tool> mcp`.
+    public struct Server: Equatable, Sendable {
+        public var name: String
+        public var tool: String
+
+        public init(name: String, tool: String) {
+            self.name = name
+            self.tool = tool
+        }
+    }
 
     /// What a hook runs.
     static func command(tool: String, agent: String, event: String) -> String {
@@ -46,27 +60,62 @@ public enum AgentHooks {
     /// is given, Copilot CLI in instructions it is told of
     /// (`instructionsEnvironment`), Codex in the MCP server's instructions,
     /// which it reads. Nil tells it nothing.
+    /// `server`: AgentTerm's MCP server, for this session only; nil gives
+    /// none.
     public static func launchArguments(
-        agent: String, tool: String, usageFile: String?, directory: URL?, home: String, trust: [String] = [], prompt: String? = nil
+        agent: String, tool: String, usageFile: String?, directory: URL?, home: String, trust: [String] = [], prompt: String? = nil,
+        server: Server? = nil
     ) throws -> String {
         switch agent {
         case "claude":
             var settings: [String: Any] = ["hooks": claudeHooks(tool: tool)]
             if let usageFile { settings["statusLine"] = StatusLineRelay.statusLine(tool: tool, file: usageFile) }
             let json = try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])
-            return " --settings " + Handoff.shellQuote(String(decoding: json, as: UTF8.self))
+            // `--mcp-config` takes every word after it up to the next
+            // option: it comes before `--settings`, never last.
+            return try (server.map { " --mcp-config " + Handoff.shellQuote(try claudeServer($0)) } ?? "")
+                + " --settings " + Handoff.shellQuote(String(decoding: json, as: UTF8.self))
                 + (prompt.map { " --append-system-prompt " + Handoff.shellQuote($0) } ?? "")
         case "codex":
-            return codexArguments(tool: tool)
+            return codexArguments(tool: tool) + (server.map(codexServer) ?? "")
         case "copilot":
             guard let directory else { throw CocoaError(.fileNoSuchFile) }
-            return try copilotArguments(tool: tool, directory: directory)
+            return try copilotArguments(tool: tool, directory: directory) + (server.map { " --additional-mcp-config " + Handoff.shellQuote(try copilotServer($0)) } ?? "")
         case "agy":
             guard let directory else { throw CocoaError(.fileNoSuchFile) }
-            return try antigravityArguments(tool: tool, directory: directory, home: home, trust: trust, prompt: prompt)
+            return try antigravityArguments(tool: tool, directory: directory, home: home, trust: trust, prompt: prompt, server: server)
         default:
             throw CocoaError(.featureUnsupported)
         }
+    }
+
+    // MARK: AgentTerm's MCP server, for one session
+
+    /// Claude Code's `--mcp-config`: next to the servers of the user's own
+    /// configuration, which it still reads. It passes its environment on to
+    /// the server, the session's variable with it.
+    static func claudeServer(_ server: Server) throws -> String {
+        try json(["mcpServers": [server.name: ["type": "stdio", "command": server.tool, "args": ["mcp"]]]])
+    }
+
+    /// Codex's `-c`: Codex gives a server only a few variables of its own
+    /// (`HOME`, `PATH` and the like) and those `env_vars` names; without the
+    /// session's, the server is not in a session and offers no tools.
+    static func codexServer(_ server: Server) -> String {
+        let table = "mcp_servers." + server.name
+        return [
+            "\(table).command=\(tomlString(server.tool))", "\(table).args=[\"mcp\"]",
+            "\(table).env_vars=[\(tomlString(HostServer.agentShellsVariable))]",
+        ].map { " -c " + Handoff.shellQuote($0) }.joined()
+    }
+
+    /// Copilot CLI's `--additional-mcp-config`: every tool of the server.
+    static func copilotServer(_ server: Server) throws -> String {
+        try json(["mcpServers": [server.name: ["type": "local", "command": server.tool, "args": ["mcp"], "tools": ["*"]]]])
+    }
+
+    private static func json(_ object: [String: Any]) throws -> String {
+        String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
     }
 
     /// Claude Code's hooks, for the settings it is started with.
@@ -112,7 +161,13 @@ public enum AgentHooks {
     /// folders the user trusts already, which are read from their settings
     /// and not changed: `--settings` is for this session only.
     /// `trust`: folders trusted for the session too, a schedule's (#11).
-    static func antigravityArguments(tool: String, directory: URL, home: String, trust: [String] = [], prompt: String? = nil) throws -> String {
+    /// `server`: AgentTerm's MCP server, which Antigravity reads from the
+    /// folder's `.agents/mcp_config.json` as it reads a project's; it takes
+    /// no server on its command line (`--settings` refuses `mcpServers`,
+    /// tried with 1.5.9).
+    static func antigravityArguments(
+        tool: String, directory: URL, home: String, trust: [String] = [], prompt: String? = nil, server: Server? = nil
+    ) throws -> String {
         let folder = directory.appendingPathComponent("antigravity", isDirectory: true)
         let agents = folder.appendingPathComponent(".agents", isDirectory: true)
         try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -131,6 +186,12 @@ public enum AgentHooks {
             events[event] = event.hasSuffix("ToolUse") ? [["matcher": "*", "hooks": [hook]]] : [hook]
         }
         try write(["agentterm": events], to: agents.appendingPathComponent("hooks.json"))
+        let servers = agents.appendingPathComponent("mcp_config.json")
+        if let server {
+            try write(["mcpServers": [server.name: ["command": server.tool, "args": ["mcp"]]]], to: servers)
+        } else {
+            try? FileManager.default.removeItem(at: servers)
+        }
         let settingsFile = URL(fileURLWithPath: home).appendingPathComponent(".gemini/antigravity-cli/settings.json")
         let own = (FileManager.default.contents(atPath: settingsFile.path)).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
         var trusted = own?["trustedWorkspaces"] as? [String] ?? []
