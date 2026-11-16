@@ -137,7 +137,7 @@ struct PaneView: View {
         } else if pane.front == TabID.diff, let file = model.diffTabFile {
             DiffDocumentView(file: file)
         } else if let front = pane.front, let tab = model.browsers.tab(forTab: front) {
-            BrowserPaneView(tab: tab, focused: focused)
+            UserBrowserView(project: tab.project, focused: focused)
         } else {
             EmptyPaneView(pane: pane)
         }
@@ -305,9 +305,10 @@ struct AgentAreaView: View {
     }
 
     /// The page beside the agent, shown as a device: as wide as its screen,
-    /// and the agent gets the rest.
+    /// and the agent gets the rest; never narrower than its bar needs for
+    /// its buttons, the page then in the middle of its part.
     private var emulatedWidth: CGFloat? {
-        area.shownBrowser(among: browserTabs).flatMap { model.browserEmulation[$0] }.map { CGFloat($0) }
+        area.shownBrowser(among: browserTabs).flatMap { model.browserEmulation[$0] }.map { max(CGFloat($0), BrowserPaneView.barWidth) }
     }
 
     @ViewBuilder
@@ -399,6 +400,21 @@ private struct PartStrip: View {
                         PartTab(tab: tab, selected: tab == shown)
                     }
                 }
+            }
+            .fixedSize(horizontal: part == .browser && tabs.count < 5, vertical: false)
+            if part == .browser {
+                // One more page beside the agent, the user's to use first.
+                Button {
+                    model.openBrowserTab(besideAgent: agentTab)
+                } label: {
+                    Image(systemName: "plus").font(.system(size: 10, weight: .semibold)).frame(width: 20, height: 18)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("New page beside this agent. It is yours until you give it to the agent.")
+                .accessibilityLabel("New Page")
+                .accessibilityIdentifier("agent-new-page")
+                Spacer(minLength: 0)
             }
             Button {
                 model.hideAgentPart(part, of: agentTab)

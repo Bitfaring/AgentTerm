@@ -730,7 +730,7 @@ private struct TabCommands: View {
             .keyboardShortcut("[", modifiers: [.command, .shift])
             .disabled(model.tabCount < 2)
         Divider()
-        let front = model.frontTabID
+        let front = model.frontStripTab
         Button(front.map(model.tabLayout.isPinned) == true ? "Unpin Tab" : "Pin Tab") {
             if let front { model.setTabPinned(front, !model.tabLayout.isPinned(front)) }
         }

@@ -282,10 +282,72 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertFalse(server.text("browser_navigate", ["tab": tab, "url": page.absoluteString]).failed)
     }
 
+    /// BROWSER-31: the + of an agent's Browser part opens one more page
+    /// beside the agent: the agent's, which it lists, and the user's to use
+    /// until it is given back; not a page of the user's Browser tab.
+    func testTheUserOpensAPageBesideAnAgent() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let first = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.press(.id("agent-new-page"))
+        app.wait(for: .containing("You have this tab"), timeout: 20)
+        XCTAssertFalse(app.exists(.id("strip-browser")), "the page went to the user's Browser tab")
+        app.wait(for: .id("browser-address"), timeout: 20)
+        app.write(page.absoluteString, into: .id("browser-address"), confirm: true)
+        // The agent lists both, the new one as the user's for now.
+        var listed = ""
+        wait("the agent to list the new page", timeout: 15) {
+            listed = server.text("browser_tabs").text
+            return listed.split(separator: "\n").count == 2 && listed.contains("Test page")
+        }
+        let second = try XCTUnwrap(listed.split(separator: "\n").compactMap { $0.split(separator: ":").first.map(String.init) }.first { $0 != first }, listed)
+        XCTAssertTrue(listed.split(separator: "\n").first { $0.hasPrefix(second + ":") }?.contains("the user has it now") ?? false, listed)
+        let refused = server.text("browser_navigate", ["tab": second, "url": page.absoluteString])
+        XCTAssertTrue(refused.failed)
+        XCTAssertEqual(refused.text, BrowserWords.userHasIt(second))
+        // Given back, the agent drives it.
+        app.press(.id("browser-control"))
+        app.wait(for: .containing("is using this tab"))
+        XCTAssertFalse(server.text("browser_navigate", ["tab": second, "url": page.absoluteString]).failed)
+    }
+
+    /// BROWSER-32: Show As is a button of the page's bar, in sight, which
+    /// names the device in use; its list shows the page as another, one
+    /// after another, each time named on the bar and the page given its
+    /// screen's width, and as this Mac again.
+    func testShowAsOnTheBarShowsOneDeviceAfterAnother() throws {
+        let page = try makeSite()
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait(for: .id("browser-address"), timeout: 20)
+        app.write(page.absoluteString, into: .id("browser-address"), confirm: true)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
+        XCTAssertEqual(app.value(of: .id("browser-show-as")), "This Mac")
+        func width() -> CGFloat { app.frame(of: .id("browser-page"))?.width ?? 0 }
+        let whole = width()
+        for (name, wide) in [("iPhone SE", 375), ("iPad Mini", 768), ("Pixel 7", 412), ("iPhone 12 Pro", 390), ("iPhone SE", 375)] {
+            app.press(.id("browser-show-as"))
+            app.press(.id("show-as-\(name)"))
+            app.wait("the bar to name \(name), not \(app.value(of: .id("browser-show-as")) ?? "nothing")", timeout: 15) {
+                self.app.value(of: .id("browser-show-as")) == name
+            }
+            app.wait("the page as wide as \(name)'s screen, \(wide), not \(width())") { abs(width() - CGFloat(wide)) < 2 }
+        }
+        shot("shown-as")
+        app.press(.id("browser-show-as"))
+        // The one in use is marked.
+        XCTAssertEqual(app.first(.id("show-as-iPhone SE"))?.value, "shown")
+        app.press(.id("show-as-this-mac"))
+        app.wait("the bar to name this Mac") { self.app.value(of: .id("browser-show-as")) == "This Mac" }
+        app.wait("the page as wide as before, \(whole), not \(width())") { abs(width() - whole) < 2 }
+    }
+
     /// BROWSER-8: a server of the project that is not running is said so;
     /// a tab the agent did not open, the user's, it neither sees nor
-    /// reaches; the device size is pretended; and the switch in Settings
-    /// turns it all off.
+    /// reaches; the device size is pretended; and Settings has no switch
+    /// that takes the browser from the agents.
     func testWhatIsRefusedAndWhy() throws {
         let page = try makeSite()
         let (server, agent) = try startAgent()
@@ -325,7 +387,11 @@ final class BrowserUITests: MacUITestCase {
         app.wait("the page as wide as the phone, not \(app.frame(of: .id("browser-page"))?.width ?? 0)") {
             abs((self.app.frame(of: .id("browser-page"))?.width ?? 0) - 393) < 1.5
         }
-        app.wait("the agent's page part as wide as the phone") { abs((self.app.frame(of: .id("agent-browser"))?.width ?? 0) - 393) < 2 }
+        // Its part is no narrower than its bar needs, the owner's wish: the
+        // page is the phone's width in it, the bar's buttons whole.
+        app.wait("the agent's page part as wide as its bar needs, not \(self.app.frame(of: .id("agent-browser"))?.width ?? 0)") {
+            abs((self.app.frame(of: .id("agent-browser"))?.width ?? 0) - 460) < 2
+        }
         // An Android phone: its user agent with this Chromium's version,
         // its platform, and its client hints.
         XCTAssertFalse(server.text("browser_emulate", ["tab": tab, "device": "Pixel 9"]).failed)
@@ -348,11 +414,11 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertFalse(server.text("browser_emulate", ["tab": tab, "off": true]).failed)
         XCTAssertEqual(server.text("browser_evaluate", ["tab": tab, "script": "navigator.platform"]).text, "\"MacIntel\"")
 
+        // No switch turns the agents' browser off: Settings has none.
         app.press(.id("place-settings"))
         app.press(.id("settings-browser"))
-        app.press(.id("agents-use-browser"))
-        XCTAssertEqual(server.text("browser_snapshot", ["tab": tab]).text, BrowserWords.turnedOff)
-        app.press(.id("agents-use-browser"))
+        app.wait(for: .id("profile-new"))
+        XCTAssertFalse(app.exists(.id("agents-use-browser")), "the switch is still in Settings")
         XCTAssertFalse(server.text("browser_snapshot", ["tab": tab]).failed)
         app.press(.id("place-sessions"))
         app.wait(for: .id("agent-browser"))
@@ -1148,6 +1214,59 @@ final class BrowserUITests: MacUITestCase {
                 self.app.value(of: .id("browser-page")) == title
             }
         }
+    }
+
+    /// BROWSER-30: the user's pages are one Browser tab of the strip, as a
+    /// window of Chrome holds its tabs: a row of them inside, a button for
+    /// one more, each shown when picked; a page closed shows the one beside
+    /// it, and closing the tab, of several pages, is asked first.
+    func testTheUsersPagesAreOneBrowserTab() throws {
+        func page(_ name: String) throws -> URL {
+            let file = root.appendingPathComponent("\(name).html")
+            try "<!doctype html><title>\(name)</title><body>\(name)</body>".write(to: file, atomically: true, encoding: .utf8)
+            return file
+        }
+        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("tab-b") } }
+        func load(_ name: String) throws {
+            app.wait(for: .id("browser-address"), timeout: 20)
+            app.write(try page(name).absoluteString, into: .id("browser-address"), confirm: true)
+            app.wait("\(name) shown") { self.app.value(of: .id("browser-page")) == name }
+        }
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait("the first page") { pages().count == 1 }
+        try load("One")
+        XCTAssertEqual(app.first(.id("strip-browser"))?.label, "Browser")
+        // One more, from the button in the tab.
+        app.press(.id("browser-new-page"))
+        app.wait("a second page") { pages().count == 2 }
+        try load("Two")
+        app.press(.id("browser-new-page"))
+        app.wait("a third page") { pages().count == 3 }
+        try load("Three")
+        // Still one tab of the strip, which says how many it holds.
+        XCTAssertEqual(app.nodes().filter { $0.identifier == "strip-browser" }.count, 1)
+        XCTAssertEqual(app.first(.id("strip-browser"))?.label, "Browser, 3 pages")
+        let all = pages()
+        app.press(.id(all[0]))
+        app.wait("the first page shown again") { self.app.value(of: .id("browser-page")) == "One" }
+        // Closed, the page beside it is shown.
+        app.perform("Close Tab", on: .id(all[0]))
+        app.wait("two pages left") { pages().count == 2 }
+        app.wait("the page beside it shown") { self.app.value(of: .id("browser-page")) == "Two" }
+        shot("browser-tab")
+        // The tab closed with several pages: asked first.
+        app.perform("Close Browser", on: .id("strip-browser"))
+        app.wait(for: .text("Close 2 pages?"))
+        app.press(.button("Cancel"))
+        XCTAssertEqual(pages().count, 2)
+        app.perform("Close Browser", on: .id("strip-browser"))
+        app.press(.button("Close 2 Pages"))
+        app.wait("the Browser tab gone") { pages().isEmpty && !self.app.exists(.id("strip-browser")) }
+        // With one page, it closes without a question.
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait("a page again") { pages().count == 1 }
+        app.perform("Close Browser", on: .id("strip-browser"))
+        app.wait("gone again") { pages().isEmpty && !self.app.exists(.id("strip-browser")) }
     }
 
     /// BROWSER-9: the tabs are not kept: the app opens again with none.

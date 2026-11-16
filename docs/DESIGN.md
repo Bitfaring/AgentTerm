@@ -909,7 +909,10 @@ signs it with a profile of its own from `match`.
 AgentTerm's MCP server is `agenttermd mcp` (`AgentShellsMCP`): JSON-RPC, one
 message to a line, on standard input and output. Its shells' tools are
 named alike, as the browser's are: `shell_open`, `shell_run`, `shell_list`,
-`shell_read`, `shell_send`, `shell_wait` and `shell_close`. Each says in
+`shell_read`, `shell_send`, `shell_wait`, `shell_stop` and `shell_close`.
+`shell_stop` types Control C in the shell and waits, five seconds unless
+told, for what runs to end: one call for what an agent does when the user
+says stop, rather than `shell_send` with a key to look up. Each says in
 its annotations whether it only looks (`readOnlyHint`: `shell_list`,
 `shell_read`, `shell_wait`, and the browser's that only look) and whether
 it ends something (`destructiveHint`: `shell_close`, `browser_close`).
@@ -1396,6 +1399,15 @@ part closed, the shell and page in front) is an `AgentArea`, by the agent's
 tab id, in `agentAreas`; which part has the keyboard is `agentAreaFocus`.
 Picking a companion brings its agent's area, with it in front and its part
 shown. When the agent's session ends, its shells are tabs again.
+
+**The user's pages.** The pages no agent has beside it are, for each
+project, one tab of its pane's strip: the first of them stands for all in
+the pane's layout (`stripTab(of:)`), the others are in no pane, and the
+pane shows `UserBrowserView`, a row of the pages over the one shown
+(`browserShown`, by project). The tab in front is still the page itself
+(`browserInFront`), so what acts on the page in front does not change;
+what acts on a strip (the number shortcuts, pinning, moving) takes
+`frontStripTab`.
 
 ## A part that stopped
 

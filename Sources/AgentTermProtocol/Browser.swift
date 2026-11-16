@@ -444,8 +444,6 @@ public enum BrowserWords {
     /// No app shows the browser of the Mac whose agent asks.
     public static let noApp =
         "The browser runs in the AgentTerm app on this Mac, and that app is not connected to this Mac's host: it is closed, or it shows another Mac. Ask the user to open it on this Mac."
-    public static let turnedOff =
-        "The user turned off “Agents can use the browser” in AgentTerm's Settings."
     public static let notInBuild = "This build of AgentTerm has no browser."
     /// The name a private tab's profile goes by.
     public static let privateProfile = "Private"
