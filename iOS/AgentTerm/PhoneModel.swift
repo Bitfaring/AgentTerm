@@ -151,10 +151,22 @@ final class PhoneModel: ObservableObject {
         }
     }
 
-    /// Opens a tab of the user's on the Mac, in a project: `done` gets its
-    /// id, or nil when it could not be opened, and why.
-    func openPage(in project: String, url: String? = nil, _ done: @escaping (String?, String?) -> Void) {
-        askBrowser(.newTab(project: project, url: url)) { result in
+    /// The Mac's browser profiles, the default first: with several, a page
+    /// of the user's is opened in the one picked (#76).
+    @Published private(set) var browserProfiles: [BrowserProfileInfo] = []
+
+    func loadBrowserProfiles() {
+        guard status == .connected else { return }
+        askBrowser(.profiles) { [weak self] result in
+            if case .profiles(let list) = result { self?.browserProfiles = list }
+        }
+    }
+
+    /// Opens a tab of the user's on the Mac, in a project, in a profile
+    /// (its id), the default, or private: `done` gets its id, or nil when
+    /// it could not be opened, and why.
+    func openPage(in project: String, url: String? = nil, profile: String? = nil, isPrivate: Bool = false, _ done: @escaping (String?, String?) -> Void) {
+        askBrowser(.newTab(project: project, url: url, profile: profile, private: isPrivate)) { result in
             switch result {
             case .opened(let tab): done(tab, nil)
             case .refused(let why): done(nil, why)

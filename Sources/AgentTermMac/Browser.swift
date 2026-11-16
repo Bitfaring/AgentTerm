@@ -5,9 +5,9 @@ import CAgentTermCEF
 import CryptoKit
 import SwiftUI
 
-/// The browser's tabs (#76). Each is Chromium's, in the profile of its
-/// project; the agents drive the tabs they opened and those the user shares
-/// with them, through the host, and see what the user sees.
+/// The browser's tabs (#76). Each is Chromium's, in a profile the user
+/// keeps, or in a private one in memory; an agent drives the tabs it opened,
+/// through the host, and sees what the user sees.
 @MainActor
 final class BrowserModel: ObservableObject {
     @Published private(set) var tabs: [BrowserTab] = []
@@ -38,13 +38,16 @@ final class BrowserModel: ObservableObject {
     func close(_ tab: BrowserTab) {
         tab.shutDown()
         tabs.removeAll { $0 === tab }
+        // The last tab of a private profile: what it kept goes.
+        if BrowserProfiles.isPrivate(tab.profile), !tabs.contains(where: { $0.profile == tab.profile }) {
+            Chromium.shared.forgetProfile(tab.profile)
+        }
     }
 
-    /// Closes every tab without forgetting them: another Mac is on show,
-    /// and they come back with this one.
+    /// Closes every tab: another Mac is on show.
     func closeAll() {
-        tabs.forEach { $0.shutDown() }
-        tabs = []
+        let closing = tabs
+        closing.forEach { close($0) }
     }
 
     /// Something of a tab changed that other devices show.
@@ -168,7 +171,9 @@ final class BrowserTab: ObservableObject, Identifiable {
     var info: BrowserTabInfo {
         BrowserTabInfo(
             id: id, title: title, url: url, project: project, openedBy: owner, loading: loading, userHasIt: userHasIt,
-            emulating: emulating?.name, profile: model?.profiles?.profile(profile)?.name ?? "")
+            emulating: emulating?.name,
+            profile: BrowserProfiles.isPrivate(profile) ? BrowserWords.privateProfile : model?.profiles?.profile(profile)?.name ?? "",
+            isPrivate: BrowserProfiles.isPrivate(profile))
     }
 
     /// Whether an agent's session sees it and may drive it: only the one
@@ -207,10 +212,13 @@ final class BrowserTab: ObservableObject, Identifiable {
         }
         starting = true
         problem = nil
-        model?.profiles?.markInUse(profile)
+        let isPrivate = BrowserProfiles.isPrivate(profile)
+        if !isPrivate { model?.profiles?.markInUse(profile) }
         // In the window, so that Chromium draws it, until a pane shows it.
         BrowserParking.park(container)
-        Chromium.shared.create(in: container, url: url.isEmpty ? "about:blank" : url, profile: BrowserProfiles.folder(for: profile)) { [weak self] browser in
+        Chromium.shared.create(
+            in: container, url: url.isEmpty ? "about:blank" : url, key: profile, folder: isPrivate ? nil : BrowserProfiles.folder(for: profile)
+        ) { [weak self] browser in
             guard let self else { return }
             self.starting = false
             guard browser != 0 else {

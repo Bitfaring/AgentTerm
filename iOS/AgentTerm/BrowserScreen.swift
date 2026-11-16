@@ -52,15 +52,21 @@ struct BrowserTabRow: View {
     var nested = false
 
     private var owner: String {
-        guard let agent = tab.openedBy else { return "Yours" }
-        let name = model.sessions.first { $0.id == agent }?.displayName ?? "An agent"
-        if nested { return tab.userHasIt ? "You have it" : "Its agent's" }
-        return tab.userHasIt ? "\(name)'s · you have it" : "\(name)'s"
+        let whose: String
+        if let agent = tab.openedBy {
+            let name = model.sessions.first { $0.id == agent }?.displayName ?? "An agent"
+            if nested { whose = tab.userHasIt ? "You have it" : "Its agent's" } else { whose = tab.userHasIt ? "\(name)'s · you have it" : "\(name)'s" }
+        } else {
+            whose = "Yours"
+        }
+        // Which profile, when the user keeps several, or private.
+        let profile = tab.isPrivate || model.browserProfiles.count > 1 ? " · \(tab.profile)" : ""
+        return whose + profile
     }
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: tab.loading ? "arrow.triangle.2.circlepath" : "globe")
+            Image(systemName: tab.loading ? "arrow.triangle.2.circlepath" : tab.isPrivate ? "eye.slash" : "globe")
                 .foregroundStyle(tab.openedBy != nil ? Color.accentColor : .secondary)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {

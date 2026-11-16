@@ -24,12 +24,16 @@ public struct BrowserTabInfo: Codable, Equatable, Hashable, Identifiable, Sendab
     public var emulating: String?
     /// The name of the profile it uses: its sign-ins and cookies.
     public var profile: String
+    /// A private tab: a profile of its own in memory, which keeps nothing
+    /// and is gone with the last of its tabs.
+    public var isPrivate: Bool
 
     public init(
         id: String, title: String, url: String, project: String, openedBy: SessionID? = nil, loading: Bool = false,
-        userHasIt: Bool = false, emulating: String? = nil, profile: String = ""
+        userHasIt: Bool = false, emulating: String? = nil, profile: String = "", isPrivate: Bool = false
     ) {
         self.profile = profile
+        self.isPrivate = isPrivate
         self.id = id
         self.title = title
         self.url = url
@@ -45,6 +49,21 @@ public struct BrowserTabInfo: Codable, Equatable, Hashable, Identifiable, Sendab
     public func reachable(by agent: SessionID) -> Bool { openedBy == agent }
 
     public var displayTitle: String { title.isEmpty ? (url.isEmpty ? "New Tab" : url) : title }
+}
+
+/// A profile of the browser, as the user named it in Settings > Browser:
+/// its own sign-ins, cookies, storage and cache.
+public struct BrowserProfileInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    /// The one the user's tabs open in.
+    public var isDefault: Bool
+
+    public init(id: String, name: String, isDefault: Bool) {
+        self.id = id
+        self.name = name
+        self.isDefault = isDefault
+    }
 }
 
 /// A phone, a tablet or a size of window a page can be shown as, through
@@ -307,11 +326,15 @@ public struct BrowserDevice: Codable, Equatable, Hashable, Sendable {
 /// what the iPhone or the user asks of a tab. Tabs are named by their id;
 /// elements by the `ref` the last snapshot gave them.
 public enum BrowserRequest: Codable, Equatable, Sendable {
-    /// Opens a tab of the agent's own, in its project's profile, at `url`
-    /// or empty, beside the agent where the user sees it.
-    case open(url: String?)
+    /// Opens a tab of the agent's own, at `url` or empty, beside the agent
+    /// where the user sees it: in the profile named, or the one its tabs
+    /// use, or the only one there is; or private, in a profile of its own
+    /// in memory.
+    case open(url: String?, profile: String?, private: Bool)
     /// The tabs the agent may drive.
     case tabs
+    /// The profiles there are.
+    case profiles
     case navigate(tab: String, url: String)
     /// Back (-1) or forward (+1) in the tab's history, or reload (0).
     case history(tab: String, step: Int)
@@ -354,16 +377,17 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     case tap(tab: String, x: Double, y: Double)
     /// Text typed into what has the keyboard in the page.
     case text(tab: String, text: String)
-    /// A device opens a tab of the user's in a project, at `url` or empty;
-    /// the Mac does not bring it to the front.
-    case newTab(project: String, url: String?)
+    /// A device opens a tab of the user's in a project, at `url` or empty,
+    /// in a profile (its id), the default, or private; the Mac does not
+    /// bring it to the front.
+    case newTab(project: String, url: String?, profile: String?, private: Bool)
     /// Stops loading the page.
     case stop(tab: String)
 
     /// The tab it is about, when it is about one.
     public var tab: String? {
         switch self {
-        case .open, .tabs, .newTab: return nil
+        case .open, .tabs, .newTab, .profiles: return nil
         case .navigate(let tab, _), .history(let tab, _), .snapshot(let tab, _), .screenshot(let tab, _, _), .click(let tab, _, _), .hover(let tab, _),
             .type(let tab, _, _, _, _), .select(let tab, _, _), .press(let tab, _), .scroll(let tab, _, _, _), .wait(let tab, _, _, _),
             .evaluate(let tab, _), .console(let tab, _), .network(let tab, _), .emulate(let tab, _), .close(let tab), .picture(let tab),
@@ -386,7 +410,8 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     /// acting on its page; showing it as a device, or closing it, does not.
     public var isTheDevices: Bool {
         switch self {
-        case .picture, .takeOver, .giveBack, .watch, .tap, .text, .press, .scroll, .history, .navigate, .stop, .newTab, .emulate, .close: return true
+        case .picture, .takeOver, .giveBack, .watch, .tap, .text, .press, .scroll, .history, .navigate, .stop, .newTab, .emulate, .close, .profiles:
+            return true
         default: return false
         }
     }
@@ -406,6 +431,8 @@ public enum BrowserResult: Codable, Equatable, Sendable {
     case touched(field: Bool)
     /// A device's new tab.
     case opened(tab: String)
+    /// The profiles there are, for a device.
+    case profiles([BrowserProfileInfo])
 }
 
 /// What the apps and the agents are told about the browser, in the same
@@ -417,6 +444,21 @@ public enum BrowserWords {
     public static let turnedOff =
         "The user turned off “Agents can use the browser” in AgentTerm's Settings."
     public static let notInBuild = "This build of AgentTerm has no browser."
+    /// The name a private tab's profile goes by.
+    public static let privateProfile = "Private"
+    /// The profiles, for an agent: `names` with the default first.
+    public static func profiles(_ names: [String], uses: String?) -> String {
+        "The browser's profiles, each with its own sign-ins and cookies: \(names.joined(separator: ", ")) (the first is the user's default)."
+            + (uses.map { " Your tabs use \($0)." } ?? "")
+            + " Or private: true, for a private tab of your own that keeps nothing and has none of the user's sign-ins."
+    }
+    /// An agent's first tab, with several profiles and none named.
+    public static func whichProfile(_ names: [String]) -> String {
+        "There are several browser profiles: \(names.joined(separator: ", ")) (the first is the user's default). Ask the user which one to use, then call browser_open again with profile set to its name; or open a private tab with private: true."
+    }
+    public static func noProfile(_ name: String, _ names: [String]) -> String {
+        "There is no browser profile called “\(name)”. The profiles: \(names.joined(separator: ", "))."
+    }
     public static func notYours(_ tab: String) -> String {
         "There is no tab \(tab) of yours: you see and use only the tabs you opened. Open one with browser_open, or list yours with browser_tabs."
     }

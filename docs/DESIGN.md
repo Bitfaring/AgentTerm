@@ -1105,10 +1105,17 @@ browser is made in it once `on_request_context_initialized` says it is
 open, and `atc_create` answers with `ATC_EVENT_CREATED` and the token it
 was given. The profiles, their names and the default are the app's
 preferences. Data Chromium has open is wiped at the next start, before
-Chromium opens anything (`browserProfilesToWipe`). An agent's profile is
-asked once, at its first `browser_open` (`ProfileQuestion`), when there
-is more than one profile and the host says someone is at the Mac;
-otherwise, and after 45 seconds with no answer, the default.
+Chromium opens anything (`browserProfilesToWipe`). A request context is
+named by a key (`atc_create`'s `key`), the profile's id, so that tabs of
+one profile share it. An agent's profile is the one it names, then the
+one it was given (`BrowserModel.agentProfiles`), then the only one; with
+several and none named, `browser_open` is refused at once with their
+names (`BrowserWords.whichProfile`), for the agent to ask the user in its
+conversation. A private tab's profile is `private-user` or
+`private-agent-<session>`, a request context with no `cache_path`, which
+Chromium keeps in memory; `atc_forget_profile` lets it go when the last
+of its tabs closes, and the next private tab gets a new one. A popup is
+opened in its opener's profile.
 
 **Tabs.** A `BrowserTab` holds Chromium's browser for one page, the view
 it draws in (`BrowserContainerView`, moved to whichever pane shows it),
@@ -1123,8 +1130,9 @@ An agent's tab whose agent has ended is the user's.
 **The devices.** A device asks with `browserAsk`, for what the user does
 (`BrowserRequest.isTheDevices`: a picture, take over and give back,
 `watch`, `tap`, `text`, `press`, `scroll`, `history`, `navigate`, `stop`,
-`emulate`, `close`, and `newTab`, a tab of the user's in a project, which
-the Mac does not bring to the front). A `tap` is answered with whether a
+`emulate`, `close`, `profiles`, and `newTab`, a tab of the user's in a
+project, in a profile or private, which the Mac does not bring to the
+front). A `tap` is answered with whether a
 field of the page took the keyboard (`touched`, from the element that has
 it, through shadow roots and frames of the same site; a frame of another
 site counts as a field), and the device's keyboard comes up for it; a

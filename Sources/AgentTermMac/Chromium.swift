@@ -134,14 +134,21 @@ final class Chromium {
     /// Makes a browser inside `parent`, in the profile kept in `profile`,
     /// and hands its id to `done` (0 when it could not be made). `parent`
     /// is kept until then.
-    func create(in parent: NSView, url: String, profile: URL, _ done: @escaping (Int32) -> Void) {
+    /// Makes a browser in the profile named `key`, kept in `folder`, or in
+    /// memory only with no folder: a private one.
+    func create(in parent: NSView, url: String, key: String, folder: URL?, _ done: @escaping (Int32) -> Void) {
         onceReady { [self] in
             let token = nextToken
             nextToken += 1
             making[token] = done
-            try? FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
-            atc_create(Unmanaged.passUnretained(parent).toOpaque(), url, profile.path, token)
+            if let folder { try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
+            atc_create(Unmanaged.passUnretained(parent).toOpaque(), url, key, folder?.path, token)
         }
+    }
+
+    /// A private profile's last tab closed: what it kept goes with it.
+    func forgetProfile(_ key: String) {
+        onceReady { atc_forget_profile(key) }
     }
 
     private func created(token: Int32, browser: Int32) {

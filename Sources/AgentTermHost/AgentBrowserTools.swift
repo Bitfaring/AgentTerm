@@ -9,9 +9,13 @@ extension AgentShellsMCP {
     static let browserTools: [[String: Any]] = [
         browserTool(
             "browser_open",
-            "Opens a tab of your own in AgentTerm's browser (Chromium), beside you where the user sees it, at a URL or empty. It uses the profile the user picks for you, and has its sign-ins and cookies. Returns the tab's id.",
-            ["url": string("The address to load")], required: []),
+            "Opens a tab of your own in AgentTerm's browser (Chromium), beside you where the user sees it, at a URL or empty, and returns its id. It uses a profile, with that profile's sign-ins and cookies: the one named, the one your tabs already use, or the only one there is. With several profiles and none named yet, it says which there are: ask the user which one to use. A private tab has a profile of its own in memory, shared by your private tabs only, with none of the user's sign-ins, and is gone with your last private tab.",
+            [
+                "url": string("The address to load"), "profile": string("A profile by its name, from browser_profiles"),
+                "private": boolean("A private tab, which keeps nothing and needs no profile"),
+            ], required: []),
         browserTool("browser_tabs", "The browser tabs you opened that are still open. The user's tabs, and another agent's, you do not see.", [:], required: []),
+        browserTool("browser_profiles", "The browser's profiles by name, the user's default first, and the one your tabs use.", [:], required: []),
         browserTool("browser_navigate", "Loads an address in a tab, and says where it ended up.", ["tab": tabArgument, "url": string("The address")], required: ["tab", "url"]),
         browserTool("browser_back", "Goes back in a tab's history.", ["tab": tabArgument], required: ["tab"]),
         browserTool("browser_forward", "Goes forward in a tab's history.", ["tab": tabArgument], required: ["tab"]),
@@ -75,7 +79,9 @@ extension AgentShellsMCP {
 
     /// What only looks at a tab: said to the agents, which may then ask
     /// less of the user before using it.
-    private static let looking: Set<String> = ["browser_tabs", "browser_snapshot", "browser_screenshot", "browser_wait", "browser_console", "browser_network"]
+    private static let looking: Set<String> = [
+        "browser_tabs", "browser_profiles", "browser_snapshot", "browser_screenshot", "browser_wait", "browser_console", "browser_network",
+    ]
 
     private static func browserTool(_ name: String, _ description: String, _ properties: [String: Any], required: [String]) -> [String: Any] {
         let readOnly = looking.contains(name)
@@ -99,15 +105,16 @@ extension AgentShellsMCP {
         // A tab's id is a string; a number is taken too.
         let tab = text("tab") ?? (arguments["tab"] as? NSNumber).map { $0.stringValue }
         func needs(_ key: String) -> BrowserToolError { BrowserToolError(text: "Give \(key == "tab" ? "the tab's id" : "`\(key)`") as `\(key)`.") }
-        if name != "browser_open", name != "browser_tabs", tab == nil { return .failure(needs("tab")) }
+        if !["browser_open", "browser_tabs", "browser_profiles"].contains(name), tab == nil { return .failure(needs("tab")) }
         let id = tab ?? ""
         func withRef(_ make: (String) -> BrowserRequest) -> Result<BrowserRequest, BrowserToolError> {
             guard let ref = text("ref") else { return .failure(needs("ref")) }
             return .success(make(ref))
         }
         switch name {
-        case "browser_open": return .success(.open(url: text("url")))
+        case "browser_open": return .success(.open(url: text("url"), profile: text("profile"), private: flag("private")))
         case "browser_tabs": return .success(.tabs)
+        case "browser_profiles": return .success(.profiles)
         case "browser_navigate":
             guard let url = text("url") else { return .failure(needs("url")) }
             return .success(.navigate(tab: id, url: url))
@@ -197,6 +204,9 @@ extension AgentShellsMCP {
             return ([["type": "text", "text": field ? "Touched a field." : "Touched."]], false)
         case .opened(let tab):
             return ([["type": "text", "text": "Opened tab \(tab)."]], false)
+        case .profiles(let profiles):
+            let names = profiles.sorted { $0.isDefault && !$1.isDefault }.map(\.name)
+            return ([["type": "text", "text": BrowserWords.profiles(names, uses: nil)]], false)
         }
     }
 }

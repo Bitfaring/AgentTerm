@@ -83,7 +83,13 @@ void atc_shutdown(void);
 /// under the root), loading `url`. A profile opens in the background the
 /// first time: the answer is ATC_EVENT_CREATED, sent to browser 0, with the
 /// new browser's id in `b` (0 when it could not be made) and `token` in `a`.
-void atc_create(void *parent, const char *url, const char *cache_path, int token);
+/// `key` names the profile: browsers of one key share it. With no
+/// `cache_path` it is kept in memory only, a private one, until
+/// `atc_forget_profile`.
+void atc_create(void *parent, const char *url, const char *key, const char *cache_path, int token);
+/// Lets a profile in memory go: once its browsers are closed, what it kept
+/// is gone. A profile with a folder is kept for as long as the app runs.
+void atc_forget_profile(const char *key);
 /// The browser's own view, to be moved to another parent; NULL once closed.
 void *atc_view(int browser);
 void atc_close(int browser);

@@ -3,8 +3,9 @@ import SwiftUI
 
 /// A profile of the browser (#76): its own cookies, sign-ins, storage and
 /// cache, in a folder of its own. The user names and keeps them in
-/// Settings > Browser; one is the default. An agent is asked for one when it
-/// opens its first tab, and keeps it for the tabs it opens after.
+/// Settings > Browser; one is the default. With several, an agent names one
+/// at its first tab, having asked the user, and keeps it for the tabs it
+/// opens after.
 struct BrowserProfile: Codable, Equatable, Hashable, Identifiable {
     var id: String
     var name: String
@@ -53,6 +54,25 @@ final class BrowserProfiles: ObservableObject {
     }
 
     func markInUse(_ id: String) { inUse.insert(id) }
+
+    // MARK: Private
+
+    /// A private profile's id: one for the user's private tabs, one for
+    /// each agent's, so that no agent sees another's. Kept in memory only,
+    /// with no folder, and gone with the last of its tabs.
+    static func privateID(for agent: SessionID?) -> String { agent.map { "private-agent-\($0)" } ?? "private-user" }
+    static func isPrivate(_ id: String) -> Bool { id.hasPrefix("private-") }
+
+    /// The profiles, for an agent or a device: the default first.
+    var infos: [BrowserProfileInfo] {
+        ([defaultProfile] + list.filter { $0.id != defaultID }).map { BrowserProfileInfo(id: $0.id, name: $0.name, isDefault: $0.id == defaultID) }
+    }
+
+    /// A profile by its name, as an agent gives it, or by its id.
+    func profile(named name: String) -> BrowserProfile? {
+        let wanted = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return list.first { $0.name.lowercased() == wanted } ?? list.first { $0.id == name }
+    }
 
     @discardableResult
     func add(named name: String) -> BrowserProfile {
@@ -114,45 +134,6 @@ final class BrowserProfiles: ObservableObject {
     }
 }
 
-/// Which profile an agent's first tab opens in (#76): asked of the user,
-/// the default picked already.
-struct ProfileQuestion: Identifiable {
-    let id = UUID()
-    let agent: SessionInfo
-}
-
-struct ProfileQuestionSheet: View {
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var profiles: BrowserProfiles
-    let question: ProfileQuestion
-    @State private var chosen = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Which browser profile should \(question.agent.displayName) use?").font(.headline)
-            Text("It opens a page in the browser. Its tabs use the profile's sign-ins and cookies, and the tabs it opens after use it too.")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Picker("Profile", selection: $chosen) {
-                ForEach(profiles.list) { profile in
-                    Text(profile.id == profiles.defaultID ? "\(profile.name) (default)" : profile.name).tag(profile.id)
-                }
-            }
-            .pickerStyle(.radioGroup)
-            .accessibilityIdentifier("profile-choice")
-            HStack {
-                Spacer()
-                Button("Use Profile") { model.answerProfileQuestion(question, with: chosen) }
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("profile-use")
-            }
-        }
-        .padding(20)
-        .frame(width: 440)
-        .onAppear { chosen = profiles.defaultID }
-        .interactiveDismissDisabled()
-    }
-}
-
 /// Settings > Browser (#76): the profiles, the default one, and whether the
 /// agents may use the browser.
 struct BrowserSettingsView: View {
@@ -183,7 +164,7 @@ struct BrowserSettingsView: View {
                             .accessibilityIdentifier("profile-new")
                     }
                     Text(
-                        "Each keeps its own sign-ins, cookies, storage and cache. Your tabs, and agents nobody is at the Mac to ask, use the default; an agent is asked which one when it opens its first tab."
+                        "Each keeps its own sign-ins, cookies, storage and cache. With several, the Browser button asks which one a tab of yours opens in, and an agent asks you in its conversation before its first tab; with one, it is used. A private tab keeps nothing and has none of their sign-ins."
                     )
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     ForEach(profiles.list) { profile in

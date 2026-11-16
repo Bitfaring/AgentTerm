@@ -83,13 +83,23 @@ struct BrowserPaneView: View {
                     tab.focus()
                 }
                 .accessibilityIdentifier("browser-address")
-            // Which profile's sign-ins it uses.
-            Text(model.profiles.profile(tab.profile)?.name ?? "")
+            // Which profile's sign-ins it uses, or none: a private tab.
+            let isPrivate = BrowserProfiles.isPrivate(tab.profile)
+            let profileName = isPrivate ? BrowserWords.privateProfile : model.profiles.profile(tab.profile)?.name ?? ""
+            Label(profileName, systemImage: isPrivate ? "eye.slash" : "person.crop.circle")
+                .labelStyle(.titleAndIcon)
                 .font(.system(size: 10.5, weight: .medium))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Capsule().fill(Color.white.opacity(0.08)))
-                .help("Uses the profile “\(model.profiles.profile(tab.profile)?.name ?? "")”: its sign-ins, cookies and cache")
+                .background(Capsule().fill(isPrivate ? Color.purple.opacity(0.28) : Color.white.opacity(0.08)))
+                .help(
+                    isPrivate
+                        ? "A private tab: it keeps nothing, has none of the profiles' sign-ins, and what it has is gone with the last private tab"
+                        : "Uses the profile “\(profileName)”: its sign-ins, cookies and cache"
+                )
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(profileName)
+                .accessibilityValue(profileName)
                 .accessibilityIdentifier("browser-profile")
             if let device = tab.emulating {
                 Button {

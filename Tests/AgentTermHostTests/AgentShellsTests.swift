@@ -1126,9 +1126,13 @@ extension AgentShellsMCPTests {
             }, version: "test")
         let tools = (call(server, "tools/list")["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
         XCTAssertEqual(tools.count, AgentShellsMCP.tools.count + AgentShellsMCP.browserTools.count)
-        XCTAssertEqual(AgentShellsMCP.browserTools.count, 20)
+        // browser_profiles came on 2026-11-16, with browser_open's profile and private.
+        XCTAssertEqual(AgentShellsMCP.browserTools.count, 21)
         XCTAssertTrue(tools.contains { $0["name"] as? String == "browser_snapshot" })
         XCTAssertFalse(tool(server, "browser_open", ["url": "localhost:3000"]).failed)
+        XCTAssertFalse(tool(server, "browser_profiles").failed)
+        XCTAssertFalse(tool(server, "browser_open", ["profile": "Work"]).failed)
+        XCTAssertFalse(tool(server, "browser_open", ["private": true]).failed)
         XCTAssertFalse(tool(server, "browser_click", ["tab": "4", "ref": "e3"]).failed)
         XCTAssertFalse(tool(server, "browser_type", ["tab": 4, "ref": "e5", "text": "hi", "submit": true]).failed)
         XCTAssertFalse(tool(server, "browser_emulate", ["tab": "4", "device": "iphone 16"]).failed)
@@ -1140,7 +1144,9 @@ extension AgentShellsMCPTests {
         XCTAssertEqual(
             asked,
             [
-                .open(url: "localhost:3000"), .click(tab: "4", ref: "e3", double: false), .type(tab: "4", ref: "e5", text: "hi", submit: true, append: false),
+                .open(url: "localhost:3000", profile: nil, private: false), .profiles, .open(url: nil, profile: "Work", private: false),
+                .open(url: nil, profile: nil, private: true),
+                .click(tab: "4", ref: "e3", double: false), .type(tab: "4", ref: "e5", text: "hi", submit: true, append: false),
                 .emulate(tab: "4", device: BrowserDevice.preset(named: "iPhone 16")), .history(tab: "4", step: -1),
             ])
         let picture = call(server, "tools/call", ["name": "browser_screenshot", "arguments": ["tab": "4"]])["result"] as? [String: Any] ?? [:]

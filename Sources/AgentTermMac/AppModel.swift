@@ -259,10 +259,6 @@ final class AppModel: ObservableObject {
     func setShellSettings(_ settings: ShellSettings) {
         connection?.send(.setShellSettings(settings))
     }
-    /// Which profile an agent's first tab opens in, while it is asked.
-    @Published var profileQuestion: ProfileQuestion?
-    /// What waits for the answer, by agent's session.
-    var profileWaiters: [SessionID: [(String) -> Void]] = [:]
     var browserTabsPending = false
     /// How wide each tab's page is, by tab id, while it is shown as a
     /// device: an agent's area gives its page just that room.
@@ -908,11 +904,6 @@ final class AppModel: ObservableObject {
 
     /// A session's terminal, shown in whichever pane holds it (#69).
     func controller(for id: SessionID) -> TerminalController? { controllers[id] }
-
-    /// Whether someone is at the Mac, as its host says (#22): the browser
-    /// asks them which profile an agent uses, and uses the default when
-    /// nobody is (#76).
-    var hostSaysSomeoneIsHere: Bool { hostSaysMacInUse }
 
     /// The diff's tab stays where it is, out of the front.
     func showingNoDiff() { diffInFront = false }

@@ -26,7 +26,9 @@ extension AppModel {
         browsers.popup = { [weak self] opener, address in
             guard let self else { return }
             let owner = opener.owner.flatMap { id in self.sessions.first { $0.id == id } }
-            let tab = self.browsers.open(url: address, project: opener.project, owner: owner)
+            // In its opener's profile: a window that signs in, the sign-in of
+            // that profile, and a private tab's, its private one.
+            let tab = self.browsers.open(url: address, project: opener.project, owner: owner, profile: opener.profile)
             opener.devtools.happened.append("The page opened \(address) in a new tab, \(tab.id).")
             // The user's tab opens in front, as a browser's does; an
             // agent's goes beside the agent without taking the keyboard.
@@ -71,14 +73,15 @@ extension AppModel {
 
     // MARK: The user's
 
-    /// A new tab of the user's, in the project on show, in front.
-    func openBrowserTab(url: String? = nil) {
+    /// A new tab of the user's, in the project on show, in front: in the
+    /// default profile, the one picked, or private.
+    func openBrowserTab(url: String? = nil, profile: String? = nil, isPrivate: Bool = false) {
         guard !isRemote else {
             notice = "The browser is the Mac's own: open it in AgentTerm on \(remote?.name ?? "that Mac")."
             return
         }
         show(.sessions, toggling: false)
-        let tab = browsers.open(url: url, project: shownProject, owner: nil)
+        let tab = browsers.open(url: url, project: shownProject, owner: nil, profile: isPrivate ? BrowserProfiles.privateID(for: nil) : profile)
         selectTab(id: tab.tabID)
         if url == nil { browserAddressRequest += 1 }
     }
@@ -168,39 +171,29 @@ extension AppModel {
 
     // MARK: Profiles
 
-    /// The profile an agent's tab opens in: the one it has, or the one the
-    /// user picks for it when it opens its first tab, the default picked
-    /// already. With nobody at the Mac to ask, or a single profile, the
-    /// default; a question nobody answers gives way to it after a while.
-    private func profile(for agent: SessionInfo) async -> String {
-        if let had = browsers.tabs.first(where: { $0.owner == agent.id })?.profile, profiles.profile(had) != nil { return had }
-        if let chosen = browsers.agentProfiles[agent.id], profiles.profile(chosen) != nil { return chosen }
-        guard profiles.list.count > 1, hostSaysSomeoneIsHere else {
-            browsers.agentProfiles[agent.id] = profiles.defaultID
-            return profiles.defaultID
-        }
-        let chosen = await withCheckedContinuation { continuation in
-            profileWaiters[agent.id, default: []].append { continuation.resume(returning: $0) }
-            if profileQuestion?.agent.id != agent.id {
-                profileQuestion = ProfileQuestion(agent: agent)
-                NSApp.requestUserAttention(.informationalRequest)
-                // The agent waits on it: not for longer than its call may.
-                let asked = profileQuestion?.id
-                DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
-                    guard let self, let question = self.profileQuestion, question.id == asked else { return }
-                    self.answerProfileQuestion(question, with: self.profiles.defaultID)
-                }
-            }
-        }
-        return chosen
+    /// Why an agent's tab was not opened in a profile, in words for it.
+    struct ProfileRefusal: Error {
+        let text: String
     }
 
-    func answerProfileQuestion(_ question: ProfileQuestion, with profile: String) {
-        let chosen = profiles.profile(profile)?.id ?? profiles.defaultID
-        browsers.agentProfiles[question.agent.id] = chosen
-        if profileQuestion?.id == question.id { profileQuestion = nil }
-        let waiting = profileWaiters.removeValue(forKey: question.agent.id) ?? []
-        waiting.forEach { $0(chosen) }
+    /// The profile an agent's tab opens in: private, in one of its own in
+    /// memory; the one it names; the one its tabs use; or the only one
+    /// there is. With several and none named yet, the agent is told which
+    /// there are, to ask the user in its conversation (#76).
+    private func profile(for agent: SessionInfo, named name: String?, isPrivate: Bool) -> Result<String, ProfileRefusal> {
+        if isPrivate { return .success(BrowserProfiles.privateID(for: agent.id)) }
+        let names = profiles.infos.map(\.name)
+        if let name {
+            guard let named = profiles.profile(named: name) else { return .failure(ProfileRefusal(text: BrowserWords.noProfile(name, names))) }
+            browsers.agentProfiles[agent.id] = named.id
+            return .success(named.id)
+        }
+        if let chosen = browsers.agentProfiles[agent.id], profiles.profile(chosen) != nil { return .success(chosen) }
+        guard profiles.list.count > 1 else {
+            browsers.agentProfiles[agent.id] = profiles.defaultID
+            return .success(profiles.defaultID)
+        }
+        return .failure(ProfileRefusal(text: BrowserWords.whichProfile(names)))
     }
 
     /// Deletes a profile, closing its tabs first.
@@ -268,9 +261,13 @@ extension AppModel {
             return .refused("This is not the session of an agent AgentTerm started, or that session has ended.")
         }
         switch request {
-        case .open(let url):
+        case .open(let url, let named, let isPrivate):
             let project = folders.first { WorktreePath.belongs(session.cwd, to: $0.path) }?.path ?? ""
-            let profile = await profile(for: session)
+            let profile: String
+            switch self.profile(for: session, named: named, isPrivate: isPrivate) {
+            case .success(let chosen): profile = chosen
+            case .failure(let why): return .refused(why.text)
+            }
             // Empty first, then loaded as browser_navigate does: made with
             // its address, its first document is the empty one, which has
             // loaded already, and the page would be said before it is there.
@@ -290,6 +287,9 @@ extension AppModel {
             return .text("Opened tab \(tab.id)" + (await whereNow(tab)) + " The user sees it beside you.")
         case .tabs:
             return .tabs(browsers.tabs.filter { $0.reachable(by: agent) }.map(\.info))
+        case .profiles:
+            let uses = browsers.agentProfiles[agent].flatMap { profiles.profile($0)?.name }
+            return .text(BrowserWords.profiles(profiles.infos.map(\.name), uses: uses))
         default:
             break
         }
@@ -433,7 +433,7 @@ extension AppModel {
             tab.emulating = device
             done(device.map { "Shows the page as \($0.name)" } ?? "Shows the page as itself")
             return .text(device.map { "Tab \(tab.id) is shown as \($0.name)" + ($0.width > 0 ? ", \($0.width) × \($0.height)" : "") + "." } ?? "Tab \(tab.id) is shown as itself again.")
-        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop:
+        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles:
             return .refused("That is not for this tab.")
         }
     }
@@ -453,10 +453,12 @@ extension AppModel {
             tab.deviceInput = Task { _ = await turn.value }
             return await turn.value
         }
-        if case .newTab(let project, let url) = request {
+        if case .profiles = request { return .profiles(profiles.infos) }
+        if case .newTab(let project, let url, let named, let isPrivate) = request {
             // The user's, as one opened on the Mac, but not brought to the
             // front there: they are on the device.
-            let tab = browsers.open(url: url, project: project, owner: nil)
+            let profile = isPrivate ? BrowserProfiles.privateID(for: nil) : named.flatMap { profiles.profile($0)?.id } ?? profiles.defaultID
+            let tab = browsers.open(url: url, project: project, owner: nil, profile: profile)
             guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
             return .opened(tab: tab.id)
         }

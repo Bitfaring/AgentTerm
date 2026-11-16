@@ -819,8 +819,8 @@ static void CEF_CALLBACK on_request_context_initialized(cef_request_context_hand
 
 static NSMutableArray<ATCProfile *> *g_profiles;
 
-static ATCProfile *atc_profile(const char *cache_path) {
-    NSString *key = cache_path ? [NSString stringWithUTF8String:cache_path] : @"";
+static ATCProfile *atc_profile(const char *name, const char *cache_path) {
+    NSString *key = name ? [NSString stringWithUTF8String:name] ?: @"" : @"";
     NSValue *known = g_contexts[key];
     if (known) return (__bridge ATCProfile *)known.pointerValue;
     if (!g_context_handler) {
@@ -830,14 +830,17 @@ static ATCProfile *atc_profile(const char *cache_path) {
     }
     ATCProfile *profile = [ATCProfile new];
     profile.waiting = [NSMutableArray new];
-    // Kept for as long as the app runs.
+    // Kept for as long as the app runs, or, in memory, until forgotten.
     [g_profiles addObject:profile];
     g_contexts[key] = [NSValue valueWithPointer:(__bridge void *)profile];
     cef_request_context_settings_t settings;
     memset(&settings, 0, sizeof(settings));
     settings.size = sizeof(settings);
-    atc_set(&settings.cache_path, cache_path);
-    settings.persist_session_cookies = 1;
+    // No folder: Chromium keeps it in memory, an "incognito" profile.
+    if (cache_path && cache_path[0]) {
+        atc_set(&settings.cache_path, cache_path);
+        settings.persist_session_cookies = 1;
+    }
     g_making_profile = profile;
     profile.context = p_cef_request_context_create_context(&settings, ATC_GIVE(g_context_handler));
     g_making_profile = nil;
@@ -885,11 +888,24 @@ static void atc_make(NSView *view, NSString *url, ATCProfile *profile, int token
     atc_created(token, identifier);
 }
 
-void atc_create(void *parent, const char *url, const char *cache_path, int token) {
+void atc_forget_profile(const char *name) {
+    if (!name || !g_contexts) return;
+    NSString *key = [NSString stringWithUTF8String:name];
+    NSValue *known = key ? g_contexts[key] : nil;
+    if (!known) return;
+    ATCProfile *profile = (__bridge ATCProfile *)known.pointerValue;
+    [g_contexts removeObjectForKey:key];
+    // Its browsers hold the context while they close; then it goes.
+    if (profile.context) profile.context->base.base.release(&profile.context->base.base);
+    profile.context = NULL;
+    [g_profiles removeObject:profile];
+}
+
+void atc_create(void *parent, const char *url, const char *key, const char *cache_path, int token) {
     if (!g_started || !parent) return atc_created(token, 0);
     NSView *view = (__bridge NSView *)parent;
     NSString *address = [NSString stringWithUTF8String:url ?: "about:blank"] ?: @"about:blank";
-    ATCProfile *profile = atc_profile(cache_path);
+    ATCProfile *profile = atc_profile(key, cache_path);
     if (!profile.context) return atc_created(token, 0);
     if (profile.open) {
         atc_make(view, address, profile, token);
@@ -1079,10 +1095,11 @@ int atc_start(const atc_paths *paths, atc_event_fn events, void *context, char *
 }
 int atc_started(void) { return 0; }
 void atc_shutdown(void) {}
-void atc_create(void *parent, const char *url, const char *cache_path, int token) {
+void atc_create(void *parent, const char *url, const char *key, const char *cache_path, int token) {
     // Never asked for: Chromium does not start in such a build.
-    (void)parent, (void)url, (void)cache_path, (void)token;
+    (void)parent, (void)url, (void)key, (void)cache_path, (void)token;
 }
+void atc_forget_profile(const char *key) { (void)key; }
 void *atc_view(int browser) { (void)browser; return NULL; }
 void atc_close(int browser) { (void)browser; }
 void atc_load(int browser, const char *url) { (void)browser, (void)url; }

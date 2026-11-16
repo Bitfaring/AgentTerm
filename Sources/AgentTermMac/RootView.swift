@@ -112,9 +112,6 @@ private struct WindowSheets: ViewModifier {
             .sheet(item: $model.pendingPick) { pick in
                 SendToAgentSheet(pick: pick)
             }
-            .sheet(item: $model.profileQuestion) { question in
-                ProfileQuestionSheet(question: question)
-            }
     }
 }
 
@@ -259,8 +256,7 @@ struct LaunchBar: View {
                 .contextMenu { WorktreeLaunchItem(agent: nil) }
             // A page, as a shell is started (#76): this Mac's browser only.
             if !model.isRemote {
-                LaunchButton(title: "Browser", id: "browser") { model.openBrowserTab() }
-                    .help("Open a browser tab, in the default profile")
+                BrowserLaunch()
             }
             SSHMenu()
         }
@@ -270,6 +266,56 @@ struct LaunchBar: View {
 
 /// The hosts of `~/.ssh/config`, each opening `ssh <host>` as a session.
 /// Not shown when the configuration names none.
+/// Opens a browser tab of the user's (#76): with one profile, in it; with
+/// several, a menu asks which, and a private tab is offered beside them.
+struct BrowserLaunch: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var profiles: BrowserProfiles
+    var large = false
+
+    var body: some View {
+        if profiles.list.count > 1 {
+            Menu {
+                ForEach(profiles.infos) { profile in
+                    Button(profile.isDefault ? "\(profile.name) (default)" : profile.name) { model.openBrowserTab(profile: profile.id) }
+                }
+                Divider()
+                Button("Private") { model.openBrowserTab(isPrivate: true) }
+            } label: {
+                HStack(spacing: large ? 8 : 6) {
+                    Image(systemName: Theme.symbol(for: "browser"))
+                        .font(.system(size: large ? 13 : 11, weight: .semibold))
+                        .foregroundStyle(Theme.accent(for: "browser"))
+                    Text("Browser")
+                        .font(.system(size: large ? 13 : 12, weight: .medium))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: large ? 9 : 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .padding(.horizontal, large ? 14 : 10)
+                .padding(.vertical, large ? 9 : 5)
+                .background(RoundedRectangle(cornerRadius: large ? 9 : 7, style: .continuous).fill(Theme.raised))
+                .overlay(RoundedRectangle(cornerRadius: large ? 9 : 7, style: .continuous).strokeBorder(Theme.hairline))
+                .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Open a browser tab in a profile, or a private one")
+            .accessibilityLabel("Browser")
+            .accessibilityIdentifier("browser-launch")
+        } else {
+            LaunchButton(title: "Browser", id: "browser", large: large) { model.openBrowserTab() }
+                .help("Open a browser tab")
+                .contextMenu {
+                    Button("New Private Tab") { model.openBrowserTab(isPrivate: true) }
+                }
+        }
+    }
+}
+
 struct SSHMenu: View {
     @EnvironmentObject private var model: AppModel
     var large = false
@@ -815,7 +861,7 @@ struct WelcomeView: View {
                 LaunchButton(title: "Shell", id: "shell", large: true) { model.launch(nil) }
                     .contextMenu { WorktreeLaunchItem(agent: nil) }
                 if !model.isRemote {
-                    LaunchButton(title: "Browser", id: "browser", large: true) { model.openBrowserTab() }
+                    BrowserLaunch(large: true)
                 }
                 SSHMenu(large: true)
             }

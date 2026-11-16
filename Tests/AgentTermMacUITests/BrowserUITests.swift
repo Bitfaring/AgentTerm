@@ -60,6 +60,8 @@ final class BrowserUITests: MacUITestCase {
     /// MCP server it would start.
     private func startAgent() throws -> (Server, SessionInfo) {
         let told = root.appendingPathComponent("agent-variable")
+        // A second agent's own, not the first's.
+        try? FileManager.default.removeItem(at: told)
         try """
         #!/bin/sh
         printf '%s' "$AGENTTERM_MCP" > '\(told.path)'
@@ -67,11 +69,14 @@ final class BrowserUITests: MacUITestCase {
         exec cat
         """.write(to: root.appendingPathComponent("agents/claude"), atomically: true, encoding: .utf8)
         let phone = try device()
-        app.press(.button("Claude Code"))
-        wait("the agent's session") { phone.sessions.contains { $0.agent == "claude" } }
+        wait("the sessions listed") { phone.messages.contains { if case .sessions = $0 { return true } else { return false } } }
+        let before = Set(phone.sessions.filter { $0.agent == "claude" }.map(\.id))
+        // From the menu: once an agent runs, its tab is a "Claude Code" button too.
+        app.menu(["File", "New Claude Code"])
+        wait("the agent's session") { phone.sessions.contains { $0.agent == "claude" && !before.contains($0.id) } }
         wait("its variable") { FileManager.default.fileExists(atPath: told.path) }
         let variable = try String(contentsOf: told, encoding: .utf8)
-        let agent = try XCTUnwrap(phone.sessions.first { $0.agent == "claude" })
+        let agent = try XCTUnwrap(phone.sessions.first { $0.agent == "claude" && !before.contains($0.id) })
         return (try Server(tool: hostExecutable, variable: variable, state: state), agent)
     }
 
@@ -357,38 +362,54 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertTrue(app.exists(.id("mac-switcher")), "the window closed with the tab")
     }
 
-    /// BROWSER-10: with two profiles, an agent's first tab asks which one,
-    /// the default picked already; its next tab uses the same without
-    /// asking; with one profile, nothing is asked.
-    func testAnAgentIsAskedWhichProfile() throws {
+    /// BROWSER-10: with one profile, an agent's tab uses it without a word;
+    /// with two, its first `browser_open` that names none is refused at once
+    /// with the profiles' names, to ask the user in its conversation; one it
+    /// names it gets, and its next tab the same without naming it; a name
+    /// that is no profile's is refused. `browser_profiles` lists them. The
+    /// header's Browser button opens a tab of the user's in a profile picked
+    /// from its menu, or a private one.
+    func testAnAgentAsksWhichProfile() throws {
         let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        func tabID(_ text: String) throws -> String {
+            try XCTUnwrap(text.range(of: #"tab \d+"#, options: .regularExpression).map { String(text[$0].dropFirst(4)) }, text)
+        }
+        /// The profile the tab in front says it uses, in its bar.
+        func profileShown() -> String {
+            let pill = app.first(.id("browser-profile"))
+            return pill.map { $0.value.isEmpty ? $0.label : $0.value } ?? "none"
+        }
+
+        // One profile: used.
+        let first = server.text("browser_open", ["url": page.absoluteString])
+        XCTAssertFalse(first.failed, first.text)
+        XCTAssertFalse(server.text("browser_close", ["tab": try tabID(first.text)]).failed)
+
+        // Two: the agent is told to ask.
         app.press(.id("place-settings"))
         app.press(.id("settings-browser"))
         app.press(.id("profile-new"))
         app.wait(for: .id("profile-name-Profile 2"))
         app.press(.id("place-sessions"))
-        let (server, _) = try startAgent()
-        defer { server.stop() }
-
-        // Asked in a sheet; the agent waits for the answer.
-        var opened: (text: String, failed: Bool)?
-        DispatchQueue.global().async {
-            let answer = server.text("browser_open", ["url": page.absoluteString])
-            DispatchQueue.main.async { opened = answer }
-        }
-        app.wait(for: .id("profile-choice"), timeout: 20)
-        shot("profile-question")
-        app.press(.text("Profile 2"))
-        app.press(.id("profile-use"))
-        wait("the tab opened", timeout: 30) { opened != nil }
-        XCTAssertFalse(opened?.failed ?? true, opened?.text ?? "")
-        app.wait(for: .id("browser-profile"))
-        XCTAssertEqual(app.first(.id("browser-profile"))?.value.isEmpty == false ? app.first(.id("browser-profile"))?.value : app.first(.id("browser-profile"))?.label, "Profile 2")
-
-        // The next tab is the same profile's, without a question.
-        let again = server.text("browser_open", ["url": page.absoluteString])
+        let (other, _) = try startAgent()
+        defer { other.stop() }
+        let unnamed = other.text("browser_open", ["url": page.absoluteString])
+        XCTAssertTrue(unnamed.failed, unnamed.text)
+        XCTAssertEqual(unnamed.text, BrowserWords.whichProfile(["Default", "Profile 2"]))
+        XCTAssertEqual(other.text("browser_profiles").text, BrowserWords.profiles(["Default", "Profile 2"], uses: nil))
+        let wrong = other.text("browser_open", ["url": page.absoluteString, "profile": "Work"])
+        XCTAssertEqual(wrong.text, BrowserWords.noProfile("Work", ["Default", "Profile 2"]))
+        let named = other.text("browser_open", ["url": page.absoluteString, "profile": "profile 2"])
+        XCTAssertFalse(named.failed, named.text)
+        app.wait(for: .id("browser-profile"), timeout: 20)
+        app.wait("its tab in Profile 2, not \(profileShown())") { profileShown() == "Profile 2" }
+        // Its next tab: the same, without naming it.
+        let again = other.text("browser_open", ["url": page.absoluteString])
         XCTAssertFalse(again.failed, again.text)
-        XCTAssertFalse(app.exists(.id("profile-choice")), "asked again")
+        XCTAssertEqual(other.text("browser_profiles").text, BrowserWords.profiles(["Default", "Profile 2"], uses: "Profile 2"))
+        shot("agent-in-profile-2")
 
         // Chromium made the profile where it is kept: a profile it refuses
         // falls back to one of its own, shared by every profile.
@@ -397,6 +418,55 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertFalse(log.contains("Cannot create profile"), "Chromium refused a profile:\n\(log)")
         let made = ((try? FileManager.default.contentsOfDirectory(atPath: browser.path)) ?? []).filter { $0.hasPrefix("profile-") && $0 != "profile-default" }
         XCTAssertEqual(made.count, 1, "Profile 2's folder: \(made)")
+
+        // The user's: the header's Browser button asks which.
+        app.press(.id("browser-launch"))
+        app.press(.button("Profile 2"))
+        app.wait("the user's tab in Profile 2, not \(profileShown())") { profileShown() == "Profile 2" }
+        app.press(.id("browser-launch"))
+        app.press(.button("Private"))
+        app.wait("the user's private tab, not \(profileShown())") { profileShown() == BrowserWords.privateProfile }
+        shot("user-private-tab")
+    }
+
+    /// BROWSER-22: an agent's private tabs share a profile of their own in
+    /// memory: what one keeps the other has, a tab in the default profile
+    /// has none of it, another agent's private tab neither, and once its
+    /// last private tab is closed it is gone.
+    func testPrivateTabsKeepNothing() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        func open(_ arguments: [String: Any], on server: Server) throws -> String {
+            let opened = server.text("browser_open", ["url": page.absoluteString].merging(arguments) { $1 })
+            XCTAssertFalse(opened.failed, opened.text)
+            return try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        }
+        func kept(_ tab: String, on server: Server) -> String {
+            server.text("browser_evaluate", ["tab": tab, "script": "localStorage.getItem('kept') ?? 'nothing'"]).text
+        }
+        let one = try open(["private": true], on: server)
+        XCTAssertFalse(server.text("browser_evaluate", ["tab": one, "script": "localStorage.setItem('kept', 'yes'); 'set'"]).failed)
+        let two = try open(["private": true], on: server)
+        XCTAssertEqual(kept(two, on: server), "\"yes\"", "the agent's private tabs do not share")
+        let plain = try open([:], on: server)
+        XCTAssertEqual(kept(plain, on: server), "\"nothing\"", "the default profile has what a private tab kept")
+        let (other, _) = try startAgent()
+        defer { other.stop() }
+        let others = try open(["private": true], on: other)
+        XCTAssertEqual(kept(others, on: other), "\"nothing\"", "another agent's private tab has what this one's kept")
+        app.wait("its profile said") { self.app.exists(.id("browser-profile")) }
+
+        // Its last private tab closed: gone.
+        XCTAssertFalse(server.text("browser_close", ["tab": one]).failed)
+        XCTAssertFalse(server.text("browser_close", ["tab": two]).failed)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        let three = try open(["private": true], on: server)
+        XCTAssertEqual(kept(three, on: server), "\"nothing\"", "a private profile kept what it had after its last tab closed")
+        // Nothing of it on disk.
+        let browser = state.appendingPathComponent("browser")
+        let folders = ((try? FileManager.default.contentsOfDirectory(atPath: browser.path)) ?? []).filter { $0.contains("private") }
+        XCTAssertEqual(folders, [], "a private profile has a folder")
     }
 
     /// BROWSER-13: a page asks for a permission; the bar asks the user, not
@@ -666,7 +736,7 @@ final class BrowserUITests: MacUITestCase {
         // A tab of the user's, in the agent's project, not in front on the Mac.
         let project = try XCTUnwrap(phone.messages.lazy.compactMap { if case .browserTabs(let tabs) = $0 { return tabs.first { $0.id == tab }?.project } else { return nil } }.first)
         // Empty, then the page typed into its address bar, as the iPhone does.
-        guard case .opened(let own)? = ask(.newTab(project: project, url: nil)) else { return XCTFail("no tab opened") }
+        guard case .opened(let own)? = ask(.newTab(project: project, url: nil, profile: nil, private: false)) else { return XCTFail("no tab opened") }
         func lastTabs() -> [BrowserTabInfo] { phone.messages.reversed().lazy.compactMap { if case .browserTabs(let tabs) = $0 { return tabs } else { return nil } }.first ?? [] }
         wait("the device's tab listed as the user's") { lastTabs().contains { $0.id == own && $0.openedBy == nil && $0.project == project } }
         if case .refused(let why)? = ask(.navigate(tab: own, url: page.absoluteString)) { XCTFail(why) }

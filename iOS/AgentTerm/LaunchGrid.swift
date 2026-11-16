@@ -38,16 +38,40 @@ struct LaunchGrid: View {
             .accessibilityLabel("Start Shell\(labelSuffix)")
             .contextMenu { worktreeItem(Launch(agent: nil)) }
             if showsBrowser {
-                // A tab of the user's in the Mac's browser, shown here live.
-                Button {
-                    model.openPage(in: folder ?? "") { tab, why in
-                        if let tab { newPage = PageSheetID(id: tab) } else { pageProblem = why }
+                // A tab of the user's in the Mac's browser, shown here live:
+                // with several profiles, in the one picked, or private.
+                if model.browserProfiles.count > 1 {
+                    Menu {
+                        ForEach(model.browserProfiles) { profile in
+                            Button(profile.isDefault ? "\(profile.name) (default)" : profile.name) { openPage(profile: profile.id) }
+                        }
+                        Divider()
+                        Button {
+                            openPage(isPrivate: true)
+                        } label: {
+                            Label(BrowserWords.privateProfile, systemImage: "eye.slash")
+                        }
+                    } label: {
+                        item("Browser", id: "browser")
                     }
-                } label: {
-                    item("Browser", id: "browser")
+                    .foregroundStyle(.primary)
+                    .accessibilityLabel("Open a Page\(labelSuffix)")
+                } else {
+                    Button {
+                        openPage()
+                    } label: {
+                        item("Browser", id: "browser")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open a Page\(labelSuffix)")
+                    .contextMenu {
+                        Button {
+                            openPage(isPrivate: true)
+                        } label: {
+                            Label("Open a Private Page", systemImage: "eye.slash")
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open a Page\(labelSuffix)")
             }
             if showsSSH, !model.sshHosts.isEmpty {
                 // The hosts of the Mac's SSH configuration: the session
@@ -68,6 +92,7 @@ struct LaunchGrid: View {
         }
         .disabled(model.status != .connected)
         .opacity(model.status == .connected ? 1 : 0.45)
+        .onAppear { if showsBrowser { model.loadBrowserProfiles() } }
         .sheet(item: $inWorktree) { launch in
             if let folder { NewWorktreeSheet(project: folder, main: model.worktrees[folder]?.first, start: launch.agent, shell: launch.agent == nil) }
         }
@@ -87,6 +112,12 @@ struct LaunchGrid: View {
         var id: String { agent?.id ?? "" }
     }
     @State private var inWorktree: Launch?
+
+    private func openPage(profile: String? = nil, isPrivate: Bool = false) {
+        model.openPage(in: folder ?? "", profile: profile, isPrivate: isPrivate) { tab, why in
+            if let tab { newPage = PageSheetID(id: tab) } else { pageProblem = why }
+        }
+    }
 
     /// "Start in a New Worktree…", in the menu of what can be started in a
     /// folder (#34). Not where there is no folder to make one of.

@@ -382,7 +382,7 @@ user sees.
   started as a shell is: the Browser button next to Shell in the header,
   on the launch screen, or Browser > New Browser Tab (⌥⌘T). It opens in
   the project on show,
-  in the default profile. Its bar has back, forward, reload or stop, the
+  in the profile picked (see Profiles). Its bar has back, forward, reload or stop, the
   profile it uses, and the
   address, where words that are not an address are searched for (⌘L to
   reach it, ⌘R, ⌘[ and ⌘] too). Its menu finds in the page (⌥⌘F), zooms,
@@ -407,14 +407,23 @@ user sees.
   ("Work", "Personal", "Test account"): each has its own sign-ins,
   cookies, storage and cache. Each shows what it keeps on disk; a profile
   is made, renamed, cleared of its data and deleted there (each asked
-  first), the last one is never deleted, and one is the default. The
-  user's tabs open in the default. **An agent is asked for one when it
-  opens its first tab**: a sheet in the Mac's window names the agent,
-  the default picked already; the agent waits for the answer, and its
-  next tabs use the same profile without asking. With a single profile,
-  with nobody at the Mac (an agent started from the iPhone, or by a
-  schedule, while nobody uses the Mac), or with no answer in 45 seconds,
-  the default is used. Data that Chromium has open is cleared, or a
+  first), the last one is never deleted, and one is the default. With a
+  single profile, every tab uses it. **With several, the Browser button
+  asks which** (a menu of them, the default first, and Private; Browser >
+  New Browser Tab opens one in the default), and so does Browser among
+  what a folder can start on the iPhone. **An agent asks the user in its
+  conversation**: its first `browser_open` that names no profile is
+  answered at once with the profiles' names and asks it to ask the user;
+  the one it then names is its own, and its next tabs use it without
+  naming it (`browser_profiles` lists them). A **private tab** (Browser >
+  New Private Tab, ⇧⌥⌘T; Private in the Browser button's menu, or its
+  own menu with a single profile; `private: true` for an agent, which is
+  not asked) has a profile of its own in memory: it keeps nothing on
+  disk, has none of the profiles' sign-ins, and what it has is gone with
+  the last of its tabs. The user's private tabs share one, each agent's
+  share another of its own. A tab says which profile it uses, or Private,
+  in its bar. A page that opens a window opens it in its own profile.
+  Data that Chromium has open is cleared, or a
   deleted profile's thrown away, the next time the app opens, and the
   app says so. The user's own browser's profile is never read. The
   released and the development builds keep their profiles apart, and
@@ -473,7 +482,9 @@ user sees.
   as a click on the Mac makes it, and Let … Go On gives it back; showing
   it as a device or closing it does not take it. Browser, among what a
   folder can start, opens a page of the user's in it, on the Mac but not
-  in front there; the user's pages open in a sheet. Send to Agent, which
+  in front there: with several profiles, in the one picked from its menu,
+  or private; with one, in it, and a private one from its own menu. The
+  user's pages open in a sheet. Send to Agent, which
   picks one element of a page, is the Mac's only (principle 1).
 
 ### Usage
