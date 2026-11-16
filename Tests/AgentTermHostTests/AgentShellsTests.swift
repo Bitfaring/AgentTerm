@@ -971,6 +971,11 @@ final class AgentsUseShellsTests: XCTestCase {
     func testTheAgentsAreAskedToUseTheShellsUnlessTheirWordsAreEmptied() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-use-\(UUID().uuidString)").standardizedFileURL
         defer { try? FileManager.default.removeItem(at: root) }
+        // What the agents are told is kept in the host's state folder: the
+        // test's own, never the one of the app on this Mac (CLAUDE.md, rule 3).
+        let stateBefore = ProcessInfo.processInfo.environment["AGENTTERM_STATE_DIR"]
+        setenv("AGENTTERM_STATE_DIR", root.appendingPathComponent("state").path, 1)
+        defer { if let stateBefore { setenv("AGENTTERM_STATE_DIR", stateBefore, 1) } else { unsetenv("AGENTTERM_STATE_DIR") } }
         let agents = root.appendingPathComponent("agents")
         try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
         let told = root.appendingPathComponent("told")
