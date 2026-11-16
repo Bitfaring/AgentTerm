@@ -302,6 +302,26 @@ extension AppModel {
             closeBrowserTab(tab)
             return .text("Closed tab \(id).")
         }
+        var request = request
+        if case .upload(let tab, let ref, let paths) = request {
+            // Files of its project only: an agent does not send what else
+            // is on the Mac to a site (principle 2).
+            let project = folders.first { WorktreePath.belongs(session.cwd, to: $0.path) }?.path ?? session.cwd
+            let root = URL(fileURLWithPath: project).resolvingSymlinksInPath().standardizedFileURL.path
+            var chosen: [String] = []
+            for path in paths {
+                let expanded = (path as NSString).expandingTildeInPath
+                let url = (expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded) : URL(fileURLWithPath: session.cwd).appendingPathComponent(expanded))
+                    .resolvingSymlinksInPath().standardizedFileURL
+                var isFolder: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder), !isFolder.boolValue else {
+                    return .refused(BrowserWords.noFile(url.path))
+                }
+                guard url.path.hasPrefix(root + "/") else { return .refused(BrowserWords.notInProject(url.path, project)) }
+                chosen.append(url.path)
+            }
+            request = .upload(tab: tab, ref: ref, paths: chosen)
+        }
         do {
             return try await act(request, in: tab)
         } catch let failure as DevToolsSession.Failure {
@@ -382,6 +402,11 @@ extension AppModel {
             let picked = try await devtools.select(values, in: try devtools.node(for: ref))
             done("Picked \(picked.joined(separator: ", ")) in \(ref)")
             return .text("Picked \(picked.map { "“\($0)”" }.joined(separator: ", ")) in \(ref).")
+        case .upload(_, let ref, let paths):
+            try await devtools.upload(paths, into: try devtools.node(for: ref))
+            let names = paths.map { ($0 as NSString).lastPathComponent }
+            done("Chose \(names.joined(separator: ", ")) in \(ref)")
+            return .text("Chose \(names.map { "“\($0)”" }.joined(separator: ", ")) in \(ref).")
         case .press(_, let key):
             done("Pressed \(key)")
             let before = devtools.document

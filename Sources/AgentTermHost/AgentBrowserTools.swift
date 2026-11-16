@@ -42,6 +42,13 @@ extension AgentShellsMCP {
             ["tab": tabArgument, "ref": refArgument, "values": ["type": "array", "items": ["type": "string"], "description": "The options to pick"]],
             required: ["tab", "ref", "values"]),
         browserTool(
+            "browser_upload",
+            "Chooses files for a file field by its ref, as its dialog would, without opening one. Only files of your project can be chosen.",
+            [
+                "tab": tabArgument, "ref": refArgument,
+                "paths": ["type": "array", "items": ["type": "string"], "description": "The files: absolute, or from your working folder"],
+            ], required: ["tab", "ref", "paths"]),
+        browserTool(
             "browser_press", "Presses a key in a tab, with Control, Alt, Shift or Meta when asked: Enter, Escape, Tab, ArrowDown, Control+A.",
             ["tab": tabArgument, "key": string("The key")], required: ["tab", "key"]),
         browserTool(
@@ -132,6 +139,10 @@ extension AgentShellsMCP {
             let values = (arguments["values"] as? [String]) ?? text("values").map { [$0] } ?? []
             guard !values.isEmpty else { return .failure(needs("values")) }
             return withRef { .select(tab: id, ref: $0, values: values) }
+        case "browser_upload":
+            let paths = (arguments["paths"] as? [String]) ?? text("paths").map { [$0] } ?? text("path").map { [$0] } ?? []
+            guard !paths.isEmpty else { return .failure(needs("paths")) }
+            return withRef { .upload(tab: id, ref: $0, paths: paths) }
         case "browser_press":
             guard let key = text("key") else { return .failure(needs("key")) }
             return .success(.press(tab: id, key: key))

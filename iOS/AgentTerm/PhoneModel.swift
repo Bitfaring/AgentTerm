@@ -611,7 +611,6 @@ final class PhoneModel: ObservableObject {
 
     /// Each folder's git worktrees (#23, #33), as its host lists them.
     @Published private(set) var worktrees: [String: [WorktreeInfo]] = [:]
-    @Published private(set) var worktreeSetups: [String: String] = [:]
     /// What became of the last worktree that was finished.
     @Published var worktreeSaid: String?
 
@@ -619,7 +618,6 @@ final class PhoneModel: ObservableObject {
     func finishWorktree(_ worktree: WorktreeInfo, of folder: String, _ finish: WorktreeFinish, deleteBranch: Bool) {
         connection?.send(.finishWorktree(folder: folder, path: worktree.path, finish: finish, deleteBranch: deleteBranch))
     }
-    func setWorktreeSetup(_ command: String?, for folder: String) { connection?.send(.setWorktreeSetup(folder: folder, command: command)) }
     func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
 
@@ -1055,7 +1053,6 @@ final class PhoneModel: ObservableObject {
         commitWriter = CommitWriterSettings()
         schedules = []
         worktrees = [:]
-        worktreeSetups = [:]
         writingCommitMessage = []
         syncing = [:]
         sshHosts = []
@@ -1268,9 +1265,8 @@ final class PhoneModel: ObservableObject {
             schedulesPaused = paused
         case .scheduleRunOutput(let id, let at, let text):
             runOutputs[ScheduleOverview.Run.id(schedule: id, at: at)] = .some(text)
-        case .worktrees(let folder, let list, let setup):
+        case .worktrees(let folder, let list):
             worktrees[folder] = list
-            worktreeSetups[folder] = setup
         case .historyMarks(let pinned, let hidden):
             pinnedConversations = Set(pinned)
             hiddenConversations = Set(hidden)
@@ -1312,8 +1308,6 @@ final class PhoneModel: ObservableObject {
             isSearching = false
             searchTruncated = truncated
             searchProblem = problem
-        case .worktreeSetups(let setups):
-            worktreeSetups = setups
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
         case .keepAwake(let on):

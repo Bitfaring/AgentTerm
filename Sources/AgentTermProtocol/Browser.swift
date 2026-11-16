@@ -349,6 +349,9 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     case type(tab: String, ref: String, text: String, submit: Bool, append: Bool)
     /// Picks options of a list by their value or their words.
     case select(tab: String, ref: String, values: [String])
+    /// Chooses files for a file field, as its dialog would: files of the
+    /// agent's project only.
+    case upload(tab: String, ref: String, paths: [String])
     /// A key, with Control, Alt, Shift or Meta: "Enter", "Control+A".
     case press(tab: String, key: String)
     /// Scrolls the page, or an element, by points.
@@ -389,7 +392,7 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
         switch self {
         case .open, .tabs, .newTab, .profiles: return nil
         case .navigate(let tab, _), .history(let tab, _), .snapshot(let tab, _), .screenshot(let tab, _, _), .click(let tab, _, _), .hover(let tab, _),
-            .type(let tab, _, _, _, _), .select(let tab, _, _), .press(let tab, _), .scroll(let tab, _, _, _), .wait(let tab, _, _, _),
+            .type(let tab, _, _, _, _), .select(let tab, _, _), .upload(let tab, _, _), .press(let tab, _), .scroll(let tab, _, _, _), .wait(let tab, _, _, _),
             .evaluate(let tab, _), .console(let tab, _), .network(let tab, _), .emulate(let tab, _), .close(let tab), .picture(let tab),
             .takeOver(let tab), .giveBack(let tab), .watch(let tab, _, _), .tap(let tab, _, _), .text(let tab, _), .stop(let tab):
             return tab
@@ -400,7 +403,7 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     /// the tab; looking at it is not.
     public var acts: Bool {
         switch self {
-        case .navigate, .history, .click, .hover, .type, .select, .press, .scroll, .evaluate, .emulate, .tap, .text, .stop: return true
+        case .navigate, .history, .click, .hover, .type, .select, .upload, .press, .scroll, .evaluate, .emulate, .tap, .text, .stop: return true
         default: return false
         }
     }
@@ -455,6 +458,15 @@ public enum BrowserWords {
     /// An agent's first tab, with several profiles and none named.
     public static func whichProfile(_ names: [String]) -> String {
         "There are several browser profiles: \(names.joined(separator: ", ")) (the first is the user's default). Ask the user which one to use, then call browser_open again with profile set to its name; or open a private tab with private: true."
+    }
+    /// A file an agent would upload that is not its project's.
+    public static func notInProject(_ path: String, _ project: String) -> String {
+        "\(path) is not a file of your project (\(project)): only those can be uploaded. Copy it into the project first if the user wants it sent."
+    }
+    public static func noFile(_ path: String) -> String { "There is no file at \(path)." }
+    /// The frames of a page, whose insides a snapshot does not read.
+    public static func frames(_ addresses: [String]) -> String {
+        "This page has \(addresses.count == 1 ? "a frame" : "\(addresses.count) frames") whose insides are not in this snapshot and cannot be acted on here: \(addresses.joined(separator: ", ")). To use one, open its address in a tab (browser_navigate or browser_open)."
     }
     public static func noProfile(_ name: String, _ names: [String]) -> String {
         "There is no browser profile called “\(name)”. The profiles: \(names.joined(separator: ", "))."

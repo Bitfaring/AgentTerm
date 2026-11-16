@@ -269,6 +269,14 @@ final class DevToolsSession {
         }
         walk(start, depth: 0, parentName: "")
         if length >= limit { lines.append("… the page goes on; take a snapshot of a part with ref.") }
+        // What a snapshot does not read: the insides of the page's frames,
+        // said with their addresses so that one can be opened instead.
+        if ref == nil,
+            let frames = try? await evaluate("[...document.querySelectorAll('iframe, frame')].map(f => f.src || '(no address)')"),
+            let data = frames.data(using: .utf8), let addresses = try? JSONDecoder().decode([String].self, from: data), !addresses.isEmpty
+        {
+            lines.append(BrowserWords.frames(addresses))
+        }
         return lines.isEmpty ? "Nothing on the page can be read." : lines.joined(separator: "\n")
     }
 
@@ -342,6 +350,14 @@ final class DevToolsSession {
         let value = try await run("function(){ return 'value' in this ? String(this.value) : this.innerText }", on: node) as? String
         if submit { try await press("Enter") }
         return value
+    }
+
+    /// Files chosen for a file field, as its dialog would choose them; the
+    /// page is told they changed.
+    func upload(_ paths: [String], into node: Int) async throws {
+        let isFileField = try await run("function(){ return this.tagName === 'INPUT' && this.type === 'file'; }", on: node) as? Bool ?? false
+        guard isFileField else { throw Failure(text: "That element is not a file field: give the ref of one (a button that chooses files).") }
+        try await call("DOM.setFileInputFiles", ["files": paths, "backendNodeId": node])
     }
 
     func select(_ values: [String], in node: Int) async throws -> [String] {

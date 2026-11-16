@@ -944,31 +944,4 @@ final class SchedulerHostTests: XCTestCase {
         XCTAssertEqual(client.sessions.filter { $0.schedule != nil }, [])
         XCTAssertEqual(runs, [])
     }
-
-    /// SCHED-36: a run in a worktree of its own is not started when the
-    /// folder's setup command fails there, and says why, in the list and in
-    /// the banner; the worktree is kept, to be looked at.
-    func testARunWhoseWorktreeSetupFailsIsNotStarted() throws {
-        try repository()
-        client.connection.send(.setWorktreeSetup(folder: project.path, command: "echo the setup broke; exit 7"))
-        var schedule = evening()
-        schedule.inWorktree = true
-        client.connection.send(.saveSchedule(schedule))
-        waitUntil("saved") { self.client.schedules.count == 1 }
-        client.connection.send(.runSchedule(id: "s-claude"))
-        waitUntil("recorded") { self.runs.count == 1 }
-        let run = try XCTUnwrap(runs.first)
-        XCTAssertFalse(run.started)
-        XCTAssertTrue(run.note.hasPrefix("Not started: the setup command failed in its worktree."), run.note)
-        XCTAssertTrue(run.note.contains("the setup broke"), run.note)
-        // Where the user's shell is bash, as on the machines that run CI, it
-        // says more as a login shell, and "logout" last: not why it failed.
-        XCTAssertEqual(HostServer.lastLine(of: "bash: no job control in this shell\nthe setup broke\nlogout\n"), "the setup broke")
-        let worktree = try XCTUnwrap(run.worktree)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: worktree))
-        pause()
-        XCTAssertEqual(client.sessions, [])
-        XCTAssertEqual(startedLines, [])
-        waitUntil("the banner told") { self.client.failures.last?.part == .schedule }
-    }
 }

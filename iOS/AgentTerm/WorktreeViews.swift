@@ -17,9 +17,7 @@ struct WorktreeChips: View {
     let shownPath: String
 
     @State private var discarding: WorktreeInfo?
-    @State private var settingUp = false
     @State private var adding = false
-    @State private var setup = ""
 
     private var shown: WorktreeInfo? { list.first { $0.path == shownPath } ?? list.first }
 
@@ -43,24 +41,19 @@ struct WorktreeChips: View {
                 }
                 .accessibilityLabel("New Worktree")
                 .accessibilityIdentifier("worktree-add")
-                Menu {
-                    if !shown.isMain {
+                if !shown.isMain {
+                    Menu {
                         Button(WorktreeWords.merge(into: list.first)) { finish(shown, .merge, deleteBranch: shown.isAgentTerm) }
                             .disabled(shown.changed > 0 || shown.ahead == 0)
                         Button(WorktreeWords.pullRequest) { finish(shown, .pullRequest, deleteBranch: false) }
                             .disabled(model.diffs[shownPath]?.pushRemote == nil && model.diffs[shownPath]?.upstream == nil)
                         Button("Throw Away…", role: .destructive) { discarding = shown }
-                        Divider()
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold)).frame(width: 30, height: 30)
                     }
-                    Button("Setup Command for New Worktrees…") {
-                        setup = model.worktreeSetups[project] ?? ""
-                        settingUp = true
-                    }
-                } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold)).frame(width: 30, height: 30)
+                    .accessibilityLabel("Worktree Actions")
+                    .accessibilityIdentifier("worktree-more")
                 }
-                .accessibilityLabel("Worktree Actions")
-                .accessibilityIdentifier("worktree-more")
             }
             .disabled(model.status != .connected)
             .padding(.horizontal, 16)
@@ -74,15 +67,6 @@ struct WorktreeChips: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text(discarding.map(WorktreeWords.discardMessage) ?? "")
-            }
-            .alert(WorktreeWords.setupTitle, isPresented: $settingUp) {
-                TextField("None", text: $setup)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                Button("Save") { model.setWorktreeSetup(setup, for: project) }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(WorktreeWords.setupAdvice.replacingOccurrences(of: "`", with: ""))
             }
             .sheet(isPresented: $adding) {
                 NewWorktreeSheet(project: project, main: list.first, start: nil)
@@ -169,7 +153,6 @@ struct NewWorktreeSheet: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(WorktreeWords.newAdvice)
-                        Text(WorktreeWords.setupSaid(model.worktreeSetups[project]))
                         if model.diffs[project]?.files.isEmpty == false {
                             Label(WorktreeWords.uncommitted, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                         }

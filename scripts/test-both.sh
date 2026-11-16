@@ -19,6 +19,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v xcodegen >/dev/null || { echo "test-both.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
 source scripts/lib-simulator.sh
+source scripts/lib-cleanup.sh
 choose_simulator "${1:-}" "iPhone Air"
 DEVICE="$SIM_UDID"
 echo "Testing on this Mac and on $SIM_NAME ($SIM_UDID)."
@@ -69,10 +70,10 @@ HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_
 DAEMON=$!
 MAC=""
 cleanup() {
-    [ -n "$MAC" ] && kill "$MAC" 2>/dev/null || true
-    kill "$DAEMON" 2>/dev/null || true
+    local status=$?
+    stop_then_remove "$MAC $DAEMON" "$ROOT"
     defaults delete "$IDENTIFIER" >/dev/null 2>&1 || true
-    rm -rf "$ROOT"
+    exit "$status"
 }
 trap cleanup EXIT
 for _ in $(seq 1 50); do [ -s "$STATE/token" ] && break; sleep 0.1; done

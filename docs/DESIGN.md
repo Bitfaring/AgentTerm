@@ -709,15 +709,13 @@ chip's counts are not stale.
 
 Messages: `createInWorktree(request:branch:from:)`, `listWorktrees(folder:)`,
 `finishWorktree(folder:path:finish:deleteBranch:)` (refused while a session
-runs in it), `setWorktreeSetup(folder:command:)`, kept in `worktrees.json`;
-answered with `worktrees(folder:list:setup:)` and `worktreeFinished`;
-`worktreeSetups` carries every folder's setup command to a client that
-connects and whenever one changes (#34). What both apps say of a worktree
+runs in it); answered with `worktrees(folder:list:)` and
+`worktreeFinished`. No command is run in a new worktree: the folder's setup
+command of #34 was taken away on 2026-11-16 (#75), and a `worktrees.json`
+an earlier build kept is no longer read. What both apps say of a worktree
 is in `WorktreeWords` and `WorktreeInfo.chipTitle/chipCounts/chipHelp`.
 `SessionInfo.branch` names a session's worktree branch; `WorktreePath`
-tells which folder a session in `.agentterm/worktrees` belongs to. The setup
-command runs through the login shell in the new worktree before the
-session, so the agent is still known by its command.
+tells which folder a session in `.agentterm/worktrees` belongs to.
 
 On the Mac, `AppModel.panelFolder` is the worktree shown (`shownWorktree`)
 or the selected folder; the side panel's diff, commits, history and files
@@ -741,10 +739,10 @@ until)` comes due at midnight or at `from` and then every `minutes` until
 goes into `waitingRuns` as before; one whose schedule has a condition or a
 worktree is got ready off the queue (`prepare`): the folder's changes are
 read, or its branch is pulled and its head compared, and its worktree is
-made (`GitWorktrees.create`, submodules, the setup command, the folder
-trusted for the agent), and it then starts, is recorded as skipped, or is
-recorded as not started and reported (`PartFailure.Part.schedule`): also
-when its submodules, its setup command or the trust failed, the worktree
+made (`GitWorktrees.create`, submodules, the folder trusted for the
+agent), and it then starts, is recorded as skipped, or is recorded as not
+started and reported (`PartFailure.Part.schedule`): also when its
+submodules or the trust failed, the worktree
 then kept and named in the run, and when the pull stopped on conflicts,
 which is aborted first, with nobody there to resolve them (#50). When a
 run starts, how its folder was is kept (`GitActions.baseline`: the head,

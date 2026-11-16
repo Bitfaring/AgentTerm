@@ -493,8 +493,6 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(WorktreeWords.discardMessage(WorktreeInfo(path: "/code/clean", branch: "clean", isMain: false)), "Its folder is removed.")
         XCTAssertEqual(WorktreeWords.merge(into: own), "Merge into main")
         XCTAssertEqual(WorktreeWords.merge(into: nil), "Merge into the folder's branch")
-        XCTAssertEqual(WorktreeWords.setupSaid("npm install"), "Its setup command runs first: npm install")
-        XCTAssertEqual(WorktreeWords.setupSaid(""), "No setup command is run in it.")
     }
 
     /// NOTE-13 (#62): what an agent said at the end is told by its end,

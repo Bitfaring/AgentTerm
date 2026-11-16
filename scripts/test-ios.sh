@@ -15,6 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v xcodegen >/dev/null || { echo "test-ios.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
 source scripts/lib-simulator.sh
+source scripts/lib-cleanup.sh
 if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then print_simulators; exit 0; fi
 # The fallback is not the simulator run-ios.sh falls back to: this test
 # resets the simulator's keychain, which unpairs the app you are trying out.
@@ -100,7 +101,13 @@ SECOND_DAEMON=$!
 # reach, for the phone to show its settings as they were and not change them.
 ( while ! grep -q '"keepAwake":true' "$SECOND_STATE/settings.json" 2>/dev/null; do sleep 0.3; done; kill "$SECOND_DAEMON" ) &
 GONE_WATCH=$!
-trap 'kill "$DAEMON" "$SECOND_DAEMON" "$GONE_WATCH" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
+TAKEOVER_PID=""
+cleanup() {
+    local status=$?
+    stop_then_remove "$DAEMON $SECOND_DAEMON $GONE_WATCH $TAKEOVER_PID" "$STATE" "$SECOND_STATE"
+    exit "$status"
+}
+trap cleanup EXIT
 for _ in $(seq 1 50); do [ -s "$STATE/token" ] && [ -s "$SECOND_STATE/token" ] && break; sleep 0.1; done
 [ -s "$STATE/token" ] && [ -s "$SECOND_STATE/token" ] || { echo "test-ios.sh: the hosts did not start" >&2; cat "$STATE/daemon.log" "$SECOND_STATE/daemon.log" >&2; exit 1; }
 
@@ -157,7 +164,6 @@ if [ -n "${TAKEOVER:-}" ]; then
     [ "$TAKEOVER" = only ] && export TEST_RUNNER_AGENTTERM_ONLY_MAC_TAKEOVER=1
     AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" take-control --port "$PORT" --after 8 --hold 60 --type 'seq 1 400' > "$STATE/takeover.log" 2>&1 &
     TAKEOVER_PID=$!
-    trap 'kill "$DAEMON" "$SECOND_DAEMON" "$GONE_WATCH" "$TAKEOVER_PID" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
 fi
 
 if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then

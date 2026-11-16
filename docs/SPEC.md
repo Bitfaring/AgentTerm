@@ -107,8 +107,9 @@ says names the device it runs on.
   folder's current commit, a git worktree for it in
   `<folder>/.agentterm/worktrees/<branch>`, and starts the session there.
   Nothing is brought along: no uncommitted change, nothing git ignores;
-  with changes not committed, the app asks first. A folder can name a
-  setup command (`npm install`) that is run in each new worktree first.
+  with changes not committed, the app asks first. What the worktree needs
+  (`npm install`, a `.env`) is done in it by its user, or the agent: no
+  command is run in it by AgentTerm (decided on 2026-11-16, #75).
 - The session is listed under its folder with its branch, on the Mac and
   the iPhone. Selecting it, the Git, History and Files tabs show its
   worktree; on the iPhone its menu has "Changes, History and Files",
@@ -126,12 +127,12 @@ says names the device it runs on.
 - **+** makes a new one: the branch's name, suggested and editable, the
   branch it starts from (the folder's own unless another, local or of a
   remote, is picked; the new branch follows none), and what is started
-  there, an agent or a shell. The sheet says which setup command will run,
-  and when the folder has changes that the worktree will not have.
+  there, an agent or a shell. The sheet says when the folder has changes
+  that the worktree will not have.
 - **⋯** is for the worktree on show: merge its branch into the folder's
   and remove it (with its branch, for one AgentTerm made), open a pull
   request with `gh`, or throw it away, which asks first and says what is
-  not merged; and the folder's setup command. A merge that conflicts is
+  not merged; the folder's own chip has none. A merge that conflicts is
   left in the folder to be resolved and continued, or aborted, as any
   other, and the worktree is kept. A worktree a session runs in is not
   removed.
@@ -203,7 +204,7 @@ says names the device it runs on.
   made ready) or was stopped for taking too long is said
   in the top banner of both apps. A pull that stops on conflicts before a
   run is undone, since nobody is there to resolve them, and a worktree
-  whose submodules or setup command failed is kept, to be looked at, with
+  whose submodules failed is kept, to be looked at, with
   no agent started in it. A run skipped as its schedule says
   (nothing changed, nothing pulled, the run before still going) is in the
   list of runs only.
@@ -216,8 +217,8 @@ says names the device it runs on.
   too. A run going when the host stops, or dies, ends with it.
 - **A worktree of its own.** A schedule may have each run in a new
   worktree of the folder, on a branch named after the schedule and the
-  time, with its submodules checked out and the folder's setup command
-  run; the worktree is kept afterwards, in the folder's worktree bar, to
+  time, with its submodules checked out; the worktree is kept afterwards,
+  in the folder's worktree bar, to
   be looked at, merged or thrown away.
 - **The prompt** opens in a larger editor, with the files of the
   schedule's folder beside it, found by name: one that is picked is named
@@ -433,14 +434,18 @@ user sees.
   beside it (see Panes), reads a page as text with a ref for what can be
   acted on (`browser_snapshot`), clicks, types, picks, presses keys,
   scrolls and waits (`browser_click`, `browser_type`, `browser_select`,
-  `browser_press`, `browser_scroll`, `browser_wait`), looks at it
+  `browser_press`, `browser_scroll`, `browser_wait`), chooses files for a
+  file field (`browser_upload`: files of its project only, so that nothing
+  else of the Mac is sent to a site), looks at it
   (`browser_screenshot`), reads its console and its requests
   (`browser_console`, `browser_network`), runs its scripts
   (`browser_evaluate`), shows it as a device (`browser_emulate`), goes
   back, forward or reloads, and closes its own tabs. Each action says what
   came of it: where the page is now, whether it changed, what was
   downloaded or opened, whether the console has new errors. A ref of a
-  page that changed since is refused with what to do. An agent sees and
+  page that changed since is refused with what to do. A snapshot does not
+  read the insides of a page's frames: it names them, with their
+  addresses, to be opened in a tab instead. An agent sees and
   drives only the tabs it opened: the user's tabs, and another agent's,
   it is neither listed nor reaches, and no tab is shared with it. To have
   an agent work on a page, the user asks it to open it; a tab of the same
@@ -873,8 +878,8 @@ panel.
     commit to which, staged and committed in the folder as a file is.
     Discarding it, asked first, checks out the recorded commit again. A
     submodule inside a submodule is listed the same way under it. A new
-    worktree has its submodules checked out, theirs too, before its setup
-    command runs; when one cannot be fetched the worktree is made all the
+    worktree has its submodules checked out, theirs too, before its
+    session starts; when one cannot be fetched the worktree is made all the
     same, and the banner says so.
     Not part of it:
     choosing a remote, and adding, removing or updating submodules from

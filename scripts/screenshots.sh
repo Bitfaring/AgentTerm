@@ -30,6 +30,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source scripts/lib-cleanup.sh
 ONLY="${ONLY:-both}"
 DO_MAC=yes DO_IPHONE=yes DO_IPAD=yes
 case "$ONLY" in
@@ -144,12 +145,12 @@ HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_
 DAEMON=$!
 MAC=""
 cleanup() {
-    [ -n "$MAC" ] && kill "$MAC" 2>/dev/null || true
-    kill "$DAEMON" 2>/dev/null || true
+    local status=$?
+    stop_then_remove "$MAC $DAEMON" "$ROOT"
     defaults delete "$IDENTIFIER" >/dev/null 2>&1 || true
     [ -n "${DEVICE:-}" ] && xcrun simctl status_bar "$DEVICE" clear 2>/dev/null || true
     [ -n "${IPAD_DEVICE:-}" ] && xcrun simctl status_bar "$IPAD_DEVICE" clear 2>/dev/null || true
-    rm -rf "$ROOT"
+    exit "$status"
 }
 trap cleanup EXIT
 for _ in $(seq 1 50); do [ -s "$STATE/token" ] && break; sleep 0.1; done

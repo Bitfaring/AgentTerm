@@ -573,7 +573,6 @@ public final class HostServer {
             setAgentShells(nil)
             loadSchedules()
             loadHistoryMarks()
-            loadWorktreeSetups()
             startAtLoginByDefault()
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + min(1, configuration.scheduleInterval), repeating: configuration.scheduleInterval)
@@ -973,7 +972,6 @@ public final class HostServer {
     /// off the queue, and then starts it or says why it is not started.
     private func prepare(_ schedule: Schedule, at: Date, note: String) {
         let home = configuration.home
-        let setup = worktreeSetups[WorktreePath.project(of: schedule.folder) ?? schedule.folder]
         workQueue.async { [weak self] in
             var skipped: String?
             var failed: String?
@@ -1025,14 +1023,6 @@ public final class HostServer {
                     // It is kept, to be looked at.
                     if let problem = GitWorktrees.checkOutSubmodules(in: made.directory) {
                         failed = "Not started: the submodules could not be checked out in its worktree. \(Self.firstLine(of: problem))"
-                    } else if let setup {
-                        let ran = Subprocess.run(
-                            HostEnvironment.shell, ["-l", "-i", "-c", setup], cwd: made.directory, timeout: 600, mergeErrors: true,
-                            environment: HostEnvironment.loginShellCommandEnvironment)
-                        if ran?.status != 0 {
-                            let said = String(decoding: ran?.output ?? Data(), as: UTF8.self)
-                            failed = "Not started: the setup command failed in its worktree. \(Self.lastLine(of: said) ?? "It could not be run.")"
-                        }
                     }
                     if failed == nil {
                         // The agent would ask whether the new folder is trusted, with nobody there.
@@ -1077,12 +1067,6 @@ public final class HostServer {
     /// What git or a command said, in a line for a run's note.
     static func firstLine(of said: String) -> String {
         said.split(whereSeparator: \.isNewline).first.map(String.init) ?? said
-    }
-
-    /// The last line a command printed, which says why it failed: not the
-    /// "logout" bash says last as a login shell, which it is run in.
-    static func lastLine(of said: String) -> String? {
-        said.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty && $0 != "logout" }
     }
 
     /// Starts a run's agent in its folder, or in the worktree made for it.
@@ -1481,43 +1465,17 @@ public final class HostServer {
 
     // MARK: Worktrees (#23, #33)
 
-    /// The command each folder runs in a new worktree before its session.
-    private var worktreeSetups: [String: String] = [:]
-    private var worktreeSetupsFile: URL? { configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("worktrees.json") }
-
-    private func loadWorktreeSetups() {
-        guard let file = worktreeSetupsFile, let data = FileManager.default.contents(atPath: file.path) else { return }
-        worktreeSetups = MessageCoding.decode([String: String].self, from: data) ?? [:]
-    }
-
-    private func saveWorktreeSetups() {
-        guard let file = worktreeSetupsFile else { return }
-        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? MessageCoding.encode(worktreeSetups).write(to: file, options: .atomic)
-    }
-
-    /// Makes the worktree off the queue the sessions use, runs the folder's
-    /// setup command in it, then starts the session there.
+    /// Makes the worktree off the queue the sessions use, with its
+    /// submodules, then starts the session there. What git ignores is not
+    /// brought along: what the worktree needs is done in it by its user.
     private func createInWorktree(_ request: CreateRequest, branch: String?, from: String?, for client: Client) {
         let folder = request.cwd ?? configuration.home
         let agent = SessionSummaries.agent(forCommand: request.command) ?? "shell"
-        let setup = worktreeSetups[WorktreePath.project(of: folder) ?? folder]
         let id = client.id
         workQueue.async { [weak self] in
             let made = Result { try GitWorktrees.create(in: folder, agent: agent, branch: branch, from: from) }
             var problem: String?
-            // Before the setup command, which may build what is in them.
             if case .success(let worktree) = made { problem = GitWorktrees.checkOutSubmodules(in: worktree.directory) }
-            if case .success(let worktree) = made, let setup {
-                // As in a terminal, with the user's PATH.
-                let ran = Subprocess.run(
-                    HostEnvironment.shell, ["-l", "-i", "-c", setup], cwd: worktree.directory, timeout: 600, mergeErrors: true,
-                    environment: HostEnvironment.loginShellCommandEnvironment)
-                if ran?.status != 0 {
-                    let said = String(decoding: ran?.output ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                    problem = (problem.map { $0 + "\n\n" } ?? "") + "The setup command failed in the new worktree: \(setup)\n\n\(String(said.suffix(1500)))"
-                }
-            }
             self?.queue.async {
                 guard let self, let client = self.clients[id] else { return }
                 switch made {
@@ -1539,12 +1497,11 @@ public final class HostServer {
 
     private func sendWorktrees(of folder: String, to ids: [ClientID]) {
         let inUse = Set(sessions.values.map(\.info.cwd))
-        let setup = worktreeSetups[folder]
         workQueue.async { [weak self] in
             let list = GitWorktrees.list(folder: folder, inUse: inUse)
             self?.queue.async {
                 guard let self else { return }
-                for id in ids { if let client = self.clients[id] { self.send(.worktrees(folder: folder, list: list, setup: setup), to: client) } }
+                for id in ids { if let client = self.clients[id] { self.send(.worktrees(folder: folder, list: list), to: client) } }
             }
         }
     }
@@ -1962,12 +1919,6 @@ public final class HostServer {
             sendWorktrees(of: folder, to: [client.id])
         case .finishWorktree(let folder, let path, let finish, let deleteBranch):
             finishWorktree(folder: folder, path: path, finish: finish, deleteBranch: deleteBranch, for: client)
-        case .setWorktreeSetup(let folder, let command):
-            let command = command?.trimmingCharacters(in: .whitespacesAndNewlines)
-            worktreeSetups[folder] = command?.isEmpty == false ? command : nil
-            saveWorktreeSetups()
-            for other in clients.values where other.authenticated { send(.worktreeSetups(worktreeSetups), to: other) }
-            sendWorktrees(of: folder, to: clients.values.filter(\.authenticated).map(\.id))
         case .removeSchedule(let id):
             schedules.removeAll { $0.id == id }
             schedulesFrom[id] = nil
@@ -2696,7 +2647,6 @@ public final class HostServer {
         for (id, state) in noticesSeen { send(.noticeSeen(session: id, state: state), to: client) }
         send(.schedules(schedules), to: client)
         send(.schedulesPaused(schedulesPaused), to: client)
-        send(.worktreeSetups(worktreeSetups), to: client)
         send(.browserTabs(browserTabsList), to: client)
         send(agentPromptsMessage, to: client)
         send(shellSettingsMessage, to: client)

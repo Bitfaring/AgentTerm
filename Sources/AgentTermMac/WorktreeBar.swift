@@ -5,13 +5,11 @@ import SwiftUI
 /// first, each worktree after it with what is changed in it. A click makes
 /// the side panel about that one, the first goes back to the folder. "+"
 /// makes a new one; "⋯" is what to do with the one shown once its work is
-/// done (#23), and the folder's setup command.
+/// done (#23).
 struct WorktreeBar: View {
     @EnvironmentObject private var model: AppModel
     @State private var discarding: WorktreeInfo?
-    @State private var settingUp = false
     @State private var adding = false
-    @State private var setup = ""
 
     private var folder: String? { model.selectedFolder }
     private var list: [WorktreeInfo] { folder.flatMap { model.worktrees[$0] } ?? [] }
@@ -40,8 +38,8 @@ struct WorktreeBar: View {
                 .accessibilityLabel("New Worktree")
                 .accessibilityIdentifier("worktree-add")
                 .disabled(model.status != .connected)
-                Menu {
-                    if !shown.isMain {
+                if !shown.isMain {
+                    Menu {
                         Button(WorktreeWords.merge(into: list.first)) {
                             model.finishWorktree(shown, of: folder, .merge, deleteBranch: shown.isAgentTerm)
                             model.shownWorktree = nil
@@ -50,21 +48,16 @@ struct WorktreeBar: View {
                         Button(WorktreeWords.pullRequest) { model.finishWorktree(shown, of: folder, .pullRequest, deleteBranch: false) }
                             .disabled(model.diff?.pushRemote == nil && model.diff?.upstream == nil)
                         Button("Throw Away…", role: .destructive) { discarding = shown }
-                        Divider()
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
                     }
-                    Button("Setup Command for New Worktrees…") {
-                        setup = model.worktreeSetups[folder] ?? ""
-                        settingUp = true
-                    }
-                } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Merge \(shown.chipTitle), open a pull request for it, or throw it away")
+                    .accessibilityLabel("Worktree Actions")
+                    .accessibilityIdentifier("worktree-more")
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help(shown.isMain ? "The setup command of new worktrees" : "Merge \(shown.chipTitle), open a pull request for it, or throw it away")
-                .accessibilityLabel("Worktree Actions")
-                .accessibilityIdentifier("worktree-more")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -83,26 +76,6 @@ struct WorktreeBar: View {
                 }
             } message: {
                 Text(discarding.map(WorktreeWords.discardMessage) ?? "")
-            }
-            .sheet(isPresented: $settingUp) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(WorktreeWords.setupTitle).font(.headline)
-                    Text(.init(WorktreeWords.setupAdvice))
-                        .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    TextField("None", text: $setup).textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("worktree-setup")
-                    HStack {
-                        Spacer()
-                        Button("Cancel") { settingUp = false }.keyboardShortcut(.cancelAction)
-                        Button("Save") {
-                            model.setWorktreeSetup(setup, for: folder)
-                            settingUp = false
-                        }
-                        .keyboardShortcut(.defaultAction)
-                    }
-                }
-                .padding(20)
-                .frame(width: 460)
             }
             .sheet(isPresented: $adding) {
                 NewWorktreeSheet(folder: folder, main: list.first) { adding = false }
@@ -193,7 +166,6 @@ private struct NewWorktreeSheet: View {
                 }
                 .accessibilityIdentifier("worktree-start")
             }
-            Text(WorktreeWords.setupSaid(model.worktreeSetups[folder])).font(.system(size: 11)).foregroundStyle(.secondary)
             if uncommitted {
                 Label(WorktreeWords.uncommitted, systemImage: "exclamationmark.triangle")
                     .font(.system(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)

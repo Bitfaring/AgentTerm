@@ -81,7 +81,7 @@ in the backlog, separate from the 0.8.0 milestone.
 The [0.8.0 milestone](https://github.com/manhpham90vn/AgentTerm/milestone/8)
 develops this direction through an attention inbox, split panes, a prompt
 composer, feedback on diffs, queued instructions, richer handoffs and results,
-PR and CI review, worktree setup, delegation and comparisons across agents.
+PR and CI review, delegation and comparisons across agents.
 
 The [embedded browser](https://github.com/manhpham90vn/AgentTerm/issues/76)
 is planned for this release. It will combine everyday browsing with tools

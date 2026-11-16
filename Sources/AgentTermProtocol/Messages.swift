@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 20
+public let agenttermProtocolVersion = 21
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -492,9 +492,6 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Merges, opens a pull request for, or throws away a worktree, and
     /// removes it (but for a pull request), its branch too when asked.
     case finishWorktree(folder: String, path: String, finish: WorktreeFinish, deleteBranch: Bool)
-    /// The command a folder runs in each new worktree before its agent
-    /// (`npm install`); nil or empty for none.
-    case setWorktreeSetup(folder: String, command: String?)
 }
 
 /// JSON text frames sent by the host.
@@ -659,8 +656,8 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// What a run printed: its screen and what scrolled by, as text; nil
     /// when nothing was kept of it.
     case scheduleRunOutput(id: String, at: Date, text: String?)
-    /// A folder's worktrees, the folder's own first, and its setup command.
-    case worktrees(folder: String, list: [WorktreeInfo], setup: String?)
+    /// A folder's worktrees, the folder's own first.
+    case worktrees(folder: String, list: [WorktreeInfo])
     /// What became of `finishWorktree`: a pull request's address, or that
     /// it was merged or removed.
     case worktreeFinished(folder: String, path: String, said: String)
@@ -672,10 +669,6 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// A `findText` is over: whether there were more lines than were
     /// given, and why it could not be done, when it could not.
     case searchEnded(search: Int, truncated: Bool, problem: String?)
-    /// The setup command of every folder that has one (#34): sent when a
-    /// client connects and whenever one changes, so that it is known
-    /// before a folder's worktrees were ever asked for.
-    case worktreeSetups([String: String])
 }
 
 public enum MessageCoding {

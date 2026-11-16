@@ -302,7 +302,6 @@ final class AppModel: ObservableObject {
 
     /// Each folder's git worktrees (#23, #33), as its host lists them.
     @Published private(set) var worktrees: [String: [WorktreeInfo]] = [:]
-    @Published private(set) var worktreeSetups: [String: String] = [:]
     /// What became of the last worktree that was finished.
     @Published var worktreeSaid: String?
 
@@ -310,7 +309,6 @@ final class AppModel: ObservableObject {
     func finishWorktree(_ worktree: WorktreeInfo, of folder: String, _ finish: WorktreeFinish, deleteBranch: Bool) {
         connection?.send(.finishWorktree(folder: folder, path: worktree.path, finish: finish, deleteBranch: deleteBranch))
     }
-    func setWorktreeSetup(_ command: String?, for folder: String) { connection?.send(.setWorktreeSetup(folder: folder, command: command)) }
 
     func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
 
@@ -1269,7 +1267,6 @@ final class AppModel: ObservableObject {
         commitWriter = CommitWriterSettings()
         schedules = []
         worktrees = [:]
-        worktreeSetups = [:]
         hostVersion = 0
         system.stats = nil
         sshHosts = []
@@ -1438,17 +1435,14 @@ final class AppModel: ObservableObject {
             schedulesPaused = paused
         case .scheduleRunOutput(let id, let at, let text):
             runOutputs[ScheduleOverview.Run.id(schedule: id, at: at)] = .some(text)
-        case .worktrees(let folder, let list, let setup):
+        case .worktrees(let folder, let list):
             worktrees[folder] = list
-            worktreeSetups[folder] = setup
         case .filesFound, .textFound, .searchEnded:
             // Each takes the answers that carry its own searches' numbers.
             search.handle(message)
             promptSearch.handle(message)
         case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .historyMarks, .conversationDeleted, .conversationsDeleted, .conversationExported:
             historyStore.handle(message, folderPath: panelFolder)
-        case .worktreeSetups(let setups):
-            worktreeSetups = setups
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
         case .macInUse(let inUse):

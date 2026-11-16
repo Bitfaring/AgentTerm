@@ -68,16 +68,8 @@ public struct WorktreeInfo: Codable, Equatable, Hashable, Identifiable, Sendable
 public enum WorktreeWords {
     public static let newTitle = "New Worktree"
     public static let newAdvice =
-        "A new branch in a folder of its own, so that what is done there does not touch this one. It starts from the branch picked, without changes that are not committed and without what git ignores, such as .env or node_modules."
-    public static let setupTitle = "Setup Command"
-    public static let setupAdvice =
-        "Run in each new worktree of this folder before its session starts, as in a terminal: `npm install`, `cp ../../../.env .`. Nothing else is copied into a new worktree."
+        "A new branch in a folder of its own, so that what is done there does not touch this one. It starts from the branch picked, without changes that are not committed and without what git ignores, such as .env or node_modules: what it needs, such as `npm install`, is done there."
     public static let uncommitted = "This folder has changes that are not committed: the new worktree will not have them."
-
-    public static func setupSaid(_ command: String?) -> String {
-        guard let command, !command.isEmpty else { return "No setup command is run in it." }
-        return "Its setup command runs first: \(command)"
-    }
 
     public static func discardTitle(_ worktree: WorktreeInfo) -> String { "Throw away \(worktree.chipTitle)?" }
     public static func discardMessage(_ worktree: WorktreeInfo) -> String {

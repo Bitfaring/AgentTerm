@@ -795,6 +795,136 @@ final class BrowserUITests: MacUITestCase {
         app.wait("all of them again") { self.app.exists(.id("agent-shells")) && self.app.exists(.id("terminal-\(agent.id)")) && !self.app.exists(.id("agent-alone")) }
     }
 
+    /// The id `browser_open` said it opened.
+    private func tabID(_ opened: (text: String, failed: Bool)) throws -> String {
+        XCTAssertFalse(opened.failed, opened.text)
+        return try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+    }
+
+    /// BROWSER-23: an agent chooses a file of its project for a file field,
+    /// by a path from its folder, and the page has it. A file outside its
+    /// project, one that is not there, and an element that is no file field
+    /// are refused, with why.
+    func testAnAgentUploadsAFileOfItsProject() throws {
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let page = root.appendingPathComponent("upload.html")
+        try """
+        <!doctype html><title>Upload</title>
+        <input type="file" id="file" aria-label="Report" onchange="document.title = 'got ' + [...this.files].map(f => f.name).join(',')">
+        <button>Send</button>
+        """.write(to: page, atomically: true, encoding: .utf8)
+        try "hello".write(to: URL(fileURLWithPath: agent.cwd).appendingPathComponent("report.txt"), atomically: true, encoding: .utf8)
+        let tab = try tabID(server.text("browser_open", ["url": page.absoluteString]))
+        let snapshot = server.text("browser_snapshot", ["tab": tab]).text
+        let field = try XCTUnwrap(ref(in: snapshot, "\"Report\""), snapshot)
+        let button = try XCTUnwrap(ref(in: snapshot, "button \"Send\""), snapshot)
+        continueAfterFailure = true
+
+        let chosen = server.text("browser_upload", ["tab": tab, "ref": field, "paths": ["report.txt"]])
+        XCTAssertFalse(chosen.failed, chosen.text)
+        wait("the page has the file") { server.text("browser_evaluate", ["tab": tab, "script": "document.title"]).text == "\"got report.txt\"" }
+        let outside = server.text("browser_upload", ["tab": tab, "ref": field, "paths": ["/etc/hosts"]])
+        XCTAssertTrue(outside.failed && outside.text.contains("is not a file of your project"), outside.text)
+        let missing = server.text("browser_upload", ["tab": tab, "ref": field, "paths": ["not-there.txt"]])
+        XCTAssertTrue(missing.failed && missing.text.contains("There is no file at"), missing.text)
+        let notAField = server.text("browser_upload", ["tab": tab, "ref": button, "paths": ["report.txt"]])
+        XCTAssertTrue(notAField.failed && notAField.text.contains("not a file field"), notAField.text)
+    }
+
+    /// BROWSER-24: a sign-in kept by a profile, on a server of the Mac's
+    /// own: the agent signs in in one tab, and its second tab is signed in;
+    /// its private tab is not, nor a tab of another profile.
+    func testASignInIsTheProfilesOnly() throws {
+        let folder = root.appendingPathComponent("signs")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "<!doctype html><title>Sign in</title><button onclick=\"document.cookie = 'who=bo; path=/'; document.title = 'In'\">Sign in</button>"
+            .write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try "<!doctype html><title>Who</title><script>document.title = document.cookie.includes('who=bo') ? 'Signed in' : 'Signed out'</script>"
+            .write(to: folder.appendingPathComponent("who.html"), atomically: true, encoding: .utf8)
+        let serverPort = port + 501
+        stopWhateverListens(on: serverPort)
+        defer { stopWhateverListens(on: serverPort) }
+        let web = Process()
+        web.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        web.arguments = ["-I", "-m", "http.server", String(serverPort), "--bind", "127.0.0.1", "--directory", folder.path]
+        web.standardOutput = FileHandle.nullDevice
+        web.standardError = FileHandle.nullDevice
+        try web.run()
+        defer { web.terminate() }
+        Thread.sleep(forTimeInterval: 1)
+        let site = "http://127.0.0.1:\(serverPort)/"
+
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        func title(_ tab: String) -> String { server.text("browser_evaluate", ["tab": tab, "script": "document.title"]).text }
+        let signing = try tabID(server.text("browser_open", ["url": site]))
+        let button = try XCTUnwrap(ref(in: server.text("browser_snapshot", ["tab": signing]).text, "button \"Sign in\""))
+        XCTAssertFalse(server.text("browser_click", ["tab": signing, "ref": button]).failed)
+        wait("signed in") { title(signing) == "\"In\"" }
+        continueAfterFailure = true
+        XCTAssertEqual(title(try tabID(server.text("browser_open", ["url": site + "who.html"]))), "\"Signed in\"", "the profile's second tab")
+        XCTAssertEqual(title(try tabID(server.text("browser_open", ["url": site + "who.html", "private": true]))), "\"Signed out\"", "a private tab")
+
+        // Another profile, which another agent names.
+        app.press(.id("place-settings"))
+        app.press(.id("settings-browser"))
+        app.press(.id("profile-new"))
+        app.wait(for: .id("profile-name-Profile 2"))
+        app.press(.id("place-sessions"))
+        let (other, _) = try startAgent()
+        defer { other.stop() }
+        let elsewhere = try tabID(other.text("browser_open", ["url": site + "who.html", "profile": "Profile 2"]))
+        XCTAssertEqual(other.text("browser_evaluate", ["tab": elsewhere, "script": "document.title"]).text, "\"Signed out\"", "another profile's tab")
+    }
+
+    /// BROWSER-25: a page's frames are named in its snapshot, with their
+    /// addresses, their insides not read; a frame's page opened in the tab
+    /// is read.
+    func testASnapshotNamesThePagesFrames() throws {
+        let folder = root.appendingPathComponent("framed")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "<!doctype html><title>Inner</title><button>Inside</button>".write(to: folder.appendingPathComponent("inner.html"), atomically: true, encoding: .utf8)
+        try "<!doctype html><title>Framed</title><p>Outside</p><iframe src=\"inner.html\"></iframe><iframe src=\"inner.html?2\"></iframe>"
+            .write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let tab = try tabID(server.text("browser_open", ["url": folder.appendingPathComponent("index.html").absoluteString]))
+        let inner = folder.appendingPathComponent("inner.html").absoluteString
+        let snapshot = server.text("browser_snapshot", ["tab": tab]).text
+        XCTAssertTrue(snapshot.contains(BrowserWords.frames([inner, inner + "?2"])), snapshot)
+        XCTAssertNil(ref(in: snapshot, "button \"Inside\""), "a frame's insides were read")
+        XCTAssertFalse(server.text("browser_navigate", ["tab": tab, "url": inner]).failed)
+        XCTAssertNotNil(ref(in: server.text("browser_snapshot", ["tab": tab]).text, "button \"Inside\""), "the frame's page opened in the tab is not read")
+    }
+
+    /// BROWSER-26: what changes under an agent while it acts: a link it
+    /// clicked took the page elsewhere, which it is told, and a ref of the
+    /// page before is refused as such; the tab closed by a device is no
+    /// longer its, and it is told so.
+    func testWhatChangesUnderAnAgent() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let tab = try tabID(server.text("browser_open", ["url": page.absoluteString]))
+        let snapshot = server.text("browser_snapshot", ["tab": tab]).text
+        let link = try XCTUnwrap(ref(in: snapshot, "link \"Next page\""), snapshot)
+        let field = try XCTUnwrap(ref(in: snapshot, "textbox \"Name\""), snapshot)
+        let clicked = server.text("browser_click", ["tab": tab, "ref": link])
+        XCTAssertFalse(clicked.failed, clicked.text)
+        XCTAssertTrue(clicked.text.contains("second.html"), "not told where the page went: \(clicked.text)")
+        let stale = server.text("browser_type", ["tab": tab, "ref": field, "text": "Bo"])
+        XCTAssertTrue(stale.failed, stale.text)
+        XCTAssertEqual(stale.text, BrowserWords.staleRef(field))
+
+        let phone = try device()
+        phone.send(.browserAsk(id: 3001, request: .close(tab: tab)))
+        wait("closed") { phone.messages.contains { if case .browserAnswer(3001, _) = $0 { return true } else { return false } } }
+        let gone = server.text("browser_snapshot", ["tab": tab])
+        XCTAssertTrue(gone.failed, gone.text)
+        XCTAssertEqual(gone.text, BrowserWords.notYours(tab))
+    }
+
     /// BROWSER-17 (#94): an agent with its page beside it opens a shell,
     /// which shows under both: the page stays shown, and so does the
     /// agent's terminal.
