@@ -97,6 +97,9 @@ private struct WindowSheets: ViewModifier {
             .sheet(isPresented: $model.showPairMac) {
                 PairMacSheet()
             }
+            .sheet(isPresented: $model.showOnboarding) {
+                OnboardingView()
+            }
             .sheet(isPresented: $model.showBrowseFolders) {
                 BrowseFoldersSheet()
             }
@@ -122,7 +125,7 @@ private struct WindowQuestions: ViewModifier {
     private var closeQuestion: String {
         guard let request = model.pendingCloseRequest else { return "" }
         let count = model.sessionsEnded(by: request).count
-        let kept = request.keepSession != nil || request.keepFile != nil || request.keepDiff
+        let kept = request.keepGroup != nil
         return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
     }
 
@@ -825,7 +828,8 @@ struct TerminalAreaReader: View {
     /// What to take off for the padding a terminal gets.
     let insets: CGSize
     /// False on the launch screen with no session: the strip of tabs a
-    /// session brings is taken off too.
+    /// session brings is taken off too, and the row of its tab's items
+    /// under it (#127).
     var stripShown = true
     /// Whether this is the place a new session would be shown in.
     var reports = true
@@ -841,7 +845,7 @@ struct TerminalAreaReader: View {
 
     private func report(_ size: CGSize) {
         guard reports else { return }
-        let strip = stripShown ? 0 : model.tabStripHeight
+        let strip = stripShown ? 0 : model.tabStripHeight + GroupRow.height
         model.terminalArea = CGSize(width: size.width - insets.width, height: size.height - insets.height - strip)
     }
 }
@@ -855,8 +859,9 @@ struct ForeignSizeBanner: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "iphone").foregroundStyle(.secondary)
-            Text("Another device is using this session, so it is shown at that device's size (\(size.cols) × \(size.rows)).")
+            let driver = model.sizeDrivers[session]
+            Image(systemName: SizeDriver.symbol(for: driver)).foregroundStyle(.secondary)
+            Text(SizeDriver.inUse(by: driver, size: size))
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .truncationMode(.tail)

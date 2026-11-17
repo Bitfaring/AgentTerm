@@ -583,6 +583,8 @@ final class PhoneModel: ObservableObject {
     @Published var showBrowser = false
     @Published private(set) var controller: TerminalController?
     @Published private(set) var foreignSize: TermSize?
+    /// Who decides it, when the host says (#120).
+    @Published private(set) var sizeDriver: SizeDriver?
     @Published var message: String?
     @Published private(set) var fontSize: Double
 
@@ -803,25 +805,34 @@ final class PhoneModel: ObservableObject {
 
     // MARK: Arranging sessions
 
-    /// What a folder's section lists: its sessions in the order chosen,
-    /// pinned ones first, and the label of each group before its sessions.
+    /// What a folder's section lists, as the Mac's strip holds it (#127):
+    /// each agent in the order chosen, pinned ones first, its own pages and
+    /// shells under it; then the user's shells, then the user's pages, each
+    /// under a heading of their kind.
     enum SessionItem: Identifiable {
-        case label(TabGroup, count: Int)
         case session(SessionInfo)
         /// The heading of an agent's own shells or pages, under it: "Shells", "Browser".
         case part(agent: SessionID, title: String)
+        /// The heading of the user's own shells or pages, with how many
+        /// there are, as the Mac's tab of them says it.
+        case heading(HolderKind, folder: String, count: Int)
         /// A shell an agent opened, under it.
         case shell(SessionInfo)
-        /// A page of the Mac's browser: an agent's under it, or the user's.
-        case page(BrowserTabInfo, nested: Bool)
+        /// A shell of the user's, under the Shells heading.
+        case userShell(SessionInfo)
+        /// A page of the Mac's browser an agent opened, under it.
+        case page(BrowserTabInfo)
+        /// A page of the user's, or of an agent that ended, under the
+        /// Browser heading.
+        case userPage(BrowserTabInfo)
 
         var id: String {
             switch self {
-            case .label(let group, _): return "g:" + group.id
             case .session(let session): return session.layoutID
             case .part(let agent, let title): return "p:\(agent):\(title)"
-            case .shell(let shell): return "s:" + shell.layoutID
-            case .page(let tab, _): return "b:" + tab.id
+            case .heading(let kind, let folder, _): return "h:\(kind.rawValue):\(folder)"
+            case .shell(let shell), .userShell(let shell): return "s:" + shell.layoutID
+            case .page(let tab), .userPage(let tab): return "b:" + tab.id
             }
         }
     }
@@ -829,11 +840,16 @@ final class PhoneModel: ObservableObject {
     /// Whether a session is a shell an agent opened that still runs: shown
     /// under its agent, as on the Mac, not on its own.
     private func isCompanion(_ session: SessionInfo) -> Bool {
-        session.openedBy.map { agent in sessions.contains { $0.id == agent } } ?? false
+        // An agent's session only: one an agent typed in a shell opened is
+        // the user's (#129), as on the Mac.
+        session.openedBy.map { agent in sessions.contains { $0.id == agent && $0.agent != nil } } ?? false
     }
 
     /// An agent's own shells and pages, in the order of the tabs.
     func companions(of agent: SessionID) -> (shells: [SessionInfo], pages: [BrowserTabInfo]) {
+        // An agent's session only: what an agent typed in a shell opened is
+        // the user's (#129), listed so, as on the Mac.
+        guard sessions.contains(where: { $0.id == agent && $0.agent != nil }) else { return ([], []) }
         let order = Dictionary(sessionLayout.order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         let shells = sessions.filter { $0.openedBy == agent }.sorted { (order[$0.layoutID] ?? .max, $0.id) < (order[$1.layoutID] ?? .max, $1.id) }
         return (shells, browserTabs.filter { $0.openedBy == agent })
@@ -842,47 +858,46 @@ final class PhoneModel: ObservableObject {
     private func companionItems(of agent: SessionInfo) -> [SessionItem] {
         let (shells, pages) = companions(of: agent.id)
         var items: [SessionItem] = []
+        if !pages.isEmpty { items += [.part(agent: agent.id, title: "Browser")] + pages.map(SessionItem.page) }
         if !shells.isEmpty { items += [.part(agent: agent.id, title: "Shells")] + shells.map(SessionItem.shell) }
-        if !pages.isEmpty { items += [.part(agent: agent.id, title: "Browser")] + pages.map { .page($0, nested: true) } }
         return items
     }
 
     /// The pages of the user's, and of agents that ended, that no folder shows.
     var loosePages: [BrowserTabInfo] {
         let paths = Set(groups.compactMap(\.path))
-        let running = Set(sessions.map(\.id))
+        let running = Set(sessions.filter { $0.agent != nil }.map(\.id))
         return browserTabs.filter { tab in !(tab.openedBy.map(running.contains) ?? false) && !paths.contains(tab.project) }
     }
 
     func items(for group: FolderGroup) -> [SessionItem] {
         let own = Dictionary(group.sessions.map { ($0.layoutID, $0) }, uniquingKeysWith: { $1 })
         var items: [SessionItem] = []
-        var announced: Set<String> = []
+        // The agents, in the order of the Mac's strip, each with its own.
+        var listed: Set<String> = []
         for id in sessionLayout.order {
-            guard let session = own[id], !isCompanion(session) else { continue }
-            if let tabGroup = sessionLayout.group(of: id) {
-                if announced.insert(tabGroup.id).inserted {
-                    let count = sessionLayout.members(of: tabGroup.id).filter { own[$0] != nil }.count
-                    items.append(.label(tabGroup, count: count))
-                }
-                if tabGroup.isCollapsed { continue }
-            }
+            guard let session = own[id], session.agent != nil, !isCompanion(session) else { continue }
+            listed.insert(id)
             items.append(.session(session))
             items += companionItems(of: session)
         }
-        // Sessions the arrangement has not heard of yet.
-        let known = Set(sessionLayout.order)
-        for session in group.sessions where !known.contains(session.layoutID) && !isCompanion(session) {
+        // Agents the arrangement has not heard of yet.
+        for session in group.sessions where session.agent != nil && !listed.contains(session.layoutID) && !isCompanion(session) {
             items.append(.session(session))
             items += companionItems(of: session)
         }
-        // The user's pages of the folder, after its sessions, as on the Mac.
-        let running = Set(sessions.map(\.id))
-        items += browserTabs.filter { tab in !(tab.openedBy.map(running.contains) ?? false) && tab.project == group.path }.map { .page($0, nested: false) }
+        let folder = group.path ?? ""
+        // The user's shells of the folder, under one heading.
+        let shells = group.sessions.filter { $0.agent == nil && !isCompanion($0) }
+        if !shells.isEmpty { items += [.heading(.shells, folder: folder, count: shells.count)] + shells.map(SessionItem.userShell) }
+        // The user's pages of the folder, under one heading, as on the Mac.
+        let running = Set(sessions.filter { $0.agent != nil }.map(\.id))
+        let pages = browserTabs.filter { tab in !(tab.openedBy.map(running.contains) ?? false) && tab.project == group.path }
+        if !pages.isEmpty { items += [.heading(.browser, folder: folder, count: pages.count)] + pages.map(SessionItem.userPage) }
         return items
     }
 
-    /// Moves a session one place up (-1) or down (+1) among the sessions
+    /// Moves an agent's session one place up (-1) or down (+1) among those
     /// its folder shows.
     func move(_ session: SessionInfo, by offset: Int, in group: FolderGroup) {
         let shown = items(for: group).compactMap { item -> String? in
@@ -912,11 +927,12 @@ final class PhoneModel: ObservableObject {
     }
 
     /// Brings the arrangement up to date with the sessions that run. Only
-    /// sessions: the Mac's window has tabs of its own in there, for files.
+    /// the agents' sessions, the ones with a tab of their own: the Mac's
+    /// window has tabs of its own in there, for shells, pages and files.
     private func syncSessionLayout() {
         guard sessionsKnown, layoutKnown else { return }
         var layout = sessionLayout
-        layout.sync(with: sessions.map(\.layoutID), owns: SessionInfo.isLayoutID)
+        layout.sync(with: SessionInfo.withTabs(sessions).map(\.layoutID), owns: SessionInfo.isLayoutID)
         sessionLayout = layout
     }
 
@@ -989,7 +1005,7 @@ final class PhoneModel: ObservableObject {
     }
 
     func agentID(for session: SessionInfo) -> String {
-        session.agent ?? "shell"
+        session.agent ?? session.typedAgent ?? "shell"
     }
 
     // MARK: Pairing
@@ -1356,6 +1372,9 @@ final class PhoneModel: ObservableObject {
             writingCommitMessage.remove(folder)
             // A draft: it goes in the field, to be read before committing.
             if let text { commitDrafts[folder] = text }
+        case .agentSetup:
+            // Set up on the Mac only (#129).
+            break
         case .sshHosts(let list):
             sshHosts = list
         case .systemStats(let stats):
@@ -1412,11 +1431,12 @@ final class PhoneModel: ObservableObject {
                 // and the Mac had it at its own, without a button.
                 if !paging { controller?.claimSize() }
             }
-        case .resized(let id, let size, let driver):
+        case .resized(let id, let size, let driver, let by):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
             guard let controller, controller.session == id else { return }
             controller.hostResized(to: size, driver: driver)
             foreignSize = controller.foreignSize
+            sizeDriver = driver ? nil : by
         case .exited:
             break
         case .paired(_, let token):

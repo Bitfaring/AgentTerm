@@ -22,6 +22,7 @@ struct BrowserPaneView: View {
             Theme.hairline.frame(height: 1)
             AgentBar(tab: tab)
             if let permission = tab.permission { PermissionBar(tab: tab, origin: permission.origin, what: permission.what) }
+            if !model.browsers.heldChromeWindows.isEmpty { HeldChromeWindowBar(windows: model.browsers.heldChromeWindows) }
             if finding { findBar }
             ZStack {
                 // Shown as a device: the page as wide and as tall as its
@@ -133,6 +134,7 @@ struct BrowserPaneView: View {
                 Button("Actual Size") { tab.setZoom(0) }
                 Divider()
                 Button("Developer Tools") { tab.showDevTools() }
+                Button("Open in Chrome Window") { tab.openInChromeWindow() }
                 Divider()
                 Button("Close Tab") { model.closeBrowserTab(tab) }
             } label: {
@@ -256,6 +258,40 @@ private struct AgentBar: View {
 }
 
 /// A page asks for something only the user decides: an agent never answers it.
+/// A window Chrome's own interface opened by itself was held back (#125):
+/// said here, with a button that opens it outside the app.
+private struct HeldChromeWindowBar: View {
+    @EnvironmentObject private var model: AppModel
+    let windows: [NSWindow]
+
+    private var words: String {
+        if windows.count == 1, let title = windows.first?.title, !title.isEmpty { return "Chrome opened “\(title)” in a window of its own." }
+        return "Chrome opened \(windows.count) windows of its own."
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "macwindow").foregroundStyle(.secondary)
+            Text(words)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            Button(windows.count == 1 ? "Open in Chrome Window" : "Open in Chrome Windows") { model.browsers.showHeld() }
+                .controlSize(.small)
+                .accessibilityIdentifier("browser-open-held")
+            Button(windows.count == 1 ? "Close It" : "Close Them") { model.browsers.dismissHeld() }
+                .controlSize(.small)
+                .accessibilityIdentifier("browser-close-held")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Theme.panel)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("browser-held-window")
+    }
+}
+
 private struct PermissionBar: View {
     @ObservedObject var tab: BrowserTab
     let origin: String
@@ -436,168 +472,6 @@ private struct ShowAsRow: View {
         .accessibilityValue(chosen ? "shown" : "")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { action() }
-    }
-}
-
-/// The Browser tab's label in a strip: the user's pages of the project,
-/// all in this one tab, as a window of Chrome holds its tabs.
-struct BrowserTabLabel: View {
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var browsers: BrowserModel
-    @ObservedObject var tab: BrowserTab
-    let number: Int
-    @State private var hovering = false
-    @Environment(\.paneFront) private var paneFront
-    @Environment(\.paneID) private var paneID
-
-    private var selected: Bool { paneFront == tab.tabID }
-
-    var body: some View {
-        let pages = model.userPages(in: tab.project)
-        let loading = pages.contains { $0.loading }
-        HStack(spacing: 6) {
-            Image(systemName: loading ? "arrow.triangle.2.circlepath" : "globe")
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(pages.count > 1 ? "Browser (\(pages.count))" : "Browser")
-                .font(.system(size: 12, weight: selected ? .medium : .regular))
-                .foregroundStyle(selected ? .primary : .secondary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-            ZStack {
-                if number <= 9, !hovering {
-                    Text("⌘\(number)").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.tertiary)
-                }
-                Button {
-                    model.requestCloseBrowser(in: tab.project)
-                } label: {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .opacity(hovering ? 1 : 0)
-                .help(pages.count > 1 ? "Close the browser's \(pages.count) pages" : "Close the browser")
-            }
-            .frame(minWidth: 22)
-        }
-        .padding(.leading, 10)
-        .padding(.trailing, 6)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(selected ? Color.white.opacity(0.12) : (hovering ? Color.white.opacity(0.05) : .clear))
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture { model.selectStripTab(tab.tabID) }
-        .help(model.shownPage(in: tab.project)?.displayTitle ?? "Browser")
-        .contextMenu {
-            TabArrangeMenu(id: tab.tabID)
-            Divider()
-            Button("New Page") { model.openBrowserTab() }
-            Button("Close Browser") { model.requestCloseBrowser(in: tab.project) }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(pages.count > 1 ? "Browser, \(pages.count) pages" : "Browser")
-        .accessibilityIdentifier("strip-browser")
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction { model.selectStripTab(tab.tabID) }
-        .accessibilityAction(named: "Close Browser") { model.requestCloseBrowser(in: tab.project) }
-    }
-}
-
-/// The Browser tab of a project: a row of the user's pages there, with a
-/// button for one more, and the page picked.
-struct UserBrowserView: View {
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var browsers: BrowserModel
-    let project: String
-    let focused: Bool
-
-    var body: some View {
-        let pages = model.userPages(in: project)
-        let shown = model.shownPage(in: project)
-        VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(pages) { page in
-                            PageTab(tab: page, selected: page === shown)
-                        }
-                    }
-                }
-                .fixedSize(horizontal: pages.count < 6, vertical: false)
-                Button {
-                    model.openBrowserTab()
-                } label: {
-                    Image(systemName: "plus").font(.system(size: 10.5, weight: .semibold)).frame(width: 22, height: 20)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("New page")
-                .accessibilityLabel("New Page")
-                .accessibilityIdentifier("browser-new-page")
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 30)
-            .background(Theme.panel)
-            .overlay(alignment: .bottom) { Theme.hairline.frame(height: 1) }
-            if let shown {
-                BrowserPaneView(tab: shown, focused: focused).id(shown.id)
-            } else {
-                Theme.canvas
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("user-browser")
-    }
-}
-
-/// One page in the Browser tab's row.
-private struct PageTab: View {
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject var tab: BrowserTab
-    let selected: Bool
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: tab.loading ? "arrow.triangle.2.circlepath" : "globe")
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(tab.displayTitle)
-                .font(.system(size: 11.5, weight: selected ? .medium : .regular))
-                .foregroundStyle(selected ? .primary : .secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 170, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
-            Button {
-                model.closeBrowserTab(tab)
-            } label: {
-                Image(systemName: "xmark").font(.system(size: 8.5, weight: .bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .opacity(hovering || selected ? 1 : 0)
-            .help("Close this page")
-        }
-        .padding(.leading, 8)
-        .padding(.trailing, 6)
-        .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(selected ? Color.white.opacity(0.12) : (hovering ? Color.white.opacity(0.05) : .clear)))
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture { model.selectTab(id: tab.tabID) }
-        .help(tab.url)
-        .contextMenu { Button("Close Page") { model.closeBrowserTab(tab) } }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(tab.displayTitle)
-        .accessibilityIdentifier("tab-b\(tab.id)")
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction { model.selectTab(id: tab.tabID) }
-        .accessibilityAction(named: "Close Tab") { model.closeBrowserTab(tab) }
     }
 }
 

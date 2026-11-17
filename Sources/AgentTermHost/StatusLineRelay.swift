@@ -6,28 +6,24 @@ import Foundation
 ///
 /// Claude Code does not write the account's rate limits anywhere, but it
 /// hands them to the status line command, with how full the context is. So
-/// the sessions AgentTerm starts get a status line command of AgentTerm's own,
-/// `agenttermd statusline <file>`. It saves what it is given for the host to
-/// read, then runs the status line the user had set up, if any, and passes
-/// on what that prints, so theirs still shows.
+/// `agenttermd setup claude` puts a status line command of AgentTerm's own
+/// in its settings (#129), `agenttermd statusline`. In a session of
+/// AgentTerm's it saves what it is given in the file the session's
+/// environment names, for the host to read; anywhere, it then runs the
+/// status line the user had set up, if any, and passes on what that prints,
+/// so theirs still shows.
 public enum StatusLineRelay {
-    /// The command line to start Claude Code with so that it reports to `file`.
-    public static func launchArguments(tool: String, file: String) -> String {
-        let settings: [String: Any] = ["statusLine": statusLine(tool: tool, file: file)]
-        let json = (try? JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        return " --settings " + Handoff.shellQuote(json)
-    }
 
-    /// The status line setting that reports to `file`.
-    static func statusLine(tool: String, file: String) -> [String: Any] {
-        ["type": "command", "command": Handoff.shellQuote(tool) + " statusline " + Handoff.shellQuote(file)]
-    }
-
-    /// Saves the status line's input and returns what the user's own status
-    /// line prints for it.
-    public static func run(input: Data, file: String, home: String = NSHomeDirectory(), environment: [String: String] = ProcessInfo.processInfo.environment) -> Data {
+    /// Saves the status line's input in `file`, the session's, and returns
+    /// what the user's own status line prints for it: the one `previous`
+    /// keeps, which AgentTerm's took the place of (#129), or the one of the
+    /// user's settings. Outside a session of AgentTerm's, nothing is saved.
+    public static func run(
+        input: Data, file: String?, previous: URL? = nil, home: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Data {
         let object = (try? JSONSerialization.jsonObject(with: input)) as? [String: Any]
-        if object != nil {
+        if object != nil, let file {
             let url = URL(fileURLWithPath: file)
             let problem = failureFile(for: file)
             do {
@@ -41,7 +37,9 @@ public enum StatusLineRelay {
             }
         }
         let project = (object?["workspace"] as? [String: Any])?["project_dir"] as? String ?? object?["cwd"] as? String
-        guard let command = userCommand(project: project, home: home, environment: environment) else { return Data() }
+        let kept = previous.flatMap { FileManager.default.contents(atPath: $0.path) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        guard let command = (kept?["command"] as? String).flatMap({ $0.isEmpty ? nil : $0 }) ?? userCommand(project: project, home: home, environment: environment)
+        else { return Data() }
         return pipe(input, through: command)
     }
 
@@ -99,6 +97,7 @@ public enum StatusLineRelay {
         var usage = SessionUsage()
         let model = object["model"] as? [String: Any]
         usage.model = model?["display_name"] as? String ?? model?["id"] as? String
+        usage.effort = (object["effort"] as? [String: Any])?["level"] as? String
         if let context = object["context_window"] as? [String: Any] {
             usage.contextWindow = (context["context_window_size"] as? NSNumber)?.intValue
             if let current = context["current_usage"] as? [String: Any] {

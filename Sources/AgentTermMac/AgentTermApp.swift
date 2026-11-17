@@ -72,7 +72,7 @@ struct AgentTermApp: App {
                 BrowserCommands(model: model)
             }
             CommandGroup(after: .toolbar) {
-                AgentAreaCommands(model: model)
+                GroupItemCommands(model: model)
             }
             CommandGroup(after: .sidebar) {
                 Button("Bigger Text") { model.changeFontSize(by: 1) }
@@ -750,8 +750,6 @@ private struct TabCommands: View {
             if let front { model.setTabPinned(front, !model.tabLayout.isPinned(front)) }
         }
         .disabled(front == nil)
-        Button("Add Tab to New Group") { if let front { model.newTabGroup(with: front) } }
-            .disabled(front == nil)
         Button("Move Tab Left") { if let front { model.moveTab(front, by: -1) } }
             .keyboardShortcut("[", modifiers: [.command, .control, .shift])
             .disabled(model.tabCount < 2)
@@ -771,34 +769,37 @@ private struct TabCommands: View {
         Button("Close All Files") { model.closeFileTabs(pane: pane) }
             .keyboardShortcut("w", modifiers: [.command, .shift])
             .disabled(files.documents.isEmpty && model.diffTabFile == nil)
-        Button("Close Other Tabs…") {
-            model.closeTabs(
-                .init(
-                    keepSession: model.diffInFront || files.active != nil ? nil : model.selectedSession,
-                    keepFile: model.diffInFront ? nil : files.active, keepDiff: model.diffInFront, pane: pane
-                ))
-        }
-        .disabled(model.tabCount < 2)
+        Button("Close Other Tabs…") { model.closeTabs(.init(keepGroup: model.frontStripTab, pane: pane)) }
+            .disabled(model.tabCount < 2)
         Button(model.sessions.isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs(.init(pane: pane)) }
             .disabled(model.tabCount == 0)
     }
 }
 
-/// Moving about an agent's area, its page and its shells, with the keyboard
-/// alone, and showing one of them alone for a while (#69).
-private struct AgentAreaCommands: View {
+/// Moving about the group in front with the keyboard alone. In an agent's
+/// tab, about its area (#69): the agent, its page, its shells, each where
+/// it is, and one of them shown alone for a while. In one of the user's
+/// groups, which shows one item (#127): the one before it, the one after.
+/// The same keys for both: Option and Command with an arrow.
+private struct GroupItemCommands: View {
     @ObservedObject var model: AppModel
+
+    private var area: Bool { model.agentAreaInFront != nil }
+    private var several: Bool { model.paneLayout.focusedPane.front.map { model.members(of: $0).count > 1 } ?? false }
 
     var body: some View {
         Divider()
-        // Each where it is: the agent on the left, its page on the right,
-        // its shells under both.
-        Button("Keyboard to the Agent") { model.moveKeyboard(to: .agent) }
-            .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-            .disabled(!model.canMoveKeyboard(to: .agent))
-        Button("Keyboard to Its Page") { model.moveKeyboard(to: .browser) }
-            .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-            .disabled(!model.canMoveKeyboard(to: .browser))
+        // The agent on the left, its page on the right, its shells under both.
+        Button(area ? "Keyboard to the Agent" : "Previous Item in Group") {
+            if area { model.moveKeyboard(to: .agent) } else { model.showNextMember(-1) }
+        }
+        .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+        .disabled(area ? !model.canMoveKeyboard(to: .agent) : !several)
+        Button(area ? "Keyboard to Its Page" : "Next Item in Group") {
+            if area { model.moveKeyboard(to: .browser) } else { model.showNextMember(1) }
+        }
+        .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+        .disabled(area ? !model.canMoveKeyboard(to: .browser) : !several)
         Button("Keyboard to Its Shells") { model.moveKeyboard(to: .shells) }
             .keyboardShortcut(.downArrow, modifiers: [.command, .option])
             .disabled(!model.canMoveKeyboard(to: .shells))
@@ -807,7 +808,7 @@ private struct AgentAreaCommands: View {
             isOn: Binding(get: { model.agentAreaInFront.flatMap { model.agentAreaAlone[$0] } != nil }, set: { _ in model.toggleAlone() })
         )
         .keyboardShortcut(.return, modifiers: [.command, .shift])
-        .disabled(model.agentAreaInFront == nil)
+        .disabled(!area)
         Divider()
     }
 }

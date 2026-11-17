@@ -65,11 +65,19 @@ final class AppModel: ObservableObject {
     }
     /// Sessions currently sized by another device, with that device's grid.
     @Published private(set) var foreignSizes: [SessionID: TermSize] = [:]
+    /// Who decides each of those sizes, when the host says (#120).
+    @Published private(set) var sizeDrivers: [SessionID: SizeDriver] = [:]
     @Published private(set) var diff: DiffSnapshot?
-    /// The change whose diff has a tab in the middle pane, with the folder
-    /// it is in. The tab keeps both: looking at a session of another folder
-    /// changes which folder the side panel shows, and must not close it.
-    @Published private(set) var diffTab: OpenDiff?
+    /// The changes whose diffs are open, with the folder each is in, in the
+    /// Diffs tab of their project (#127). A diff keeps both: looking at a
+    /// session of another folder changes which folder the side panel shows,
+    /// and must not close it. Each follows its change, as the one diff tab
+    /// did before.
+    @Published private(set) var diffTabs: [OpenDiff] = []
+    /// The diff shown, or last shown, by its tab id.
+    @Published private(set) var diffShownID: String?
+    /// The diff shown, or the last one shown.
+    var diffTab: OpenDiff? { diffTabs.first { $0.tabID == diffShownID } ?? diffTabs.last }
 
     struct OpenDiff: Equatable {
         let folder: String
@@ -82,6 +90,10 @@ final class AppModel: ObservableObject {
         /// The file is changed inside a submodule (#44), which `folder`
         /// then is: the tab goes when nothing is changed there any more.
         var inSubmodule = false
+
+        /// Its id among the tabs: its folder, what it is of, its file; not
+        /// whether it is staged, which it follows.
+        var tabID: String { "d:" + folder + "\n" + (commit?.hash ?? "") + "\n" + file.path }
     }
     /// Whether the diff's tab is the one in front.
     @Published private(set) var diffInFront = false {
@@ -236,14 +248,11 @@ final class AppModel: ObservableObject {
     }
     /// The project whose panes are on show.
     @Published var shownProject = ""
-    /// How each agent's own shells and browser are laid out beside it, by
-    /// the tab id of its session.
+    /// How each agent's own page and shells are laid out beside it in its
+    /// tab, by the tab id of its session.
     @Published var agentAreas: [String: AgentArea] = AppModel.savedAgentAreas(for: nil) {
         didSet { if agentAreas != oldValue { saveAgentAreas() } }
     }
-    /// Where each pane, and each part of an agent's area, is in the window,
-    /// in its coordinates from the top left: a click finds its pane here.
-    var paneFrames: [PanePlace: CGRect] = [:]
     /// The part of an agent's area the keyboard is in, by the agent's tab.
     @Published var agentAreaFocus: [String: AgentAreaPart] = [:]
     /// The part of an agent's area shown alone for a while, filling it
@@ -256,9 +265,13 @@ final class AppModel: ObservableObject {
     @Published var browserFindRequest = 0
     /// What the user picked in a page to send an agent, while its sheet is open.
     @Published var pendingPick: BrowserPick?
-    /// The page the Browser tab of each project shows, of the user's
-    /// pages there, by the project's folder.
-    @Published var browserShown: [String: String] = [:]
+    /// The item each of the user's groups of the strip shows, by the
+    /// group's id (#127): a shell, a page, a diff, a file. What an agent's
+    /// tab shows is its area's (`agentAreas`).
+    @Published var groupShown: [String: String] = [:]
+    /// Where each pane, and each part of an agent's area, is in the window,
+    /// in its coordinates from the top left: a click finds its place here.
+    var paneFrames: [PanePlace: CGRect] = [:]
     /// The project whose Browser tab, of several pages, is asked to close.
     @Published var pendingBrowserClose: String?
     /// The tab the element sent last was picked in.
@@ -575,6 +588,46 @@ final class AppModel: ObservableObject {
     /// The hosts of this Mac's SSH configuration, as the host read them.
     @Published private(set) var sshHosts: [String] = []
 
+    // MARK: The agents' hooks and MCP server (#129)
+
+    /// What each agent has of AgentTerm's in its own configuration, as the
+    /// host found it; nil until it has said.
+    @Published private(set) var agentSetup: AgentSetupReport?
+    /// The onboarding, shown over the window.
+    @Published var showOnboarding = false
+    /// Whether the onboarding was looked at in this run of the app: it is
+    /// shown at most once a run, when an installed agent is not set up.
+    private var onboardingChecked = false
+    /// The user asked not to be shown the onboarding again.
+    static let onboardingHiddenKey = "onboarding.hidden"
+    var onboardingHidden: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.onboardingHiddenKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.onboardingHiddenKey) }
+    }
+
+    /// Asks the host again what each agent has.
+    func refreshAgentSetup() {
+        connection?.send(.agentSetupStatus)
+    }
+
+    /// Adds AgentTerm's hooks and MCP server to an agent's configuration,
+    /// or every installed one's (nil), or takes them out: on this Mac's host
+    /// only, which does it with the agents' own commands.
+    func runAgentSetup(agent: String?, remove: Bool = false) {
+        guard !isRemote, status == .connected else { return }
+        connection?.send(.runAgentSetup(agent: agent, remove: remove))
+    }
+
+    /// The setup the host said: the onboarding is shown, once a run of the
+    /// app, when an agent installed on this Mac misses something of
+    /// AgentTerm's and the user did not ask not to be shown it.
+    private func agentSetupSaid(_ report: AgentSetupReport) {
+        agentSetup = report
+        guard !onboardingChecked, !isRemote, report.busy.isEmpty else { return }
+        onboardingChecked = true
+        if report.needsSetup, !onboardingHidden, ProcessInfo.processInfo.environment["AGENTTERM_NO_ONBOARDING"] == nil { showOnboarding = true }
+    }
+
     func refreshSSHHosts() {
         // A host from before 0.4.0 does not know the request, and would
         // answer with an error for the user to wonder about.
@@ -757,9 +810,8 @@ final class AppModel: ObservableObject {
 
     /// Closing every tab but the one named. Nothing named closes them all.
     struct CloseRequest: Identifiable {
-        var keepSession: SessionID?
-        var keepFile: String?
-        var keepDiff = false
+        /// The tab of the strip that stays, with all it holds (#127).
+        var keepGroup: String?
         /// The pane whose strip it was asked from: only its tabs are closed
         /// (#69), what the user sees there. Nil for every tab of every pane.
         var pane: String?
@@ -928,7 +980,7 @@ final class AppModel: ObservableObject {
             if active != nil { DispatchQueue.main.async { self?.frontChanged() } }
         }.store(in: &observers)
         // The arrangement of the tabs follows the tabs that exist.
-        $sessions.combineLatest(files.$documents, $diffTab, $diff)
+        $sessions.combineLatest(files.$documents, $diffTabs, $diff)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.syncTabs() }
             .store(in: &observers)
@@ -1224,6 +1276,8 @@ final class AppModel: ObservableObject {
         // Each Mac's panes are kept here, apart (#69).
         workspaces = Self.savedWorkspaces(for: mac?.id)
         agentAreas = Self.savedAgentAreas(for: mac?.id)
+        agentAreaFocus = [:]
+        agentAreaAlone = [:]
         shownProject = ""
         // The browser is this Mac's: its tabs close while another Mac is
         // on show (#76).
@@ -1471,6 +1525,7 @@ final class AppModel: ObservableObject {
             hostVersion = version
             tellWhetherInFront()
             refreshSSHHosts()
+            refreshAgentSetup()
             hostMatch = ProtocolMatch(host: version)
             otherBuildOfHost = hostMatch == .same ? Self.otherBuild(release: release, revision: revision) : nil
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
@@ -1563,6 +1618,8 @@ final class AppModel: ObservableObject {
             if let message { commitMessages[path] = message }
         case .sshHosts(let list):
             sshHosts = list
+        case .agentSetup(let report):
+            agentSetupSaid(report)
         case .systemStats(let stats):
             system.stats = stats
         case .tabLayout(let layout):
@@ -1609,11 +1666,12 @@ final class AppModel: ObservableObject {
         case .replayed(let id):
             replaying.remove(id)
             controllers[id]?.endReplay()
-        case .resized(let id, let size, let driver):
+        case .resized(let id, let size, let driver, let by):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
             guard let controller = controllers[id] else { return }
             controller.hostResized(to: size, driver: driver)
             foreignSizes[id] = controller.foreignSize
+            sizeDrivers[id] = driver ? nil : by
         case .exited(let id, _):
             controllers[id] = nil
             foreignSizes[id] = nil
@@ -1706,13 +1764,15 @@ final class AppModel: ObservableObject {
             apply(snapshot, to: path)
         case .diffFile(let path, let file):
             loadingDiffFile = false
-            guard isRemote, let tab = diffTab, tab.folder == path, tab.commit == nil else { break }
-            if let file {
-                if file.path == tab.file.path, file.isStaged == tab.file.isStaged, file != tab.file {
-                    diffTab = OpenDiff(folder: path, file: file, inSubmodule: tab.inSubmodule)
+            guard isRemote else { break }
+            for tab in diffTabs where tab.folder == path && tab.commit == nil {
+                if let file {
+                    if file.path == tab.file.path, file.isStaged == tab.file.isStaged, file != tab.file {
+                        updateDiff(tab.tabID, to: OpenDiff(folder: path, file: file, inSubmodule: tab.inSubmodule))
+                    }
+                } else if tab.tabID == diffTab?.tabID {
+                    closeDiffTab(tab.tabID)
                 }
-            } else {
-                closeDiffTab()
             }
         case .gitSynced(let path):
             syncing[path] = nil
@@ -1768,6 +1828,17 @@ final class AppModel: ObservableObject {
         let size = startingSize
         Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
         connection?.send(.create(CreateRequest(command: agent?.id, cwd: startingDirectory, title: agent?.name, size: size)))
+    }
+
+    /// Starts a shell for an agent (#127), from its group's row: in its
+    /// folder, under it, and the agent sees and uses it as one it opened
+    /// itself.
+    func newShell(besideAgent agentTab: String) {
+        guard status == .connected, let agent = session(forTab: agentTab), agent.agent != nil else { return }
+        lastError = nil
+        selectNextAttached = true
+        Telemetry.shared.record(.sessionStart(agent: .init(id: nil)))
+        connection?.send(.create(CreateRequest(cwd: agent.cwd, size: startingSize, openedBy: agent.id)))
     }
 
     /// Starts an agent, or a shell, in a new git worktree of the selected
@@ -2031,17 +2102,27 @@ final class AppModel: ObservableObject {
     func closeFileTabs(except kept: String? = nil, keepDiff: Bool = false, pane: String? = nil) {
         // Of one pane, those in it only (#69).
         let inPane = pane.flatMap { paneLayout.pane($0) }.map { Set($0.tabs) }
-        if !keepDiff, !tabLayout.isPinned(TabID.diff), inPane?.contains(TabID.diff) ?? true { closeDiffTab() }
-        let elsewhere = inPane.map { tabs in Set(files.documents.map(\.path).filter { !tabs.contains(TabID.file($0)) }) } ?? []
+        if !keepDiff {
+            for diff in diffTabs {
+                let group = TabID.holder(.diffs, project(ofPath: diff.folder))
+                if !tabLayout.isPinned(group), inPane?.contains(group) ?? true { closeDiffTab(diff.tabID) }
+            }
+        }
+        let elsewhere = inPane.map { tabs in Set(files.documents.map(\.path).filter { !tabs.contains(TabID.holder(.files, project(ofPath: $0))) }) } ?? []
         files.closeAll(except: kept, keeping: pinnedFilePaths.union(elsewhere))
     }
 
-    /// The sessions a request would end.
-    func sessionsEnded(by request: CloseRequest) -> [SessionInfo] {
+    /// Whether a request closes a tab of the strip: one it does not keep,
+    /// not pinned, in its pane.
+    private func closes(_ group: String, by request: CloseRequest) -> Bool {
         let inPane = request.pane.flatMap { paneLayout.pane($0) }.map { Set($0.tabs) }
-        return sessions.filter {
-            $0.id != request.keepSession && !tabLayout.isPinned(TabID.session($0)) && (inPane?.contains(TabID.session($0)) ?? true)
-        }
+        return group != request.keepGroup && !tabLayout.isPinned(group) && (inPane?.contains(group) ?? true)
+    }
+
+    /// The sessions a request would end: what the tabs it closes hold, an
+    /// agent with its shells.
+    func sessionsEnded(by request: CloseRequest) -> [SessionInfo] {
+        sessions.filter { closes(stripTab(of: TabID.session($0)), by: request) }
     }
 
     /// Closes every tab but the one the request keeps. Sessions are running
@@ -2051,17 +2132,13 @@ final class AppModel: ObservableObject {
     }
 
     func closeTabsConfirmed(_ request: CloseRequest) {
-        closeFileTabs(except: request.keepFile, keepDiff: request.keepDiff, pane: request.pane)
+        for diff in diffTabs where closes(TabID.holder(.diffs, project(ofPath: diff.folder)), by: request) { closeDiffTab(diff.tabID) }
+        let keptFiles = files.documents.map(\.path).filter { !closes(TabID.holder(.files, project(ofPath: $0)), by: request) }
+        files.closeAll(except: nil, keeping: Set(keptFiles))
         for session in sessionsEnded(by: request) { close(session.id) }
-        // What was kept comes to the front.
-        if let kept = request.keepSession, let session = sessions.first(where: { $0.id == kept }) {
-            // Not past a file with unsaved changes that is asking what to do.
-            if files.pendingClose == nil { select(session: session) }
-        } else if let kept = request.keepFile {
-            if files.pendingClose == nil { files.active = kept }
-        } else if request.keepDiff {
-            if files.pendingClose == nil { showDiffTab() }
-        }
+        // What was kept comes to the front, not past a file with unsaved
+        // changes that is asking what to do.
+        if let kept = request.keepGroup, files.pendingClose == nil { selectStripTab(kept) }
     }
 
     /// Closes the tab in front: a file is closed, a session is ended.
@@ -2283,27 +2360,34 @@ final class AppModel: ObservableObject {
         follow(snapshot, in: directory)
     }
 
-    /// Has the diff's tab follow the change it shows, in the folder or in
-    /// one of its submodules, theirs too (#44).
+    /// Has each diff follow the change it shows, in the folder or in one of
+    /// its submodules, theirs too (#44).
     private func follow(_ snapshot: DiffSnapshot, in directory: String) {
-        guard let tab = diffTab, tab.commit == nil else { return }
-        guard tab.folder == directory else {
-            if tab.folder.hasPrefix(directory + "/") {
-                if let inside = snapshot.submodules.first(where: { tab.folder == $0.directory(in: directory) || tab.folder.hasPrefix($0.directory(in: directory) + "/") }) {
-                    follow(inside.changes, in: inside.directory(in: directory))
-                } else if tab.inSubmodule {
-                    // Nothing is changed in its submodule any more. A tab
-                    // of another worktree of the folder is not this: it stays.
-                    closeDiffTab()
-                }
+        for tab in diffTabs where tab.commit == nil {
+            if tab.folder == directory {
+                follow(tab, in: snapshot, directory: directory)
+            } else if tab.folder.hasPrefix(directory + "/"), tab.inSubmodule,
+                !snapshot.submodules.contains(where: { tab.folder == $0.directory(in: directory) || tab.folder.hasPrefix($0.directory(in: directory) + "/") })
+            {
+                // Nothing is changed in its submodule any more. A diff of
+                // another worktree of the folder is not this: it stays.
+                closeDiffTab(tab.tabID)
             }
-            return
         }
-        // The tab shows the change as it is now. A file that was
-        // just staged or unstaged is followed into its new list.
+        for inside in snapshot.submodules {
+            let place = inside.directory(in: directory)
+            if diffTabs.contains(where: { $0.commit == nil && ($0.folder == place || $0.folder.hasPrefix(place + "/")) }) {
+                follow(inside.changes, in: place)
+            }
+        }
+    }
+
+    /// A diff shows its change as it is now. A file that was just staged
+    /// or unstaged is followed into its new list.
+    private func follow(_ tab: OpenDiff, in snapshot: DiffSnapshot, directory: String) {
         guard var now = snapshot.files.first(where: { $0.id == tab.file.id }) ?? snapshot.files.first(where: { $0.path == tab.file.path }) else {
-            // A change that is gone, committed for one, takes its tab with it.
-            closeDiffTab()
+            // A change that is gone, committed for one, takes its diff with it.
+            closeDiffTab(tab.tabID)
             return
         }
         if isRemote {
@@ -2312,7 +2396,7 @@ final class AppModel: ObservableObject {
             if now.isStaged == tab.file.isStaged { now.patch = tab.file.patch }
             connection?.send(.diffFile(path: directory, file: now.path, staged: now.isStaged))
         }
-        if now != tab.file { diffTab = OpenDiff(folder: directory, file: now, inSubmodule: tab.inSubmodule) }
+        if now != tab.file { updateDiff(tab.tabID, to: OpenDiff(folder: directory, file: now, inSubmodule: tab.inSubmodule)) }
     }
 
     /// The change that has a tab in the middle pane, if any.
@@ -2335,7 +2419,7 @@ final class AppModel: ObservableObject {
     ///   nil for a change of the folder itself.
     func openDiff(_ file: FileDiff, in submodule: String? = nil) {
         guard let folder = directory(of: submodule) else { return }
-        diffTab = OpenDiff(folder: folder, file: file, inSubmodule: submodule != nil)
+        putDiff(OpenDiff(folder: folder, file: file, inSubmodule: submodule != nil))
         // From another Mac the list has no diffs in it: this file's is asked for.
         if isRemote {
             loadingDiffFile = true
@@ -2355,9 +2439,42 @@ final class AppModel: ObservableObject {
         if selectedFolder != tab.folder, folders.contains(where: { $0.path == tab.folder }) { selectedFolder = tab.folder }
     }
 
-    func closeDiffTab() {
-        diffTab = nil
-        diffInFront = false
+    /// Opens a diff, or brings up the one it has, with its change now.
+    private func putDiff(_ open: OpenDiff) {
+        if let index = diffTabs.firstIndex(where: { $0.tabID == open.tabID }) { diffTabs[index] = open } else { diffTabs.append(open) }
+        diffShownID = open.tabID
+    }
+
+    /// A diff's change, as it is now, in its place.
+    private func updateDiff(_ id: String, to open: OpenDiff) {
+        guard let index = diffTabs.firstIndex(where: { $0.tabID == id }), diffTabs[index] != open else { return }
+        diffTabs[index] = open
+    }
+
+    /// Shows one of the diffs.
+    func showDiff(_ id: String) {
+        guard diffTabs.contains(where: { $0.tabID == id }) else { return }
+        if diffShownID != id {
+            diffShownID = id
+            if diffInFront { frontChanged() }
+        }
+        showDiffTab()
+    }
+
+    /// Closes a diff, the one shown unless said: the one beside it in its
+    /// project is shown in its place, if any.
+    func closeDiffTab(_ id: String? = nil) {
+        guard let id = id ?? diffTab?.tabID, let index = diffTabs.firstIndex(where: { $0.tabID == id }) else { return }
+        let closing = diffTabs.remove(at: index)
+        guard diffShownID == id else { return }
+        let project = project(ofPath: closing.folder)
+        let beside = diffTabs.filter { self.project(ofPath: $0.folder) == project }
+        diffShownID = beside.last?.tabID
+        if beside.isEmpty {
+            diffInFront = false
+        } else if diffInFront {
+            frontChanged()
+        }
     }
 
     /// Stages files for the next commit. No files means every change.
@@ -2520,7 +2637,7 @@ final class AppModel: ObservableObject {
     /// Shows what a commit did to one file, in the diff's tab.
     func openDiff(_ file: FileDiff, of commit: CommitInfo) {
         guard let folder = panelFolder else { return }
-        diffTab = OpenDiff(folder: folder, file: file, commit: commit)
+        putDiff(OpenDiff(folder: folder, file: file, commit: commit))
         loadingDiffFile = false
         showDiffTab()
     }
@@ -2616,7 +2733,7 @@ final class AppModel: ObservableObject {
     /// Shows what a stash holds of one file, in the diff's tab.
     func openDiff(_ file: FileDiff, of stash: StashInfo) {
         guard let folder = panelFolder else { return }
-        diffTab = OpenDiff(folder: folder, file: file, commit: CommitInfo(hash: stash.hash, subject: stash.message, date: stash.date), label: "STASH")
+        putDiff(OpenDiff(folder: folder, file: file, commit: CommitInfo(hash: stash.hash, subject: stash.message, date: stash.date), label: "STASH"))
         loadingDiffFile = false
         showDiffTab()
     }

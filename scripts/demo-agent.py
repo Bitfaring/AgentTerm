@@ -6,15 +6,17 @@ terminal it draws what an agent's screen looks like after one answer, and
 draws it again for the new width whenever the terminal is resized, as the
 real ones do. Nothing is asked of any service and no account is used.
 
-As `claude` it also reports usage the way Claude Code does, through the
-status line command it was started with, so the usage band has figures.
-With AGENTTERM_DEMO_DONE_AFTER=<seconds> in its environment, it tells its
+With AGENTTERM_DEMO_TOOL, AgentTerm's program, in its environment, it
+stands in for an agent `agenttermd setup` set up (#129), and runs that
+program as such an agent runs it: it tells its hooks it started, runs
+AgentTerm's MCP server beside it for as long as it runs, and as `claude`
+reports usage through AgentTerm's status line, so the usage band has
+figures. With AGENTTERM_DEMO_DONE_AFTER=<seconds> as well, it tells its
 hooks that a turn began, half that time after it starts, and that it is
 done, that many seconds after (the iPhone's test of the Inbox, #67, #71).
 """
 import json
 import os
-import re
 import subprocess
 import sys
 import textwrap
@@ -22,6 +24,9 @@ import threading
 import time
 
 NAME = os.path.basename(sys.argv[0])
+TOOL = os.environ.get("AGENTTERM_DEMO_TOOL")
+# Each agent's first event, which says its hooks are there.
+START_EVENTS = {"claude": "SessionStart", "codex": "SessionStart", "agy": "SessionStart", "copilot": "sessionStart"}
 ESC = "\x1b["
 DIM, BOLD, RESET = ESC + "2m", ESC + "1m", ESC + "0m"
 
@@ -65,45 +70,51 @@ def size():
         return os.terminal_size((80, 24))
 
 
+def run_tool(arguments, given):
+    """AgentTerm's program, run as a set up agent runs it, given JSON."""
+    subprocess.run([TOOL] + arguments, input=json.dumps(given).encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def set_up():
+    """Its start told to its hooks, and AgentTerm's MCP server started
+    beside it, which says to the host that it did; kept while this runs."""
+    if not TOOL or NAME not in START_EVENTS:
+        return None
+    event = START_EVENTS[NAME]
+    run_tool(["hook", NAME, event], {"hook_event_name": event})
+    return subprocess.Popen([TOOL, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def report_usage():
-    """What Claude Code tells its status line: the model, the context, the limits."""
-    if "--settings" not in sys.argv:
+    """What Claude Code tells its status line: the model, the context, the
+    limits, given to AgentTerm's, which keeps it for the usage band."""
+    if not TOOL:
         return
     try:
-        settings = json.loads(sys.argv[sys.argv.index("--settings") + 1])
-        found = re.search(r" statusline '(.+)'$", settings["statusLine"]["command"])
-        if not found:
-            return
         now = time.time()
         week = now + 2 * 86400 - (now % 86400) + 4 * 3600
         report = {
             "model": {"display_name": "Fable 5.2"},
+            "effort": {"level": "high"},
             "context_window": {"context_window_size": 1_000_000, "used_percentage": 5},
             "rate_limits": {
                 "five_hour": {"used_percentage": 12, "resets_at": now + 4 * 3600 + 28 * 60},
                 "seven_day": {"used_percentage": 38, "resets_at": week},
             },
         }
-        os.makedirs(os.path.dirname(found.group(1)), exist_ok=True)
-        with open(found.group(1), "w") as file:
-            json.dump(report, file)
-    except (ValueError, KeyError, IndexError, OSError):
+        run_tool(["statusline"], report)
+    except OSError:
         pass
 
 
 def tell_done_later():
     """Claude Code's Stop hook, run as it runs it, after a while."""
     after = os.environ.get("AGENTTERM_DEMO_DONE_AFTER")
-    if not after or "--settings" not in sys.argv:
-        return
-    try:
-        settings = json.loads(sys.argv[sys.argv.index("--settings") + 1])
-        hooks = {name: settings["hooks"][name][0]["hooks"][0]["command"] for name in ("UserPromptSubmit", "Stop")}
-    except (ValueError, KeyError, IndexError, TypeError):
+    if not after or not TOOL:
         return
 
     def tell(name, event):
-        subprocess.run(hooks[name], shell=True, input=json.dumps(event).encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        run_tool(["hook", "claude", name], event)
 
     for at, name, event in [
         (float(after) / 2, "UserPromptSubmit", {"hook_event_name": "UserPromptSubmit", "prompt": ASK}),
@@ -163,6 +174,8 @@ def main():
         sys.stdin.read()
         print("feat: trim the spaces around each field")
         return
+    # Held while this runs: its input closed, the server ends.
+    server = set_up()  # noqa: F841
     if NAME == "claude":
         report_usage()
         tell_done_later()

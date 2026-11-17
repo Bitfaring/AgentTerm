@@ -403,7 +403,7 @@ private struct InboxIcon: View {
     var body: some View {
         switch item.kind {
         case .session(let info):
-            let agent = info.agent ?? "shell"
+            let agent = info.agent ?? info.typedAgent ?? "shell"
             Image(systemName: Theme.symbol(for: agent)).foregroundStyle(Theme.accent(for: agent))
         case .failure:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
@@ -423,7 +423,7 @@ private struct InboxWords {
         switch item.kind {
         case .session(let info):
             title = (info.cwd as NSString).lastPathComponent + " · " + info.displayName
-            why = model.agentName(info.agent ?? "shell") + " " + (item.notice?.why ?? "")
+            why = model.agentName(info.agent ?? info.typedAgent ?? "shell") + " " + (item.notice?.why ?? "")
             detail = item.notice?.detail.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             waits = info.state?.isWaiting == true
         case .failure(let failure):

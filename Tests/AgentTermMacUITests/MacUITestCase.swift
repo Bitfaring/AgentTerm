@@ -254,8 +254,23 @@ class MacUITestCase: XCTestCase {
     func makeAgents(_ directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for name in ["claude", "codex"] {
+            // Asked of its plugins (#129), as the real one answers: in a
+            // folder of its own, what it was given and how it was asked.
+            let plugins = directory.appendingPathComponent("plugins-\(name)").path
+            let listed = name == "claude" ? #"printf '  ❯ %s\n    Status: ✔ enabled\n' "$n""# : #"printf '%s  installed, enabled  1.0\n' "$n""#
             let script = """
                 #!/bin/sh
+                case "$1 $2" in
+                  "plugin "*|"features list")
+                    mkdir -p '\(plugins)'
+                    printf '%s\\n' "$*" >> '\(plugins).log'
+                    case "$1 $2" in
+                      "plugin list") for f in '\(plugins)'/plugin-*; do [ -e "$f" ] || continue; n=${f##*/plugin-}; \(listed); done ;;
+                      "plugin install"|"plugin add") touch '\(plugins)'/plugin-"$3" ;;
+                      "plugin uninstall"|"plugin remove") rm -f '\(plugins)'/plugin-"$3" ;;
+                    esac
+                    exit 0 ;;
+                esac
                 case " $* " in
                   *" -p "*) cat > /dev/null; echo "feat: written by the stand-in \(name)"; exit 0 ;;
                 esac
@@ -288,6 +303,9 @@ class MacUITestCase: XCTestCase {
             ["--port", String(port), "--local-only", "--no-account-usage", "--home", home.path, "--agents", root.appendingPathComponent("agents").path] + extra
         var environment = Self.ownHome(home)
         environment["AGENTTERM_STATE_DIR"] = state.path
+        // An agent's hooks and MCP server are said missing after 3 seconds,
+        // not 20 (#129).
+        environment["AGENTTERM_LINK_GRACE"] = "3"
         // What it throws away stays in the test's folder, also when its
         // home is the user's.
         if home != self.home { environment["AGENTTERM_TRASH_DIR"] = root.appendingPathComponent("trash").path }
@@ -324,7 +342,9 @@ class MacUITestCase: XCTestCase {
     }
 
     /// What a test has the app started with besides, when it starts it again.
-    var appEnvironment: [String: String] = [:]
+    /// The onboarding is not shown, but in the test of it (#129): the
+    /// stand-in agents are not set up, and it would cover the window.
+    var appEnvironment: [String: String] = ["AGENTTERM_NO_ONBOARDING": "1"]
 
     /// Starts the app on the test's host. Its preferences are its own too:
     /// with a home of its own it reads and writes none of the real app's.
@@ -396,7 +416,7 @@ class MacUITestCase: XCTestCase {
         var failures: [PartFailure]? { last { if case .failures(let list) = $0 { return list } else { return nil } } }
         /// The size a session has now, as told to a device that is attached to it.
         func size(of session: SessionID) -> TermSize? {
-            last { if case .resized(session, let size, _) = $0 { return size } else { return nil } }
+            last { if case .resized(session, let size, _, _) = $0 { return size } else { return nil } }
         }
         func text(_ session: SessionID) -> String { String(decoding: output[session] ?? Data(), as: UTF8.self) }
         func send(_ message: ClientMessage) { connection.send(message) }

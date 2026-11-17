@@ -440,8 +440,8 @@ final class SessionTests: MacUITestCase {
         phone.send(.takeControl(session: id, size: TermSize(cols: 40, rows: 20)))
         wait("the phone's size") { phone.size(of: id) == TermSize(cols: 40, rows: 20) }
         app.wait(for: .button("Use This Window's Size"), timeout: 15)
-        app.wait(for: .containing("Another device is using this session"))
-        app.wait(for: .containing("40 × 20"))
+        // SIZE-10 (#120): named, as the device named itself.
+        app.wait(for: .containing("In use on iPhone · 40×20"))
         app.press(.button("Use This Window's Size"))
         app.waitGone(.button("Use This Window's Size"), timeout: 15)
         wait("the Mac's size again") { (phone.size(of: id)?.cols ?? 0) > 40 }
@@ -460,7 +460,7 @@ final class SessionTests: MacUITestCase {
         pad.send(.takeControl(session: id, size: large))
         wait("the iPad's size") { pad.size(of: id) == large }
         app.wait(for: .button("Use This Window's Size"), timeout: 15)
-        app.wait(for: .containing("300 × 100"))
+        app.wait(for: .containing("In use on iPad · 300×100"))
         // Something on the last row, to look at in the picture.
         pad.connection.sendInput(Data("clear; tput cup 99 0; printf LAST-ROW\n".utf8), to: id)
         RunLoop.current.run(until: Date().addingTimeInterval(2))

@@ -226,7 +226,11 @@ final class RemoteMacTests: MacUITestCase {
         app.menu(["File", "New Shell"])
         wait("a session here") { phone.sessions.count == 1 }
         let own = try XCTUnwrap(phone.sessions.first)
-        wait("this Mac's host to have its tab") { phone.tabLayout?.order == [own.layoutID] }
+        // A shell of the user's is held in the Shells tab of its project
+        // (#127): that tab is this Mac's.
+        wait("this Mac's host to have its tab") { phone.tabLayout?.order.contains { $0.hasPrefix("h:shells:") } == true }
+        let ownOrder = try XCTUnwrap(phone.tabLayout?.order)
+        XCTAssertFalse(ownOrder.contains(own.layoutID), "a shell of the user's has a tab of its own: \(ownOrder)")
         pair()
         app.wait(for: .text("work, folder"), timeout: 15)
         app.press(.button("Shell"))
@@ -234,11 +238,11 @@ final class RemoteMacTests: MacUITestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(2))
         // Nothing the other Mac's host was ever told names a tab of this Mac.
         let told = otherDevice.messages.compactMap { message -> TabLayout? in if case .tabLayout(let layout) = message { return layout } else { return nil } }
-        XCTAssertFalse(told.contains { $0.order.contains(own.layoutID) }, "the other Mac was given this Mac's tabs: \(told.map(\.order))")
+        XCTAssertFalse(told.contains { !Set($0.order).isDisjoint(with: ownOrder) }, "the other Mac was given this Mac's tabs: \(told.map(\.order))")
         // This Mac's own are as they were.
         switchTo("This Mac")
         RunLoop.current.run(until: Date().addingTimeInterval(1))
-        XCTAssertEqual(phone.tabLayout?.order, [own.layoutID])
+        XCTAssertEqual(phone.tabLayout?.order, ownOrder)
     }
 
     /// REMOTE-17.

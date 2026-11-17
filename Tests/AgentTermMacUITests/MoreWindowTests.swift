@@ -22,9 +22,11 @@ final class MoreWindowTests: MacUITestCase {
         let shell = try XCTUnwrap(phone.sessions.first { $0.title != "Claude Code" && $0.title != "Codex" })
         let claude = try XCTUnwrap(phone.sessions.first { $0.title == "Claude Code" })
         let codex = try XCTUnwrap(phone.sessions.first { $0.title == "Codex" })
+        // The shell's tab is the Shells tab of its folder (#127): pinned, it
+        // keeps the shells it holds.
         app.press(.id("session-\(shell.id)"))
         app.menu(["Tab", "Pin Tab"])
-        wait("the pin") { phone.tabLayout?.pinned.contains(shell.layoutID) ?? false }
+        wait("the pin") { phone.tabLayout?.pinned.contains { $0.hasPrefix("h:shells:") } ?? false }
         // TAB-4: every tab but Claude Code's. It asks, since a session would end, and nothing ends before the answer.
         app.perform("Close Other Tabs", on: .id("tab-\(claude.id)"))
         app.wait(for: .button("End Sessions and Close"))

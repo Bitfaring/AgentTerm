@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 25
+public let agenttermProtocolVersion = 26
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -77,6 +77,13 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     /// it is in the Inbox until one does, or it is dismissed there; both
     /// tell the host `noticeSeen`. Nil or false for every other session.
     public var unseen: Bool?
+    /// An agent typed by hand in this shell, while it runs (#129): its
+    /// id, as the host found it in front in the terminal.
+    public var typedAgent: String?
+    /// Whether the agent of this session, or the one typed in it, talks to
+    /// AgentTerm: its hooks and AgentTerm's MCP server (#129). Nil for a
+    /// session with no agent.
+    public var link: AgentLink?
 
     public init(
         id: SessionID, title: String, cwd: String, size: TermSize, createdAt: Date,
@@ -114,13 +121,21 @@ public struct CreateRequest: Codable, Equatable, Sendable {
     /// it, without Return: the user reads it there, then runs it or not.
     /// An agent's install command, for one (`AgentInstallGuide`).
     public var typed: String?
+    /// The agent's session a shell is opened for, by the user, in its group
+    /// (#127): the agent sees and uses it as one it opened itself. A shell
+    /// only, in the agent's folder.
+    public var openedBy: SessionID?
 
-    public init(command: String? = nil, cwd: String? = nil, title: String? = nil, size: TermSize = .default, typed: String? = nil) {
+    public init(
+        command: String? = nil, cwd: String? = nil, title: String? = nil, size: TermSize = .default, typed: String? = nil,
+        openedBy: SessionID? = nil
+    ) {
         self.command = command
         self.cwd = cwd
         self.title = title
         self.size = size
         self.typed = typed
+        self.openedBy = openedBy
     }
 }
 
@@ -332,6 +347,14 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Replaces how things are shown on every device: the temperature's
     /// unit, diffs in one panel or two, changes as a list or a tree.
     case setDisplaySettings(DisplaySettings)
+    /// Asks for what each agent has of AgentTerm's in its own
+    /// configuration (#129). Answered with `agentSetup`.
+    case agentSetupStatus
+    /// Adds AgentTerm's hooks and MCP server to an agent's own
+    /// configuration, or to every installed one's (nil), or takes them out,
+    /// as `agenttermd setup` does. Answered with `agentSetup` when it starts
+    /// and when it is done.
+    case runAgentSetup(agent: String?, remove: Bool)
     /// Asks for the hosts of the Mac's SSH configuration. Answered with `sshHosts`.
     case sshHosts
     /// Opens `ssh <host>` in a new session the sender is attached to. The
@@ -517,8 +540,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// it: everything before this was a replay of what already happened.
     case replayed(session: SessionID)
     /// The PTY now has this size. `driver` is true when the receiving client
-    /// is the one whose size was chosen.
-    case resized(session: SessionID, size: TermSize, driver: Bool)
+    /// is the one whose size was chosen; `by` names that client when it is
+    /// another (#120).
+    case resized(session: SessionID, size: TermSize, driver: Bool, by: SizeDriver? = nil)
     case exited(session: SessionID, status: Int32)
     case error(String)
     /// Answer to `pair`: the token this device connects with from now on.
@@ -594,6 +618,8 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// and when a client changes it. Nil from a host that keeps none yet:
     /// the client then hands it its own.
     case displaySettings(DisplaySettings?)
+    /// What each agent has of AgentTerm's in its own configuration (#129).
+    case agentSetup(AgentSetupReport)
     /// The hosts the Mac's SSH configuration names, as they are written there.
     case sshHosts([String])
     /// Whether the host starts when the user logs in to the Mac. Sent on

@@ -312,10 +312,19 @@ struct TerminalScreen: View {
                     .background(Palette.panel)
                     .overlay(alignment: .top) { Palette.hairline.frame(height: 1) }
                 } else {
-                    if part == .agent, let info = model.session(session), let agent = info.agent {
-                        UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent], compact: true) {
-                            showingUsage = true
+                    // An agent typed by hand in a shell has one too, while it runs (#129).
+                    if part == .agent, let info = model.session(session), let agent = info.agent ?? info.typedAgent {
+                        HStack(spacing: 0) {
+                            UsageBar(agent: agent, name: info.agent == nil ? model.agentName(agent) : info.title, usage: info.usage, account: model.accountUsage[agent], compact: true) {
+                                showingUsage = true
+                            }
+                            // Whether its hooks and AgentTerm's MCP server talk to the Mac.
+                            if let link = info.link {
+                                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 22)
+                                AgentLinkMark(link: link, typed: info.agent == nil ? model.agentName(agent) : nil, compact: true)
+                            }
                         }
+                        .frame(height: 38)
                         .background(Palette.panel)
                         .sheet(isPresented: $showingUsage) {
                             ScrollView {
@@ -421,8 +430,8 @@ private struct ForeignSizeBanner: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "macbook").foregroundStyle(.secondary)
-            Text("In use on the Mac · \(size.cols)×\(size.rows) · scaled to fit")
+            Image(systemName: SizeDriver.symbol(for: model.sizeDriver)).foregroundStyle(.secondary)
+            Text(SizeDriver.inUse(by: model.sizeDriver, size: size))
                 .font(.footnote)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)

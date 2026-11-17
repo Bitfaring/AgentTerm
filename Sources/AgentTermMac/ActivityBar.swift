@@ -91,7 +91,8 @@ struct SettingsSections: View {
     @EnvironmentObject private var model: AppModel
 
     static let panes: [(tag: String, title: String, symbol: String)] = [
-        ("general", "General", "gearshape"), ("shell", "Shell", "terminal"), ("agents", "Agents", "sparkles"), ("git", "Git", "arrow.triangle.branch"), ("browser", "Browser", "globe"),
+        ("general", "General", "gearshape"), ("shell", "Shell", "terminal"), ("agents", "Agents", "sparkles"), ("hooks", AgentLinkWords.title, "puzzlepiece.extension"),
+        ("git", "Git", "arrow.triangle.branch"), ("browser", "Browser", "globe"),
         ("permissions", "Permissions", "lock.shield"), ("privacy", "Privacy", "hand.raised"),
     ]
 
@@ -150,6 +151,7 @@ struct SettingsPane: View {
             case "git": ScrollView { GitSettingsView() }
             case "browser": ScrollView { BrowserSettingsView() }
             case "agents": AgentPromptsView()
+            case "hooks": ScrollView { HooksAndMCPSettingsView() }
             case "shell": ScrollView { ShellSettingsView() }
             case "permissions": ScrollView { PermissionsView() }
             case "privacy": ScrollView { PrivacySettingsView() }

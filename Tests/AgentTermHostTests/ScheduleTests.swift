@@ -180,8 +180,8 @@ final class SchedulerHostTests: XCTestCase {
         copilot) event=userPromptSubmitted ;;
         *) event= ;;
         esac
-        if [ -n "$event" ] && [ -n "$AGENTTERM_EVENTS" ]; then
-            printf '{"agent":"%s","event":"%s","at":%s,"input":{}}' "$agent" "$event" "$(date +%s)" > "$AGENTTERM_EVENTS"
+        if [ -n "$event" ] && [ -n "$\(AppChannel.current.eventsVariable)" ]; then
+            printf '{"agent":"%s","event":"%s","at":%s,"input":{}}' "$agent" "$event" "$(date +%s)" > "$\(AppChannel.current.eventsVariable)"
         fi
         # Codex prints nothing either: a run of it is known only by its silence.
         [ "$agent" = claude ] && echo "the stand-in $agent is at work"

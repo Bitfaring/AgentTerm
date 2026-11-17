@@ -184,7 +184,7 @@ IDENTIFIER="$IDENTIFIER" OUT="$ROOT/app" CONFIG=debug CHANNEL=dev ./scripts/bund
 APP="$ROOT/app/AgentTerm Dev.app/Contents/MacOS"
 swift build --build-tests > "$LOG" 2>&1 || { grep -E "error:" "$LOG" | cut -c1-300 >&2; echo "screenshots.sh: the tests did not build" >&2; exit 1; }
 
-HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" "$APP/agenttermd" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_TOOL="$APP/agenttermd" "$APP/agenttermd" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 python3 -m http.server "$WEB_PORT" --bind 127.0.0.1 --directory "$PROJECT/docs" > /dev/null 2>&1 &
 WEB=$!

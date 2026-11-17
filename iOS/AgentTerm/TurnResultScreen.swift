@@ -37,7 +37,7 @@ struct TurnResultScreen: View {
     @ViewBuilder
     private func content(_ info: SessionInfo) -> some View {
         let item = InboxItem(.session(info))
-        let agent = info.agent ?? "shell"
+        let agent = info.agent ?? info.typedAgent ?? "shell"
         let result = model.turnResults[session]
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: AgentStyle.symbol(for: agent))

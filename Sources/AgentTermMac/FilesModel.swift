@@ -4,22 +4,78 @@ import AgentTermProtocol
 import AppKit
 import SwiftUI
 
+/// The text of an open file as it is being edited, in a box of its own: a
+/// key in the editor changes what the box holds, and no view is told. Kept
+/// in the document itself, every view that watches the open files was told
+/// at each key, and the whole window was laid out again (#104). What views
+/// show of it is whether it differs from the disk's, which the document says.
+final class EditedText {
+    var text: String
+    init(_ text: String) { self.text = text }
+}
+
 /// A file open in the Files tab.
 struct OpenDocument: Equatable {
     var path: String
     var content: FileContent
-    /// The text as edited. Only meaningful for text content.
-    var text: String
+    /// The text as edited, for text content. `FilesModel` changes it.
+    fileprivate let edited: EditedText
     /// The text as it is on disk.
-    var savedText: String
+    fileprivate(set) var savedText: String
+    /// Whether the text as edited differs from the disk's: kept true to
+    /// both by `FilesModel`, which is what changes them.
+    fileprivate(set) var isDirty = false
     /// A file on another Mac that was asked for and is not here yet.
     var isLoading = false
     /// The bytes of an image on another Mac: there is no file here to read it from.
     var imageData: Data?
 
+    init(path: String, content: FileContent, text: String, savedText: String, isLoading: Bool = false, imageData: Data? = nil) {
+        self.path = path
+        self.content = content
+        edited = EditedText(text)
+        self.savedText = savedText
+        self.isLoading = isLoading
+        self.imageData = imageData
+        isDirty = differs
+    }
+
+    /// The text as edited. Only meaningful for text content.
+    var text: String { edited.text }
+
+    /// Whether the text as edited differs from the disk's, worked out.
+    fileprivate var differs: Bool { isText && !Self.same(edited.text, savedText) }
+
+    /// Whether two texts are the same, unit for unit. Their lengths first,
+    /// which is all it takes after a letter typed: Swift's own `==` reads
+    /// both through to where they differ, megabytes at each key (#104).
+    fileprivate static func same(_ left: String, _ right: String) -> Bool {
+        let one = left as NSString
+        return one.length == (right as NSString).length && one.isEqual(to: right)
+    }
+
+    /// The disk has `text` now, written from here: the text as edited may
+    /// have gone on since.
+    fileprivate mutating func wasSaved(as text: String) {
+        savedText = text
+        isDirty = differs
+    }
+
+    /// Its edits thrown away: the text as it is on disk again.
+    fileprivate mutating func revert() {
+        edited.text = savedText
+        isDirty = false
+    }
+
+    /// The same document: its text as edited is the same box, whatever it
+    /// holds at the moment.
+    static func == (left: OpenDocument, right: OpenDocument) -> Bool {
+        left.path == right.path && left.isDirty == right.isDirty && left.isLoading == right.isLoading && left.edited === right.edited
+            && left.imageData == right.imageData && left.content == right.content && left.savedText == right.savedText
+    }
+
     var name: String { (path as NSString).lastPathComponent }
     var isText: Bool { if case .text = content { return true } else { return false } }
-    var isDirty: Bool { isText && text != savedText }
     var isMarkdown: Bool { FileLanguage.isMarkdown(path) }
     /// A file that is one Mermaid diagram.
     var isMermaid: Bool { FileLanguage.isMermaid(path) }
@@ -168,7 +224,7 @@ final class FilesModel: ObservableObject {
         case .fileSaved(let path):
             guard let text = saving.removeValue(forKey: path) else { return }
             let index = documents.firstIndex(where: { $0.path == path })
-            if let index { documents[index].savedText = text }
+            if let index { documents[index].wasSaved(as: text) }
             let again = saveAgain.remove(path) != nil
             let closing = closeWhenSaved.remove(path) != nil
             guard let index else { return }
@@ -248,10 +304,8 @@ final class FilesModel: ObservableObject {
         for index in documents.indices where documents[index].isText && !documents[index].isDirty {
             // Only files without edits of our own follow the disk. One with
             // unsaved changes keeps them; saving then overwrites the disk.
-            if case .text(let onDisk) = FileBrowser.read(documents[index].path), onDisk != documents[index].savedText {
-                documents[index].content = .text(onDisk)
-                documents[index].text = onDisk
-                documents[index].savedText = onDisk
+            if case .text(let onDisk) = FileBrowser.read(documents[index].path), !OpenDocument.same(onDisk, documents[index].savedText) {
+                documents[index] = OpenDocument(path: documents[index].path, content: .text(onDisk), text: onDisk, savedText: onDisk)
             }
         }
     }
@@ -361,8 +415,9 @@ final class FilesModel: ObservableObject {
             return true
         }
         do {
-            try FileBrowser.write(documents[index].text, to: path)
-            documents[index].savedText = documents[index].text
+            let text = documents[index].text
+            try FileBrowser.write(text, to: path)
+            documents[index].wasSaved(as: text)
             return true
         } catch {
             self.error = "\(error)"
@@ -384,13 +439,19 @@ final class FilesModel: ObservableObject {
     }
 
     func discardChanges(_ path: String) {
-        guard let index = documents.firstIndex(where: { $0.path == path }) else { return }
-        documents[index].text = documents[index].savedText
+        guard let index = documents.firstIndex(where: { $0.path == path }), documents[index].isDirty else { return }
+        documents[index].revert()
     }
 
+    /// The editor's text after a change in it. No view is told of it,
+    /// unless it is the change that makes the file differ from the disk's,
+    /// or no longer differ (#104).
     func setText(_ text: String, for path: String) {
-        guard let index = documents.firstIndex(where: { $0.path == path }), documents[index].text != text else { return }
-        documents[index].text = text
+        guard let index = documents.firstIndex(where: { $0.path == path }) else { return }
+        let document = documents[index]
+        document.edited.text = text
+        let dirty = document.differs
+        if dirty != document.isDirty { documents[index].isDirty = dirty }
     }
 
     private func rememberOpenFiles() {

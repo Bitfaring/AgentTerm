@@ -98,77 +98,142 @@ final class AgentStateTests: XCTestCase {
         XCTAssertEqual(change("codex", "Interrupt", #"{"hook_event_name":"Interrupt"}"#), .set(nil))
     }
 
-    // MARK: - What each agent is given
+    // MARK: - What each agent is given, in its own configuration (#129)
 
-    /// The command a hook runs is the same for every session, so that
-    /// Codex, which trusts a hook by its command, asks once.
-    func testEachAgentIsGivenHooksThatAreTheSameForEverySession() throws {
+    private func setup(_ root: URL, name: String = "agentterm-dev", prompt: String? = nil) -> AgentSetup {
+        AgentSetup(
+            directory: root.appendingPathComponent("setup"), tool: "/Apps/My App's/agenttermd", home: root.appendingPathComponent("home").path, name: name,
+            environment: [:], locate: { [] }, prompt: { _ in prompt }, run: { _ in nil })
+    }
+
+    private func json(_ file: URL) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    }
+
+    /// AGENT-13 (#129): each agent's plugin, which `agenttermd setup` adds to
+    /// its own configuration, has its hooks, the one of its start among
+    /// them, each running `agenttermd hook <agent> <event>`: the same
+    /// command for every session, so that an agent that trusts a hook by
+    /// its command asks once; and AgentTerm's MCP server.
+    func testEachAgentsPluginHasItsHooksTheSameForEverySession() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-hooks-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let home = root.appendingPathComponent("home")
-        try FileManager.default.createDirectory(at: home.appendingPathComponent(".gemini/antigravity-cli"), withIntermediateDirectories: true)
-        try #"{"trustedWorkspaces":["/Users/someone/work"],"model":"x"}"#.write(
-            to: home.appendingPathComponent(".gemini/antigravity-cli/settings.json"), atomically: true, encoding: .utf8)
-        let tool = "/Apps/My App's/agenttermd"
-        let hooks = root.appendingPathComponent("hooks")
+        let setup = setup(root)
 
-        func words(_ arguments: String) -> [String] {
-            let result = Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' x" + arguments])
-            return String(decoding: result?.output ?? Data(), as: UTF8.self).split(separator: "\n").map(String.init).dropFirst().map { $0 }
-        }
-
-        // Claude Code: one --settings, with the status line and the hooks.
-        let claude = words(try AgentHooks.launchArguments(agent: "claude", tool: tool, usageFile: "/tmp/s 1.json", directory: nil, home: home.path))
-        XCTAssertEqual(claude.first, "--settings")
-        let settings = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(claude[1].utf8)) as? [String: Any])
-        XCTAssertNotNil(settings["statusLine"])
-        let stop = try XCTUnwrap(((settings["hooks"] as? [String: Any])?["Stop"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])
+        // Claude Code: a marketplace of one plugin, its hooks and its server.
+        let claude = try setup.writeClaudeMarketplace()
+        let market = try json(claude.appendingPathComponent(".claude-plugin/marketplace.json"))
+        XCTAssertEqual(market["name"] as? String, "agentterm-dev")
+        XCTAssertEqual((market["plugins"] as? [[String: Any]])?.first?["source"] as? String, "./plugin")
+        let hooks = try XCTUnwrap(try json(claude.appendingPathComponent("plugin/hooks/hooks.json"))["hooks"] as? [String: Any])
+        XCTAssertEqual(Set(hooks.keys), Set(["SessionStart"] + AgentHooks.claudeEvents))
+        let stop = try XCTUnwrap((hooks["Stop"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])
         XCTAssertEqual(stop.first?["command"] as? String, "'/Apps/My App'\\''s/agenttermd' hook claude Stop")
+        let servers = try XCTUnwrap(try json(claude.appendingPathComponent("plugin/.mcp.json"))["mcpServers"] as? [String: [String: Any]])
+        XCTAssertEqual(servers["agentterm-dev"]?["command"] as? String, "/Apps/My App's/agenttermd")
+        XCTAssertEqual(servers["agentterm-dev"]?["args"] as? [String], ["mcp"])
 
-        // Codex: one -c for each event, as TOML.
-        let codex = words(try AgentHooks.launchArguments(agent: "codex", tool: tool, usageFile: nil, directory: nil, home: home.path))
-        XCTAssertEqual(codex.filter { $0 == "-c" }.count, AgentHooks.codexEvents.count)
-        XCTAssertTrue(codex.contains(#"hooks.Stop=[{hooks=[{type="command",command="'/Apps/My App'\\''s/agenttermd' hook codex Stop"}]}]"#), codex.joined(separator: "\n"))
+        // Codex: the server only, which names the session's variable, as
+        // Codex passes no other (its hooks are in config.toml).
+        let codex = try setup.writeCodexMarketplace()
+        let codexServer = try XCTUnwrap((try json(codex.appendingPathComponent("plugin/.mcp.json"))["mcpServers"] as? [String: [String: Any]])?["agentterm-dev"])
+        XCTAssertEqual(codexServer["env_vars"] as? [String], [HostServer.agentShellsVariable])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: codex.appendingPathComponent("plugin/hooks/hooks.json").path))
 
-        // Copilot CLI: a plugin of the host's.
-        let copilot = words(try AgentHooks.launchArguments(agent: "copilot", tool: tool, usageFile: nil, directory: hooks, home: home.path))
-        XCTAssertEqual(copilot, ["--plugin-dir", hooks.appendingPathComponent("copilot").path])
-        let plugin = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: hooks.appendingPathComponent("copilot/hooks.json"))) as? [String: Any])
+        // Copilot CLI: its own layout, with the hooks of its own names.
+        let copilot = try setup.writeCopilotMarketplace()
+        let plugin = try json(copilot.appendingPathComponent("plugin/hooks.json"))
         XCTAssertEqual(plugin["version"] as? Int, 1)
-        XCTAssertNotNil(FileManager.default.contents(atPath: hooks.appendingPathComponent("copilot/plugin.json").path))
+        let copilotHooks = try XCTUnwrap(plugin["hooks"] as? [String: [[String: Any]]])
+        XCTAssertEqual(Set(copilotHooks.keys), Set(["sessionStart"] + AgentHooks.copilotEvents))
+        XCTAssertEqual(copilotHooks["agentStop"]?.first?["bash"] as? String, "'/Apps/My App'\\''s/agenttermd' hook copilot agentStop")
+        XCTAssertNotNil(FileManager.default.contents(atPath: copilot.appendingPathComponent("plugin/plugin.json").path))
+        XCTAssertNotNil(FileManager.default.contents(atPath: copilot.appendingPathComponent("plugin/.mcp.json").path))
 
-        // Antigravity: a folder of the host's, trusted for the session next
-        // to the folders the user trusts, whose settings are left as they are.
-        let agy = words(try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: home.path))
-        let folder = hooks.appendingPathComponent("antigravity").path
-        XCTAssertEqual(Array(agy.prefix(3)), ["--add-dir", folder, "--settings"])
-        let trusted = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(agy[3].utf8)) as? [String: Any])
-        XCTAssertEqual(trusted["trustedWorkspaces"] as? [String], ["/Users/someone/work", folder])
-        XCTAssertNotNil(FileManager.default.contents(atPath: folder + "/.agents/hooks.json"))
-        XCTAssertEqual(
-            try String(contentsOf: home.appendingPathComponent(".gemini/antigravity-cli/settings.json"), encoding: .utf8),
-            #"{"trustedWorkspaces":["/Users/someone/work"],"model":"x"}"#)
+        // Antigravity: its own layout: a tool's hooks for every tool.
+        let agy = try setup.writeAntigravityPlugin()
+        let agyHooks = try XCTUnwrap(try json(agy.appendingPathComponent("hooks.json"))["agentterm-dev"] as? [String: [[String: Any]]])
+        XCTAssertEqual(Set(agyHooks.keys), Set(["SessionStart"] + AgentHooks.antigravityEvents))
+        XCTAssertEqual(agyHooks["PreToolUse"]?.first?["matcher"] as? String, "*")
+        XCTAssertEqual(agyHooks["Stop"]?.first?["command"] as? String, "'/Apps/My App'\\''s/agenttermd' hook agy Stop")
+        XCTAssertNotNil(FileManager.default.contents(atPath: agy.appendingPathComponent("mcp_config.json").path))
 
         // Nothing of a session is in any of it.
-        for arguments in [claude, codex, copilot] { XCTAssertFalse(arguments.joined().contains("session-"), arguments.joined()) }
+        for folder in [claude, codex, copilot, agy] {
+            let files = FileManager.default.enumerator(atPath: folder.path)?.compactMap { $0 as? String } ?? []
+            for file in files {
+                let text = (try? String(contentsOf: folder.appendingPathComponent(file), encoding: .utf8)) ?? ""
+                XCTAssertFalse(text.contains("session-"), file)
+            }
+        }
+    }
+
+    /// SCHED-23 (#11, #129): a schedule's run of Antigravity trusts the
+    /// schedule's folder for that run, next to those the user trusts, whose
+    /// settings are left as they are.
+    func testAScheduledAntigravityTrustsItsFolderForThatRun() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-trust-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".gemini/antigravity-cli"), withIntermediateDirectories: true)
+        let settingsFile = home.appendingPathComponent(".gemini/antigravity-cli/settings.json")
+        try #"{"trustedWorkspaces":["/Users/someone/work"],"model":"x"}"#.write(to: settingsFile, atomically: true, encoding: .utf8)
+        let arguments = try XCTUnwrap(AgentHooks.antigravityTrust(["/Users/someone/project"], home: home.path))
+        let words = String(decoding: Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' x" + arguments])?.output ?? Data(), as: UTF8.self).split(separator: "\n").map(String.init)
+        XCTAssertEqual(words.dropFirst().first, "--settings")
+        let trusted = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(words[2].utf8)) as? [String: Any])
+        XCTAssertEqual(trusted["trustedWorkspaces"] as? [String], ["/Users/someone/work", "/Users/someone/project"])
+        XCTAssertEqual(try String(contentsOf: settingsFile, encoding: .utf8), #"{"trustedWorkspaces":["/Users/someone/work"],"model":"x"}"#)
+    }
+
+    /// AGENT-14 (#129, principle 7): Codex keeps hooks only in its
+    /// config.toml, where each build's are a block of their own between
+    /// marks, after the user's own; taking one build's out leaves the
+    /// other's and the user's as they were.
+    func testEachBuildsCodexHooksAreABlockOfTheirOwn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-codex-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = root.appendingPathComponent("home/.codex/config.toml")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let own = "model = \"o3\"\n\n[mcp_servers.mine]\ncommand = \"mine\"\n"
+        try own.write(to: config, atomically: true, encoding: .utf8)
+        let release = setup(root, name: "agentterm"), development = setup(root, name: "agentterm-dev")
+        try release.addCodexHooks(path: "/no/codex")
+        try development.addCodexHooks(path: "/no/codex")
+        try release.addCodexHooks(path: "/no/codex")
+        let text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(text.hasPrefix(own), text)
+        XCTAssertEqual(text.components(separatedBy: "# >>> AgentTerm's hooks (agentterm)").count, 2, "the release's block twice: \(text)")
+        XCTAssertEqual(text.components(separatedBy: "# >>> AgentTerm's hooks (agentterm-dev)").count, 2)
+        XCTAssertEqual(text.components(separatedBy: "[[hooks.Stop]]").count, 3)
+        XCTAssertTrue(text.contains(#"hooks = [{ type = "command", command = "'/Apps/My App'\\''s/agenttermd' hook codex SessionStart" }]"#), text)
+        try release.removeCodexHooks()
+        let left = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(left.hasPrefix(own), left)
+        XCTAssertFalse(left.contains("(agentterm)\n") || left.contains("hooks (agentterm),"), left)
+        XCTAssertTrue(left.contains("# >>> AgentTerm's hooks (agentterm-dev)"), left)
+        try development.removeCodexHooks()
+        XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), own)
     }
 
     /// MCP-13: Copilot CLI and Antigravity are told to run their commands in
-    /// shells the user sees as Claude Code is, through instructions files of
-    /// the host's, which they read; not when they are told nothing.
+    /// shells the user sees as Claude Code and Codex are by AgentTerm's MCP
+    /// server, which they do not hear: Copilot CLI through a folder of
+    /// instructions its environment names, in every session; Antigravity
+    /// through a rule of its plugin. Not when they are told nothing.
     func testCopilotAndAntigravityAreToldToUseTheShells() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-told-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let hooks = root.appendingPathComponent("hooks")
-        let tool = "/Apps/AgentTerm.app/agenttermd"
 
-        // Antigravity: a rule always on, in the folder it is given.
-        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, prompt: AgentShellsInstructions.useShells)
-        let rule = hooks.appendingPathComponent("antigravity/.agents/rules/agentterm.md")
+        // Antigravity: a rule always on, in its plugin.
+        let plugin = try setup(root, prompt: AgentShellsInstructions.useShells).writeAntigravityPlugin()
+        let rule = plugin.appendingPathComponent("rules/agentterm-dev.md")
         let text = try String(contentsOf: rule, encoding: .utf8)
         XCTAssertTrue(text.hasPrefix("---\ntrigger: always_on\n---\n"), text)
         XCTAssertTrue(text.contains(AgentShellsInstructions.useShells))
-        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, prompt: nil)
+        // Read outside AgentTerm too: it says when it holds.
+        XCTAssertTrue(text.contains("inside AgentTerm and nowhere else"), text)
+        _ = try setup(root, prompt: nil).writeAntigravityPlugin()
         XCTAssertFalse(FileManager.default.fileExists(atPath: rule.path), "turned off, the rule is still there")
 
         // Copilot CLI: a folder of instructions it is told of, next to any
@@ -183,22 +248,18 @@ final class AgentStateTests: XCTestCase {
         XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "claude", directory: hooks, prompt: AgentShellsInstructions.useShells, current: [:]), [:])
     }
 
-    /// PROMPT-1: Claude Code is told what AgentTerm says in its system
-    /// prompt, the user's words or the default, and nothing when there is
-    /// nothing to say; the default names the browser's tools and the
-    /// server they are of.
-    func testClaudeIsToldInItsSystemPrompt() throws {
-        func words(_ arguments: String) -> [String] {
-            let result = Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' x" + arguments])
-            return String(decoding: result?.output ?? Data(), as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).map(String.init).dropFirst()
-                .filter { !$0.isEmpty }
+    /// PROMPT-1 (#129): Claude Code and Codex are told what AgentTerm says
+    /// through its MCP server's instructions, which both give the model
+    /// (Claude Code 2.1.326 was seen to on 2026-11-17): the user's words or
+    /// the default, and nothing when there is nothing to say; the default
+    /// names the browser's tools and the server they are of.
+    func testClaudeAndCodexAreToldThroughTheServersInstructions() throws {
+        func initialize(_ server: AgentShellsMCP) -> [String: Any]? {
+            let line = server.handle(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#)
+            return (line.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any])?["result"] as? [String: Any]
         }
-        let tool = "/Apps/AgentTerm.app/agenttermd"
-        let told = words(try AgentHooks.launchArguments(agent: "claude", tool: tool, usageFile: nil, directory: nil, home: "/tmp", prompt: "Use AgentTerm's browser."))
-        let at = try XCTUnwrap(told.firstIndex(of: "--append-system-prompt"))
-        XCTAssertEqual(told[at + 1], "Use AgentTerm's browser.")
-        let silent = words(try AgentHooks.launchArguments(agent: "claude", tool: tool, usageFile: nil, directory: nil, home: "/tmp", prompt: nil))
-        XCTAssertFalse(silent.contains("--append-system-prompt"))
+        let told = AgentShellsMCP(ask: { _ in .done }, version: "test", useShells: true, instructions: "Use AgentTerm's browser.")
+        XCTAssertEqual(initialize(told)?["instructions"] as? String, "Use AgentTerm's browser.")
 
         let both = try XCTUnwrap(AgentShellsInstructions.told(useShells: true, browser: true, server: "agentterm-dev"))
         XCTAssertTrue(both.contains("shell_open") && both.contains("browser_open"), both)
@@ -808,8 +869,8 @@ final class AgentStateWatchTests: XCTestCase {
         let script = root.appendingPathComponent("claude")
         try """
         #!/bin/sh
-        read line; printf '{"agent":"claude","event":"UserPromptSubmit","at":%s,"input":{}}' "$(date +%s)" > "$AGENTTERM_EVENTS.new"; mv "$AGENTTERM_EVENTS.new" "$AGENTTERM_EVENTS"
-        read line; printf '{"agent":"claude","event":"Stop","at":%s,"input":{}}' "$(date +%s)" > "$AGENTTERM_EVENTS.new"; mv "$AGENTTERM_EVENTS.new" "$AGENTTERM_EVENTS"
+        read line; printf '{"agent":"claude","event":"UserPromptSubmit","at":%s,"input":{}}' "$(date +%s)" > "$\(AppChannel.current.eventsVariable).new"; mv "$\(AppChannel.current.eventsVariable).new" "$\(AppChannel.current.eventsVariable)"
+        read line; printf '{"agent":"claude","event":"Stop","at":%s,"input":{}}' "$(date +%s)" > "$\(AppChannel.current.eventsVariable).new"; mv "$\(AppChannel.current.eventsVariable).new" "$\(AppChannel.current.eventsVariable)"
         exec sleep 600
         """.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)

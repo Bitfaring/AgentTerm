@@ -31,7 +31,7 @@ final class EndToEndTests: XCTestCase {
         }
 
         var lastResize: (size: TermSize, driver: Bool)? {
-            messages.compactMap { if case .resized(_, let size, let driver) = $0 { return (size, driver) } else { return nil } }.last
+            messages.compactMap { if case .resized(_, let size, let driver, _) = $0 { return (size, driver) } else { return nil } }.last
         }
 
         var pairingCode: String? {
@@ -213,6 +213,29 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(mac.lastResize?.driver, false)
         mac.type("stty size\n", in: id)
         waitUntil("mac restored once it types") { mac.lastResize?.driver == true && mac.lastResize?.size == widerMac }
+        mac.connection.send(.kill(session: id))
+    }
+
+    /// SIZE-10 (#120): the device whose size a session has is named to the
+    /// others: the Mac's own app by the Mac's name, a device by its own; not
+    /// to the one that has it.
+    func testTheDeviceWhoseSizeASessionHasIsNamed() {
+        let mac = connect("Mac")
+        mac.connection.send(.create(CreateRequest(command: "exec sh", size: TermSize(cols: 120, rows: 40))))
+        waitUntil("attached") { mac.attached != nil }
+        let id = mac.attached!.id
+        let pad = connect("Manh's iPad")
+        let padSize = TermSize(cols: 90, rows: 50)
+        pad.connection.send(.attach(session: id, size: padSize))
+        func told(_ client: TestClient) -> (driver: Bool, by: SizeDriver?)? {
+            client.messages.compactMap { if case .resized(id, _, let driver, let by) = $0 { return (driver, by) } else { return nil } }.last
+        }
+        let macName = Host.current().localizedName ?? "Mac"
+        waitUntil("the iPad is told the Mac has it") { told(pad)?.by == SizeDriver(name: macName, isMac: true) }
+        pad.connection.send(.takeControl(session: id, size: padSize))
+        waitUntil("the Mac is told the iPad has it") { told(mac)?.by == SizeDriver(name: "Manh's iPad", isMac: false) }
+        XCTAssertEqual(told(pad)?.driver, true)
+        XCTAssertNil(told(pad)?.by, "the one that has it is not named to itself")
         mac.connection.send(.kill(session: id))
     }
 
@@ -480,9 +503,8 @@ final class EndToEndTests: XCTestCase {
             client.messages.compactMap { if case .tabLayout(let layout) = $0 { return layout } else { return nil } }
         }
         var layout = TabLayout()
-        layout.sync(with: ["s:1:10", "s:2:20", "f:/a.md"])
+        layout.sync(with: ["s:1:10", "s:2:20", "h:files:/p"])
         layout.setPinned("s:2:20", true)
-        layout.newGroup(with: "s:1:10", name: "api")
         do {
             let host = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, foldersFile: file))
             let hostPort = try host.start()

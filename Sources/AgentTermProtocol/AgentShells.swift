@@ -26,6 +26,11 @@ public enum AgentShellRequest: Codable, Equatable, Sendable {
     /// The commands of the shell as they stand, with the output of the
     /// running or last one, at most its last `lines` lines.
     case command(session: SessionID, lines: Int)
+    /// Said once by the server as it starts (#129): the host learns that
+    /// the session's agent has AgentTerm's MCP server, one typed by hand in
+    /// a shell included, which the server names: the agent it was started
+    /// by, when it is one of the four. Answered with `done`.
+    case started(agent: String?)
 }
 
 public enum AgentShellResult: Codable, Equatable, Sendable {
@@ -93,9 +98,6 @@ public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Send
         public var rawValue: String
         public init(rawValue: String) { self.rawValue = rawValue }
 
-        /// An agent kept the server an earlier build had put in its own
-        /// configuration: it refused to take it out, and is not asked again.
-        public static let leftOver = Cause(rawValue: "leftOver")
         /// An agent's server was refused when it signed in to the host.
         public static let signIn = Cause(rawValue: "signIn")
     }
@@ -117,9 +119,6 @@ public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Send
     public func headline(on mac: String? = nil) -> String {
         let onMac = mac.map { " on \($0)" } ?? ""
         switch cause {
-        case .leftOver:
-            let named = agents.isEmpty ? "an agent" : Self.list(agents)
-            return "The MCP server an earlier AgentTerm put in the settings of \(named)\(onMac) could not be taken out."
         case .signIn:
             return "An agent's MCP server was refused by the AgentTerm host\(onMac)."
         default:
@@ -130,10 +129,6 @@ public struct AgentShellsFault: Codable, Equatable, Hashable, Identifiable, Send
     /// What follows from it and what to do about it.
     public var advice: String {
         switch cause {
-        case .leftOver:
-            let server = AppChannel.current.mcpServerName
-            return
-                "AgentTerm now gives its server to the sessions it starts only, and this one is still in those settings, for every session. Take it out with “mcp remove \(server)” of each of those agents."
         case .signIn:
             return "Its agent cannot open shells you see: it was started by another copy of AgentTerm, or before the host was set up again. Start that agent's session again."
         default:
@@ -189,7 +184,7 @@ public enum AgentShellsInstructions {
     public static var browser: String { browser(server: AppChannel.current.mcpServerName) }
 
     public static func browser(server: String) -> String {
-        "AgentTerm has a browser of its own, Chromium, shown beside you where the user sees it. When the user asks you to open, look at, use or test anything in a browser (a web page, a site, a URL, localhost or a development server, \"the browser\", \"Chrome\" or \"Chromium\"), use AgentTerm's browser through the browser_ tools of the \(server) MCP server: browser_open to open a tab of your own, browser_snapshot to read the page and get the refs of what you can act on, browser_click, browser_type, browser_select and browser_press to act, browser_screenshot to look, browser_console and browser_network for errors. You see and use only the tabs you opened, not the user's. When browser_open says there are several profiles, ask the user which one to use and open it with that profile; for a clean session with none of the user's sign-ins, open a private tab. Do not use another browser tool, extension or MCP server for it (such as Claude in Chrome or a headless browser), nor `open`, curl or a script, unless the user names that other one. If the browser_ tools are not loaded yet, load them by name first. The user may take a tab over; then wait, or open another."
+        "AgentTerm has a browser of its own, Chromium, whose pages you open are in your tab, where the user sees them. When the user asks you to open, look at, use or test anything in a browser (a web page, a site, a URL, localhost or a development server, \"the browser\", \"Chrome\" or \"Chromium\"), use AgentTerm's browser through the browser_ tools of the \(server) MCP server: browser_open to open a tab of your own, browser_snapshot to read the page and get the refs of what you can act on, browser_click, browser_type, browser_select and browser_press to act, browser_screenshot to look, browser_console and browser_network for errors. You see and use only the tabs you opened, not the user's. When browser_open says there are several profiles, ask the user which one to use and open it with that profile; for a clean session with none of the user's sign-ins, open a private tab. Do not use another browser tool, extension or MCP server for it (such as Claude in Chrome or a headless browser), nor `open`, curl or a script, unless the user names that other one. If the browser_ tools are not loaded yet, load them by name first. The user may take a tab over; then wait, or open another."
     }
 
     /// Everything an agent is told by AgentTerm, for its system prompt or

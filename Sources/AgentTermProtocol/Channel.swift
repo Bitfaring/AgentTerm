@@ -36,6 +36,15 @@ public enum AppChannel: String, Sendable {
     /// (#57). Each build has its own, so that both can be installed and
     /// neither replaces the other's.
     public var mcpServerName: String { self == .release ? "agentterm" : "agentterm-dev" }
+
+    /// The variable that names the file a session's hooks write in (#129):
+    /// each build's own, so that the other build's hooks, which an agent
+    /// may have too, leave this build's sessions alone (principle 7).
+    public var eventsVariable: String { self == .release ? "AGENTTERM_EVENTS" : "AGENTTERM_DEV_EVENTS" }
+
+    /// The variable that names the file Claude Code's status line writes
+    /// what it is given in (#129), each build's own.
+    public var usageVariable: String { self == .release ? "AGENTTERM_USAGE" : "AGENTTERM_DEV_USAGE" }
 }
 
 /// The version of the app that is running, as its bundle states it. Every

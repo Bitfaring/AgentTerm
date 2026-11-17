@@ -23,6 +23,7 @@ extension AppModel {
         BrowserModel.forgetKeptTabs()
         browsers.profiles = profiles
         browsers.changed = { [weak self] in self?.browserTabsChanged() }
+        browsers.watchChromeWindows()
         browsers.popup = { [weak self] opener, address in
             guard let self else { return }
             let owner = opener.owner.flatMap { id in self.sessions.first { $0.id == id } }
@@ -108,7 +109,7 @@ extension AppModel {
         let wasFront = browserInFront == tab.tabID
         let wasShown = shownPage(in: tab.project) === tab
         browsers.close(tab)
-        if wasShown { browserShown[tab.project] = next?.tabID }
+        if wasShown { groupShown[TabID.holder(.browser, tab.project)] = next?.tabID }
         if wasFront {
             browserInFront = nil
             syncTabs()

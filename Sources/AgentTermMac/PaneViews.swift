@@ -25,7 +25,7 @@ extension EnvironmentValues {
 }
 
 /// The middle of the window in Sessions: the project on show's one pane.
-/// The user does not split it; an agent's shells and pages are shown beside
+/// The user does not split it; an agent's page and shell are shown beside
 /// it, in its area.
 struct WorkspaceView: View {
     @EnvironmentObject private var model: AppModel
@@ -103,8 +103,8 @@ private enum SplitSpace {
 /// One pane: its strip of tabs, and the tab in front.
 struct PaneView: View {
     @EnvironmentObject private var model: AppModel
-    // What a pane shows is read through the model, but these say when it
-    // changed: a file of another Mac whose words come later, a new page.
+    // Which of a tab's items is shown is read through the model, but these
+    // say when it changed: a file opened, a new page.
     @EnvironmentObject private var files: FilesModel
     @EnvironmentObject private var browsers: BrowserModel
     let pane: PaneLayout.Pane
@@ -126,18 +126,15 @@ struct PaneView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let front = pane.front, let session = model.session(forTab: front) {
-            if model.hasArea(front) {
-                AgentAreaView(agent: session, paneFocused: focused)
-            } else {
-                SessionContent(session: session, focused: focused)
+        if let front = pane.front, let item = model.shownMember(of: front) {
+            VStack(spacing: 0) {
+                GroupRow(group: front)
+                if TabID.holder(of: front) == nil, model.hasArea(front), let agent = model.session(forTab: front) {
+                    AgentAreaView(agent: agent, paneFocused: focused)
+                } else {
+                    MemberContent(group: front, item: item, focused: focused)
+                }
             }
-        } else if let front = pane.front, let document = model.document(forTab: front) {
-            DocumentView(document: document)
-        } else if pane.front == TabID.diff, let file = model.diffTabFile {
-            DiffDocumentView(file: file)
-        } else if let front = pane.front, let tab = model.browsers.tab(forTab: front) {
-            UserBrowserView(project: tab.project, focused: focused)
         } else {
             EmptyPaneView(pane: pane)
         }
@@ -220,22 +217,32 @@ struct SessionUsageBar: View {
     @State private var showingUsage = false
 
     var body: some View {
-        if let agent = session.agent {
+        // An agent typed by hand in a shell has one too, while it runs (#129).
+        if let agent = session.agent ?? session.typedAgent {
+            let name = session.agent == nil ? model.agentName(agent) : session.title
             Theme.hairline.frame(height: 1)
-            UsageBar(agent: agent, name: session.title, usage: session.usage, account: model.accountUsage[agent]) {
-                showingUsage = true
-            }
-            .background(Theme.panel)
-            .help("Show the account's usage")
-            .popover(isPresented: $showingUsage, arrowEdge: .bottom) {
-                ScrollView {
-                    UsageDetails(agent: agent, name: session.title, usage: session.usage, account: model.accountUsage[agent]) {
-                        model.refreshAccountUsage()
-                    }
+            HStack(spacing: 0) {
+                UsageBar(agent: agent, name: name, usage: session.usage, account: model.accountUsage[agent]) {
+                    showingUsage = true
                 }
-                .frame(width: 380)
-                .frame(maxHeight: 520)
+                .help("Show the account's usage")
+                .popover(isPresented: $showingUsage, arrowEdge: .bottom) {
+                    ScrollView {
+                        UsageDetails(agent: agent, name: name, usage: session.usage, account: model.accountUsage[agent]) {
+                            model.refreshAccountUsage()
+                        }
+                    }
+                    .frame(width: 380)
+                    .frame(maxHeight: 520)
+                }
+                // Whether its hooks and AgentTerm's MCP server talk to the host.
+                if let link = session.link {
+                    Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 24)
+                    AgentLinkMark(link: link, typed: session.agent == nil ? name : nil)
+                }
             }
+            .frame(height: 46)
+            .background(Theme.panel)
         }
     }
 }
@@ -252,11 +259,51 @@ private struct EmptyPaneView: View {
     }
 }
 
-/// An agent with its own shells and browser beside it (#69): the agent on
-/// the left, its browser on the right, its shells under both, the full
-/// width. A part that is closed is hidden, and comes back from the bar.
+/// What one of the user's groups shows (#127): the item picked in its row,
+/// the whole pane for it. An agent with nothing of its own beside it is
+/// shown so too.
+struct MemberContent: View {
+    @EnvironmentObject private var model: AppModel
+    // What is shown is read through the model, but these say when it
+    // changed: a file of another Mac whose words come later, a page. Its
+    // pane's watching them is not enough: with the same group, item and
+    // focus, SwiftUI does not make this view's body again.
+    @EnvironmentObject private var files: FilesModel
+    @EnvironmentObject private var browsers: BrowserModel
+    let group: String
+    let item: String
+    let focused: Bool
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let session = model.session(forTab: item) {
+            SessionContent(session: session, focused: focused, showsUsage: session.agent != nil || session.typedAgent != nil).id(session.id)
+        } else if let tab = model.browsers.tab(forTab: item) {
+            BrowserPaneView(tab: tab, focused: focused).id(tab.id)
+        } else if let diff = model.diffTabs.first(where: { $0.tabID == item }) {
+            DiffDocumentView(file: diff.file)
+        } else if let document = model.document(forTab: item) {
+            DocumentView(document: document)
+        } else {
+            Theme.canvas
+        }
+    }
+}
+
+/// An agent with its own page and shell beside it (#69): the agent on the
+/// left, its page on the right, its shell under both, the full width. Which
+/// page and which shell, and whether each part is shown, is picked in the
+/// row under the strip (#127), where the parts' own strips were.
 struct AgentAreaView: View {
     @EnvironmentObject private var model: AppModel
+    // What it shows is read through the model, but this says when its
+    // pages changed.
+    @EnvironmentObject private var browsers: BrowserModel
     let agent: SessionInfo
     let paneFocused: Bool
 
@@ -279,29 +326,26 @@ struct AgentAreaView: View {
                 case .shells: shellsPart
                 }
                 AloneBar(agentTab: agentTab, part: alone)
-            } else {
-                if showShells {
-                    SplitContainer(axis: .stacked, fraction: area.down, setFraction: { model.setAgentArea(agentTab, down: $0) }) {
-                        top(showBrowser: showBrowser)
-                    } second: {
-                        shellsPart
-                    }
-                } else {
+            } else if showShells {
+                SplitContainer(axis: .stacked, fraction: area.down, setFraction: { model.setAgentArea(agentTab, down: $0) }) {
                     top(showBrowser: showBrowser)
+                } second: {
+                    shellsPart
                 }
-                HiddenPartsBar(agentTab: agentTab, hiddenShells: area.shellsHidden ? shells.count : 0, hiddenBrowser: area.browserHidden ? browserTabs.count : 0)
+            } else {
+                top(showBrowser: showBrowser)
             }
-            // What the agent has used, at the very bottom, under its shells.
+            // What the agent has used, at the very bottom, under its shell.
             SessionUsageBar(session: agent)
         }
     }
 
     private var shellsPart: some View {
-        ShellsPart(agentTab: agentTab, shells: shells, shown: area.shownShell(among: shells), focused: paneFocused && focus == .shells)
+        ShellsPart(agentTab: agentTab, shown: area.shownShell(among: shells), focused: paneFocused && focus == .shells)
     }
 
     private var browserPart: some View {
-        BrowserPart(agentTab: agentTab, tabs: browserTabs, shown: area.shownBrowser(among: browserTabs), focused: paneFocused && focus == .browser)
+        BrowserPart(agentTab: agentTab, shown: area.shownBrowser(among: browserTabs), focused: paneFocused && focus == .browser)
     }
 
     /// The page beside the agent, shown as a device: as wide as its screen,
@@ -328,153 +372,71 @@ struct AgentAreaView: View {
 
     private var agentPart: some View {
         SessionContent(session: agent, focused: paneFocused && focus == .agent, showsUsage: false)
+            .id(agent.id)
             .background(PaneFrameReader(place: .part(agent: agentTab, .agent)))
     }
 }
 
-/// The agent's shells, as tabs of one pane under it.
+/// The agent's shell picked, under it. The part the keyboard is in has a
+/// line at its top, as its strip had.
 private struct ShellsPart: View {
     @EnvironmentObject private var model: AppModel
     let agentTab: String
-    let shells: [String]
     let shown: String?
     let focused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            PartStrip(title: "Shells", agentTab: agentTab, part: .shells, tabs: shells, shown: shown, focused: focused)
+        ZStack {
+            Theme.canvas
             if let shown, let session = model.session(forTab: shown) {
-                SessionContent(session: session, focused: focused, showsUsage: false)
-            } else {
-                Theme.canvas
+                SessionContent(session: session, focused: focused, showsUsage: false).id(session.id)
             }
         }
+        .overlay(alignment: .top) { if focused { Color.accentColor.opacity(0.6).frame(height: 1.5) } }
         .background(PaneFrameReader(place: .part(agent: agentTab, .shells)))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("agent-shells")
+        .background(PartName(label: "Its shells", identifier: "agent-shells"))
     }
 }
 
-/// The agent's browser tabs, on the right of it.
+/// The agent's page picked, on the right of it.
 private struct BrowserPart: View {
     @EnvironmentObject private var model: AppModel
     let agentTab: String
-    let tabs: [String]
     let shown: String?
     let focused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            PartStrip(title: "Browser", agentTab: agentTab, part: .browser, tabs: tabs, shown: shown, focused: focused)
+        ZStack {
+            Theme.canvas
             if let shown, let tab = model.browsers.tab(forTab: shown) {
-                BrowserPaneView(tab: tab, focused: focused)
-            } else {
-                Theme.canvas
+                BrowserPaneView(tab: tab, focused: focused).id(tab.id)
             }
         }
-        .background(PaneFrameReader(place: .part(agent: agentTab, .browser)))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("agent-browser")
-    }
-}
-
-/// The strip of a part of an agent's area: its tabs, and closing the part.
-private struct PartStrip: View {
-    @EnvironmentObject private var model: AppModel
-    let title: String
-    let agentTab: String
-    let part: AgentAreaPart
-    let tabs: [String]
-    let shown: String?
-    let focused: Bool
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.tertiary)
-                .padding(.trailing, 4)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(tabs, id: \.self) { tab in
-                        PartTab(tab: tab, selected: tab == shown)
-                    }
-                }
-            }
-            .fixedSize(horizontal: part == .browser && tabs.count < 5, vertical: false)
-            if part == .browser {
-                // One more page beside the agent, the user's to use first.
-                Button {
-                    model.openBrowserTab(besideAgent: agentTab)
-                } label: {
-                    Image(systemName: "plus").font(.system(size: 10, weight: .semibold)).frame(width: 20, height: 18)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("New page beside this agent. It is yours until you give it to the agent.")
-                .accessibilityLabel("New Page")
-                .accessibilityIdentifier("agent-new-page")
-                Spacer(minLength: 0)
-            }
-            Button {
-                model.hideAgentPart(part, of: agentTab)
-            } label: {
-                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help(part == .shells ? "Hide the shells. They keep running, and stay in the list of sessions." : "Hide the browser. Its tabs stay open.")
-            .accessibilityLabel(part == .shells ? "Hide Shells" : "Hide Browser")
-        }
-        .padding(.horizontal, 8)
-        .frame(height: 28)
-        .background(Theme.panel)
         .overlay(alignment: .top) { if focused { Color.accentColor.opacity(0.6).frame(height: 1.5) } }
-        .overlay(alignment: .bottom) { Theme.hairline.frame(height: 1) }
+        .background(PaneFrameReader(place: .part(agent: agentTab, .browser)))
+        .background(PartName(label: "Its page", identifier: "agent-browser"))
     }
 }
 
-private struct PartTab: View {
-    @EnvironmentObject private var model: AppModel
-    let tab: String
-    let selected: Bool
-    @State private var hovering = false
+/// The name of a part of an agent's area for assistive tools, "Its page"
+/// or "Its shells", as an element of its own behind the part, the part's
+/// size. A container about the part cannot have it: with the part's strip
+/// gone (#127) it holds one container only, what the part shows, and
+/// SwiftUI makes one element of the two, with the outer one's name; the
+/// terminal's or the page's own was lost (seen in the accessibility tree).
+private struct PartName: View {
+    let label: String
+    let identifier: String
 
     var body: some View {
-        let session = model.session(forTab: tab)
-        HStack(spacing: 5) {
-            Image(systemName: session != nil ? Theme.symbol(for: "shell") : "globe")
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(model.tabName(tab))
-                .font(.system(size: 11.5, weight: selected ? .medium : .regular))
-                .foregroundStyle(selected ? .primary : .secondary)
-                .lineLimit(1)
-                .frame(maxWidth: 160, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
-            if let session { AgentStateMark(session: session) }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(selected ? Color.white.opacity(0.12) : (hovering ? Color.white.opacity(0.05) : .clear)))
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture { model.selectTab(id: tab) }
-        .contextMenu {
-            if let session {
-                Button("End Session") { model.requestEnd(session.id) }
-            } else if let browser = model.browsers.tab(forTab: tab) {
-                Button("Close Tab") { model.browsers.close(browser) }
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(model.tabName(tab))
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction { model.selectTab(id: tab) }
+        Color.clear
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier(identifier)
     }
 }
 
-/// Under an agent's area, the parts that were closed, to show them again.
 /// Says that one part of an agent's area is shown alone, and gives the
 /// others back (#69).
 private struct AloneBar: View {
@@ -505,31 +467,5 @@ private struct AloneBar: View {
         .overlay(alignment: .top) { Theme.hairline.frame(height: 1) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-alone")
-    }
-}
-
-private struct HiddenPartsBar: View {
-    @EnvironmentObject private var model: AppModel
-    let agentTab: String
-    let hiddenShells: Int
-    let hiddenBrowser: Int
-
-    var body: some View {
-        if hiddenShells > 0 || hiddenBrowser > 0 {
-            HStack(spacing: 8) {
-                if hiddenShells > 0 {
-                    Button("Show Shells (\(hiddenShells))") { model.showAgentPart(.shells, of: agentTab) }
-                }
-                if hiddenBrowser > 0 {
-                    Button("Show Browser (\(hiddenBrowser))") { model.showAgentPart(.browser, of: agentTab) }
-                }
-                Spacer()
-            }
-            .controlSize(.small)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Theme.panel)
-            .overlay(alignment: .top) { Theme.hairline.frame(height: 1) }
-        }
     }
 }

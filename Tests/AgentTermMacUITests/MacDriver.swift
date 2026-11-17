@@ -138,9 +138,11 @@ final class MacDriver {
     /// A way to pick an element: by identifier, or by what it says.
     enum Query: CustomStringConvertible {
         case id(String)
-        /// An identifier that ends like this: for one that holds a path,
-        /// which the same folder has more than one of.
-        case idEnding(String)
+        /// An identifier that ends like this, and begins with `prefix`:
+        /// for one that holds a path, which the same folder has more than
+        /// one of, and the list, a tab's row and the Files panel each have
+        /// one of (#127).
+        case idEnding(String, prefix: String = "")
         /// A button, of whatever kind, that says exactly this.
         case button(String)
         /// Anything whose title, label or value is exactly this.
@@ -152,7 +154,7 @@ final class MacDriver {
         var description: String {
             switch self {
             case .id(let id): return "id \(id)"
-            case .idEnding(let end): return "id ending in \(end)"
+            case .idEnding(let end, let prefix): return "id \(prefix)… ending in \(end)"
             case .button(let name): return "button \"\(name)\""
             case .text(let text): return "\"\(text)\""
             case .containing(let text): return "something with \"\(text)\""
@@ -163,7 +165,7 @@ final class MacDriver {
         func matches(_ node: Node) -> Bool {
             switch self {
             case .id(let id): return node.identifier == id
-            case .idEnding(let end): return node.identifier.hasSuffix(end)
+            case .idEnding(let end, let prefix): return node.identifier.hasPrefix(prefix) && node.identifier.hasSuffix(end)
             case .button(let name):
                 return [kAXButtonRole, kAXMenuButtonRole, kAXPopUpButtonRole, kAXMenuItemRole, kAXCheckBoxRole, kAXRadioButtonRole].contains(node.role)
                     && (node.title == name || node.label == name)
@@ -255,11 +257,14 @@ final class MacDriver {
     /// Picks an item of the app's menu bar, such as ["File", "New Shell"].
     func menu(_ path: [String], file: StaticString = #filePath, line: UInt = #line) {
         var current = nodes(menus: true).first { $0.role == kAXMenuBarRole }?.element
-        for name in path {
+        for (index, name) in path.enumerated() {
             guard let parent = current else { break }
             var next: AXUIElement?
+            // The first name is one of the menu bar's own: an item of the
+            // Tab menu named after a tab, "Browser", is not the Browser menu.
+            let deepest = index == 0 ? 1 : 4
             func search(_ element: AXUIElement, _ depth: Int) {
-                guard next == nil, depth < 4, let children = Self.attribute(element, kAXChildrenAttribute) as? [AXUIElement] else { return }
+                guard next == nil, depth < deepest, let children = Self.attribute(element, kAXChildrenAttribute) as? [AXUIElement] else { return }
                 for child in children where next == nil {
                     if Self.string(child, kAXTitleAttribute) == name { next = child } else { search(child, depth + 1) }
                 }

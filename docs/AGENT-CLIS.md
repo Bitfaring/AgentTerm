@@ -1,8 +1,9 @@
 # The agents on the command line
 
 AgentTerm works with each agent through its command line program: it starts
-it in a terminal, gives it hooks and AgentTerm's MCP server for that session
-only, reads what it reports, and types into it. This file is what is known
+it in a terminal with nothing of its own added, reads what the hooks and the
+MCP server the user added to its own configuration (#129) report, and types
+into it. This file is what is known
 of each, how a session is started, what each asks about itself, and what was
 found by running the real program, with the version it was found with
 (principle 5). It is the reference to check a change against, and it is
@@ -17,33 +18,62 @@ brought up to date when an agent's new version behaves otherwise.
 
 ## How a session of an agent is started
 
-`HostServer` starts the agent's program in a terminal of its own, with what
-`AgentHooks.launchArguments` adds to its command line, for that session only
-and without a change to the user's own configuration of it:
+`HostServer` starts the agent's program in a terminal of its own, with
+nothing of AgentTerm's on its command line (#129, decided by the owner on
+2026-11-17); only what the user chose (a resume, a schedule's permissions,
+and for a schedule's run of Antigravity its folder trusted for that run).
+What the agent gets of AgentTerm is in its own configuration, at the user's
+scope, once `agenttermd setup` (Settings > Hooks & MCP) added it:
 
-| Agent | Hooks given by | MCP server given by | What AgentTerm tells it (`AgentPrompts`) given by |
-|---|---|---|---|
-| Claude Code | `--settings` (with the status line, `StatusLineRelay`) | `--mcp-config`, before `--settings` (it takes every word after it) | `--append-system-prompt` |
-| Codex | `-c hooks.<Event>=[{hooks=[{type="command",command="…"}]}]`, one `-c` per event | `-c mcp_servers.<name>.command/args/env_vars` (it passes only the variables `env_vars` names) | the MCP server's instructions |
-| Antigravity | `--add-dir <folder>`, a folder of the host's holding `.agents/hooks.json`, trusted for the session by `--settings '{"trustedWorkspaces":[…]}'` | `.agents/mcp_config.json` in that folder | a rule of that folder, `.agents/rules/agentterm.md` |
-| Copilot CLI | `--plugin-dir <folder>`, a plugin of the host's holding `hooks.json` | `--additional-mcp-config` | instructions it is told of in its environment (`instructionsEnvironment`) |
+| Agent | Hooks | MCP server | What AgentTerm tells it (`AgentPrompts`) | Claude Code's status line |
+|---|---|---|---|---|
+| Claude Code | a plugin (`claude plugin marketplace add <folder> --scope user`, `claude plugin install <name>@<name> --scope user`) | the same plugin's `.mcp.json` | the server's instructions, which reach the model | in `~/.claude/settings.json`, the user's kept and run after it |
+| Codex | between marks in `~/.codex/config.toml`: it takes hooks nowhere else | a plugin (`codex plugin marketplace add`, `codex plugin add`), `env_vars` naming the session's variable | the server's instructions | |
+| Copilot CLI | a plugin of its own layout (`copilot plugin marketplace add`, `copilot plugin install`) | the same plugin's `.mcp.json` | a folder of instructions its environment names, in every session: it does not give a server's instructions | |
+| Antigravity | a plugin of its own layout (`agy plugin install <folder>`, a copy) | the same plugin's `mcp_config.json` | a rule of the plugin, always on: installed again after the words change | |
 
 - Every hook runs `<agenttermd> hook <agent> <event>`, the host's program of
-  the build that started the session (`/Applications/AgentTerm.app/Contents/MacOS/agenttermd`
+  the build that set it up (`/Applications/AgentTerm.app/Contents/MacOS/agenttermd`
   for the release). It saves what it is given, replacing the last, in the
-  file `AGENTTERM_EVENTS` names in the session's environment; the host reads
-  it (`AgentHooks.change`).
-- The events asked for: Claude Code `UserPromptSubmit PreToolUse
-  PermissionRequest PostToolUse Notification Stop`; Codex `UserPromptSubmit
-  PreToolUse PermissionRequest PostToolUse Stop Interrupt`; Copilot CLI
-  `userPromptSubmitted preToolUse permissionRequest postToolUse
-  postToolUseFailure agentStop`; Antigravity `PreInvocation PreToolUse
-  PostToolUse Stop`.
-- Claude Code's status line runs `<agenttermd> statusline <file>`, which saves
-  what Claude Code gives it (its rate limits among it) and then runs the
-  user's own status line, if any.
+  file the session's environment names (`AGENTTERM_EVENTS`, or
+  `AGENTTERM_DEV_EVENTS` for a development build); the host reads it
+  (`AgentHooks.change`). Outside a session of AgentTerm's it does nothing.
+- The events asked for: Claude Code `SessionStart UserPromptSubmit PreToolUse
+  PermissionRequest PostToolUse Notification Stop`; Codex `SessionStart
+  UserPromptSubmit PreToolUse PermissionRequest PostToolUse Stop Interrupt`;
+  Copilot CLI `sessionStart userPromptSubmitted preToolUse permissionRequest
+  postToolUse postToolUseFailure agentStop`; Antigravity `SessionStart
+  PreInvocation PreToolUse PostToolUse Stop`. The start's says at once that
+  the hooks are there.
+- Claude Code's status line runs `<agenttermd> statusline`, which saves what
+  Claude Code gives it (its rate limits among it) in the file its session's
+  environment names, then runs the status line it took the place of.
 - The MCP server is `<agenttermd> mcp`, of the same build (`AppChannel.mcpServerName`:
-  `agentterm`, or `agentterm-dev` for a development build).
+  `agentterm`, or `agentterm-dev` for a development build). It says to the
+  host that it started, and for which agent: the one among its forebears.
+
+### How each takes hooks and an MCP server by its own commands (#129, 2026-11-17)
+
+Tried with the real agents, each with the plugin loaded for that one session
+only (`--plugin-dir`, or a scratch `CODEX_HOME`), nothing written into the
+user's own configuration; a stand-in hook and MCP server wrote down that
+they ran and whether `AGENTTERM_MCP` reached them:
+
+| Agent | Version | Found |
+|---|---|---|
+| Claude Code | 2.1.326 | `claude plugin marketplace add` takes a URL, a path or a GitHub repository; `claude plugin details` lists a plugin's hooks and servers. `claude -p "hi"`: SessionStart, UserPromptSubmit and Stop ran; the server started with the variable; the server's instructions reached the model (it said the word they asked for). `--scope` is `user` unless told otherwise |
+| Copilot CLI | 1.0.112 | `copilot plugin marketplace add` takes a local path, and reads a marketplace of Claude Code's layout; a local one's plugin is read live, not copied. `copilot -p "hi"`: sessionStart, userPromptSubmitted and agentStop ran; the server started with the variable; its instructions did not reach the model (`--allow-all-mcp-server-instructions` exists) |
+| Codex | 0.169.0 | `codex plugin marketplace add` takes a local or Git marketplace, of Claude Code's layout too; `codex plugin add` copies the plugin into its cache. `codex exec "hi"`: the server started; the variable reached it only once its `.mcp.json` named it in `env_vars`. No hook of the plugin ran, with `--enable plugin_hooks` either: `codex features list` says `plugin_hooks  removed  false`, and `hooks  stable  true` for those of `config.toml`, which it asks to review |
+| Antigravity | 1.5.9 | `agy plugin install <folder>` converts Claude Code's layout (a hook of an event it has not is skipped and said); `agy plugin validate` says how it loads a plugin, which can hold rules, hooks and servers. Its own `~/.gemini/config/hooks.json` and `mcp_config.json` exist too. Not tried in a session: its sign-in is in its home |
+
+An agent typed at a zsh prompt is the leader of the terminal's foreground
+process group, named as typed (`claude`, `codex`, `copilot`, `agy`) by the
+first word of its command line; `proc_name` gives the file's own name,
+`2.1.326` for Claude Code, whose command is a link to its version. Tried
+with the programs installed on the Mac on 2026-11-17, each a program of its
+own (Mach-O): Claude Code's own installer, Codex's standalone release, Copilot
+CLI's Homebrew cask, Antigravity's. One installed with npm runs in Node,
+whose first word may be `node`: not tried.
 
 ## What each asks about itself
 
@@ -52,19 +82,18 @@ update, a sign-in) is the user's to answer: a test or an agent of AgentTerm
 does not answer it unless the owner says so.
 
 - **Codex** asks to review hooks it was not given before ("Hooks need review:
-  6 hooks are new or changed"). Hooks given with `-c` count as session flags;
-  what was trusted is kept in `~/.codex/config.toml`, one entry per event and
-  place, `[hooks.state."/<session-flags>/config.toml:<event>:<group>:<hook>"]`,
-  with the hash of the hook (`trusted_hash`). Tried on 2026-11-17: trusted
-  once, the same command was not asked about again. **Why it asks again and
-  again**: the release and a development build give each their own program
-  (principle 7), so the same entry holds the hash of one command at a time,
-  and each build that starts Codex after the other is asked again, its trust
-  replacing the other's. Not fixed yet.
+  6 hooks are new or changed"). What was trusted is kept in
+  `~/.codex/config.toml`, one entry per event and place,
+  `[hooks.state."<file>:<event>:<group>:<hook>"]`, with the hash of the hook
+  (`trusted_hash`). Tried on 2026-11-17: trusted once, the same command was
+  not asked about again. Hooks given with `-c` counted as one place for
+  every build (`/<session-flags>/config.toml`), each build's trust replacing
+  the other's (#124); since #129 each build's hooks are a block of their
+  own in `config.toml`, each its own places.
 - **Antigravity** keeps its trusted folders in
-  `~/.gemini/antigravity-cli/settings.json` (`trustedWorkspaces`). AgentTerm
-  adds its hooks folder and the session's folder for the session through
-  `--settings`, which is not saved. A file outside the workspace is asked
+  `~/.gemini/antigravity-cli/settings.json` (`trustedWorkspaces`). A
+  schedule's run gets its folder trusted for that run through `--settings`,
+  which is not saved. A file outside the workspace is asked
   about one at a time ("Allow access to this file? 1. Yes 2. Yes, and always
   allow non-workspace access 3. No"). Seen on 2026-11-17: the saved list holds
   the development build's hooks folder, not the release's. **What it asks each
@@ -72,7 +101,7 @@ does not answer it unless the owner says so.
   when tried with the hooks of the release in the AgentTerm repository.
 - **Claude Code** asks whether to trust a folder it has not been in; the
   answer is kept per project in `~/.claude.json` (`hasTrustDialogAccepted`).
-  The hooks given by `--settings` were not asked about.
+  A plugin's hooks were not asked about.
 - **Copilot CLI** asks whether to trust a folder; its plugin's hooks were not
   asked about. `copilot --version` says to run `copilot update` when there is
   one.
@@ -80,7 +109,7 @@ does not answer it unless the owner says so.
 ## What was found by running them (group 0 of #114, 2026-11-17)
 
 Run in the AgentTerm repository, which all four trust, with the command line
-`AgentHooks.launchArguments` makes, the hooks pointed at the release's
+AgentTerm gave the agents before #129 (their hooks on it), pointed at the release's
 `agenttermd`, `AGENTTERM_EVENTS` set to a file that was read every tenth of a
 second. Prompts of a few words, to spend as little of the accounts as could
 be.

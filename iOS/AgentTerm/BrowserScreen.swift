@@ -50,6 +50,8 @@ struct BrowserTabRow: View {
     let tab: BrowserTabInfo
     /// Set in under its agent, which it is shown under: it is not named.
     var nested = false
+    /// Set in under the Browser heading of the user's pages (#127).
+    var indented = false
 
     private var owner: String {
         let whose: String
@@ -76,7 +78,7 @@ struct BrowserTabRow: View {
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
         }
-        .padding(.leading, nested ? 38 : 12)
+        .padding(.leading, nested || indented ? 38 : 12)
         .padding(.trailing, 12)
         .padding(.vertical, 10)
         .contentShape(Rectangle())

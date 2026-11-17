@@ -84,18 +84,19 @@ says names the device it runs on.
   the folder list and on its tab on the Mac, in the sessions list and the
   terminal's title on the iPhone. A folder's row says when one of its
   sessions waits.
-- The state comes from what the agent says about itself, through hooks
-  AgentTerm gives it for that session only, never from the screen. A state
-  that is shown is true; where it is not known, nothing is shown.
-- A shell has no state. An agent that has just started has none until it
-  says something. After Escape or Control C is typed to a working agent,
-  its state is not known until the agent says more.
-- Codex asks to review the hooks AgentTerm gives it when they are new or
-  changed: the first session after AgentTerm is installed, and the first
-  after switching between the released and dev builds (seen with Codex
-  0.169). Until its hooks first report, a Codex session says that its
-  state shows once they run, and to choose "Trust all and continue" if
-  Codex asks; told to go on without them, Codex shows no state.
+- The state comes from what the agent says about itself, through
+  AgentTerm's hooks in the agent's own configuration (see "Hooks and MCP"),
+  never from the screen. A state that is shown is true; where it is not
+  known, nothing is shown.
+- A shell has no state, unless an agent typed in it has the hooks. An
+  agent that has just started has none until it says something. After
+  Escape or Control C is typed to a working agent, its state is not known
+  until the agent says more.
+- Codex asks to review AgentTerm's hooks, in its `config.toml`, the first
+  time it starts after they were added or changed (seen with Codex 0.169).
+  Until its hooks first report, a Codex session says that its state shows
+  once they run, and to choose "Trust all and continue" if Codex asks;
+  told to go on without them, Codex shows no state.
 - Antigravity does not say when it waits for permission: while it runs a
   tool, its state is not shown, and its session says why.
 
@@ -343,6 +344,61 @@ says names the device it runs on.
   left the front: there is no push through Apple. A switch in the iPhone's
   Settings turns it off.
 
+### Hooks and MCP (#129)
+
+AgentTerm starts an agent as the user would, with nothing of its own on
+its command line: its hooks (what it is doing, the Inbox, notifications),
+AgentTerm's MCP server (shells and pages of its own, and what AgentTerm
+tells it), and for Claude Code the status line AgentTerm reads its usage
+from, are in the agent's own configuration, at the user's scope, for every
+folder. AgentTerm adds them only when the user asks, with each agent's own
+commands, and takes them out the same way; outside AgentTerm they do
+nothing (decided by the owner on 2026-11-17).
+
+- **Settings > Hooks & MCP** (Mac) lists each agent: whether it is installed
+  on the Mac, what it has (Hooks, MCP server, and Status line for Claude
+  Code), asked of the agent itself, and whether its session running now
+  was heard from; Install, Install for All, Remove; and the same as a
+  command to run in a terminal, with Copy: `'<AgentTerm>/agenttermd' setup
+  claude` (or `codex`, `copilot`, `agy`, `all`; `--remove` takes them out;
+  `setup status` says what each has). What does not work is said, in the
+  agent's own words. Only AgentTerm on that Mac sets its agents up; another
+  Mac shows them only.
+- How each takes them, as tried with the versions in use: Claude Code, a
+  plugin of a marketplace in AgentTerm's folder (`claude plugin marketplace
+  add`, `claude plugin install`, `--scope user`), and the status line in its
+  settings, the one the user had kept and run after AgentTerm's; Copilot
+  CLI, a plugin the same way; Codex, a plugin with the server, and the hooks
+  between marks in its `config.toml`, which it then asks to review (it takes
+  hooks nowhere else); Antigravity, a plugin installed from AgentTerm's
+  folder, with what it is told as a rule (installed again after changing
+  those words). Claude Code has one status line: of the two builds, the one
+  set up last has it, and runs the other's after its own.
+- **The onboarding** (Mac) shows over the window each time the app opens
+  while an agent installed on the Mac misses its hooks or the MCP server:
+  Welcome, Folders (add the projects' folders), Permissions, Hooks & MCP
+  (the same rows, with Install for All), iPhone (pairing over Tailscale).
+  Each step can be skipped; Don't Show This Again stops it; Settings >
+  Hooks & MCP shows it again.
+- **Each agent's session** has a mark at the end of its usage band, on the
+  Mac and the iPhone: connected (both heard), missing (one or both not
+  heard within 20 seconds of the agent's start), or connecting. Touched,
+  it says which and what to do, in the same words on both.
+- **Outside AgentTerm**, an agent set up works as before: its hooks write
+  nothing, AgentTerm's server offers no tools and tells it nothing (it is
+  listed among its servers, empty), Claude Code's status line shows the
+  user's own (an empty one for a user who had none, and Claude Code then
+  hides some of its keyboard hints), and what Antigravity is told says it
+  holds only where the server has tools. Codex asks once to review the
+  hooks, wherever it next starts.
+- **An agent typed by hand in a shell** (`claude`, `codex`, `copilot`, `agy`
+  at the prompt) is found from the program in front of the shell's
+  terminal, as named when typed, and while it runs the shell is its
+  session: its usage band and mark, its state and the Inbox when it has
+  the hooks, its own shells and pages when it has the server. Every
+  session, a shell's too, has what they need to reach the host in its
+  environment. When the shell is in front again, it is a shell again.
+
 ### Shells an agent opens
 
 - An agent can open a shell as a session the user sees: asked to "open an
@@ -350,20 +406,18 @@ says names the device it runs on.
   tab, works in it, and the user watches and can type in it too. On the
   Mac it is a tab and a row in its agent's folder, on the iPhone a row,
   marked as opened by an agent.
-- It is done through AgentTerm's MCP server, which AgentTerm gives to
-  each session of Claude Code, Codex, Copilot CLI and Antigravity it
-  starts, for that session only, as it gives it its hooks: always, with no
-  switch. Nothing is written into the agents' own settings, and an agent
-  started outside AgentTerm, where the server has nothing to offer, does
-  not have it.
-- Builds before 0.8.0 installed the server in the agents' settings, for
-  the whole user. AgentTerm takes out what it put there with each agent's
-  own command, once for each agent; an agent that refuses is named in the
-  top banner, with how to take it out by hand, and is not asked again.
-- A development build gives its sessions a server of its own, under
-  another name (`agentterm-dev`), and each works only in the sessions of
-  its own build: trying a change never takes the shells from the agents
-  of the installed app.
+- It is done through AgentTerm's MCP server, in the agent's own
+  configuration once Settings > Hooks & MCP added it (see "Hooks and
+  MCP"), in every session of that agent, one started from AgentTerm or
+  typed in its shells. Elsewhere it offers no tools. A shell the agent
+  opens is its own while its session is an agent's; one opened by an agent
+  typed in a shell of the user's is the user's.
+- What builds before 0.8.0 put in the agents' settings is not taken out any
+  more (principle 6).
+- A development build has a server of its own, under another name
+  (`agentterm-dev`), and each works only in the sessions of its own build:
+  trying a change never takes the shells from the agents of the installed
+  app.
 - Its tools, all named `shell_…`: open a shell (with a command or
   without), **run a command in it and be told its exit code and its
   output once it ends**, in one call, list the shells, read a shell's
@@ -437,18 +491,32 @@ by the user and by the agents alike. An agent drives the very tab the
 user sees.
 
 - **For the user.** The user's pages of a project are one tab of its
-  strip, Browser, as a window of Chrome holds its tabs: inside it a row of
-  the pages, each shown when picked and closed by its ×, and a + for one
-  more. The tab says how many pages it holds; a page closed shows the one
-  beside it, the last one closed closes the tab, and closing the tab while
-  it holds several is asked first. The list on the left holds them the
+  strip, Browser, as a window of Chrome holds its tabs: the row under the
+  strip holds the pages, each shown when picked and closed by its ×, and
+  New Page for one more (see Panes). The tab says how many pages it holds;
+  a page closed shows the one beside it, the last one closed closes the
+  tab, and closing the tab while it holds several is asked first. The list on the left holds them the
   same way (#122): one Browser row in the project, its pages set in under
   it; the row shows the page the tab shows, and closes them all from its
   menu. A page is started as a shell is: the
   Browser button next to Shell in the header, on the launch screen, the +
   of the row, or Browser > New Browser Tab (⌥⌘T). It opens in
   the project on show,
-  in the profile picked (see Profiles). Its bar has back, forward, reload or stop, the
+  in the profile picked (see Profiles). A right click in a page opens a
+  menu as Chrome's (#131): in a text field Cut, Copy, Paste and Select
+  All; on selected text Copy; on a link Open Link in New Tab and Copy Link
+  Address; on an image Open Image in New Tab and Copy Image Address;
+  elsewhere on the page Back, Forward and Reload; Inspect always, which
+  opens the page's DevTools. A link or an image opened in a new tab is a
+  page of the user's in the Browser tab.
+- **Extensions** (#125) can be installed from the Chrome Web Store, in the
+  profile of the page, as in Chrome; Chrome asks first, in its own prompt.
+  A window of Chrome's own that Chrome opens by itself, an extension's
+  welcome page say, does not show: the Browser tab says Chrome opened it,
+  with Open in Chrome Window, which shows it outside AgentTerm (where the
+  extensions' buttons are), and Close It. A page can be opened in such a
+  window from the bar's menu too (Open in Chrome Window). These windows
+  close with the app. Its bar has back, forward, reload or stop, the
   profile it uses, and the
   address, where words that are not an address are searched for (⌘L to
   reach it, ⌘R, ⌘[ and ⌘] too). Show As, a button of the bar that names the device
@@ -503,8 +571,8 @@ user sees.
   released and the development builds keep their profiles apart, and
   their keychain items.
 - **For the agents.** Through AgentTerm's MCP server, with its shells'
-  tools: an agent opens tabs of its own (`browser_open`), which show
-  beside it (see Panes), reads a page as text with a ref for what can be
+  tools: an agent opens tabs of its own (`browser_open`), which are in
+  its tab (see Panes), reads a page as text with a ref for what can be
   acted on (`browser_snapshot`), clicks, types, picks, presses keys,
   scrolls and waits (`browser_click`, `browser_type`, `browser_select`,
   `browser_press`, `browser_scroll`, `browser_wait`), chooses files for a
@@ -547,8 +615,9 @@ user sees.
   2026-11-16, as for the shells' three).
 - **On the iPhone**, as on the Mac: an agent's own shells and pages are
   listed right under it, set in, under the headings Shells and Browser;
-  the user's pages are in their project's folder, and those of no folder
-  under "Browser on the Mac". An agent's screen has Agent, Shells and
+  the user's pages are in their project's folder under a Browser heading
+  that says how many there are, and those of no folder under "Browser on
+  the Mac". An agent's screen has Agent, Shells and
   Browser, each with its tabs when it has several: a shell is its
   terminal, a page is shown live, about ten pictures a second, which come
   while the Mac does not show it too. On an iPad on its side, the app on
@@ -577,6 +646,13 @@ few figures worth a glance: the model, how full the context is, and what the
 account's main limits have left, each in a cell of its own with a small bar
 (and, on the Mac, when it starts over). As many cells are shown as fit.
 Clicking the band opens everything the agent's own usage screen shows.
+
+The model's name is followed by how hard it thinks, in the agent's own word,
+when the agent records it (#130): "Opus 5.5 · xhigh", "gpt-6-astra ·
+medium". It follows a change made in the agent (`/effort`, its model menu).
+Nothing is shown of a level that is not known. Claude Code says it to its
+status line, Codex and Copilot CLI in their session files, Antigravity only
+as the end of its model's id.
 
 | Agent | What is shown, as `/usage` or `/status` shows it |
 |---|---|
@@ -607,11 +683,11 @@ Where the figures come from:
   sign-in has run out, the line says so and the agent renews it itself with
   its next message. `agenttermd --no-account-usage` turns all of this off.
 - **The context** comes from what the agent records on this Mac. Claude
-  Code also reports it, with its limits, to its status line: sessions
-  AgentTerm starts get a status line command of AgentTerm's own for that, which
-  then runs the status line the user had set up, so theirs still shows. For
-  someone without one, Claude Code hides some of its keyboard hints once any
-  status line is set, which is Claude Code's doing.
+  Code also reports it, with its limits, to its status line: once Settings >
+  Hooks & MCP added AgentTerm's to its settings, which then runs the status
+  line the user had set up, so theirs still shows. For someone without one,
+  Claude Code hides some of its keyboard hints once any status line is set,
+  which is Claude Code's doing.
 
 These are the services' own endpoints for their own apps, not public APIs,
 and may change without notice. A figure that cannot be read is left out
@@ -654,6 +730,10 @@ under 20% that is not charging turns amber.
 - The other way round, while the Mac is using a session that is open on the
   iPhone, the iPhone shows the Mac's whole terminal scaled down to fit, with a
   line saying so and a "Fit This Screen" button that takes the session back.
+- That line names who uses the session, in the same words on both apps
+  (#120): "In use on MacBook Pro · 180×48", the Mac by its name, a device by
+  the name it gives itself ("In use on Manh's iPad · 90×50"), so that a
+  phone watching a session an iPad uses does not say it is used on the Mac.
 - Handing a session back and forth redraws the program for the new size each
   time.
 - What a terminal sends by itself (answers to the program's questions, focus
@@ -738,28 +818,50 @@ panel.
   terminals, which keep running and come back as they were when another
   place is picked. Settings opens on General each time. Settings is not a
   window of its own.
-- **The folders.** Project folders the user added, each with its running
-  sessions underneath. A session shows its agent's icon and a name. The list belongs to the host, so the iPhone shows the
+- **The folders.** Project folders the user added, each with what its
+  strip holds underneath (#127): each running agent, with the pages and
+  shells it has right under it, set in; then the user's Shells, Browser,
+  Diffs and Files, each a row that says how many it holds, with them set
+  in under it. A session shows its agent's icon and a name. The list belongs to the host, so the iPhone shows the
   same folders. Sessions started elsewhere are listed under "Other".
   A folder is dragged onto another to go before it, or moved up and down
   from its menu; a folder dragged in from the Finder is added. A folder's
-  sessions are in the order of their tabs and can be dragged the same way.
-- **Middle: terminal.** The selected session. With no session selected, a
-  launch screen for the selected folder. Above it, every running session of
-  the project on show is a tab; another is started from the header (the
-  agents, Shell, Browser) or the File and Browser menus. Command and a
-  number (⌘1 to ⌘9) shows the tab in that place of the pane the keyboard is
-  in, ⌘⇧] and ⌘⇧[ go to the next and previous, ⌘W ends the
-  session on screen. Open files are tabs in the same strip, and so is the
-  diff picked in the Git tab. A tab's menu (right click) closes it, the
-  other tabs of its pane, every file of its pane (terminals stay), or every
-  tab of its pane; the Tab menu's do the same for the pane the keyboard is
-  in. Whatever would end a session asks first. Files with unsaved changes
-  are never closed without asking.
+  agents are in the order of their tabs and can be dragged the same way.
+- **Middle: terminal.** What the tab in front shows, under two rows
+  (#127). With nothing open, a launch screen for the selected folder. The
+  strip holds a tab for each running agent of the project on show, and
+  one for each kind of thing the user opened there: **Shells**, **Browser**,
+  **Diffs** (a diff picked in the Git tab, one more each time) and
+  **Files**, each saying how many it holds. The row under the strip holds
+  what the tab in front holds: an agent first, then the pages and the
+  shells it has; or the user's shells, pages, diffs or files. It is where
+  they are picked, opened and closed. One of the user's tabs shows one of
+  its items, the whole pane for it: the one picked in the row, which the
+  tab shows again when it is picked again. An agent's tab shows the agent
+  with its page and its shell beside it (Panes, below): its row picks
+  which page and which shell, and at its end has a button each that hides
+  and shows the page and the shell beside the agent. An agent's row has
+  + Page and + Shell, which open one more for that agent: a page it lists
+  and drives (the user's until it is given back), and a shell in its
+  folder, which it lists and uses as one it opened itself. The Shells and
+  Browser rows have a + for one more of the user's. A tab is started from the header
+  (the agents, Shell, Browser) or the File and Browser menus. Command and
+  a number (⌘1 to ⌘9) shows the tab in that place of the strip, ⌘⇧] and
+  ⌘⇧[ the next and previous tab, and in one of the user's tabs ⌥⌘→ and
+  ⌥⌘← (View > Next and Previous Item in Group) the next and previous
+  item it holds, with the keyboard in it; in an agent's tab the same keys
+  move about its area (Panes). ⌘W closes what is shown, a session is ended.
+  An item's × closes it; the × of the Shells, Diffs or Files tab closes
+  the one it shows, and the Browser tab's all its pages, asked first when
+  there are several. A tab's menu (right click) closes it, the other tabs
+  of its pane, every file of its pane (terminals stay), or every tab of
+  its pane; closing an agent's tab ends the agent and its shells. The Tab
+  menu's do the same for the pane the keyboard is in. Whatever would end
+  a session asks first. Files with unsaved changes are never closed
+  without asking.
 - **Panes** (#69). The user does not split the middle: it has one strip
-  of tabs and shows the tab in front, a session, a file, the diff or a
-  page of the browser. What is shown side by side is an agent's own shells
-  and pages, beside it (below), which the agent opens; a layout split by an
+  of tabs and shows the tab in front. What is shown side by side is an
+  agent's own page and shell, beside it (below); a layout split by an
   earlier build is put back into one. A session is shown in one place
   only: the window is one device to the host, with one size for each
   session.
@@ -770,34 +872,35 @@ panel.
   no listed folder have their own too. What is in front is kept by the app
   on the Mac, for each Mac it shows and each project, and comes back when
   the window opens again; a tab that ended meanwhile is simply gone.
-  **An agent's own shells and browser are laid out beside it.** When an
-  agent opens shells (see "Shells an agent opens") or browser tabs, picking
-  it shows its area: the agent on the left, its browser on the right, its
-  shells under both, the full width, as tabs of that one pane. These are
-  not tabs of the strip. The area belongs to the agent's session, so
-  picking another agent shows that one's. A shell or page picked in the
-  list of sessions or a notice shows its agent's area with it in front.
-  The dividers are dragged as between panes; closing the shells or the
-  browser (the × of their strip) hides them, and the bar under the area
-  shows them again (Show Shells, Show Browser): a shell keeps running and
-  stays in the list of sessions. An agent opening a shell or a page does
-  not take the keyboard from where the user types. The View menu puts the
-  keyboard in the agent (⌥⌘←), its page (⌥⌘→) or its shells (⌥⌘↓), and
-  Show This Part Alone (⇧⌘Return) has the part the keyboard is in fill the
-  area for a while, a bar under it saying so, until it is chosen again or
-  Show All is clicked; it is not kept when the app quits. A shell the user opens
-  is the user's, a tab like any other, and so is a browser tab the user
-  opens, and an agent's shell or page once its agent's session has ended.
-  An agent's own shells and pages are always shown in its area, never as
-  tabs of their own: they are not dragged, pinned or moved to a pane. In
-  the list at the left they are right under their agent, set in.
+  **An agent's own shells and pages are laid out beside it**: those it
+  opens (see "Shells an agent opens"), and those the user opens for it
+  from its row. Its tab shows its area: the agent on the left, the page
+  picked on the right, the shell picked under both, the full width, the
+  agent's usage under all of it. They are not tabs of their own, nor in
+  the user's Shells and Browser tabs, and are not dragged, pinned or
+  moved: they are in the agent's row under the strip (#127), and in the
+  list at the left right under their agent, set in. The area belongs to
+  the agent's session, so picking another agent shows that one's. A shell
+  or page picked in the row, in the list or from a notice is shown in its
+  part, with the keyboard in it; the row marks what is on show, and
+  which of them has the keyboard. The dividers are dragged. The two
+  buttons at the end of the agent's row hide the page and the shell
+  beside it and show them again: hidden, a shell keeps running and a page
+  stays open, both stay in the row and in the list, and picking one there
+  shows its part again. An agent opening a shell or a page does not take
+  the keyboard from where the user types. The View menu puts the keyboard
+  in the agent (⌥⌘←), its page (⌥⌘→) or its shells (⌥⌘↓), and Show This
+  Part Alone (⇧⌘Return) has the part the keyboard is in fill the area for
+  a while, a bar under it saying so, until it is chosen again or Show All
+  is clicked; it is not kept when the app quits. A shell the user opens is
+  the user's, in the Shells tab, and so is a page in the Browser tab, and
+  an agent's shell or page once its agent's session has ended.
   Tabs are arranged by hand. A tab is dragged onto another to go before it
   (or moved from its menu and the Tab menu). A **pinned** tab stays first
-  and is left open by the commands that close many tabs. Tabs can be put
-  in a **group**, which has a name and a color and shows as a label before
-  its tabs; clicking the label folds the group away. A tab takes on the
-  place it is dropped in: pinned among the pinned, in the group of the tab
-  it lands next to, or on a group's label to join it.
+  and is left open by the commands that close many tabs; a tab takes on
+  the place it is dropped in, pinned among the pinned. Tab groups, with
+  their names and colors, were taken away (#127): the user's shells,
+  pages, diffs and files are each held in one tab instead.
 - **Right: side panel**, with three tabs, Git, History and Files. The panel can be hidden. It is there in Sessions only, and so is its button: in History, Schedules and Settings what is in the middle is what the window is about.
   - **History** of the panel: the conversations each agent had in the
     selected folder only; conversations that ran in a subfolder belong to
@@ -1151,9 +1254,9 @@ logging out) is not reported.
 ### What the two apps share
 
 The Mac and the iPhone offer the same things wherever the device allows:
-folders (add, remove, reorder), the arrangement of sessions (order, pins
-and groups, kept by the host so both show the same and a change on one
-appears on the other), sessions (start, end), the terminal with a text size
+folders (add, remove, reorder), the arrangement of the agents' sessions
+(order and pins, kept by the host so both show the same and a change on
+one appears on the other), sessions (start, end), the terminal with a text size
 setting, the Git view as a list or grouped by folder with commit, push,
 pull and a commit message written by an agent, History with both scopes,
 resume, copying the resume command, handoff from a past conversation or a
@@ -1171,9 +1274,10 @@ They differ where the device does:
   scans and manages Macs.
 - "Show in Finder" is on the Mac only. The key bar and the compose field are
   on the iPhone only.
-- On the Mac files and diffs open as tabs next to the terminals; on the
-  iPhone they open as screens. The Mac's file tabs are arranged with the
-  sessions' tabs but belong to its window; the iPhone leaves them alone.
+- On the Mac files and diffs open in the Files and Diffs tabs next to the
+  terminals; on the iPhone they open as screens. The Mac's tabs of the
+  user's shells, pages, diffs and files are arranged with the agents' tabs
+  but belong to its window; the iPhone leaves them alone.
 
 ### Files
 
@@ -1276,7 +1380,12 @@ button at the top right of Sessions goes back to the list of Macs.
 - The iPhone can be paired with several Macs. The Macs screen lists them
   and pairs another one. It shows one Mac at a time, the one picked there.
   Forgetting a Mac leaves the others paired.
-- List of sessions on the Mac on screen, with the folder each runs in.
+- List of sessions on the Mac on screen, by the folder each runs in, as
+  the Mac lists them (#127): each agent with its own pages and shells set
+  in under it, then the user's shells under a Shells heading that says how
+  many there are, and the user's pages under a Browser heading. Groups of
+  sessions, with their colors, were taken away. An agent's session is
+  pinned and moved up or down from its menu, or dragged onto another.
 - Full terminal for a session, sized to the screen.
 - A key bar above the keyboard for keys a phone keyboard lacks: Esc, Tab,
   Shift+Tab, Ctrl, arrows, and Enter.

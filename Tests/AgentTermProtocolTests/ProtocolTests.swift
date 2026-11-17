@@ -147,6 +147,7 @@ final class ProtocolTests: XCTestCase {
             .folders(["/Users/me/app"]),
             .attached(info),
             .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: true),
+            .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: false, by: SizeDriver(name: "Manh's iPad", isMac: false)),
             .exited(session: 3, status: 130),
             .turnResult(
                 session: 3,
@@ -389,14 +390,44 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(second, Data(repeating: 1, count: 300_000))
     }
 
+    /// LINK-5 (#129): what the mark of an agent's session says of its hooks
+    /// and MCP server, in the same words on both apps; and what the host
+    /// and the apps say of them goes through the protocol whole.
+    func testAnAgentsLinkInWordsAndOnTheWire() throws {
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink()), "Connecting…")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: true, mcp: true)), "Hooks and MCP connected")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: false, mcp: true)), "No hooks")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: true, mcp: false)), "No MCP")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: false, mcp: false)), "No hooks, no MCP")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: true)), "Connecting…")
+        XCTAssertTrue(AgentLinkWords.hooks(false).contains("does not come to the Inbox"))
+        XCTAssertTrue(AgentLinkWords.mcp(false).contains("cannot open shells and pages"))
+        XCTAssertTrue(AgentLink(hooks: false).isMissing)
+        XCTAssertFalse(AgentLink(hooks: true).isMissing)
+
+        var shell = SessionInfo(id: 3, title: "zsh", cwd: "/p", size: .default, createdAt: Date(timeIntervalSince1970: 7))
+        shell.typedAgent = "codex"
+        shell.link = AgentLink(hooks: true, mcp: false)
+        let state = AgentSetupState(
+            agent: "claude", name: "Claude Code", installed: true, hooks: true, mcp: false, statusLine: true, command: "x setup claude", removeCommand: "x setup claude --remove", note: nil,
+            problem: "It said no.")
+        let messages: [ServerMessage] = [.sessions([shell]), .agentSetup(AgentSetupReport(agents: [state], busy: ["claude"]))]
+        for message in messages {
+            XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
+        }
+        let asked: [ClientMessage] = [.agentSetupStatus, .runAgentSetup(agent: nil, remove: true), .agentShell(id: 0, key: "k", request: .started(agent: "agy"))]
+        for message in asked {
+            XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ClientMessage.self, from: MessageCoding.encode(message))), message)
+        }
+        XCTAssertTrue(AgentSetupReport(agents: [state]).needsSetup)
+        XCTAssertFalse(AgentSetupReport(agents: [AgentSetupState(agent: "agy", name: "Antigravity", installed: false, command: "", removeCommand: "")]).needsSetup)
+    }
+
     /// MCP-19: what is wrong with the agents' server, in words, and a cause
     /// this build does not know still read.
     func testAnAgentShellsFaultInWords() throws {
-        let install = AgentShellsFault(cause: .leftOver, agents: ["Codex", "Copilot CLI"])
-        XCTAssertEqual(install.headline(), "The MCP server an earlier AgentTerm put in the settings of Codex and Copilot CLI could not be taken out.")
-        XCTAssertEqual(
-            install.headline(on: "Studio"), "The MCP server an earlier AgentTerm put in the settings of Codex and Copilot CLI on Studio could not be taken out.")
-        XCTAssertTrue(install.advice.contains("mcp remove \(AppChannel.current.mcpServerName)"), install.advice)
+        let install = AgentShellsFault(cause: .signIn, agents: ["Codex"])
+        XCTAssertEqual(AgentShellsFault(cause: .signIn).headline(on: "Studio"), "An agent's MCP server was refused by the AgentTerm host on Studio.")
         XCTAssertEqual(AgentShellsFault(cause: .signIn).headline(), "An agent's MCP server was refused by the AgentTerm host.")
         XCTAssertTrue(AgentShellsFault(cause: .signIn).advice.contains("Start that agent's session again"))
         let message = ServerMessage.agentShellsFaults([install, AgentShellsFault(cause: .init(rawValue: "later"))])

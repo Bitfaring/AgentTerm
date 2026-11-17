@@ -50,7 +50,7 @@ struct SidebarView: View {
                                 return provider
                             }
                             .onDrop(of: [.data, .fileURL], delegate: FolderDropDelegate(before: folder.path, model: model, dropTarget: $dropTarget))
-                        rows(sessions: model.sessions(in: folder), pages: browsers.tabs.filter { $0.project == folder.path }, loose: false)
+                        rows(sessions: model.sessions(in: folder), pages: browsers.tabs.filter { $0.project == folder.path }, project: folder.path, loose: false)
                     }
                     if !model.folders.isEmpty {
                         // Room under the last folder to drop one at the end.
@@ -69,7 +69,7 @@ struct SidebarView: View {
                             .padding(.horizontal, 6)
                             .padding(.top, 14)
                             .padding(.bottom, 4)
-                        rows(sessions: model.inTabOrder(model.looseSessions), pages: looseTabs, loose: true)
+                        rows(sessions: model.inTabOrder(model.looseSessions), pages: looseTabs, project: "", loose: true)
                     }
                     if model.folders.isEmpty && model.looseSessions.isEmpty {
                         Text("No folders yet.\nAdd one to keep its agents and changes together.")
@@ -90,23 +90,32 @@ struct SidebarView: View {
         }
     }
 
-    /// A folder's rows, or those of no folder: its sessions in the order of
-    /// their tabs, each agent with its own shells and pages right under it,
-    /// set in, as they are its own and not tabs; then the user's pages,
-    /// under one Browser row, as the strip holds them in one Browser tab.
+    /// A folder's rows, or those of no folder, as its strip holds them
+    /// (#127): each agent, its own pages and shells right under it, set in;
+    /// then the user's shells, pages, diffs and files, each under one row of
+    /// their kind.
     @ViewBuilder
-    private func rows(sessions: [SessionInfo], pages: [BrowserTab], loose: Bool) -> some View {
+    private func rows(sessions: [SessionInfo], pages: [BrowserTab], project: String, loose: Bool) -> some View {
         let companions = model.companions
         let inner: CGFloat = (loose ? 8 : 24) + 16
-        ForEach(sessions.filter { companions.owner[TabID.session($0)] == nil }) { session in
+        ForEach(sessions.filter { $0.agent != nil && companions.owner[TabID.session($0)] == nil }) { session in
             SessionRow(session: session, showsPath: loose)
                 .modifier(SessionArranging(session: session, dropTarget: $dropTarget))
             let tab = TabID.session(session)
+            ForEach((companions.browsers[tab] ?? []).compactMap { browsers.tab(forTab: $0) }) { page in
+                BrowserRow(tab: page, leading: inner)
+            }
             ForEach((companions.shells[tab] ?? []).compactMap { model.session(forTab: $0) }) { shell in
                 SessionRow(session: shell, leading: inner)
             }
-            ForEach((companions.browsers[tab] ?? []).compactMap { browsers.tab(forTab: $0) }) { page in
-                BrowserRow(tab: page, leading: inner)
+        }
+        // The user's shells, one Shells row a project with them under it.
+        let shells = sessions.filter { $0.agent == nil && companions.owner[TabID.session($0)] == nil }
+        if !shells.isEmpty {
+            HolderListRow(kind: .shells, project: loose ? (shells.first.map { model.project(ofTab: TabID.session($0)) } ?? "") : project, count: shells.count, loose: loose)
+            ForEach(shells) { shell in
+                SessionRow(session: shell, leading: inner)
+                    .contextMenu { Button("End Session") { model.requestEnd(shell.id) } }
             }
         }
         // The project's pages that are the user's (#76), one Browser row a
@@ -116,6 +125,22 @@ struct SidebarView: View {
             BrowserGroupRow(project: group.project, pages: group.pages, loose: loose)
             ForEach(group.pages) { tab in
                 BrowserRow(tab: tab, leading: inner)
+            }
+        }
+        if !loose {
+            let diffs = model.userDiffs(in: project)
+            if !diffs.isEmpty {
+                HolderListRow(kind: .diffs, project: project, count: diffs.count, loose: loose)
+                ForEach(diffs, id: \.tabID) { diff in
+                    ItemListRow(item: diff.tabID, symbol: "plus.forwardslash.minus", title: (diff.file.path as NSString).lastPathComponent, leading: inner)
+                }
+            }
+            let documents = model.userFiles(in: project)
+            if !documents.isEmpty {
+                HolderListRow(kind: .files, project: project, count: documents.count, loose: loose)
+                ForEach(documents, id: \.path) { document in
+                    ItemListRow(item: TabID.file(document.path), symbol: document.isMarkdown ? "doc.text" : "doc", title: document.name, leading: inner)
+                }
             }
         }
     }
@@ -134,6 +159,83 @@ extension SidebarView {
     }
 }
 
+/// The row of one of a project's groups of the user's own in the list
+/// (#127), as its strip holds them: what it holds is under it. Picking it
+/// shows what that group shows.
+private struct HolderListRow: View {
+    @EnvironmentObject private var model: AppModel
+    let kind: HolderKind
+    let project: String
+    let count: Int
+    var loose = false
+    @State private var hovering = false
+
+    private var id: String { TabID.holder(kind, project) }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: kind.symbol)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            Text(kind.label(count))
+                .font(.system(size: 12.5))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, loose ? 8 : 24)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .modifier(RowBackground(selected: false, hovering: hovering))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { model.selectStripTab(id) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(kind.spoken(count))
+        .accessibilityIdentifier("sidebar-\(kind.rawValue)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { model.selectStripTab(id) }
+    }
+}
+
+/// A diff or a file in the list, under its group's row.
+private struct ItemListRow: View {
+    @EnvironmentObject private var model: AppModel
+    let item: String
+    let symbol: String
+    let title: String
+    let leading: CGFloat
+    @State private var hovering = false
+
+    private var selected: Bool { model.frontTabID == item }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            Text(title)
+                .font(.system(size: 12.5))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, leading)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .modifier(RowBackground(selected: selected, hovering: hovering))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { model.selectTab(id: item) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier("sidebar-\(item)")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { model.selectTab(id: item) }
+    }
+}
+
 /// The user's pages of a project in the list (#122), as its strip's Browser
 /// tab holds them: its pages are under it. Picking it shows the page that
 /// tab shows.
@@ -145,7 +247,7 @@ private struct BrowserGroupRow: View {
     @State private var hovering = false
 
     private func show() {
-        if let first = pages.first { model.selectStripTab(first.tabID) }
+        if !pages.isEmpty { model.selectStripTab(TabID.holder(.browser, project)) }
     }
 
     var body: some View {
@@ -154,7 +256,7 @@ private struct BrowserGroupRow: View {
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 14)
-            Text(pages.count > 1 ? "Browser (\(pages.count))" : "Browser")
+            Text(HolderKind.browser.label(pages.count))
                 .font(.system(size: 12.5))
                 .lineLimit(1)
             Spacer(minLength: 0)
@@ -181,7 +283,7 @@ private struct BrowserGroupRow: View {
             Button("Close Browser") { model.requestCloseBrowser(in: project) }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(pages.count > 1 ? "Browser, \(pages.count) pages" : "Browser")
+        .accessibilityLabel(HolderKind.browser.spoken(pages.count))
         .accessibilityIdentifier("sidebar-browser")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { show() }
@@ -189,9 +291,9 @@ private struct BrowserGroupRow: View {
     }
 }
 
-/// A session in the list can be dragged onto another to go before it. That
-/// is the same move as dragging its tab in the strip: it takes on the place
-/// it lands in, pinned or in a group, and the phones see the new order.
+/// An agent's session in the list can be dragged onto another to go before
+/// it. That is the same move as dragging its tab in the strip: it takes on
+/// the place it lands in, pinned or not, and the phones see the new order.
 private struct SessionArranging: ViewModifier {
     @EnvironmentObject private var model: AppModel
     let session: SessionInfo
@@ -216,7 +318,8 @@ private struct SessionArranging: ViewModifier {
             }
             .onDrop(of: [.data], delegate: SessionRowDropDelegate(target: id, model: model, dropTarget: $dropTarget))
             .contextMenu {
-                let shown = model.inTabOrder(model.sessions.filter { $0.cwd == session.cwd }).map(TabID.session)
+                // Among the agents beside it, the tabs of the strip (#127).
+                let shown = model.inTabOrder(model.sessions.filter { $0.cwd == session.cwd && $0.agent != nil && $0.openedBy == nil }).map(TabID.session)
                 let index = shown.firstIndex(of: id)
                 Button("Move Up") { if let index, index > 0 { model.moveTab(id, before: shown[index - 1]) } }
                     .disabled(index == nil || index == 0)
@@ -458,7 +561,7 @@ struct SessionRow: View {
     var leading: CGFloat?
     @State private var hovering = false
 
-    private var agentID: String { session.agent ?? "shell" }
+    private var agentID: String { session.agent ?? session.typedAgent ?? "shell" }
     /// One row of the list is selected at a time: a page in front is its
     /// own row's, not the session's that was in front before it (PANE-17).
     private var selected: Bool { model.selectedSession == session.id && model.browserInFront == nil }

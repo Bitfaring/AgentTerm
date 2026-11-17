@@ -51,6 +51,16 @@ final class AgentShellsLink {
         lock.unlock()
     }
 
+    /// Tells the host the server started, for the agent it names (#129):
+    /// the session's agent has AgentTerm's MCP server. Not waited for.
+    func announce(agent: String?) {
+        lock.lock()
+        let connection = self.connection ?? connect()
+        lock.unlock()
+        let key = self.key
+        DispatchQueue.main.async { connection.send(.agentShell(id: 0, key: key, request: .started(agent: agent))) }
+    }
+
     /// Asks the host and waits for its answer, or for the line to go down.
     func ask(_ request: AgentShellRequest) -> AgentShellResult {
         lock.lock()

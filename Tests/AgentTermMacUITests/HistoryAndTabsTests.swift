@@ -204,23 +204,25 @@ final class HistoryAndTabsTests: MacUITestCase {
         return size.width
     }
 
-    func testTabsAreShownPinnedGroupedAndClosed() throws {
+    func testTabsAreShownPinnedAndClosed() throws {
         let phone = try device()
         app.menu(["File", "New Shell"])
         app.menu(["File", "New Claude Code"])
         app.menu(["File", "New Codex"])
         wait("three sessions") { phone.sessions.count == 3 }
-        // TAB-1: each is a tab, and picking a tab's session from the sidebar shows it.
+        // TAB-1: each agent is a tab, the shell is in the Shells tab (#127),
+        // and picking a session from the sidebar shows it.
         let shell = try XCTUnwrap(phone.sessions.first { $0.title != "Claude Code" && $0.title != "Codex" })
         let claude = try XCTUnwrap(phone.sessions.first { $0.title == "Claude Code" })
         app.press(.id("session-\(shell.id)"))
+        app.wait(for: .id("strip-shells"))
+        app.wait(for: .id("item-\(shell.id)"))
+        XCTAssertFalse(app.exists(.id("tab-\(shell.id)")), "the shell has a tab of its own")
+        XCTAssertTrue(app.exists(.id("tab-\(claude.id)")), "the agent has no tab of its own")
         // TAB-2: the tab in front is pinned, and the host has it so.
-        app.menu(["Tab", "Pin Tab"])
-        wait("the host to know the pin") { phone.tabLayout?.pinned.contains(shell.layoutID) ?? false }
-        // Another one goes into a group of its own.
         app.press(.id("session-\(claude.id)"))
-        app.menu(["Tab", "Add Tab to New Group"])
-        wait("the host to know the group") { !(phone.tabLayout?.groups.isEmpty ?? true) }
+        app.menu(["Tab", "Pin Tab"])
+        wait("the host to know the pin") { phone.tabLayout?.pinned.contains(claude.layoutID) ?? false }
         // TAB-3: the arrangement is there again when the app is opened again.
         let arranged = phone.tabLayout
         try relaunchApp()

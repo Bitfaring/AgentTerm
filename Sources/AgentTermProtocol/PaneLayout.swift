@@ -330,20 +330,21 @@ public struct PaneLayout: Codable, Equatable, Sendable {
     }
 }
 
-/// How an agent's own shells and browser are laid out beside it (#69, #76):
-/// the agent on the left, its browser on the right, its shells under both,
-/// the full width; each part can be closed, which hides it. Kept by the Mac
-/// app for each agent's session.
+/// How an agent's own page and shells are laid out beside it in its tab
+/// (#69, #76, #127): the agent on the left, its page on the right, its
+/// shell under both, the full width; a part can be hidden. Which page and
+/// which shell is picked in the row under the strip. Kept by the Mac app
+/// for each agent's session.
 public struct AgentArea: Codable, Equatable, Sendable {
-    /// The agent's share of the width, beside its browser.
+    /// The agent's share of the width, beside its page.
     public var across: Double
-    /// The share of the height above the shells.
+    /// The share of the height above the shell.
     public var down: Double
     public var shellsHidden: Bool
     public var browserHidden: Bool
-    /// The shell in front among the agent's shells, by its tab id.
+    /// The shell shown among the agent's shells, by its tab id.
     public var shellFront: String?
-    /// The browser tab in front among the agent's.
+    /// The page shown among the agent's.
     public var browserFront: String?
 
     public init(across: Double = 0.5, down: Double = 0.64, shellsHidden: Bool = false, browserHidden: Bool = false, shellFront: String? = nil, browserFront: String? = nil) {
@@ -355,8 +356,8 @@ public struct AgentArea: Codable, Equatable, Sendable {
         self.browserFront = browserFront
     }
 
-    /// The shell shown among `shells` (tab ids in order): the one in
-    /// front if it still runs, the last one otherwise.
+    /// The shell shown among `shells` (tab ids in order): the one picked
+    /// if it still runs, the last one otherwise.
     public func shownShell(among shells: [String]) -> String? {
         shellFront.flatMap { shells.contains($0) ? $0 : nil } ?? shells.last
     }
@@ -367,17 +368,6 @@ public struct AgentArea: Codable, Equatable, Sendable {
 }
 
 extension TabLayout {
-    /// The strip of one pane: the items of `items(front:)` that are among
-    /// `tabs`, a group's label only where some of its tabs are, counting
-    /// those.
-    public func items(front: String? = nil, among tabs: Set<String>) -> [Item] {
-        items(front: front).compactMap { item in
-            switch item {
-            case .tab(let id): return tabs.contains(id) ? item : nil
-            case .group(let group, _):
-                let here = members(of: group.id).filter(tabs.contains).count
-                return here == 0 ? nil : .group(group, count: here)
-            }
-        }
-    }
+    /// The strip of one pane: its tabs, in the order of the layout.
+    public func strip(among tabs: Set<String>) -> [String] { order.filter(tabs.contains) }
 }
