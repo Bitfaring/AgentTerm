@@ -873,7 +873,9 @@ final class AgentShellsHostTests: XCTestCase {
 
         mac.connection.send(.create(CreateRequest(cwd: root.path, title: "mine")))
         waitUntil("the picked shell started", timeout: 15) { FileManager.default.fileExists(atPath: started.path) }
-        waitUntil("what is run first, run", timeout: 15) { FileManager.default.fileExists(atPath: ran.path) }
+        // `echo … > file` makes the file empty first, then writes into it:
+        // what it holds is waited for, not only the file (#128).
+        waitUntil("what is run first, run", timeout: 15) { (try? String(contentsOf: ran, encoding: .utf8)) == "startup\n" }
         XCTAssertEqual(try String(contentsOf: ran, encoding: .utf8), "startup\n")
     }
 
