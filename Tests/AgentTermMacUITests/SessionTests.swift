@@ -337,19 +337,6 @@ final class SessionTests: MacUITestCase {
         app.waitGone(.containing("The beginning of it all."))
     }
 
-    /// Whether the app is the one in front of every other.
-    private var appIsInFront: Bool { NSRunningApplication(processIdentifier: app.pid)?.isActive == true }
-
-    /// Through accessibility, as the rest is done: macOS does not let a
-    /// program that is not in front itself put another one there.
-    private func bringAppToFront() {
-        if !appIsInFront {
-            NSRunningApplication(processIdentifier: app.pid)?.activate(options: [.activateAllWindows])
-            AXUIElementSetAttributeValue(AXUIElementCreateApplication(app.pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-        }
-        wait("the app in front") { appIsInFront }
-    }
-
     /// NOTE-9 (#60): a banner hides by itself once its session is the one
     /// in front, however the user got there, and does not come back; the
     /// other devices are told that it was seen.

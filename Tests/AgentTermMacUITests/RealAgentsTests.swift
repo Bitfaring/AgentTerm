@@ -54,8 +54,6 @@ final class RealAgentsTests: MacUITestCase {
         return found.hasPrefix("/") ? found : nil
     }
 
-    private var appIsInFront: Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == app.pid }
-
     /// INBOX-5 (#67), by hand: each of the four, asked to run a command and
     /// answer while another session is in front, comes to the Inbox, done or
     /// asking; what each told is written out.
@@ -64,11 +62,7 @@ final class RealAgentsTests: MacUITestCase {
         app.press(.button("Shell"))
         wait("the shell") { phone.sessions.count == 1 }
         let shell = try XCTUnwrap(phone.sessions.first?.id)
-        if !appIsInFront {
-            NSRunningApplication(processIdentifier: app.pid)?.activate(options: [.activateAllWindows])
-            AXUIElementSetAttributeValue(AXUIElementCreateApplication(app.pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-        }
-        wait("the app in front") { appIsInFront }
+        bringAppToFront()
         app.press(.id("session-\(shell)"))
 
         let folder = Self.repository.path

@@ -47,8 +47,9 @@ final class SplitDiffViewTests: XCTestCase {
     }
 
     /// The work of laying a diff out grows with it, not faster: ten times
-    /// the rows take less than fifteen times as long. Compared with itself
-    /// rather than with a number of seconds, as SES-21 is.
+    /// the rows take less than fifteen times as long, in the best of three
+    /// rounds. Compared with itself rather than with a number of seconds,
+    /// as SES-21 is.
     func testTheWorkGrowsWithTheDiff() {
         func time(_ count: Int) -> TimeInterval {
             let patch = "@@ -1,\(count) +1,\(count) @@\n" + (1...count).map { "-line \($0) of the old file\n+line \($0) of the new one" }.joined(separator: "\n")
@@ -68,9 +69,16 @@ final class SplitDiffViewTests: XCTestCase {
             }
             return best
         }
-        let small = time(2_000), large = time(20_000)
-        // Said each time: a run that passes tells how near it was (#136).
-        print(String(format: "MEASURE the diff's layout: 2,000 rows %.4f s, 20,000 rows %.4f s, %.1f times", small, large, large / small))
-        XCTAssertLessThan(large, small * 15, "2,000 rows took \(small) s, 20,000 took \(large) s")
+        // Three rounds, and the one in which the work grew least: a runner of
+        // CI that is slow for a few seconds makes a round say more than the
+        // work does (16.1 times once, where it says 11; #136). Work that
+        // grows as the square of the rows says a hundred times in each.
+        let rounds = (0..<3).map { _ in (small: time(2_000), large: time(20_000)) }
+        let best = rounds.min { $0.large / $0.small < $1.large / $1.small } ?? rounds[0]
+        // Said each time: a run that passes tells how near it was.
+        print(
+            "MEASURE the diff's layout: " + rounds.map { String(format: "%.1f", $0.large / $0.small) }.joined(separator: ", ")
+                + String(format: " times in three rounds; the least with 2,000 rows %.4f s, 20,000 rows %.4f s", best.small, best.large))
+        XCTAssertLessThan(best.large, best.small * 15, "in the best of three rounds 2,000 rows took \(best.small) s, 20,000 took \(best.large) s")
     }
 }

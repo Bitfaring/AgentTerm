@@ -247,6 +247,85 @@ class MacUITestCase: XCTestCase {
         }
     }
 
+    /// Whether the app is the one in front of every other.
+    var appIsInFront: Bool { NSRunningApplication(processIdentifier: app.pid)?.isActive == true }
+
+    /// Through accessibility, as the rest is done: macOS does not let a
+    /// program that is not in front itself put another one there. For what
+    /// the app does only while it is in front: a banner seen (NOTE-9), the
+    /// remotes asked by itself (GIT-77).
+    func bringAppToFront() {
+        if !appIsInFront {
+            NSRunningApplication(processIdentifier: app.pid)?.activate(options: [.activateAllWindows])
+            AXUIElementSetAttributeValue(AXUIElementCreateApplication(app.pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        }
+        wait("the app in front") { appIsInFront }
+    }
+
+    /// The file a remote made slow by `makeSlowRepository` writes when it is
+    /// asked for what is new: the second it was asked at.
+    func fetchAsked(of repository: URL) -> URL {
+        repository.deletingLastPathComponent().appendingPathComponent(repository.lastPathComponent + "-fetch-asked")
+    }
+
+    static let slowRemoteSeconds = 5
+    static let commitBeforeTheFetch = "feat: made before the fetch"
+
+    /// A repository apart from the test's own, with a commit its remote
+    /// does not have, and a remote that takes five seconds to answer a
+    /// fetch and says when it was asked. For what happens while the app
+    /// asks the remotes by itself (#116), which it does once for a folder,
+    /// within three seconds of its changes being shown with the app in
+    /// front: this one's are not shown until the test picks it. A push is
+    /// not slowed.
+    func makeSlowRepository(named name: String, under parent: URL) throws -> (folder: URL, remote: URL) {
+        let folder = parent.appendingPathComponent(name), remote = parent.appendingPathComponent(name + ".git")
+        try makeRepository(folder, remote: remote)
+        try write("first line\nsecond line\n", to: "notes.txt", in: folder)
+        git("commit", "-q", "-am", Self.commitBeforeTheFetch, in: folder)
+        let program = parent.appendingPathComponent(name + "-slow-upload-pack")
+        try """
+        #!/bin/sh
+        date +%s > '\(fetchAsked(of: folder).path)'
+        sleep \(Self.slowRemoteSeconds)
+        exec git upload-pack "$@"
+
+        """.write(to: program, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: program.path)
+        git("config", "remote.origin.uploadpack", program.path, in: folder)
+        return (folder, remote)
+    }
+
+    /// With the folder of `makeSlowRepository` just picked and its changes
+    /// on show: waits for the app's own fetch to be under way, checks that
+    /// no button waits on it, presses Push, and checks that the push is
+    /// made, and only once the fetch is over (GIT-77, REMOTE-21).
+    func pushWhileTheAppFetchesByItself(_ slow: (folder: URL, remote: URL), file: StaticString = #filePath, line: UInt = #line) {
+        let asked = fetchAsked(of: slow.folder)
+        // The app asks the remotes by itself only while it is in front.
+        bringAppToFront()
+        wait("the app's own fetch to be under way", timeout: 20, file: file, line: line) { FileManager.default.fileExists(atPath: asked.path) }
+        let began =
+            (try? String(contentsOf: asked, encoding: .utf8)).flatMap { TimeInterval($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .map(Date.init(timeIntervalSince1970:)) ?? Date()
+        // No button waits on it. Looked at as they are now, without
+        // waiting: held, Fetch turns and is no button to be found.
+        for name in ["Fetch", "Pull", "Push, 1 commit"] {
+            XCTAssertEqual(app.first(.button(name))?.enabled, true, "\(name) is held while the app fetches by itself", file: file, line: line)
+        }
+        XCTAssertLessThan(
+            Date().timeIntervalSince(began), TimeInterval(Self.slowRemoteSeconds) - 1.5, "the fetch may have been over when the buttons were looked at", file: file,
+            line: line)
+        app.press(.button("Push, 1 commit"), file: file, line: line)
+        wait("the remote to have the commit", timeout: 40, file: file, line: line) {
+            self.git("log", "-1", "--format=%s", "main", in: slow.remote) == Self.commitBeforeTheFetch
+        }
+        // Not beside the fetch: after it.
+        XCTAssertGreaterThanOrEqual(
+            Date().timeIntervalSince(began), TimeInterval(Self.slowRemoteSeconds) - 1, "the push was made while the fetch was under way", file: file, line: line)
+        app.wait(for: .button("Push"), timeout: 15, file: file, line: line)
+    }
+
     /// Small programs under the agents' names. Asked for one answer (`-p`,
     /// `exec`), they give a commit message; started in a terminal, they say
     /// so, write down what they were started with (`agentStarts`), and then

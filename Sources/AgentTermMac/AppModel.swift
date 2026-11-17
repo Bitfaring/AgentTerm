@@ -647,8 +647,13 @@ final class AppModel: ObservableObject {
         connection?.send(.connectSSH(host: host, size: startingSize))
     }
 
-    /// "push" or "pull" while one is under way in a folder.
-    @Published private(set) var syncing: [String: String] = [:]
+    /// What is asked of each folder's remotes (#116): what the user asked
+    /// for holds the folder, the fetch the app makes by itself holds
+    /// nothing, and what is asked for meanwhile begins when it is over.
+    @Published private var remoteWork = RemoteWork<() -> Void>()
+    /// "push", "pull" or "fetch" while one the user asked for is under way
+    /// in a folder.
+    var syncing: [String: String] { remoteWork.busy }
     /// A first push that waits to be confirmed: it gives the branch an upstream.
     @Published var pendingFirstPush: FirstPush?
 
@@ -704,10 +709,29 @@ final class AppModel: ObservableObject {
 
     /// Asks the folder's remotes for what is new. `automatic` when no one
     /// asked: its failure is noted beside Fetch and interrupts no one.
+    ///
+    /// The one no one asked for holds no button (#116): Pull, Push and the
+    /// rest can be asked for while it is under way, and begin when it is
+    /// over.
     func fetch(automatic: Bool = false) {
-        guard let directory = panelFolder, syncing[directory] == nil else { return }
-        syncing[directory] = "fetch"
+        guard let directory = panelFolder else { return }
+        let begin: () -> Void = { [weak self] in self?.beginFetch(in: directory, automatic: automatic) }
+        if automatic {
+            guard remoteWork.beginQuietFetch(in: directory) else { return }
+        } else {
+            switch remoteWork.ask("fetch", in: directory, keeping: begin) {
+            case .refused: return
+            case .kept:
+                fetchedAt[directory] = Date()
+                return
+            case .begin: break
+            }
+        }
         fetchedAt[directory] = Date()
+        begin()
+    }
+
+    private func beginFetch(in directory: String, automatic: Bool) {
         if isRemote {
             sendForDiff(.gitFetch(path: directory, automatic: automatic), in: directory)
             return
@@ -719,13 +743,16 @@ final class AppModel: ObservableObject {
     }
 
     private func fetched(_ directory: String, problem: String?, automatic: Bool) {
-        syncing[directory] = nil
+        // What was asked for while the app fetched by itself begins now.
+        var kept: (() -> Void)?
+        if automatic { kept = remoteWork.quietFetchEnded(in: directory) } else { remoteWork.ended(in: directory) }
         if let problem {
             if automatic { fetchProblems[directory] = problem } else { notice = problem }
         } else {
             fetchProblems[directory] = nil
         }
         if !isRemote { refreshDiff() }
+        kept?()
     }
 
     /// Fetches the folder that is shown when it is time to: the side panel
@@ -770,8 +797,14 @@ final class AppModel: ObservableObject {
     }
 
     private func sync(_ what: String, in directory: String, _ message: ClientMessage, _ action: @escaping (String) -> String?) {
-        guard syncing[directory] == nil else { return }
-        syncing[directory] = what
+        let begin: () -> Void = { [weak self] in self?.beginSync(in: directory, message, action) }
+        // Refused while something of the user's is under way, the buttons
+        // being held then. Kept while the app asks the remotes by itself,
+        // and begun when that is over (#116).
+        if remoteWork.ask(what, in: directory, keeping: begin) == .begin { begin() }
+    }
+
+    private func beginSync(in directory: String, _ message: ClientMessage, _ action: @escaping (String) -> String?) {
         if isRemote {
             // The other Mac's git does it, and says when it is over.
             sendForDiff(message, in: directory)
@@ -781,7 +814,7 @@ final class AppModel: ObservableObject {
             let problem = action(directory)
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.syncing[directory] = nil
+                self.remoteWork.ended(in: directory)
                 if let problem { self.notice = problem }
                 self.refreshDiff()
                 self.files.refresh()
@@ -1403,7 +1436,7 @@ final class AppModel: ObservableObject {
         system.stats = nil
         sshHosts = []
         writingCommitMessage = []
-        syncing = [:]
+        remoteWork.forgetAll()
         hostMatch = .same
         otherBuildOfHost = nil
         failures = []
@@ -1775,7 +1808,7 @@ final class AppModel: ObservableObject {
                 }
             }
         case .gitSynced(let path):
-            syncing[path] = nil
+            remoteWork.ended(in: path)
         case .history(let path, let conversations):
             guard isRemote else { break }
             if let session = pendingSessionHandoff, path == session.cwd {

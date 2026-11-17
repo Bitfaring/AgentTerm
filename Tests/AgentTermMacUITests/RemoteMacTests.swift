@@ -8,7 +8,7 @@ final class RemoteMacTests: MacUITestCase {
     private var otherProject: URL!
     private var otherPort: UInt16 = 0
 
-    private func startOtherMac() throws {
+    private func startOtherMac(alsoWith folders: [URL] = []) throws {
         otherState = root.appendingPathComponent("other/state")
         otherHome = root.appendingPathComponent("other/home")
         otherProject = root.appendingPathComponent("other/work")
@@ -16,7 +16,7 @@ final class RemoteMacTests: MacUITestCase {
         try FileManager.default.createDirectory(at: otherHome.appendingPathComponent("Sites/blog"), withIntermediateDirectories: true)
         try makeRepository(otherProject, remote: nil)
         try write("first line\nchanged on the other Mac\n", to: "notes.txt", in: otherProject)
-        try JSONEncoder().encode([otherProject.path]).write(to: otherState.appendingPathComponent("folders.json"))
+        try JSONEncoder().encode([otherProject.path] + folders.map(\.path)).write(to: otherState.appendingPathComponent("folders.json"))
         otherPort = port + 200
         try startHost(state: otherState, home: otherHome, port: otherPort)
     }
@@ -73,6 +73,24 @@ final class RemoteMacTests: MacUITestCase {
         app.press(.button("Git"))
         app.press(.id("change-notes.txt"), timeout: 15)
         app.wait(for: .containing("+and from here"), timeout: 15)
+    }
+
+    /// REMOTE-21 (#116): on another Mac too, the fetch the app makes by
+    /// itself holds no button, and what is asked for while it is under way
+    /// is done when it is over. This is where a push was lost at times: the
+    /// app asks the other Mac's remotes about when REMOTE-12 presses Push.
+    func testWhatIsAskedWhileTheAppFetchesByItselfIsDoneAfterOnTheOtherMac() throws {
+        // A second folder on the other Mac, whose remote is slow to answer
+        // a fetch.
+        let slow = try makeSlowRepository(named: "slow", under: root.appendingPathComponent("other"))
+        try startOtherMac(alsoWith: [slow.folder])
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        // Picked now: its remotes are asked within three seconds of its
+        // changes being shown.
+        app.press(.id("folder-\(slow.folder.path)"), timeout: 15)
+        app.press(.button("Git"))
+        pushWhileTheAppFetchesByItself(slow)
     }
 
     func testPushingWritingTheMessageAndHandingOffOnTheOtherMac() throws {

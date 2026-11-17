@@ -973,7 +973,9 @@ panel.
     It is also done by itself every five minutes while the folder's changes
     are shown and the app is in front, so that the numbers stay true; when
     that fails, a warning beside the buttons says so and why, and no alert
-    interrupts. **Fetch automatically**, in Settings > Git and shared with
+    interrupts. No button waits on it either: Pull, Push and the rest can
+    be asked for while it is under way, and are done when it is over.
+    **Fetch automatically**, in Settings > Git and shared with
     the iPhone, turns it off. The menu beside the buttons pulls **by merge**
     or **by rebase**, whatever the repository is set up to, and offers
     **Force Push…**: the remote is asked first, and the question names the

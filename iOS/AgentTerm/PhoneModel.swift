@@ -281,23 +281,33 @@ final class PhoneModel: ObservableObject {
         commitWriter.writer(among: agents)
     }
 
-    /// "push" or "pull" while one is under way in a folder.
-    @Published private(set) var syncing: [String: String] = [:]
+    /// What is asked of each folder's git on the Mac (#116): what the user
+    /// asked for holds the folder, the fetch the app makes by itself holds
+    /// nothing, and what is asked for meanwhile is sent when it is over.
+    @Published private var remoteWork = RemoteWork<ClientMessage>()
+    /// "push", "pull" and the rest while one the user asked for is under
+    /// way in a folder.
+    var syncing: [String: String] { remoteWork.busy }
+
+    /// Asks the Mac for something of a folder's git that holds the folder
+    /// until it is over. Refused while something else asked for is under
+    /// way, the buttons being held then; kept while the app asks the
+    /// folder's remotes by itself, and sent when that is over.
+    private func ask(_ what: String, in folder: String, _ message: ClientMessage) {
+        guard status == .connected else { return }
+        if remoteWork.ask(what, in: folder, keeping: message) == .begin { connection?.send(message) }
+    }
 
     /// Pushes the folder's branch. For a branch that follows nothing yet
     /// the Mac picks the remote the changes name, and sets it to be followed.
     func push(in folder: String) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = "push"
-        connection?.send(.gitPush(path: folder))
+        ask("push", in: folder, .gitPush(path: folder))
     }
 
     /// Brings in what the upstream has: the way the repository is set up
     /// to (`mode` nil), by "merge" or by "rebase" (#37).
     func pull(in folder: String, mode: String? = nil) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = "pull"
-        connection?.send(.gitPull(path: folder, mode: mode))
+        ask("pull", in: folder, .gitPull(path: folder, mode: mode))
     }
 
     /// What the last fetch no one asked for said when it failed, by folder.
@@ -317,12 +327,25 @@ final class PhoneModel: ObservableObject {
     }
 
     /// Asks the folder's remotes on the Mac for what is new. `automatic`
-    /// when no one asked: its failure is noted, and interrupts no one.
+    /// when no one asked: its failure is noted, and interrupts no one. It
+    /// holds no button either (#116): what is asked for while it is under
+    /// way is sent when it is over.
     func fetch(in folder: String, automatic: Bool = false) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = "fetch"
+        guard status == .connected else { return }
+        let message = ClientMessage.gitFetch(path: folder, automatic: automatic)
+        if automatic {
+            guard remoteWork.beginQuietFetch(in: folder) else { return }
+        } else {
+            switch remoteWork.ask("fetch", in: folder, keeping: message) {
+            case .refused: return
+            case .kept:
+                fetchedAt[folder] = Date()
+                return
+            case .begin: break
+            }
+        }
         fetchedAt[folder] = Date()
-        connection?.send(.gitFetch(path: folder, automatic: automatic))
+        connection?.send(message)
     }
 
     /// Fetches the folder on screen when it is time to: the setting on, a
@@ -341,9 +364,7 @@ final class PhoneModel: ObservableObject {
     }
 
     func forcePushConfirmed(_ push: ForcePush) {
-        guard status == .connected, syncing[push.folder] == nil else { return }
-        syncing[push.folder] = "push"
-        connection?.send(.gitPush(path: push.folder, force: true, lease: push.lease))
+        ask("push", in: push.folder, .gitPush(path: push.folder, force: true, lease: push.lease))
     }
 
     /// How the Mac is doing: processor, memory, network, heat, battery, uptime.
@@ -513,9 +534,9 @@ final class PhoneModel: ObservableObject {
     /// the user was asked in the words of `CommitActionQuestion`. One that
     /// conflicts is left to be resolved, as on the Mac, and said.
     func apply(_ action: CommitActionQuestion.Action, _ commit: CommitInfo, in folder: String) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = action == .revert ? "revert" : "cherry-pick"
-        connection?.send(action == .revert ? .gitRevert(path: folder, hash: commit.hash) : .gitCherryPick(path: folder, hash: commit.hash))
+        ask(
+            action == .revert ? "revert" : "cherry-pick", in: folder,
+            action == .revert ? .gitRevert(path: folder, hash: commit.hash) : .gitCherryPick(path: folder, hash: commit.hash))
     }
 
     func loadCommit(_ hash: String, in folder: String) {
@@ -1098,7 +1119,7 @@ final class PhoneModel: ObservableObject {
         schedules = []
         worktrees = [:]
         writingCommitMessage = []
-        syncing = [:]
+        remoteWork.forgetAll()
         sshHosts = []
         system.stats = nil
         hostVersion = 0
@@ -1245,7 +1266,7 @@ final class PhoneModel: ObservableObject {
             reattachAfterConnect = true
             // Whatever was under way when the connection dropped got no answer.
             writingCommitMessage = []
-            syncing = [:]
+            remoteWork.forgetAll()
             connection?.send(.agents(refresh: false))
             // A Mac from before 0.4.0 does not know the request, and would
             // answer with an error for the user to wonder about.
@@ -1468,7 +1489,7 @@ final class PhoneModel: ObservableObject {
                 // will never answer it.
                 openCreatedSession = false
                 writingCommitMessage = []
-                syncing = [:]
+                remoteWork.forgetAll()
                 self.message = "The AgentTerm on the Mac is an older version and cannot do this. Update it, and restart its host."
             } else {
                 // A request that was going to open a session failed.
@@ -1514,7 +1535,13 @@ final class PhoneModel: ObservableObject {
                 amending[folder] = nil
             }
         case .gitFetched(let folder, let problem, let automatic):
-            syncing[folder] = nil
+            // What was asked for while the app fetched by itself is sent
+            // now (#116).
+            if automatic {
+                if let kept = remoteWork.quietFetchEnded(in: folder) { connection?.send(kept) }
+            } else {
+                remoteWork.ended(in: folder)
+            }
             if let problem {
                 if automatic { fetchProblems[folder] = problem } else { self.message = problem }
             } else {
@@ -1531,7 +1558,7 @@ final class PhoneModel: ObservableObject {
         case .gitSynced(let folder):
             // Not at the `diff` before it: one asked for while git was still
             // at work would free the buttons for a second push beside the first.
-            let was = syncing.removeValue(forKey: folder)
+            let was = remoteWork.ended(in: folder)
             // A revert or a pick made a commit: the list is another now.
             if was == "revert" || was == "cherry-pick", commits[folder] != nil { loadCommits(folder) }
         case .diffFile(let folder, let file):
@@ -1807,16 +1834,12 @@ final class PhoneModel: ObservableObject {
     /// conflicts on the Mac, once the user was asked. Resolving the files
     /// is done on the Mac.
     func abortOperation(in folder: String) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = "abort"
-        connection?.send(.gitAbort(path: folder))
+        ask("abort", in: folder, .gitAbort(path: folder))
     }
 
     /// Goes on with it, once every file was resolved on the Mac.
     func continueOperation(in folder: String) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = "continue"
-        connection?.send(.gitContinue(path: folder))
+        ask("continue", in: folder, .gitContinue(path: folder))
     }
 
     // MARK: Amend and undo the last commit (#41)
@@ -1874,9 +1897,7 @@ final class PhoneModel: ObservableObject {
                 }
                 return
             }
-            guard status == .connected, syncing[pending.folder] == nil else { return }
-            syncing[pending.folder] = "undo"
-            connection?.send(.gitUndoCommit(path: pending.folder))
+            ask("undo", in: pending.folder, .gitUndoCommit(path: pending.folder))
         }
     }
 
