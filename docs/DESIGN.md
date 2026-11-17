@@ -1199,7 +1199,11 @@ Chromium stops, which they would keep from stopping.
 headers read from `.build/cef/current` (`headerSearchPath`) with
 `CEF_API_VERSION` 15600 pinned, so that a later build of the same API is
 taken without a change. Built without the headers (`__has_include`), it
-compiles to stubs and the browser says it is not in the build. The
+compiles to stubs and the browser says it is not in the build. Each
+function of the header has its stub, and a build with the headers never
+compiles them: one that is missing stops only the linker of a build
+without them, which CodeQL's is (#133), so BROWSER-39 compiles the file
+as such a build does and looks for each. The
 framework is never linked: it is loaded with `dlopen` the first time a
 browser is wanted, and the dozen functions used are looked up by name.
 Reference counting follows the C API: a struct a callback receives

@@ -1253,6 +1253,7 @@ void atc_focus(int browser, int focus) { (void)browser, (void)focus; }
 void atc_resized(int browser) { (void)browser; }
 int atc_devtools(int browser, const char *json, size_t size) { (void)browser, (void)json, (void)size; return 0; }
 void atc_show_devtools(int browser) { (void)browser; }
+void atc_open_chrome_window(int browser, const char *url) { (void)browser, (void)url; }
 void atc_answer_permission(int prompt, int allow) { (void)prompt, (void)allow; }
 void atc_cancel_download(int download) { (void)download; }
 int atc_chrome_major(void) { return 0; }
