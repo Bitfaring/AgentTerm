@@ -18,12 +18,10 @@ struct SessionsView: View {
                         VersionCard(match: model.hostMatch)
                     }
                     if model.status == .connected {
-                        // Said in words, rather than shown as a list that
-                        // emptied: the host on the Mac stopped, and its
-                        // sessions ended with it.
-                        ForEach(model.failures) { failure in
-                            FailureCard(failure: failure)
-                        }
+                        // What needs the user (#67): the agents that wait,
+                        // what stopped (said in words, rather than shown as
+                        // a list that emptied), the agents done and not seen.
+                        InboxSection()
                     }
                     if model.status == .connected {
                         // How the Mac is doing: the Mac this phone is
@@ -100,6 +98,8 @@ struct SessionsView: View {
                 switch route {
                 case .session(let id):
                     TerminalScreen(session: id)
+                case .result(let id):
+                    TurnResultScreen(session: id)
                 case .companion(let agent, let item):
                     TerminalScreen(session: agent, initial: item)
                 case .folder(let folder):
@@ -164,6 +164,93 @@ private struct VersionCard: View {
 }
 
 /// A part of AgentTerm on the Mac that stopped without being asked to.
+/// The Inbox, at the top of the Sessions list (#67), when something needs
+/// the user: the same items as the Mac's Inbox, in the same order.
+private struct InboxSection: View {
+    @EnvironmentObject private var model: PhoneModel
+
+    var body: some View {
+        let items = model.inboxItems
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Text(Inbox.title.uppercased())
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text("\(items.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 4)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("inbox-title")
+                ForEach(items) { item in
+                    switch item.kind {
+                    case .failure(let failure): FailureCard(failure: failure)
+                    case .session: InboxRow(item: item)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A session of the Inbox: whose it is, why it is there and what was said.
+/// Touched, it opens; a done one can be dismissed from its menu.
+private struct InboxRow: View {
+    @EnvironmentObject private var model: PhoneModel
+    let item: InboxItem
+
+    var body: some View {
+        if case .session(let info) = item.kind {
+            let agent = info.agent ?? "shell"
+            let waits = info.state?.isWaiting == true
+            Button {
+                model.open(item)
+            } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: AgentStyle.symbol(for: agent))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AgentStyle.accent(for: agent))
+                        .frame(width: 22)
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text((info.cwd as NSString).lastPathComponent + " · " + info.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Text(model.agentName(agent) + " " + (item.notice?.why ?? ""))
+                            .font(.footnote)
+                            .foregroundStyle(waits ? Color.orange : .secondary)
+                            .lineLimit(1)
+                        if let detail = item.notice?.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
+                            Text(detail)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                if item.canBeDismissed {
+                    Button(Inbox.dismiss, systemImage: "xmark") { model.dismiss(item) }
+                }
+            }
+            .accessibilityIdentifier("inbox-\(item.id)")
+        }
+    }
+}
+
 private struct FailureCard: View {
     @EnvironmentObject private var model: PhoneModel
     let failure: PartFailure

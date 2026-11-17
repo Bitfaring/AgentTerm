@@ -273,6 +273,60 @@ says names the device it runs on.
   Mac hides the iPhone's banner and takes its notification out of
   Notification Center, and opening it on the iPhone hides the Mac's
   banner. Opening it on the iPhone takes its notification away too.
+- **The Inbox** (#67) lists what needs the user on the Mac on show, the
+  most pressing first: the agents that wait (a permission, a question),
+  what stopped (a host that stopped unexpectedly, a part of the app that
+  failed), then the agents that are done and were not seen since. Each
+  item says the project and the session, the agent and why it is there,
+  and the end of what the agent said. An agent that waits stays until it
+  is answered. One that is done stays until its session is seen on any
+  device (in front on the Mac while the app is in front of the others, or
+  its terminal on the iPhone's screen), or until it is dismissed, which
+  takes it out of every device's Inbox; a failure, until it is dismissed.
+  An agent that starts working again leaves it. The banners and
+  notifications go on as before; the Inbox keeps what they told until it
+  is dealt with.
+- On the Mac the Inbox is a place of the bar at the left edge, under
+  Sessions, with how many items it holds on it. As History and Schedules,
+  it has the middle of the window to itself: the terminals, the side
+  panel and the Mac's figures are not shown there. Its list is at the
+  left; the item picked, the first until one is, is shown in the middle
+  with all that its agent said or asks (the question and its choices),
+  or what stopped. Picking an item does not count as seeing its session:
+  **Open** shows the session in Sessions, where it is seen. **Dismiss**
+  (not for an agent that waits) takes it out and shows the next, and
+  **Next** shows the item after it. An item that can be dismissed also
+  has a cross when the pointer is over it; its menu has Open and
+  Dismiss. On the iPhone and the iPad the Inbox is at the top of the Sessions
+  list, shown only when it holds something; touching an item opens its
+  session, and a done one has Dismiss in its menu. The Inbox shows the
+  Mac on show.
+- **What a turn came to** (#71): an agent that is done shows, in the
+  Inbox, what it was asked, what it answered, the commands it ran with
+  their exit codes, and the files of its folder that changed while it
+  worked. The commands are those of the agent's own record of the turn,
+  with "exit 0", "exit 3", "failed" or "not known" beside each: what the
+  agent says it ran or tested is in its answer, and is not taken for what
+  it did. The files are what changed in the repository from the turn's
+  start to its end, whoever changed them: when another agent worked in the
+  same repository meanwhile, that is said; in a worktree of its own, that
+  is said too. A file that had changes already when the turn began is
+  marked so. When the agent's record cannot be read, which commands it ran
+  is said to be not known; outside a git repository, what changed is said
+  to be not known. A turn the user stopped is said to be stopped. The last
+  turn of each session is kept by the host while it runs, and shown again
+  after a device connects again.
+- From the result: **Open Diff** shows the session in Sessions with its
+  folder's changes beside it; **Continue** sends the next instruction,
+  typed into the session as the user would (refused if the agent moved
+  on); **Hand Off…** hands the conversation to another agent. On the Mac
+  these are in the Inbox's middle; on the iPhone and the iPad a done item
+  opens a screen with the result, the terminal one touch away (Open), and
+  the session is seen once its terminal is opened.
+- Looking at the folder and reading the agent's record is done by the app
+  by itself, so it has a switch, on by default: Settings > Git > "Show
+  what each turn came to", on both apps, shared through the host. Off, no
+  turn is looked at, and the Inbox shows what the agent said.
 
 ### The Live Activity
 
@@ -667,14 +721,17 @@ conversation over to a neighbouring project.
 
 Like a code editor: a bar of places at the left edge, then three panes. The
 bar has the window's places, as the iPhone has its tabs: **Sessions**,
-**History** and **Schedules** at its top, **Settings** (⌘,) at its foot. The
+**Inbox** (with how many items it holds), **History** and **Schedules** at
+its top, **Settings** (⌘,) at its foot. The
 place shown is marked; pressing it again hides its list, and pressing it
 once more shows it. The toolbar follows the panes: the launch buttons for
 the agents are in the middle, followed by the pairing button, which is filled so it
 stands out, and in the far right corner is the button that hides the side
 panel.
 
-- **Left: the place's list.** In Sessions, the folders. In History, the
+- **Left: the place's list.** In Sessions, the folders. In the Inbox, what
+  needs the user, the item picked shown in the middle (see When an agent
+  is done or needs you). In History, the
   conversations (below). In Schedules, the runs and the schedules (see
   Schedules). In Settings, its panes, General, Git, Permissions and
   Privacy; the pane picked takes the middle of the window, over the
@@ -1206,8 +1263,9 @@ The app opens on **Macs**, the list of the Macs it is paired with, each with
 whether it is connected and how many sessions it has. Picking one goes into
 that Mac; pairing another adds it to the list, and holding a Mac forgets it.
 
-Inside a Mac there are four tabs, the places of the Mac's bar: **Sessions**
-(how the Mac is doing, then the folders and their sessions), **History**
+Inside a Mac there are four tabs, the places of the Mac's bar but the
+Inbox: **Sessions** (the Inbox when it holds something, how the Mac is
+doing, then the folders and their sessions), **History**
 (every conversation on the Mac), **Schedules** (as the Mac's Schedules
 shows them, #50) and **Settings**, in the order of the Mac's Settings: General
 (keeping the Mac awake with its options, the temperature's unit), Git

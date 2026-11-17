@@ -15,6 +15,8 @@ enum LinkStatus: Equatable {
 /// A screen that can be pushed onto the navigation stack.
 enum Route: Hashable {
     case session(SessionID)
+    /// What an agent's last turn came to, opened from the Inbox (#71).
+    case result(SessionID)
     /// An agent's screen with one of its own shells ("s:<id>") or pages
     /// ("b:<id>") in front.
     case companion(agent: SessionID, item: String)
@@ -413,6 +415,9 @@ final class PhoneModel: ObservableObject {
         // A notice hides by itself once its session is opened, however the
         // user got there, and does not come back when they leave it (#60).
         didSet {
+            // What a done agent's turn came to is what its notice told: the
+            // notice goes, and the session is seen only once it is opened.
+            if case .result(let id)? = path.last, agentNotice?.session == id { agentNotice = nil }
             guard let open = openSessionID else { return }
             if agentNotice?.session == open { agentNotice = nil }
             sawNotice(of: open)
@@ -425,7 +430,10 @@ final class PhoneModel: ObservableObject {
     private func sawNotice(of session: SessionID) {
         guard let mac = pairing?.id else { return }
         notifications.remove(mac: mac, session: session)
-        guard let state = sessions.first(where: { $0.id == session })?.state, !state.isWorking, noticeSeenTold?.session != session || noticeSeenTold?.state != state
+        // Told again while the host still has it unseen (#67): the same
+        // words said twice are two turns.
+        guard let info = sessions.first(where: { $0.id == session }), let state = info.state, !state.isWorking,
+            info.unseen == true || noticeSeenTold?.session != session || noticeSeenTold?.state != state
         else { return }
         noticeSeenTold = (session, state)
         connection?.send(.noticeSeen(session: session, state: state))
@@ -712,6 +720,44 @@ final class PhoneModel: ObservableObject {
     }
 
     func dismissAgentNotice() { agentNotice = nil }
+
+    // MARK: The Inbox (#67)
+
+    /// An agent's name as the Mac lists it, its id when it is not listed.
+    func agentName(_ id: String) -> String { agents.first { $0.id == id }?.name ?? (id == "shell" ? "Shell" : id) }
+
+    /// What needs the user on the Mac on show, the most pressing first: at
+    /// the top of the Sessions list.
+    var inboxItems: [InboxItem] { Inbox.items(sessions: sessions, failures: failures) }
+
+    /// Opens the session an item is about.
+    func open(_ item: InboxItem) {
+        guard let notice = item.notice else { return }
+        // A done agent shows what its turn came to first; its terminal is
+        // a touch away. One that asks opens where it is answered.
+        if case .done = notice.state {
+            tab = "sessions"
+            path = [.result(notice.session)]
+        } else {
+            open(notice)
+        }
+    }
+
+    /// The last turn of each session's agent, as the host told it (#71).
+    @Published private(set) var turnResults: [SessionID: TurnResult] = [:]
+
+    /// Takes an item out of the Inbox without opening it, on every device:
+    /// a done session is seen, a failure dismissed. A question stays until
+    /// it is answered.
+    func dismiss(_ item: InboxItem) {
+        switch item.kind {
+        case .session(let info):
+            guard let state = info.state, !state.isWaiting else { return }
+            connection?.send(.noticeSeen(session: info.id, state: state))
+        case .failure(let failure):
+            dismiss(failure)
+        }
+    }
 
     /// A reply to an agent where it was told of: typed into its session by
     /// the host only while the agent still asks what it answers.
@@ -1042,6 +1088,7 @@ final class PhoneModel: ObservableObject {
         hostVersion = 0
         hostMatch = .same
         failures = []
+        turnResults = [:]
         sessions = []
         folders = []
         agents = []
@@ -1191,6 +1238,7 @@ final class PhoneModel: ObservableObject {
         case .sessions(let list):
             sessions = list
             sessionsKnown = true
+            turnResults = turnResults.filter { id, _ in list.contains { $0.id == id } }
             tellOfAgents(list)
             updateLiveActivity()
             if let pairing { pruneComposeDrafts(of: pairing.id, keeping: list) }
@@ -1200,6 +1248,9 @@ final class PhoneModel: ObservableObject {
                 path.removeLast()
                 controller = nil
                 foreignSize = nil
+            } else if let open = openSessionID, active {
+                // Done or asking while its terminal is on screen: seen (#67).
+                sawNotice(of: open)
             }
             if reattachAfterConnect {
                 reattachAfterConnect = false
@@ -1222,6 +1273,8 @@ final class PhoneModel: ObservableObject {
             startAtLogin = on
         case .agentShellsFaults(let faults):
             took(faults)
+        case .turnResult(let session, let result):
+            turnResults[session] = result
         case .noticeSeen(let session, let state):
             // Seen on the Mac, or on another device.
             if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }

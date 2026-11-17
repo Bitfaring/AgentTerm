@@ -313,6 +313,141 @@ final class AgentStateHostTests: XCTestCase {
         return script
     }
 
+    /// INBOX-1 (#67): an agent that is done is unseen, on every device,
+    /// until one of them shows its session; working again takes it out of
+    /// the Inbox, and done again puts it back.
+    func testADoneAgentIsUnseenUntilADeviceShowsIt() throws {
+        let script = root.appendingPathComponent("claude")
+        let hook = Handoff.shellQuote(tool.path) + " hook claude"
+        try """
+        #!/bin/sh
+        read line; printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"go"}' | \(hook) UserPromptSubmit
+        read line; printf '%s' '{"hook_event_name":"Stop","last_assistant_message":"Done once."}' | \(hook) Stop
+        read line; printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"again"}' | \(hook) UserPromptSubmit
+        read line; printf '%s' '{"hook_event_name":"Stop","last_assistant_message":"Done twice."}' | \(hook) Stop
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let mac = Client(port: port, token: token, name: "mac")
+        let phone = Client(port: port, token: token, name: "phone")
+        waitUntil("both connected") { !mac.messages.isEmpty && !phone.messages.isEmpty }
+        mac.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let id = try XCTUnwrap(mac.sessions.first?.id)
+        mac.connection.send(.attach(session: id, size: TermSize(cols: 80, rows: 24)))
+        func session(_ client: Client) -> SessionInfo? { client.sessions.first { $0.id == id } }
+        func step(_ what: String, _ condition: @escaping () -> Bool) {
+            mac.connection.sendInput(Data("\n".utf8), to: id)
+            waitUntil(what, condition)
+        }
+
+        step("working") { session(mac)?.state?.isWorking == true }
+        XCTAssertNotEqual(session(mac)?.unseen, true, "unseen while it works")
+        step("done") { session(mac)?.state == .done(said: "Done once.") }
+        waitUntil("unseen on both devices") { session(mac)?.unseen == true && session(phone)?.unseen == true }
+        XCTAssertEqual(Inbox.items(sessions: phone.sessions, failures: []).map(\.id), ["session-\(id)"])
+
+        // Shown on the phone: seen on the Mac too.
+        phone.connection.send(.noticeSeen(session: id, state: .done(said: "Done once.")))
+        waitUntil("seen on the Mac") { session(mac)?.unseen != true }
+        XCTAssertTrue(Inbox.items(sessions: mac.sessions, failures: []).isEmpty)
+
+        // Working again, then done again: unseen again.
+        step("working again") { session(mac)?.state?.isWorking == true }
+        step("done again") { session(mac)?.state == .done(said: "Done twice.") }
+        waitUntil("unseen again") { session(phone)?.unseen == true }
+        // A device that connects later is told it too.
+        let later = Client(port: port, token: token, name: "later")
+        waitUntil("the later device to be told") { session(later)?.unseen == true }
+    }
+
+    /// TURN-1 (#71): when a turn ends, every device is told what it came
+    /// to: the prompt, the last answer, the commands with their exit codes
+    /// from the agent's record, and the files of the folder that changed
+    /// while it worked; a device that connects later is told it too; with
+    /// its switch off in Settings, a turn is not looked at.
+    func testWhatATurnCameToIsToldToEveryDevice() throws {
+        let repository = root.appendingPathComponent("repository")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        func git(_ arguments: String...) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-C", repository.path, "-c", "user.name=Test", "-c", "user.email=test@example.com"] + arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+        }
+        try git("init", "-q")
+        try "one\n".write(to: repository.appendingPathComponent("parser.txt"), atomically: true, encoding: .utf8)
+        try "one\n".write(to: repository.appendingPathComponent("before.txt"), atomically: true, encoding: .utf8)
+        try git("add", ".")
+        try git("commit", "-qm", "first")
+        // Changed before the turn, and not by it.
+        try "one\nmine\n".write(to: repository.appendingPathComponent("before.txt"), atomically: true, encoding: .utf8)
+        let transcript = root.appendingPathComponent("transcript.jsonl")
+        try [
+            #"{"type":"user","message":{"role":"user","content":"Fix the parser"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"swift test"}}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"ok"}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"make lint"}}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"Exit code 2\nlint failed"}]}}"#,
+        ].joined(separator: "\n").write(to: transcript, atomically: true, encoding: .utf8)
+        let script = root.appendingPathComponent("claude")
+        let hook = Handoff.shellQuote(tool.path) + " hook claude"
+        let stop = #"{"hook_event_name":"Stop","last_assistant_message":"Fixed; lint fails.","transcript_path":"\#(transcript.path)"}"#
+        try """
+        #!/bin/sh
+        read line; printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"Fix the parser"}' | \(hook) UserPromptSubmit
+        read line; printf 'two\\n' >> parser.txt; printf 'new\\n' > added.txt
+        printf '%s' '\(stop)' | \(hook) Stop
+        read line; printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"Again"}' | \(hook) UserPromptSubmit
+        read line; printf '%s' '{"hook_event_name":"Stop","last_assistant_message":"Again."}' | \(hook) Stop
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let mac = Client(port: port, token: token, name: "mac")
+        waitUntil("connected") { !mac.messages.isEmpty }
+        mac.connection.send(.create(CreateRequest(command: script.path, cwd: repository.path, title: "agent")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let id = try XCTUnwrap(mac.sessions.first?.id)
+        mac.connection.send(.attach(session: id, size: TermSize(cols: 80, rows: 24)))
+        func result(_ client: Client) -> TurnResult? {
+            client.messages.compactMap { if case .turnResult(id, let result) = $0 { return result } else { return nil } }.last
+        }
+        mac.connection.sendInput(Data("\n".utf8), to: id)
+        waitUntil("working") { mac.sessions.first?.state?.isWorking == true }
+        // The folder is looked at as the turn begins, away from the host's queue.
+        Thread.sleep(forTimeInterval: 1)
+        mac.connection.sendInput(Data("\n".utf8), to: id)
+        waitUntil("what the turn came to", timeout: 20) { result(mac) != nil }
+        let told = try XCTUnwrap(result(mac))
+        XCTAssertEqual(told.end, .done)
+        XCTAssertEqual(told.request, "Fix the parser")
+        XCTAssertEqual(told.reply, "Fixed; lint fails.")
+        XCTAssertEqual(told.commands, [TurnResult.Command(command: "swift test", exitCode: 0), TurnResult.Command(command: "make lint", exitCode: 2)])
+        XCTAssertEqual(
+            told.changes?.files, [TurnResult.File(path: "added.txt", status: "??"), TurnResult.File(path: "parser.txt", status: "M", added: 1, removed: 0)])
+        XCTAssertEqual(told.changes?.shared, false)
+        // A device that connects later is told it too.
+        let later = Client(port: port, token: token, name: "later")
+        waitUntil("the later device to be told") { result(later) == told }
+
+        // Turned off in Settings: the next turn is not looked at.
+        mac.connection.send(.setDisplaySettings(DisplaySettings(turnResults: false)))
+        waitUntil("turned off, as the other device is told") {
+            later.messages.contains { if case .displaySettings(let told?) = $0 { return !told.turnResults } else { return false } }
+        }
+        func results() -> Int { mac.messages.filter { if case .turnResult(id, _) = $0 { return true } else { return false } }.count }
+        let before = results()
+        mac.connection.sendInput(Data("\n".utf8), to: id)
+        waitUntil("working again") { mac.sessions.first?.state?.isWorking == true }
+        mac.connection.sendInput(Data("\n".utf8), to: id)
+        waitUntil("done again") { mac.sessions.first?.state == .done(said: "Again.") }
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertEqual(results(), before, "a turn was looked at with the switch off")
+    }
+
     /// AGENT-5, AGENT-6, AGENT-7: each state is told when it begins, once,
     /// to every client; a client that connects later is told the state as
     /// it is; a shell has none; Escape to a working agent makes it not known.

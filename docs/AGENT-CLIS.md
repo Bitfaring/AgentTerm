@@ -133,6 +133,22 @@ ended.
 - What each says **once a limit is reached** was not seen: no limit was
   reached on purpose.
 
+### What a turn came to (#71) and the thinking level (#130)
+
+Each was asked to run `echo hello` and `sh -c 'echo oops >&2; exit 3'`, one
+call each, then to answer in a sentence (2026-11-17).
+
+| | The prompt | The last answer | A command and its exit code | The thinking level |
+|---|---|---|---|---|
+| Claude Code 2.1.326 | `UserPromptSubmit` `prompt` | `Stop` `last_assistant_message` | `PostToolUse` for one that succeeded, without its code; one that failed has **no `PostToolUse`** but `PostToolUseFailure` (not asked for) with `error: "Exit code 3\noops"`. Its record (`transcript_path`): `tool_use` `Bash` and its `tool_result`, `is_error` with "Exit code N" | Status line input `effort.level` (`xhigh`), `thinking.enabled`; every hook event's `effort.level` |
+| Codex 0.169.0 | `UserPromptSubmit` `prompt`, `turn_id` | `Stop` `last_assistant_message` | `PostToolUse` for both, `tool_response` the output only, **no code**. Its record (`transcript_path`, the rollout): `item_completed` with a `CommandExecution`, its `exit_code` and `turn_id` | The rollout's `turn_context` `effort` (`medium`), `model` |
+| Copilot CLI 1.0.112 | `userPromptSubmitted` `prompt` | **Not in `agentStop`**; its record (`transcriptPath`, `events.jsonl`): the last `assistant.message` | `postToolUse` `textResultForLlm` "…completed with exit code 3", `resultType` "success" all the same. Its record: `tool.execution_complete` `shellExecution.exitCode` | `session.model_change` and `session.usage_record` `reasoningEffort` (`medium`) |
+| Antigravity 1.5.9 | Every event's `lastUserInput` | **Not in `Stop`**; its record (`transcriptPath`, `transcript_full.jsonl`): the last `PLANNER_RESPONSE` with `content` | `PostToolUse` has no code; its record: the step after a `run_command` call says "Command exited with code 3." | Only as the end of `modelName` (`gemini-4-hydrogen-medium`) |
+
+So the commands of a turn and their codes are taken from each agent's own
+record when the turn ends (`TurnTranscript`), not from the hooks: a hook's
+file holds the last event only, and several quick ones are read as one.
+
 ## Not known yet
 
 - What Antigravity asks each time a session is started in AgentTerm.

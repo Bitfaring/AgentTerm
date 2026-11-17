@@ -8,12 +8,17 @@ real ones do. Nothing is asked of any service and no account is used.
 
 As `claude` it also reports usage the way Claude Code does, through the
 status line command it was started with, so the usage band has figures.
+With AGENTTERM_DEMO_DONE_AFTER=<seconds> in its environment, it tells its
+hooks that a turn began, half that time after it starts, and that it is
+done, that many seconds after (the iPhone's test of the Inbox, #67, #71).
 """
 import json
 import os
 import re
+import subprocess
 import sys
 import textwrap
+import threading
 import time
 
 NAME = os.path.basename(sys.argv[0])
@@ -86,6 +91,29 @@ def report_usage():
         pass
 
 
+def tell_done_later():
+    """Claude Code's Stop hook, run as it runs it, after a while."""
+    after = os.environ.get("AGENTTERM_DEMO_DONE_AFTER")
+    if not after or "--settings" not in sys.argv:
+        return
+    try:
+        settings = json.loads(sys.argv[sys.argv.index("--settings") + 1])
+        hooks = {name: settings["hooks"][name][0]["hooks"][0]["command"] for name in ("UserPromptSubmit", "Stop")}
+    except (ValueError, KeyError, IndexError, TypeError):
+        return
+
+    def tell(name, event):
+        subprocess.run(hooks[name], shell=True, input=json.dumps(event).encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    for at, name, event in [
+        (float(after) / 2, "UserPromptSubmit", {"hook_event_name": "UserPromptSubmit", "prompt": ASK}),
+        (float(after), "Stop", {"hook_event_name": "Stop", "last_assistant_message": CLOSING}),
+    ]:
+        timer = threading.Timer(at, tell, args=(name, event))
+        timer.daemon = True
+        timer.start()
+
+
 def claude(cols):
     out = []
     width = max(cols - 4, 20)
@@ -137,6 +165,7 @@ def main():
         return
     if NAME == "claude":
         report_usage()
+        tell_done_later()
     # The screenshots drive the agent's MCP server as the agent would, to
     # open a shell and a page beside it: they find its session's variable
     # here, a line for each session of this agent, the first first.

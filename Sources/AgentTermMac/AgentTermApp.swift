@@ -555,6 +555,21 @@ struct GitSettingsView: View {
                         .toggleStyle(.switch)
                         .accessibilityIdentifier("fetch-automatically")
                 }
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(TurnResult.setting).font(.system(size: 13, weight: .medium))
+                        Text(TurnResult.settingDetail)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 12)
+                    Toggle(TurnResult.setting, isOn: Binding(get: { model.display.turnResults }, set: { on in model.setDisplay { $0.turnResults = on } }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .accessibilityIdentifier("turn-results")
+                }
             }
             Label(
                 "The agent runs once, without a terminal and with no way to change your files, in a folder of AgentTerm's own, so it leaves no conversation in your project. Large changes are cut down before they are sent.",

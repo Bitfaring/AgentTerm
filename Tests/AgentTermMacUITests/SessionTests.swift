@@ -142,6 +142,184 @@ final class SessionTests: MacUITestCase {
         return (shell, agent)
     }
 
+    /// A stand-in for an agent, Claude Code unless said, under its name,
+    /// that tells its hooks one event a moment after it starts.
+    private func standInAgent(_ name: String, agent: String = "claude", hook: String, event: String) throws -> URL {
+        try standInAgent(name, agent: agent, events: [(hook, event)])
+    }
+
+    /// A stand-in that tells its hooks the events of a turn, a second apart.
+    private func standInAgent(_ name: String, agent: String, events: [(hook: String, event: String)]) throws -> URL {
+        let folder = root.appendingPathComponent("stand-in-\(name)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let script = folder.appendingPathComponent(agent)
+        let told = events.map { "sleep 1\nprintf '%s' '\($0.event)' | '\(hostExecutable.path)' hook \(agent) \($0.hook)\n" }.joined()
+        try "#!/bin/sh\n\(told)exec sleep 600\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    /// INBOX-3 (#67): the Inbox lists the agents that wait and those done
+    /// and not seen, with how many on its place in the rail; the item
+    /// picked is shown in the middle, the terminals hidden as in History,
+    /// without being seen; Open shows its session in Sessions, which sees
+    /// it on every device; Next goes on; Dismiss takes one out; one seen on
+    /// another device leaves; what waits cannot be dismissed.
+    func testTheInboxListsWhatNeedsTheUser() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        let asks = try standInAgent(
+            "asks", hook: "PermissionRequest", event: #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make deploy"}}"#)
+        func done(_ name: String, _ said: String, agent: String = "claude") throws -> URL {
+            try standInAgent(name, agent: agent, hook: "Stop", event: #"{"hook_event_name":"Stop","last_assistant_message":"\#(said)"}"#)
+        }
+        phone.send(.create(CreateRequest(command: asks.path, cwd: project.path, title: "deploy")))
+        phone.send(.create(CreateRequest(command: try done("tests", "All tests pass.").path, cwd: project.path, title: "tests")))
+        // Codex, with the events Codex 0.169.0 told its hooks for a turn
+        // that ran a command (2026-11-17).
+        let codex = try standInAgent(
+            "docs", agent: "codex",
+            events: [
+                ("UserPromptSubmit", #"{"hook_event_name":"UserPromptSubmit","prompt":"Write the docs.","turn_id":"t-1"}"#),
+                ("PreToolUse", #"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"make docs"},"tool_use_id":"exec-1","turn_id":"t-1"}"#),
+                (
+                    "PostToolUse",
+                    #"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"make docs"},"tool_response":"ok","tool_use_id":"exec-1","turn_id":"t-1"}"#
+                ),
+                ("Stop", #"{"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"The docs are written.","turn_id":"t-1"}"#),
+            ])
+        phone.send(.create(CreateRequest(command: codex.path, cwd: project.path, title: "docs")))
+        phone.send(.create(CreateRequest(command: try done("notes", "The notes are tidied.").path, cwd: project.path, title: "notes")))
+        wait("the four agents' states", timeout: 20) { phone.sessions.filter { $0.state?.isWorking == false }.count == 4 }
+        func id(_ title: String) throws -> SessionID { try XCTUnwrap(phone.sessions.first { $0.title == title }?.id) }
+        let deploy = try id("deploy"), tests = try id("tests"), docs = try id("docs"), notes = try id("notes")
+        // The shell is in front: none of them is seen.
+        bringAppToFront()
+        app.press(.id("session-\(shell)"))
+        app.wait(for: .containing("Inbox, 4 items"), timeout: 15)
+
+        app.press(.id("place-inbox"))
+        app.wait(for: .id("inbox-session-\(deploy)"))
+        let rows = app.nodes().map(\.identifier).filter { $0.hasPrefix("inbox-session-") }
+        XCTAssertEqual(rows.first, "inbox-session-\(deploy)", "the agent that waits is not first: \(rows)")
+        XCTAssertTrue(app.first(.id("inbox-session-\(deploy)"))?.label.contains("needs permission") == true)
+        XCTAssertTrue(app.first(.id("inbox-session-\(tests)"))?.label.contains("All tests pass.") == true)
+        // The first is shown in the middle, and no terminal.
+        app.wait(for: .id("inbox-detail-text"))
+        XCTAssertTrue(app.first(.id("inbox-detail-text"))?.text.contains("make deploy") == true)
+        XCTAssertNil(app.first(.id("terminal-\(shell)")), "a terminal shows in the Inbox")
+        // What waits cannot be dismissed: it stays until it is answered.
+        XCTAssertNil(app.first(.id("inbox-dismiss")))
+        shot("inbox")
+
+        // Picked: shown in the middle, and not seen for that.
+        app.press(.id("inbox-session-\(tests)"))
+        app.wait(for: .containing("All tests pass."))
+        XCTAssertTrue(app.first(.id("inbox-detail-text"))?.text.contains("All tests pass.") == true)
+        shot("inbox-done")
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertEqual(phone.sessions.first { $0.id == tests }?.unseen, true, "picking an item saw its session")
+        // Opened: in Sessions, and seen on every device.
+        app.press(.id("inbox-open"))
+        app.wait(for: .id("terminal-\(tests)"))
+        wait("seen, as the phone is told") { phone.sessions.first { $0.id == tests }?.unseen != true }
+        app.wait(for: .containing("Inbox, 3 items"))
+
+        // Next: the one after the one shown.
+        app.press(.id("place-inbox"))
+        app.wait(for: .id("inbox-detail-text"))
+        XCTAssertTrue(app.first(.id("inbox-detail-text"))?.text.contains("make deploy") == true)
+        app.press(.id("inbox-next"))
+        app.wait(for: .containing("The docs are written."))
+        // Dismissed: out of the Inbox, on the phone too; the next is shown.
+        app.press(.id("inbox-dismiss"))
+        app.waitGone(.id("inbox-session-\(docs)"), timeout: 15)
+        wait("dismissed, as the phone is told") { phone.sessions.first { $0.id == docs }?.unseen != true }
+        app.wait(for: .containing("The notes are tidied."))
+        // Seen on another device: it leaves the Inbox here.
+        phone.send(.noticeSeen(session: notes, state: .done(said: "The notes are tidied.")))
+        app.waitGone(.id("inbox-session-\(notes)"), timeout: 15)
+        app.wait(for: .containing("Inbox, 1 item"))
+    }
+
+    /// INBOX-6 (#71): a done agent's item shows what its turn came to: what
+    /// it was asked, what it said, the commands of its record with their
+    /// exit codes, the files that changed while it worked, and that another
+    /// agent worked in the same repository meanwhile; Open Diff shows the
+    /// session with the folder's changes beside it; Continue types the next
+    /// instruction into the other's session, which then leaves the Inbox.
+    func testADoneItemShowsWhatTheTurnCameTo() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        let transcript = root.appendingPathComponent("transcript.jsonl")
+        try [
+            #"{"type":"user","message":{"role":"user","content":"Tidy the notes"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"swift test"}}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"ok"}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"make lint"}}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"Exit code 2\nlint failed"}]}}"#,
+        ].joined(separator: "\n").write(to: transcript, atomically: true, encoding: .utf8)
+        let folder = root.appendingPathComponent("stand-in-turn")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let script = folder.appendingPathComponent("claude")
+        let hook = "'\(hostExecutable.path)' hook claude"
+        let stop = #"{"hook_event_name":"Stop","last_assistant_message":"The notes are tidied; lint fails.","transcript_path":"\#(transcript.path)"}"#
+        try """
+        #!/bin/sh
+        sleep 1
+        printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"Tidy the notes"}' | \(hook) UserPromptSubmit
+        sleep 2
+        printf 'tidied\\n' >> notes.txt; printf 'new\\n' > turn.txt
+        printf '%s' '\(stop)' | \(hook) Stop
+        exec cat
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        // Two of them in the same repository, at the same time.
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "notes")))
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "again")))
+        wait("the agents' sessions") { phone.sessions.count == 3 }
+        let notes = try XCTUnwrap(phone.sessions.first { $0.title == "notes" }?.id)
+        let again = try XCTUnwrap(phone.sessions.first { $0.title == "again" }?.id)
+        bringAppToFront()
+        app.press(.id("session-\(shell)"))
+        func told(_ id: SessionID) -> Bool { phone.messages.contains { if case .turnResult(id, _) = $0 { return true } else { return false } } }
+        wait("what the turns came to", timeout: 20) { told(notes) && told(again) }
+
+        app.press(.id("place-inbox"))
+        app.press(.id("inbox-session-\(notes)"))
+        app.wait(for: .id("inbox-request"))
+        XCTAssertTrue(app.first(.id("inbox-request"))?.text.contains("Tidy the notes") == true)
+        XCTAssertTrue(app.first(.id("inbox-detail-text"))?.text.contains("lint fails") == true)
+        let commands = app.nodes().filter { $0.identifier == "inbox-command" }.map(\.text)
+        XCTAssertEqual(commands.count, 2, "\(commands)")
+        XCTAssertTrue(commands.first?.contains("swift test") == true && commands.first?.contains("exit 0") == true, "\(commands)")
+        XCTAssertTrue(commands.last?.contains("make lint") == true && commands.last?.contains("exit 2") == true, "\(commands)")
+        let files = app.nodes().filter { $0.identifier == "inbox-file" }.map(\.text)
+        XCTAssertTrue(files.contains { $0.contains("notes.txt") && $0.contains("already changed before") }, "\(files)")
+        XCTAssertTrue(files.contains { $0.contains("turn.txt") && $0.contains("??") }, "\(files)")
+        XCTAssertNotNil(app.first(.id("inbox-shared")), "another agent in the same repository is not said")
+        shot("result")
+
+        // Open Diff: the session in Sessions, its folder's changes beside it.
+        app.press(.id("inbox-open-diff"))
+        app.wait(for: .id("terminal-\(notes)"))
+        app.wait(for: .id("panel-git"))
+        shot("open-diff")
+
+        // Continue: the next instruction, typed into the other's session.
+        phone.send(.attach(session: again, size: TermSize(cols: 80, rows: 24)))
+        app.press(.id("place-inbox"))
+        app.press(.id("inbox-session-\(again)"))
+        app.write("Now fix lint", into: .id("inbox-continue"))
+        app.press(.id("inbox-send"))
+        wait("the instruction typed into the session") { phone.text(again).contains("Now fix lint") }
+    }
+
     /// NOTE-13 (#62): a banner tells the end of what an agent said, and
     /// opens out to all of it.
     func testABannerOpensOutToAllOfWhatTheAgentSaid() throws {

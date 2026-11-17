@@ -723,6 +723,7 @@ private struct PlaceList: View {
     var body: some View {
         switch model.place {
         case .sessions: SidebarView()
+        case .inbox: InboxList()
         case .history: HistorySidebar()
         case .schedules: SchedulesSidebar()
         case .settings: SettingsSections()
@@ -799,6 +800,7 @@ private struct PlaceInTheMiddle: View {
     var body: some View {
         switch model.place {
         case .sessions: EmptyView()
+        case .inbox: InboxDetail().background(Theme.canvas)
         case .history: ConversationDetail()
         case .schedules: SchedulesView().background(Theme.canvas)
         case .settings: SettingsPane()

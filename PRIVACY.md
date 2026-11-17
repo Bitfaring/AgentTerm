@@ -40,9 +40,13 @@ the source yourself sends nothing at all.
 - **Terminal sessions.** Their input and output are kept in memory by the AgentTerm host on your Mac
   while a session runs. They are not written to disk by AgentTerm and are not sent to the developer.
 - **Your project files and git repositories.** AgentTerm reads and changes them only on your Mac, when
-  you browse, edit, stage or commit from the app.
+  you browse, edit, stage or commit from the app. When an agent's turn begins and ends, it also looks at
+  the folder with git, on your Mac, to show what changed during the turn; Settings > Git > "Show what
+  each turn came to" turns this off.
 - **Conversation history.** The History tab reads the files that Claude Code, Codex, Antigravity and
-  Copilot CLI already keep on your Mac. AgentTerm does not copy them elsewhere. A handoff writes a
+  Copilot CLI already keep on your Mac. When an agent's turn ends, AgentTerm reads the end of that
+  agent's file for the turn, to show the commands it ran (the same switch turns it off). What it shows
+  goes only to your paired devices. AgentTerm does not copy these files elsewhere. A handoff writes a
   summary file into the project folder, under `.agentterm/handoffs/`.
 - **Pairing.** A paired iPhone holds a token in its Keychain. The Mac holds only a hash of it, in
   `~/Library/Application Support/AgentTerm`. You can remove a paired device in the Mac app at any time.

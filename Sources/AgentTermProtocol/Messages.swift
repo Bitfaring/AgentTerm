@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 23
+public let agenttermProtocolVersion = 25
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -73,6 +73,10 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     /// agent handles permissions.
     public var schedule: String?
     public var schedulePermissions: SchedulePermissions?
+    /// Its agent is done, and no device has shown the session since (#67):
+    /// it is in the Inbox until one does, or it is dismissed there; both
+    /// tell the host `noticeSeen`. Nil or false for every other session.
+    public var unseen: Bool?
 
     public init(
         id: SessionID, title: String, cwd: String, size: TermSize, createdAt: Date,
@@ -442,9 +446,10 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// The Mac app is in front, or is no longer: then the Mac is in use.
     case appInFront(Bool)
     /// The user opened this session on this device while its agent was
-    /// done or waited, in `state`: what it was told about is seen (#60).
-    /// The host passes it on to the other devices, which hide their notice
-    /// of it.
+    /// done or waited, in `state`, or dismissed it from the Inbox: what it
+    /// was told about is seen (#60). The host passes it on to the other
+    /// devices, which hide their notice of it, and a done session is no
+    /// longer unseen (#67).
     case noticeSeen(session: SessionID, state: AgentState)
     /// Someone used the Mac app: a key or a click in its window. The Mac
     /// is then in use again after a device was used.
@@ -643,6 +648,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// another device (#60): a notice of it is hidden here too. Also sent
     /// on connecting, for what was seen while this device was away.
     case noticeSeen(session: SessionID, state: AgentState)
+    /// What the last turn of this session's agent came to (#71): when a
+    /// turn ends, and on connecting for each session that had one.
+    case turnResult(session: SessionID, result: TurnResult)
     /// Every schedule, with its last runs and when it runs next.
     case schedules([Schedule])
     /// Whether every schedule is held back (#47).

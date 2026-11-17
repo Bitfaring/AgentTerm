@@ -206,20 +206,27 @@ public struct DisplaySettings: Codable, Equatable, Sendable {
     /// every few minutes, so that how far ahead and behind its branch is
     /// stays true without anyone asking (#37). On unless turned off.
     public var fetchAutomatically: Bool
+    /// When an agent's turn ends, its folder before and after the turn and
+    /// the agent's own record of it are read on the Mac, for what the turn
+    /// came to (#71). On unless turned off.
+    public var turnResults: Bool
 
     public static let diffLayoutKey = "diffLayout"
     public static let changesViewKey = "diffViewMode"
     public static let fetchAutomaticallyKey = "fetchAutomatically"
+    public static let turnResultsKey = "turnResults"
     /// How long between two fetches no one asked for.
     public static let fetchInterval: TimeInterval = 5 * 60
 
     public init(
-        temperatureUnit: String = SystemStats.celsius, diffLayout: String = "unified", changesView: String = "list", fetchAutomatically: Bool = true
+        temperatureUnit: String = SystemStats.celsius, diffLayout: String = "unified", changesView: String = "list", fetchAutomatically: Bool = true,
+        turnResults: Bool = true
     ) {
         self.temperatureUnit = temperatureUnit
         self.diffLayout = diffLayout
         self.changesView = changesView
         self.fetchAutomatically = fetchAutomatically
+        self.turnResults = turnResults
     }
 
     /// A setting a later version adds is not in what an earlier one saved.
@@ -229,6 +236,7 @@ public struct DisplaySettings: Codable, Equatable, Sendable {
         diffLayout = try values.decodeIfPresent(String.self, forKey: .diffLayout) ?? "unified"
         changesView = try values.decodeIfPresent(String.self, forKey: .changesView) ?? "list"
         fetchAutomatically = try values.decodeIfPresent(Bool.self, forKey: .fetchAutomatically) ?? true
+        turnResults = try values.decodeIfPresent(Bool.self, forKey: .turnResults) ?? true
     }
 
     /// Only values the apps know how to show.
@@ -236,7 +244,7 @@ public struct DisplaySettings: Codable, Equatable, Sendable {
         DisplaySettings(
             temperatureUnit: temperatureUnit == SystemStats.fahrenheit ? SystemStats.fahrenheit : SystemStats.celsius,
             diffLayout: diffLayout == "split" ? "split" : "unified", changesView: changesView == "tree" ? "tree" : "list",
-            fetchAutomatically: fetchAutomatically)
+            fetchAutomatically: fetchAutomatically, turnResults: turnResults)
     }
 
     /// What an app's own preferences hold.
@@ -244,7 +252,8 @@ public struct DisplaySettings: Codable, Equatable, Sendable {
         DisplaySettings(
             temperatureUnit: defaults.string(forKey: SystemStats.temperatureUnitKey) ?? SystemStats.celsius,
             diffLayout: defaults.string(forKey: diffLayoutKey) ?? "unified", changesView: defaults.string(forKey: changesViewKey) ?? "list",
-            fetchAutomatically: defaults.object(forKey: fetchAutomaticallyKey) as? Bool ?? true
+            fetchAutomatically: defaults.object(forKey: fetchAutomaticallyKey) as? Bool ?? true,
+            turnResults: defaults.object(forKey: turnResultsKey) as? Bool ?? true
         ).checked
     }
 
@@ -254,5 +263,6 @@ public struct DisplaySettings: Codable, Equatable, Sendable {
         defaults.set(diffLayout, forKey: Self.diffLayoutKey)
         defaults.set(changesView, forKey: Self.changesViewKey)
         defaults.set(fetchAutomatically, forKey: Self.fetchAutomaticallyKey)
+        defaults.set(turnResults, forKey: Self.turnResultsKey)
     }
 }

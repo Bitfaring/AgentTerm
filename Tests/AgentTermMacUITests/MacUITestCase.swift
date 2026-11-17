@@ -56,9 +56,10 @@ class MacUITestCase: XCTestCase {
         home = root.appendingPathComponent("home")
         state = root.appendingPathComponent("state")
         try makeFixtures()
+        try beforeTheHostStarts()
         port = Self.nextPort
         Self.nextPort += 1
-        host = try startHost(state: state, home: home, port: port, extra: hostArguments)
+        host = try startHost(state: state, home: hostHome, port: port, extra: hostArguments)
         forgetPreferences()
         try beforeTheAppStarts()
         app = try launchApp()
@@ -132,6 +133,14 @@ class MacUITestCase: XCTestCase {
 
     /// Called with the host running and the app not started yet.
     func beforeTheAppStarts() throws {}
+
+    /// Called with the fixtures made and the host not started yet.
+    func beforeTheHostStarts() throws {}
+
+    /// The home folder the test's host is given: the test's own. Only the
+    /// test of the real agents, run by hand, gives the user's, so that the
+    /// agents are signed in.
+    var hostHome: URL { home }
 
     /// More arguments for the test's host, which a test class may give.
     var hostArguments: [String] { [] }
@@ -279,6 +288,9 @@ class MacUITestCase: XCTestCase {
             ["--port", String(port), "--local-only", "--no-account-usage", "--home", home.path, "--agents", root.appendingPathComponent("agents").path] + extra
         var environment = Self.ownHome(home)
         environment["AGENTTERM_STATE_DIR"] = state.path
+        // What it throws away stays in the test's folder, also when its
+        // home is the user's.
+        if home != self.home { environment["AGENTTERM_TRASH_DIR"] = root.appendingPathComponent("trash").path }
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

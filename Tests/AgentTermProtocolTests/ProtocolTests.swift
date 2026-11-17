@@ -30,6 +30,35 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(MessageCoding.decode(ServerMessage.self, from: old), .welcome(version: 22, host: "Mac", release: nil, revision: nil))
     }
 
+    /// INBOX-2 (#67): what is in the Inbox, and in which order: the agents
+    /// that wait, what stopped, then the agents done and not seen.
+    func testWhatIsInTheInbox() {
+        func session(_ id: SessionID, _ state: AgentState?, unseen: Bool? = nil) -> SessionInfo {
+            var info = SessionInfo(id: id, title: "s\(id)", cwd: "/p", size: .default, createdAt: Date(), agent: "claude", state: state)
+            info.unseen = unseen
+            return info
+        }
+        let sessions = [
+            session(1, .done(said: "seen already"), unseen: nil),
+            session(2, .done(said: "not seen"), unseen: true),
+            session(3, .working(since: Date())),
+            session(4, .waitingForPermission(AgentQuestion(text: "make test"))),
+            session(5, nil),
+            session(6, .waitingForAnswer(AgentQuestion(text: "Red or blue?", choices: ["Red", "Blue"]))),
+        ]
+        let failure = PartFailure(id: "f", part: .host, at: Date(), restarted: true)
+        let items = Inbox.items(sessions: sessions, failures: [failure])
+        XCTAssertEqual(items.map(\.id), ["session-4", "session-6", "failure-f", "session-2"])
+        XCTAssertEqual(items.map(\.canBeDismissed), [false, false, true, true])
+        XCTAssertEqual(items[0].notice?.why, "needs permission")
+        XCTAssertEqual(items[3].notice?.detail, "not seen")
+        // Next: the one after, the first after the last, the first when gone.
+        XCTAssertEqual(Inbox.item(after: "session-6", in: items)?.id, "failure-f")
+        XCTAssertEqual(Inbox.item(after: "session-2", in: items)?.id, "session-4")
+        XCTAssertEqual(Inbox.item(after: "session-9", in: items)?.id, "session-4")
+        XCTAssertNil(Inbox.item(after: nil, in: []))
+    }
+
     func testClientMessagesRoundTrip() {
         let messages: [ClientMessage] = [
             .hello(token: "secret", client: "iPhone"),
@@ -119,6 +148,19 @@ final class ProtocolTests: XCTestCase {
             .attached(info),
             .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: true),
             .exited(session: 3, status: 130),
+            .turnResult(
+                session: 3,
+                result: TurnResult(
+                    request: "Fix the parser", reply: "Fixed.", startedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                    endedAt: Date(timeIntervalSince1970: 1_800_000_060), end: .done,
+                    commands: [TurnResult.Command(command: "swift test", exitCode: 0), TurnResult.Command(command: "make", failed: true)],
+                    changes: TurnResult.Changes(
+                        files: [TurnResult.File(path: "a.swift", status: "M", added: 3, removed: 1, changedBefore: true)], shared: true))),
+            .turnResult(
+                session: 4,
+                result: TurnResult(
+                    request: nil, reply: nil, startedAt: Date(timeIntervalSince1970: 1_800_000_000), endedAt: Date(timeIntervalSince1970: 1_800_000_001),
+                    end: .stopped, commands: nil, changes: nil)),
             .error("nope"),
             .paired(device: "d-1", token: "t0ken"),
             .pairingCode(code: "c0de", expiresAt: Date(timeIntervalSince1970: 1_800_000_300)),

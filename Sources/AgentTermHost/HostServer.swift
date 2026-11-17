@@ -205,6 +205,10 @@ public final class HostServer {
         var lastEvent: Data?
         /// Its agent was given hooks: its state can be known.
         var hooked = false
+        /// The turn its agent is in, from its start (#71).
+        var turn: TurnRecord?
+        /// What its agent's last turn came to.
+        var lastTurn: TurnResult?
         /// What its agent's MCP server names it by, to open and reach the
         /// shells it opens (#10). Agents' sessions only.
         var agentKey: String?
@@ -233,6 +237,9 @@ public final class HostServer {
 
     private let configuration: Configuration
     private let queue = DispatchQueue(label: "agentterm.host")
+    /// Where what a turn came to is worked out (#71): git and the agents'
+    /// records, away from the host's queue.
+    private let turnQueue = DispatchQueue(label: "agentterm.host.turns", qos: .utility)
     private let detectionQueue = DispatchQueue(label: "agentterm.host.detect")
     /// Git and file reading for clients, kept off the queue that moves terminal bytes.
     private let workQueue = DispatchQueue(label: "agentterm.host.work", qos: .userInitiated, attributes: .concurrent)
@@ -1862,8 +1869,13 @@ public final class HostServer {
         case .noticeSeen(let id, let state):
             // Only what the agent still says: what it said before is gone
             // from every device already.
-            guard sessions[id]?.info.state == state else { return }
+            guard let session = sessions[id], session.info.state == state else { return }
             noticesSeen[id] = state
+            // Shown on one device is shown: it leaves every one's Inbox (#67).
+            if case .done = state, session.info.unseen == true {
+                session.info.unseen = nil
+                broadcastSessions()
+            }
             for other in clients.values where other.authenticated && other !== client { send(.noticeSeen(session: id, state: state), to: other) }
         case .answer(let id, let state, let text):
             // Only while the agent still asks what the reply answers: one
@@ -2516,12 +2528,83 @@ public final class HostServer {
             // Still working is working since it began.
             if case .working = state, case .working(let since)? = session.info.state { state = .working(since: since) }
             let note = AgentHooks.note(agent: session.info.agent, beforeAnyEvent: false)
+            let input = record["input"] as? [String: Any] ?? [:]
+            if state?.isWorking == true, session.turn == nil { beginTurn(of: session, at: at, input: input) }
             guard state != session.info.state || note != session.info.stateNote else { continue }
+            // Done anew: in the Inbox until a device shows it (#67). Any
+            // other state takes it out; a question is listed by itself.
+            if case .done = state {
+                if session.info.state != state { session.info.unseen = true }
+                endTurn(of: session, at: at, end: .done, input: input)
+            } else {
+                session.info.unseen = nil
+                // Codex says when the user stopped the turn.
+                if state == nil, event == "Interrupt" { endTurn(of: session, at: at, end: .stopped, input: input) }
+            }
             session.info.state = state
             session.info.stateNote = note
             changed = true
         }
+        // An agent working in the same repository as a turn makes its
+        // changes not all that turn's.
+        for session in sessions.values where session.turn?.shared == false {
+            if anotherAgentWorks(besides: session) { session.turn?.shared = true }
+        }
         if changed { broadcastSessions() }
+    }
+
+    // MARK: What a turn came to (#71)
+
+    /// A turn begins when its agent starts working: what the folder looks
+    /// like then is taken, away from the host's queue.
+    private func beginTurn(of session: Session, at: Date, input: [String: Any]) {
+        // Turned off in Settings: nothing is looked at.
+        guard displaySettings?.turnResults ?? true else { return }
+        let request = (input["prompt"] as? String) ?? (input["lastUserInput"] as? String)
+        let record = TurnRecord(startedAt: at, directory: session.info.cwd, request: request)
+        record.shared = anotherAgentWorks(besides: session)
+        session.turn = record
+        turnQueue.async { record.before = GitSnapshot.take(of: record.directory) }
+    }
+
+    /// The turn ended: what it came to is made from the agent's record and
+    /// the folder as it is now, and told to every device.
+    private func endTurn(of session: Session, at: Date, end: TurnResult.End, input: [String: Any]) {
+        guard let record = session.turn, let agent = session.info.agent else { return }
+        session.turn = nil
+        if anotherAgentWorks(besides: session) { record.shared = true }
+        let shared = record.shared
+        let ownWorktree = WorktreePath.project(of: record.directory) != nil && !sessions.values.contains { $0 !== session && $0.info.cwd == record.directory }
+        let transcript = (input["transcript_path"] as? String) ?? (input["transcriptPath"] as? String)
+        let turnID = input["turn_id"] as? String
+        let said = (input["last_assistant_message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let id = session.info.id
+        turnQueue.async { [weak self] in
+            let read = transcript.flatMap { TurnTranscript.read(agent: agent, file: $0, turnID: turnID) }
+            var changes: TurnResult.Changes?
+            if let before = record.before, let after = GitSnapshot.take(of: record.directory) {
+                changes = TurnResult.Changes(files: GitSnapshot.changes(from: before, to: after), shared: shared, ownWorktree: ownWorktree)
+            }
+            let result = TurnResult(
+                request: record.request ?? read?.request, reply: said ?? read?.reply, startedAt: record.startedAt, endedAt: at, end: end,
+                commands: read?.commands, changes: changes)
+            self?.queue.async {
+                guard let self, let session = self.sessions[id] else { return }
+                session.lastTurn = result
+                for client in self.clients.values where client.authenticated { self.send(.turnResult(session: id, result: result), to: client) }
+            }
+        }
+    }
+
+    /// Whether the agent of another session works in the same folder, or
+    /// one inside it or around it.
+    private func anotherAgentWorks(besides session: Session) -> Bool {
+        let folder = session.info.cwd
+        return sessions.values.contains { other in
+            guard other !== session, other.info.agent != nil, other.turn != nil || other.info.state?.isWorking == true else { return false }
+            let path = other.info.cwd
+            return path == folder || path.hasPrefix(folder + "/") || folder.hasPrefix(path + "/")
+        }
     }
 
     private func refreshSummaries() {
@@ -2635,6 +2718,10 @@ public final class HostServer {
         // as its agent still says it.
         noticesSeen = noticesSeen.filter { sessions[$0.key]?.info.state == $0.value }
         for (id, state) in noticesSeen { send(.noticeSeen(session: id, state: state), to: client) }
+        // What the last turns came to, kept while the device was away (#71).
+        for session in sessions.values {
+            if let result = session.lastTurn { send(.turnResult(session: session.info.id, result: result), to: client) }
+        }
         send(.schedules(schedules), to: client)
         send(.schedulesPaused(schedulesPaused), to: client)
         send(.browserTabs(browserTabsList), to: client)
@@ -2698,6 +2785,8 @@ public final class HostServer {
         // It may have stopped the turn, and not every agent says so.
         if session.info.state?.isWorking == true, AgentHooks.mayStopATurn(frame.payload) {
             session.info.state = nil
+            session.info.unseen = nil
+            endTurn(of: session, at: Date(), end: .stopped, input: [:])
             broadcastSessions()
         }
     }

@@ -329,9 +329,10 @@ final class AppModel: ObservableObject {
     /// The pane of Settings: General each time Settings is opened.
     @Published var settingsTab = "general"
 
-    /// The window's three places, chosen in the bar at its left edge, as
-    /// the iPhone's tabs are.
-    enum Place: String { case sessions, history, schedules, settings }
+    /// The window's places, chosen in the bar at its left edge, as the
+    /// iPhone's tabs are. The Inbox (#67), as History and Schedules, has
+    /// what it shows in the middle; its items are opened in Sessions.
+    enum Place: String { case sessions, inbox, history, schedules, settings }
     @Published private(set) var place = Place.sessions
     /// The conversation picked in History, shown in the middle of the window.
     @Published var historySelection: Conversation?
@@ -400,6 +401,76 @@ final class AppModel: ObservableObject {
 
     func dismissAgentNotice() { agentNotice = nil }
 
+    // MARK: The Inbox (#67)
+
+    /// What needs the user on the Mac on show, the most pressing first.
+    var inboxItems: [InboxItem] { Inbox.items(sessions: sessions, failures: failures) }
+    /// The item picked in the Inbox's list.
+    @Published private(set) var inboxPicked: String?
+
+    /// The item shown in the middle: the one picked, or the first while
+    /// none is, or the one picked is not there any more.
+    var inboxShown: InboxItem? {
+        let items = inboxItems
+        return items.first { $0.id == inboxPicked } ?? items.first
+    }
+
+    /// Shows an item in the middle. Its session is not seen for that: it
+    /// is when it is opened.
+    func pick(_ item: InboxItem) { inboxPicked = item.id }
+
+    /// The item after the one shown, or the first.
+    func pickNextInboxItem() {
+        guard let next = Inbox.item(after: inboxShown?.id, in: inboxItems) else { return }
+        pick(next)
+    }
+
+    /// Opens the session of an item in Sessions, where it is seen.
+    func openInSessions(_ item: InboxItem) {
+        guard case .session(let info) = item.kind, let session = sessions.first(where: { $0.id == info.id }) else { return }
+        show(.sessions, toggling: false)
+        select(session: session)
+    }
+
+    // MARK: What a turn came to (#71)
+
+    /// The last turn of each session's agent, as the host told it.
+    @Published private(set) var turnResults: [SessionID: TurnResult] = [:]
+
+    /// Opens the session with its folder's changes beside it.
+    func openDiff(of item: InboxItem) {
+        openInSessions(item)
+        UserDefaults.standard.set("git", forKey: "rightPanelTab")
+        showDiff = true
+    }
+
+    /// The next instruction for a done agent, typed into its session as
+    /// the user would; refused by the host when the agent moved on.
+    func continueTurn(of item: InboxItem, with text: String) {
+        guard case .session(let info) = item.kind, let state = info.state, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        connection?.send(.answer(session: info.id, to: state, text: text))
+    }
+
+    func handOff(_ item: InboxItem) {
+        guard case .session(let info) = item.kind else { return }
+        requestHandoff(session: info)
+    }
+
+    /// Takes an item out of the Inbox without opening it, on every device:
+    /// a done session is seen, a failure dismissed. A question stays until
+    /// it is answered. The one after it is shown in its place.
+    func dismiss(_ item: InboxItem) {
+        guard item.canBeDismissed else { return }
+        if inboxShown?.id == item.id, let next = Inbox.item(after: item.id, in: inboxItems), next.id != item.id { pick(next) }
+        switch item.kind {
+        case .session(let info):
+            guard let state = info.state, !state.isWaiting else { return }
+            connection?.send(.noticeSeen(session: info.id, state: state))
+        case .failure(let failure):
+            dismiss(failure)
+        }
+    }
+
     /// A notice hides by itself once its session is the one in front,
     /// however the user got there: its row, its tab, a shortcut (#60). In
     /// front means before the user's eyes: a session chosen in a window
@@ -408,7 +479,10 @@ final class AppModel: ObservableObject {
     private func hideNoticeOfTheSessionInFront() {
         guard place == .sessions, NSApp.isActive, let front = selectedSession else { return }
         if agentNotice?.session == front { agentNotice = nil }
-        guard let state = sessions.first(where: { $0.id == front })?.state, !state.isWorking, noticeSeenTold?.session != front || noticeSeenTold?.state != state
+        // Told again while the host still has it unseen (#67): the same
+        // words said twice are two turns.
+        guard let info = sessions.first(where: { $0.id == front }), let state = info.state, !state.isWorking,
+            info.unseen == true || noticeSeenTold?.session != front || noticeSeenTold?.state != state
         else { return }
         noticeSeenTold = (front, state)
         connection?.send(.noticeSeen(session: front, state: state))
@@ -1279,6 +1353,7 @@ final class AppModel: ObservableObject {
         hostMatch = .same
         otherBuildOfHost = nil
         failures = []
+        turnResults = [:]
         diffAnswersDue = [:]
         if pendingCommit != nil {
             // Whether git took it went with the connection. The message stays.
@@ -1412,11 +1487,14 @@ final class AppModel: ObservableObject {
         case .sessions(let list):
             sessionsKnown = true
             sessions = list
+            turnResults = turnResults.filter { id, _ in list.contains { $0.id == id } }
             browsers.sessionsChanged(list)
             // The session in front of someone at this window needs no notice.
             let shown = NSApp.isActive ? selectedSession : nil
             if let latest = AgentNotice.notices(in: list, told: &told).last(where: { $0.session != shown }) { agentNotice = latest }
             if let current = agentNotice, !list.contains(where: { $0.id == current.session && $0.state == current.state }) { agentNotice = nil }
+            // Done or asking while it is in front of someone: seen (#67).
+            hideNoticeOfTheSessionInFront()
             // Pick up sessions that were already running before this window opened.
             for info in list where controllers[info.id] == nil {
                 connection?.send(.attach(session: info.id, size: info.size))
@@ -1428,6 +1506,8 @@ final class AppModel: ObservableObject {
             startAtLogin = on
         case .agentShellsFaults(let faults):
             took(faults)
+        case .turnResult(let session, let result):
+            turnResults[session] = result
         case .noticeSeen(let session, let state):
             // Seen on another device.
             if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }

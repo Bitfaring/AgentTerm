@@ -411,6 +411,11 @@ final class FlowTests: XCTestCase {
             readANote(app, compose: compose)
             return
         }
+        if environment["AGENTTERM_ONLY_INBOX"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            useTheInbox(app, compose: compose)
+            return
+        }
         if environment["AGENTTERM_ONLY_NARROW"] != nil {
             app.navigationBars.buttons.firstMatch.tap()
             narrowTheWindow(app)
@@ -1038,6 +1043,41 @@ final class FlowTests: XCTestCase {
     /// too. A stand-in Antigravity, whose session always has a note:
     /// touched, its mark shows the words, and the session does not open.
     /// Starts in the sessions list.
+    /// INBOX-4 (#67, #71): an agent done while its terminal is not on
+    /// screen is at the top of the Sessions list, under Inbox, with what it
+    /// said; touched, it shows what its turn came to, without being seen;
+    /// Open shows its terminal, and it is then seen: it leaves the Inbox.
+    private func useTheInbox(_ app: XCUIApplication, compose: XCUIElement) {
+        // The stand-in Claude Code says it is done a few seconds after it
+        // starts (scripts/test-ios.sh): by then the list is on screen.
+        let claude = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Claude Code")).firstMatch
+        XCTAssertTrue(claude.waitForExistence(timeout: 10), "no Claude Code to start")
+        claude.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10), "the Claude Code session did not open")
+        app.navigationBars.buttons.firstMatch.tap()
+        let title = app.descendants(matching: .any)["inbox-title"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 15), "nothing came to the Inbox")
+        let item = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "inbox-session-")).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "the agent that is done is not in the Inbox")
+        XCTAssertTrue(item.label.contains("is done"), item.label)
+        XCTAssertTrue(item.label.contains("Decide what you want there"), item.label)
+        capture("18-inbox")
+        item.tap()
+        let said = app.descendants(matching: .any)["result-said"].firstMatch
+        XCTAssertTrue(said.waitForExistence(timeout: 10), "the item did not show what the turn came to")
+        let request = app.descendants(matching: .any)["result-request"].firstMatch
+        XCTAssertTrue(request.waitForExistence(timeout: 5), "what the agent was asked is not shown")
+        XCTAssertTrue(request.label.contains("Explain in short lines"), request.label)
+        capture("19-result")
+        app.buttons["result-open"].tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10), "Open did not show the terminal")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(said.waitForExistence(timeout: 5), "back from the terminal is not the result")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 10), "the session seen stayed in the Inbox")
+        capture("20-inbox-seen")
+    }
+
     private func readANote(_ app: XCUIApplication, compose: XCUIElement) {
         let antigravity = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Antigravity")).firstMatch
         XCTAssertTrue(antigravity.waitForExistence(timeout: 10), "no Antigravity to start")

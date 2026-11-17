@@ -904,6 +904,48 @@ its notification of the session out of Notification Center
 (`AgentNotifications.remove`), as it does when the session is opened on
 the phone itself.
 
+**The Inbox** (#67). Which sessions are done and not seen is the host's,
+so that every device shows the same: `SessionInfo.unseen` is set when a
+hook makes the session's state done, and taken away when its agent works
+again or `noticeSeen` is told for its done state. That message is what a
+device sends both when the session is seen there and when its Inbox item
+is dismissed; a client sends it again while the session is still unseen,
+since an agent done twice with the same words is done twice. The list is
+made by both apps the same way, from the sessions and the failures they
+have (`Inbox.items` in `AgentTermProtocol`, with the words both show): the
+waiting ones, the failures, the unseen ones. The Mac shows it as a place,
+`AppModel.Place.inbox`, with its list (`InboxList`) and the item picked
+in the middle (`InboxDetail`), over the terminals as History is; the item
+picked is kept by its id (`inboxPicked`), and the first is shown when it
+is gone. Open goes to Sessions with the session in front, which is what
+sees it. The iPhone shows it at the top of `SessionsView`, the failure
+cards among its items.
+
+**What a turn came to** (#71). A turn begins when a hook makes the
+session's agent work while no turn is open (`HostServer.beginTurn`): a
+`TurnRecord` keeps when, the prompt the hooks gave, and, taken on a queue
+of its own (`turnQueue`), a `GitSnapshot` of the repository: `git status
+--porcelain=v1 -z --untracked-files=all` and `git diff HEAD --numstat`,
+with each file's size and time of writing. It ends when the agent is done,
+or when the user stops it (Codex's `Interrupt`, a key that may stop a
+turn): on the same queue the folder is looked at again and the two are
+compared (`GitSnapshot.changes`: a file whose status, lines, size or time
+changed, or that came or went), and the agent's own record of the turn is
+read from the end of the file its last event names (`TurnTranscript`: the
+prompt and the answers as handoffs read them, the commands and their exit
+codes in each agent's own way, `docs/AGENT-CLIS.md`). The `TurnResult` is
+kept as the session's `lastTurn`, in memory, and sent to every device
+(`turnResult`), and to a device that connects after its list of sessions.
+Another agent's session working in the same folder, or one inside or
+around it, at any moment of the turn makes it `shared`. A file changed in
+the moment between the prompt and the first look is taken for the folder
+as it was. The Mac shows it in `InboxDetail`; the iPhone in
+`TurnResultScreen`, a route of its own (`Route.result`), which the Inbox
+opens for a done item. Continue is the `answer` a notification's reply
+sends. A session also counts as seen when it
+becomes done while it is already in front: both apps look again when the
+list of sessions comes.
+
 ## The Live Activity
 
 A widget extension, `AgentTermLiveActivity` (`iOS/AgentTermLiveActivity`),
