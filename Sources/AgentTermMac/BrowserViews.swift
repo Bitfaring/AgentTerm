@@ -374,11 +374,17 @@ struct ShowAsButton: View {
         Button {
             choosing.toggle()
         } label: {
-            HStack(spacing: 4) {
+            // Of one shape whatever the page is shown as: with the name in
+            // it only for a device, the button was made anew when the first
+            // one was picked. A list open under it was closed and the button
+            // left as open, and a press on the button as it was found
+            // before was lost (#134). The name takes no room while there is
+            // none: the button is as large as it was.
+            HStack(spacing: 0) {
                 Image(systemName: Self.symbol(device?.kind)).font(.system(size: 10.5, weight: .semibold))
-                if let device {
-                    Text(device.name).font(.system(size: 10.5, weight: .medium)).lineLimit(1).fixedSize()
-                }
+                Text(device?.name ?? "").font(.system(size: 10.5, weight: .medium)).lineLimit(1).fixedSize()
+                    .frame(height: device == nil ? 0 : nil)
+                    .padding(.leading, device == nil ? 0 : 4)
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 3)

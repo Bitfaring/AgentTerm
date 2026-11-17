@@ -28,7 +28,12 @@ real.
 
 M and X need the terminal they run in to be allowed under System Settings >
 Privacy & Security > Accessibility. They press and read the app's own
-elements, as VoiceOver does: no pointer is moved and no key is sent. All
+elements, as VoiceOver does: no pointer is moved and no key is sent. The
+Mac is left alone while they run: the app under test is in front, and when
+another app comes to the front a menu it has open closes (#135), and what
+it does only while in front stops. What was on screen when a test failed
+names the app in front first, and says so when it is not the one under
+test. All
 layers use state folders, ports, a home folder and preferences of their own,
 and stand-in agents (small scripts) instead of the installed ones: the
 installed app, its sessions, its paired devices and the user's accounts are
@@ -795,9 +800,10 @@ and the test talks to the real `agenttermd mcp` with it.
 | BROWSER-34 | Three pages of the user's of three sites and one with nothing loaded, in the Browser tab | Close Tab on the empty one and on the first; Close Browser for the rest | Their processes end within 20 seconds, one spare at most kept by Chromium: a closed page is not made again by the pane that showed it | M |
 | BROWSER-35 (#117) | A page of the user's shown | Close it, the last one; open one again; close it | No page process is left 20 seconds after, none kept in reserve by Chromium; the page opened again loads | M |
 | BROWSER-36 (#122) | Three pages of the user's in a project | Look at the list on the left; pick a page's row; with a shell in front, pick the Browser row; Close Browser from its row | One row "Browser (3)" ("Browser, 3 pages"), the three pages set in under it; a page's row shows that page; the Browser row shows the page its tab shows; closing asks first, then all three go. Before the fix each page was a row of its own | M |
-| BROWSER-37 (#131) | A page of the user's with a line of text and a link | The menu of a right click on the text, Reload chosen; then on the link, Open Link in New Tab chosen (opened through accessibility, `AXShowMenu`, the pages laid out for it with `AGENTTERM_WEB_ACCESSIBILITY`) | On the text: Back, Forward, Reload and Inspect, not the link's items; Reload keeps the page. On the link: Open Link in New Tab, Copy Link Address and Inspect, not Reload; the link opens as another page of the Browser tab. Copy is not chosen: it would write to the user's pasteboard | M |
+| BROWSER-37 (#131) | A page of the user's with a line of text and a link | The menu of a right click on the text, Reload chosen; then on the link, Open Link in New Tab chosen (opened through accessibility, `AXShowMenu`, the pages laid out for it with `AGENTTERM_WEB_ACCESSIBILITY`) | On the text: Back, Forward, Reload and Inspect, not the link's items; Reload reads the page again, as its file is by then, and it is the same page. On the link: Open Link in New Tab, Copy Link Address and Inspect, not Reload; the link opens as another page of the Browser tab. Copy is not chosen: it would write to the user's pasteboard | M |
 | BROWSER-38 (#125) | A page of the Chrome Web Store's, an extension's (Dark Reader), in the test's own profile | Add to Chrome, then Add extension in Chrome's prompt; then Open in Chrome Window in the bar | The extension is installed (Chrome's prompt and its bubble are left as they are); the window of Chrome's own it opens (its help page) does not show, and the Browser tab says Chrome opened it; the button shows it, with the extension's button in Chrome's toolbar. Seen on 2026-11-17: after that, Chrome opened one more window, a New Tab, which is held back in turn (not known why) | hand: `AGENTTERM_EXTENSION_TRIAL=1 scripts/test-mac.sh ExtensionTrial`, which reaches Google's site |
 | BROWSER-39 (#133) | The browser's C layer (`CAgentTermCEF`), compiled as a build made without Chromium's headers compiles it: `scripts/fetch-cef.sh` not run, as in CodeQL's build of the Swift code | Looked at for each function its header declares | Each is defined, as a stub: the app links, and says the browser is not in the build. A build with the headers never compiles the stubs; the one that was missing (`atc_open_chrome_window`) stopped CodeQL's build only | H |
+| BROWSER-40 (#134) | A page of the user's, shown as this Mac | Show As, the first device picked from its list and Show As pressed again at once; back to this Mac; Show As as it is found then, pressed once another device has been picked | The list opened again at once stays, the device in use marked in it, when the page comes to be shown as the device; the button found before the device was picked opens its list after: it is one button whatever the page is shown as. Its label was of another shape with a device's name in it, and the button was made anew: the list was closed with the button left as open, and the press was lost though reported as done | M |
 
 ### Vietnamese input
 

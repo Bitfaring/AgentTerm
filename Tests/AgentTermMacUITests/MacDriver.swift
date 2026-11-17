@@ -17,7 +17,9 @@ struct Node {
 
     /// Everything a person, or VoiceOver, would know it by.
     var text: String { [title, label, value].filter { !$0.isEmpty }.joined(separator: " | ") }
-    var summary: String { "\(role) id=\(identifier) title=\(title) label=\(label) value=\(value.prefix(60))" }
+    /// What cannot be pressed says so: a button that did nothing may have
+    /// been held just then (#116).
+    var summary: String { "\(role) id=\(identifier) title=\(title) label=\(label) value=\(value.prefix(60))" + (enabled ? "" : " (disabled)") }
 }
 
 /// Starts the Mac app against a host of its own and drives it the way
@@ -206,9 +208,15 @@ final class MacDriver {
         wait("\(query) to go away", timeout: timeout, file: file, line: line) { !self.exists(query) }
     }
 
-    /// What is on screen, one element a line, for a failure's message.
+    /// What is on screen, one element a line, for a failure's message. The
+    /// app in front is named first: when it is not this one, the Mac was
+    /// used meanwhile, and a menu the app had open was closed by that
+    /// (#135).
     func screen() -> String {
-        nodes().filter { !$0.text.isEmpty || !$0.identifier.isEmpty }.map { String(repeating: " ", count: min($0.depth, 10)) + $0.summary }
+        let front = NSWorkspace.shared.frontmostApplication
+        let inFront = "In front: \(front?.localizedName ?? "no app")" + (front?.processIdentifier == pid ? "" : ", not the app under test")
+        return inFront + "\n"
+            + nodes().filter { !$0.text.isEmpty || !$0.identifier.isEmpty }.map { String(repeating: " ", count: min($0.depth, 10)) + $0.summary }
             .joined(separator: "\n")
     }
 
@@ -398,11 +406,19 @@ final class MacDriver {
     }
 
     /// A picture of the app's window, for a failure that words do not explain.
+    /// The one in front, a sheet when one is open, that is a window to look
+    /// at: once a popover has been shown, the first in the list is one of
+    /// two points by one that it leaves behind, and the picture was of that.
     func capture(to url: URL) {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        func isToLookAt(_ window: [String: Any]) -> Bool {
+            guard let bounds = window[kCGWindowBounds as String] as? NSDictionary, let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
+            return frame.width > 40 && frame.height > 40
+        }
         guard
-            let id = windows.first(where: { ($0[kCGWindowOwnerPID as String] as? Int32) == pid && (($0[kCGWindowLayer as String] as? Int) ?? 1) == 0 })?[
-                kCGWindowNumber as String] as? Int
+            let id = windows.first(where: {
+                ($0[kCGWindowOwnerPID as String] as? Int32) == pid && (($0[kCGWindowLayer as String] as? Int) ?? 1) == 0 && isToLookAt($0)
+            })?[kCGWindowNumber as String] as? Int
         else { return }
         let capture = Process()
         capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")

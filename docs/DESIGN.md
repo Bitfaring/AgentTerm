@@ -1179,6 +1179,19 @@ new window is), copies them, or shows the DevTools. A page is laid out for
 accessibility only for the UI tests (`AGENTTERM_WEB_ACCESSIBILITY`, set
 when a browser is made): Chromium does it for a reader at a cost.
 
+**A button's label is of one shape** (#134). The Show As button on a
+page's bar shows a picture, and a device's name beside it when the page is
+shown as one. With the name there only for a device (`if let`), SwiftUI
+made the button anew when the first device was picked: its accessibility
+element was another, so that a press on the one found before did nothing
+and was still reported as done, and a list open under it was closed with
+the state it is shown by left as it was, so that the next press closed
+what was not there. The name is always in the label, empty and of no
+height for this Mac, so that the button is as large as it was.
+A button drawn by AppKit, the bordered ones of the Git panel, keeps its
+element through such a change: its Push, found before a commit, pushes
+after it, as tried.
+
 **Windows of Chrome's own** (#125). Chrome's own interface opens windows
 of its own kind, an extension's page say, outside the app's views; CEF
 gives them no client of the app's (`get_default_client` would, but a

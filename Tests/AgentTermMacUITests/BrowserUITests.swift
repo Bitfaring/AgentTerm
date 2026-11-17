@@ -352,6 +352,49 @@ final class BrowserUITests: MacUITestCase {
         app.wait("the page as wide as before, \(whole), not \(width())") { abs(width() - whole) < 2 }
     }
 
+    /// BROWSER-40 (#134): Show As is one button whatever the page is shown
+    /// as. Its label was of another shape with a device's name in it, and
+    /// the button was made anew when the first device was picked: a list
+    /// open under it was closed with the button left as open, so that the
+    /// next press did nothing, and a press on the button as it was found
+    /// before was lost, though it was reported as done.
+    func testShowAsIsOneButtonWhateverThePageIsShownAs() throws {
+        let page = try makeSite()
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait(for: .id("browser-address"), timeout: 20)
+        app.write(page.absoluteString, into: .id("browser-address"), confirm: true)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
+        // Pressed with no wait after, which `app.press` has.
+        func press(_ node: Node) { AXUIElementPerformAction(node.element, kAXPressAction as CFString) }
+
+        // The first device picked and the button pressed again at once: its
+        // list is open when the page comes to be shown as the device.
+        app.press(.id("browser-show-as"))
+        let phone = try XCTUnwrap(app.wait(for: .id("show-as-iPhone SE")))
+        let button = try XCTUnwrap(app.first(.id("browser-show-as")))
+        press(phone)
+        press(button)
+        app.wait("the bar to name iPhone SE") { self.app.value(of: .id("browser-show-as")) == "iPhone SE" }
+        // Longer than the list of the pick takes to go.
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertEqual(app.first(.id("show-as-iPhone SE"))?.value, "shown", "the list opened again at once was closed when the page came to be shown as a device")
+
+        // Back to this Mac, from that list.
+        app.press(.id("show-as-this-mac"))
+        app.wait("the bar to name this Mac") { self.app.value(of: .id("browser-show-as")) == "This Mac" }
+        app.waitGone(.id("show-as-this-mac"))
+        // The button as it is found now still opens its list once a device
+        // is picked.
+        let before = try XCTUnwrap(app.first(.id("browser-show-as")))
+        app.press(.id("browser-show-as"))
+        app.press(.id("show-as-iPad Mini"))
+        app.wait("the bar to name iPad Mini") { self.app.value(of: .id("browser-show-as")) == "iPad Mini" }
+        app.waitGone(.id("show-as-this-mac"))
+        press(before)
+        app.wait(for: .id("show-as-this-mac"))
+        XCTAssertEqual(app.first(.id("show-as-iPad Mini"))?.value, "shown")
+    }
+
     /// BROWSER-8: a server of the project that is not running is said so;
     /// a tab the agent did not open, the user's, it neither sees nor
     /// reaches; the device size is pretended; and Settings has no switch
@@ -1387,9 +1430,13 @@ final class BrowserUITests: MacUITestCase {
 
     /// BROWSER-37 (#131): a right click in a page opens a menu as Chrome's:
     /// on a link, Open Link in New Tab and Copy Link Address; on the page,
-    /// Back, Forward, Reload; Inspect always. Open Link in New Tab opens the
-    /// link as another page of the Browser tab. Copy is not pressed: it
-    /// would write to the user's pasteboard.
+    /// Back, Forward, Reload; Inspect always. Reload reads the page again,
+    /// as it is on disk by then. Open Link in New Tab opens the link as
+    /// another page of the Browser tab. Copy is not pressed: it would write
+    /// to the user's pasteboard.
+    ///
+    /// A menu that is open closes when another app comes to the front
+    /// (#135): the Mac is left alone while this runs.
     func testARightClickOpensAMenuAsChromes() throws {
         let two = root.appendingPathComponent("two.html")
         try "<!doctype html><title>Two</title><body>Two</body>".write(to: two, atomically: true, encoding: .utf8)
@@ -1419,9 +1466,13 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertNotNil(item("Forward"))
         XCTAssertNotNil(item("Inspect"))
         XCTAssertNil(item("Open Link in New Tab"), "a link's items on the page")
+        // The file is another by now: Reload reads it again, and the test
+        // goes on once it has.
+        try #"<!doctype html><title>One</title><body><p>The page, read again</p><p><a href="two.html">Go to two</a></p></body>"#.write(to: one, atomically: true, encoding: .utf8)
         choose("Reload")
         wait("the menu closed") { item("Reload") == nil }
-        app.wait("One still shown") { self.app.value(of: .id("browser-page")) == "One" }
+        app.wait(for: .containing("The page, read again"), timeout: 20)
+        XCTAssertEqual(app.value(of: .id("browser-page")), "One")
 
         // On the link.
         app.perform("AXShowMenu", on: .containing("Go to two"), timeout: 20)

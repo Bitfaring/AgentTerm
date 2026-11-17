@@ -69,6 +69,8 @@ final class SplitDiffViewTests: XCTestCase {
             return best
         }
         let small = time(2_000), large = time(20_000)
+        // Said each time: a run that passes tells how near it was (#136).
+        print(String(format: "MEASURE the diff's layout: 2,000 rows %.4f s, 20,000 rows %.4f s, %.1f times", small, large, large / small))
         XCTAssertLessThan(large, small * 15, "2,000 rows took \(small) s, 20,000 took \(large) s")
     }
 }
