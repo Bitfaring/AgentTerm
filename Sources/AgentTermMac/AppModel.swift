@@ -109,6 +109,25 @@ final class AppModel: ObservableObject {
     /// the old version's.
     @Published private(set) var hostMatch = ProtocolMatch.same
 
+    /// A host that speaks this app's protocol but was built from other
+    /// sources than the host this app comes with (#121): one left running
+    /// when the app was updated, the release it says it is from, and how
+    /// that compares with this app's. Nil when it is the same host, or when
+    /// that is not known (a host before protocol 23, a build outside an app
+    /// bundle). A release that changes nothing of the host is not pointed
+    /// out: restarting the host ends its sessions.
+    @Published private(set) var otherBuildOfHost: OtherBuildOfHost?
+
+    struct OtherBuildOfHost: Equatable {
+        let release: String?
+        let match: ProtocolMatch
+    }
+
+    static func otherBuild(release: String?, revision: String?, own: String? = AppVersion.hostRevision) -> OtherBuildOfHost? {
+        guard let revision, let own, revision != own else { return nil }
+        return OtherBuildOfHost(release: release, match: AppVersion.match(host: release))
+    }
+
     /// Parts of AgentTerm on the Mac on screen that stopped without being
     /// asked to, as its host reports them, until they are dismissed.
     @Published private(set) var failures: [PartFailure] = []
@@ -154,6 +173,7 @@ final class AppModel: ObservableObject {
         stoppingHost = true
         let port = port
         hostMatch = .same
+        otherBuildOfHost = nil
         otherHost = nil
         otherHostPID = nil
         launchedDaemon = false
@@ -1257,6 +1277,7 @@ final class AppModel: ObservableObject {
         writingCommitMessage = []
         syncing = [:]
         hostMatch = .same
+        otherBuildOfHost = nil
         failures = []
         diffAnswersDue = [:]
         if pendingCommit != nil {
@@ -1371,11 +1392,12 @@ final class AppModel: ObservableObject {
 
     private func handle(_ message: ServerMessage) {
         switch message {
-        case .welcome(let version, _):
+        case .welcome(let version, _, let release, let revision):
             hostVersion = version
             tellWhetherInFront()
             refreshSSHHosts()
             hostMatch = ProtocolMatch(host: version)
+            otherBuildOfHost = hostMatch == .same ? Self.otherBuild(release: release, revision: revision) : nil
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             wasConnected = true
             hostBroken = false

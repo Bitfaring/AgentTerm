@@ -48,6 +48,45 @@ public enum AppVersion {
 
     /// "AgentTerm 0.2.0".
     public static var label: String { "\(AppChannel.current.appName) \(current)" }
+
+    /// What the host this app comes with is built from, as
+    /// `scripts/bundle-mac.sh` writes it (#121): the host, which runs from
+    /// inside the bundle, reads the same. Nil outside an app bundle.
+    public static var hostRevision: String? {
+        Bundle.main.object(forInfoDictionaryKey: "AgentTermHostRevision") as? String
+    }
+
+    /// How the release a host says it is from compares with this app's
+    /// (#121): a host left running when the app was updated is older, even
+    /// when both speak the same protocol. `.same` when either is not known:
+    /// a host before protocol 23 says none, and a build run outside an app
+    /// bundle is "dev".
+    public static func match(host: String?, own: String = current) -> ProtocolMatch {
+        guard let host, host != "dev", own != "dev", host != own else { return .same }
+        // "0.10.0" after "0.9.0"; a release after its betas ("0.10.0-beta.2").
+        func parts(_ version: String) -> (main: String, suffix: String?) {
+            let split = version.split(separator: "-", maxSplits: 1).map(String.init)
+            return (split.first ?? version, split.count > 1 ? split[1] : nil)
+        }
+        let (hostMain, hostSuffix) = parts(host)
+        let (ownMain, ownSuffix) = parts(own)
+        let order: ComparisonResult
+        switch hostMain.compare(ownMain, options: .numeric) {
+        case .orderedSame:
+            switch (hostSuffix, ownSuffix) {
+            case (nil, _?): order = .orderedDescending
+            case (_?, nil): order = .orderedAscending
+            case (let host?, let own?): order = host.compare(own, options: .numeric)
+            case (nil, nil): order = .orderedSame
+            }
+        case let other: order = other
+        }
+        switch order {
+        case .orderedAscending: return .hostOlder
+        case .orderedDescending: return .hostNewer
+        case .orderedSame: return .same
+        }
+    }
 }
 
 /// Where AgentTerm lives on the web, for the apps to link to.

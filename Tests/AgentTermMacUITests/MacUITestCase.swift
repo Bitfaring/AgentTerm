@@ -58,7 +58,7 @@ class MacUITestCase: XCTestCase {
         try makeFixtures()
         port = Self.nextPort
         Self.nextPort += 1
-        host = try startHost(state: state, home: home, port: port)
+        host = try startHost(state: state, home: home, port: port, extra: hostArguments)
         forgetPreferences()
         try beforeTheAppStarts()
         app = try launchApp()
@@ -132,6 +132,45 @@ class MacUITestCase: XCTestCase {
 
     /// Called with the host running and the app not started yet.
     func beforeTheAppStarts() throws {}
+
+    /// More arguments for the test's host, which a test class may give.
+    var hostArguments: [String] { [] }
+
+    // MARK: The app as it is shipped
+
+    /// The app bundle `scripts/test-mac.sh` builds, under an identifier of
+    /// its own, for the tests that need the app as it is shipped: Chromium,
+    /// the Info.plist.
+    static var testBundle: URL? {
+        ProcessInfo.processInfo.environment["AGENTTERM_TEST_BUNDLE"].map { URL(fileURLWithPath: $0) }
+    }
+
+    /// Starts the bundle with the test's home, state and port, as the
+    /// unbundled app is started otherwise. Its preferences are forgotten
+    /// first when `fresh`.
+    func launchBundledApp(fresh: Bool) throws -> MacDriver {
+        let bundle = try XCTUnwrap(Self.testBundle)
+        if fresh { forgetBundlePreferences(bundle) }
+        var environment = Self.ownHome(home)
+        environment.merge(appEnvironment) { _, own in own }
+        environment["AGENTTERM_STATE_DIR"] = state.path
+        environment["AGENTTERM_PORT"] = String(appPort)
+        environment["CFFIXED_USER_HOME"] = home.path
+        let driver = try MacDriver(executable: bundle.appendingPathComponent("Contents/MacOS/AgentTerm"), environment: environment)
+        driver.wait(for: .id("mac-switcher"), timeout: 30)
+        return driver
+    }
+
+    func forgetBundlePreferences(_ bundle: URL) {
+        guard let identifier = Bundle(url: bundle)?.bundleIdentifier, identifier.contains("uitest") else { return }
+        let defaults = Process()
+        defaults.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        defaults.arguments = ["delete", identifier]
+        defaults.standardOutput = FileHandle.nullDevice
+        defaults.standardError = FileHandle.nullDevice
+        try? defaults.run()
+        defaults.waitUntilExit()
+    }
 
     // MARK: What the host has to show
 

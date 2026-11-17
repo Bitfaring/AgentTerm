@@ -254,6 +254,20 @@ Host to client: `welcome`, `sessions`, `agents`, `folders`, `attached`,
 (`tabLayout`, `keepAwake`, `keepAwakeOptions`, `commitWriter`) are pushed to
 every client when they change.
 
+`welcome` also says which release the host is from (`release`, "0.10.0")
+and what it is built from (`revision`), from protocol 23 (#121). The
+revision is a hash of the host's sources and of the packages it takes
+(`agenttermd`, `AgentTermHost`, `AgentTermClient`, `AgentTermProtocol`,
+`CAgentTermPTY`, `Package.swift`, `Package.resolved`), which
+`scripts/bundle-mac.sh` writes into the app's Info.plist
+(`AgentTermHostRevision`); the host, which runs from inside the bundle, reads
+the same. A host keeps running across an update of the app, sessions and
+all: when the one that answers speaks this app's protocol but was built from
+other sources, the Mac says from which release it is and offers Restart
+Host…, which asks first. It never restarts it by itself (decided by the
+owner on 2026-11-17), and a release that changes nothing of the host says
+nothing. A build outside an app bundle has no revision, and is not compared.
+
 The protocol version is 15 in 0.7.0. It went up with each message that
 changed while the release was made (principle 6): 8 added `agentShellsFaults`
 and gave `agentShellResult`'s list of shells the asking agent's own (see

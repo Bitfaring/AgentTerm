@@ -8,6 +8,28 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(ProtocolMatch(host: agenttermProtocolVersion + 1), .hostNewer)
     }
 
+    /// HOST-12 (#121): a host left running from an earlier release is told
+    /// apart by the release it says it is from, whatever the protocol.
+    func testAHostOfAnEarlierReleaseIsToldApart() {
+        XCTAssertEqual(AppVersion.match(host: "0.10.0", own: "0.10.1"), .hostOlder)
+        XCTAssertEqual(AppVersion.match(host: "0.9.0", own: "0.10.0"), .hostOlder)
+        XCTAssertEqual(AppVersion.match(host: "0.10.0", own: "0.9.0"), .hostNewer)
+        XCTAssertEqual(AppVersion.match(host: "0.10.0", own: "0.10.0"), .same)
+        XCTAssertEqual(AppVersion.match(host: "0.10.0-beta.2", own: "0.10.0"), .hostOlder)
+        XCTAssertEqual(AppVersion.match(host: "0.10.0-beta.2", own: "0.10.0-beta.10"), .hostOlder)
+        // Not known: a host before protocol 23, a build outside an app bundle.
+        XCTAssertEqual(AppVersion.match(host: nil, own: "0.10.0"), .same)
+        XCTAssertEqual(AppVersion.match(host: "dev", own: "0.10.0"), .same)
+        XCTAssertEqual(AppVersion.match(host: "0.9.0", own: "dev"), .same)
+    }
+
+    /// A host before protocol 23 sends no release: its welcome is still
+    /// read, for the app to tell its protocol apart.
+    func testAWelcomeWithoutAReleaseIsRead() {
+        let old = Data(#"{"welcome":{"version":22,"host":"Mac"}}"#.utf8)
+        XCTAssertEqual(MessageCoding.decode(ServerMessage.self, from: old), .welcome(version: 22, host: "Mac", release: nil, revision: nil))
+    }
+
     func testClientMessagesRoundTrip() {
         let messages: [ClientMessage] = [
             .hello(token: "secret", client: "iPhone"),
@@ -90,6 +112,7 @@ final class ProtocolTests: XCTestCase {
         let info = SessionInfo(id: 3, title: "zsh", cwd: "/Users/me", size: .default, createdAt: Date(timeIntervalSince1970: 1_800_000_000))
         let messages: [ServerMessage] = [
             .welcome(version: agenttermProtocolVersion, host: "Mac"),
+            .welcome(version: agenttermProtocolVersion, host: "Mac", release: "0.10.0", revision: "1f3a9c0d2b4e6f70"),
             .sessions([info]),
             .agents([AgentInfo(id: "claude", name: "Claude Code", path: "/usr/local/bin/claude"), AgentInfo(id: "agy", name: "Antigravity", path: nil)]),
             .folders(["/Users/me/app"]),

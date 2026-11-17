@@ -116,7 +116,7 @@ final class AgentShellsLink {
             defer { self.lock.unlock() }
             guard self.connection === connection else { return }
             switch message {
-            case .welcome(let version, _):
+            case .welcome(let version, _, _, _):
                 self.hostVersion = version
             case .error(let said) where self.hostVersion == nil:
                 self.refusal = said

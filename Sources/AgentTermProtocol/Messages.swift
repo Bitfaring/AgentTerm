@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 22
+public let agenttermProtocolVersion = 23
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -491,7 +491,11 @@ public enum ClientMessage: Codable, Equatable, Sendable {
 
 /// JSON text frames sent by the host.
 public enum ServerMessage: Codable, Equatable, Sendable {
-    case welcome(version: Int, host: String)
+    /// `release`: the version of AgentTerm the host is from ("0.10.0"), as
+    /// its app bundle says, "dev" outside one; `revision`: what the host is
+    /// built from (`AppVersion.hostRevision`), nil outside an app bundle.
+    /// Both nil from a host before protocol 23 (#121).
+    case welcome(version: Int, host: String, release: String? = nil, revision: String? = nil)
     case sessions([SessionInfo])
     case agents([AgentInfo])
     /// Project folders on the host, in the order they were added.

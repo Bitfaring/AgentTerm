@@ -17,6 +17,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-$(tr -d '[:space:]' < VERSION)}"
+# What the host is built from (#121): its targets' sources and the packages
+# they take. The app points out a host left running that was built from
+# other sources than the host it comes with, and only then: a release that
+# changes nothing of the host asks for no restart.
+HOST_REVISION="$(find Sources/agenttermd Sources/AgentTermHost Sources/AgentTermClient Sources/AgentTermProtocol Sources/CAgentTermPTY Package.swift Package.resolved -type f -print0 \
+    | xargs -0 shasum -a 256 | LC_ALL=C sort -k 2 | shasum -a 256 | cut -c1-16)"
 CONFIG="${CONFIG:-release}"
 CHANNEL="${CHANNEL:-dev}"
 case "$CHANNEL" in
@@ -77,6 +83,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>
+    <key>AgentTermHostRevision</key><string>${HOST_REVISION}</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>

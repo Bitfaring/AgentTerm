@@ -13,6 +13,8 @@ var port = agenttermDefaultPort
 var listenOnTailscale = true
 var askServices = true
 var protocolVersion = agenttermProtocolVersion
+var release = AppVersion.current
+var revision = AppVersion.hostRevision
 var home = NSHomeDirectory()
 var agentsDirectory: String?
 var arguments = CommandLine.arguments.dropFirst()
@@ -161,6 +163,14 @@ while let argument = arguments.popFirst() {
         // For testing the apps against a host of another release. Not in the help.
         guard let value = arguments.popFirst().flatMap(Int.init) else { fail("--protocol-version needs a number", status: 2) }
         protocolVersion = value
+    case "--app-version":
+        // For testing the Mac against a host left from another release (#121). Not in the help.
+        guard let value = arguments.popFirst() else { fail("--app-version needs a version", status: 2) }
+        release = value
+    case "--host-revision":
+        // For testing the Mac against a host built from other sources (#121). Not in the help.
+        guard let value = arguments.popFirst() else { fail("--host-revision needs a value", status: 2) }
+        revision = value
     case "--home":
         guard let value = arguments.popFirst() else { fail("--home needs a folder", status: 2) }
         home = value
@@ -203,6 +213,8 @@ do {
         port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home,
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
+    configuration.release = release
+    configuration.revision = revision
     configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)
     // Gives the agents' sessions the MCP server, and takes out what earlier
     // builds put in the agents' own configuration, for this Mac's host

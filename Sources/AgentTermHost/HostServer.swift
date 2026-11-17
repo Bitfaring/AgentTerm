@@ -14,6 +14,11 @@ public final class HostServer {
         /// The protocol version the host says it speaks. Only tests change
         /// it, to see what a client does with a host of another release.
         public var protocolVersion = agenttermProtocolVersion
+        /// The release the host says it is from. Only tests change it, to
+        /// see what the Mac does with a host left from another release (#121).
+        public var release = AppVersion.current
+        /// What the host says it is built from; tests change it (#121).
+        public var revision = AppVersion.hostRevision
         public var listenOnTailscale: Bool
         /// Bytes of recent output kept per session, for a client that comes
         /// back after losing its connection: it is sent what it missed.
@@ -2612,7 +2617,10 @@ public final class HostServer {
 
     private func admit(_ client: Client, as identity: DeviceRegistry.Identity) {
         client.identity = identity
-        send(.welcome(version: configuration.protocolVersion, host: Host.current().localizedName ?? "Mac"), to: client)
+        send(
+            .welcome(
+                version: configuration.protocolVersion, host: Host.current().localizedName ?? "Mac", release: configuration.release,
+                revision: configuration.revision), to: client)
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
         // What stopped before this client came, until someone has seen it.
         send(.failures(failures), to: client)

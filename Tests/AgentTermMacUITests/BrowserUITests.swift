@@ -8,9 +8,7 @@ import XCTest
 /// The test plays the agent: it starts a stand-in agent, takes the key of
 /// its session, and talks to AgentTerm's MCP server as that agent would.
 final class BrowserUITests: MacUITestCase {
-    private static var bundle: URL? {
-        ProcessInfo.processInfo.environment["AGENTTERM_TEST_BUNDLE"].map { URL(fileURLWithPath: $0) }
-    }
+    private static var bundle: URL? { testBundle }
 
     private var site: URL!
     /// The app was started once in this test: what it kept is kept when
@@ -25,33 +23,13 @@ final class BrowserUITests: MacUITestCase {
     /// The app bundle, with the test's home, state and port, as the
     /// unbundled app is started otherwise.
     override func launchApp() throws -> MacDriver {
-        let bundle = try XCTUnwrap(Self.bundle)
-        if !launched { forgetBundlePreferences(bundle) }
-        launched = true
-        var environment = Self.ownHome(home)
-        environment.merge(appEnvironment) { _, own in own }
-        environment["AGENTTERM_STATE_DIR"] = state.path
-        environment["AGENTTERM_PORT"] = String(appPort)
-        environment["CFFIXED_USER_HOME"] = home.path
-        let driver = try MacDriver(executable: bundle.appendingPathComponent("Contents/MacOS/AgentTerm"), environment: environment)
-        driver.wait(for: .id("mac-switcher"), timeout: 30)
-        return driver
+        defer { launched = true }
+        return try launchBundledApp(fresh: !launched)
     }
 
     override func tearDown() {
         super.tearDown()
         if let bundle = Self.bundle { forgetBundlePreferences(bundle) }
-    }
-
-    private func forgetBundlePreferences(_ bundle: URL) {
-        guard let identifier = Bundle(url: bundle)?.bundleIdentifier, identifier.contains("uitest") else { return }
-        let defaults = Process()
-        defaults.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-        defaults.arguments = ["delete", identifier]
-        defaults.standardOutput = FileHandle.nullDevice
-        defaults.standardError = FileHandle.nullDevice
-        try? defaults.run()
-        defaults.waitUntilExit()
     }
 
     private typealias Server = MCPServerProcess

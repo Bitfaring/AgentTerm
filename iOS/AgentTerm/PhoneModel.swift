@@ -1172,7 +1172,7 @@ final class PhoneModel: ObservableObject {
         TouchLog.received(message)
         #endif
         switch message {
-        case .welcome(let version, _):
+        case .welcome(let version, _, _, _):
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             status = .connected

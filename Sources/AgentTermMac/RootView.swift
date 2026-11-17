@@ -463,22 +463,38 @@ struct LaunchButton: View {
 private struct HostVersionBanner: View {
     @EnvironmentObject private var model: AppModel
     let match: ProtocolMatch
+    /// The same protocol, another build of the host (#121).
+    var otherBuild: AppModel.OtherBuildOfHost?
     @State private var confirming = false
+
+    private var title: String {
+        guard let otherBuild else {
+            return match == .hostOlder ? "The host that is running is from an older version of AgentTerm." : "The host that is running is from a newer version of AgentTerm."
+        }
+        guard let release = otherBuild.release, release != "dev", match != .same else {
+            return "The host that is running was built from other sources than this app's."
+        }
+        return "The host that is running is from AgentTerm \(release), \(match == .hostOlder ? "older" : "newer") than this app."
+    }
+
+    private var detail: String {
+        if otherBuild != nil, match == .same { return "Restart it to use the host this app comes with." }
+        if otherBuild != nil, match == .hostOlder { return "It kept running when the app was updated. Restart it to use this version's host." }
+        return match == .hostOlder
+            ? "It kept running when the app was updated. Some things will not work until it is restarted."
+            : "Update this app, or restart the host to use this app's own. Some things will not work until then."
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
             VStack(alignment: .leading, spacing: 2) {
-                Text(match == .hostOlder ? "The host that is running is from an older version of AgentTerm." : "The host that is running is from a newer version of AgentTerm.")
+                Text(title)
                     .font(.system(size: 12, weight: .medium))
-                Text(
-                    match == .hostOlder
-                        ? "It kept running when the app was updated. Some things will not work until it is restarted."
-                        : "Update this app, or restart the host to use this app's own. Some things will not work until then."
-                )
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
             Spacer(minLength: 8)
             // Another Mac's host is restarted on that Mac, by its own app.
@@ -743,6 +759,8 @@ private struct Banners: View {
             OtherHostBanner(path: path)
         } else if model.hostMatch != .same {
             HostVersionBanner(match: model.hostMatch)
+        } else if let other = model.otherBuildOfHost {
+            HostVersionBanner(match: other.match, otherBuild: other)
         }
         // What stopped without being asked to, until it is dismissed.
         ForEach(model.failures) { failure in
