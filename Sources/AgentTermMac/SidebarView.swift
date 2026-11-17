@@ -92,7 +92,8 @@ struct SidebarView: View {
 
     /// A folder's rows, or those of no folder: its sessions in the order of
     /// their tabs, each agent with its own shells and pages right under it,
-    /// set in, as they are its own and not tabs; then the user's pages.
+    /// set in, as they are its own and not tabs; then the user's pages,
+    /// under one Browser row, as the strip holds them in one Browser tab.
     @ViewBuilder
     private func rows(sessions: [SessionInfo], pages: [BrowserTab], loose: Bool) -> some View {
         let companions = model.companions
@@ -108,10 +109,83 @@ struct SidebarView: View {
                 BrowserRow(tab: page, leading: inner)
             }
         }
-        // The project's pages that are the user's (#76).
-        ForEach(pages.filter { companions.owner[$0.tabID] == nil }) { tab in
-            BrowserRow(tab: tab, loose: loose)
+        // The project's pages that are the user's (#76), one Browser row a
+        // project with its pages under it (#122).
+        // Not the project's path for an identity: its folder's row has it.
+        ForEach(Self.byProject(pages.filter { companions.owner[$0.tabID] == nil }), id: \.id) { group in
+            BrowserGroupRow(project: group.project, pages: group.pages, loose: loose)
+            ForEach(group.pages) { tab in
+                BrowserRow(tab: tab, leading: inner)
+            }
         }
+    }
+}
+
+extension SidebarView {
+    /// Pages by their project, in the order the first of each was opened.
+    static func byProject(_ pages: [BrowserTab]) -> [(id: String, project: String, pages: [BrowserTab])] {
+        var order: [String] = []
+        var grouped: [String: [BrowserTab]] = [:]
+        for page in pages {
+            if grouped[page.project] == nil { order.append(page.project) }
+            grouped[page.project, default: []].append(page)
+        }
+        return order.map { ("browser:" + $0, $0, grouped[$0] ?? []) }
+    }
+}
+
+/// The user's pages of a project in the list (#122), as its strip's Browser
+/// tab holds them: its pages are under it. Picking it shows the page that
+/// tab shows.
+private struct BrowserGroupRow: View {
+    @EnvironmentObject private var model: AppModel
+    let project: String
+    let pages: [BrowserTab]
+    var loose = false
+    @State private var hovering = false
+
+    private func show() {
+        if let first = pages.first { model.selectStripTab(first.tabID) }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "globe")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            Text(pages.count > 1 ? "Browser (\(pages.count))" : "Browser")
+                .font(.system(size: 12.5))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if hovering {
+                Button {
+                    model.requestCloseBrowser(in: project)
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(pages.count > 1 ? "Close the browser's \(pages.count) pages" : "Close the browser")
+            }
+        }
+        .padding(.leading, loose ? 8 : 24)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .modifier(RowBackground(selected: false, hovering: hovering))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { show() }
+        .help(model.shownPage(in: project)?.displayTitle ?? "Browser")
+        .contextMenu {
+            Button("Close Browser") { model.requestCloseBrowser(in: project) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(pages.count > 1 ? "Browser, \(pages.count) pages" : "Browser")
+        .accessibilityIdentifier("sidebar-browser")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { show() }
+        .accessibilityAction(named: "Close Browser") { model.requestCloseBrowser(in: project) }
     }
 }
 

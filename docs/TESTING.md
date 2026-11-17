@@ -757,6 +757,7 @@ and the test talks to the real `agenttermd mcp` with it.
 | BROWSER-15 | An agent's page with a form | The agent reads it, types, clicks and takes a picture while it is shown; with the browser hidden; with the window minimized; shown again | Each works within seconds, and each picture shows what was just typed | M |
 | BROWSER-34 | Three pages of the user's of three sites and one with nothing loaded, in the Browser tab | Close Tab on the empty one and on the first; Close Browser for the rest | Their processes end within 20 seconds, one spare at most kept by Chromium: a closed page is not made again by the pane that showed it | M |
 | BROWSER-35 (#117) | A page of the user's shown | Close it, the last one; open one again; close it | No page process is left 20 seconds after, none kept in reserve by Chromium; the page opened again loads | M |
+| BROWSER-36 (#122) | Three pages of the user's in a project | Look at the list on the left; pick a page's row; with a shell in front, pick the Browser row; Close Browser from its row | One row "Browser (3)" ("Browser, 3 pages"), the three pages set in under it; a page's row shows that page; the Browser row shows the page its tab shows; closing asks first, then all three go. Before the fix each page was a row of its own | M |
 
 ### Vietnamese input
 

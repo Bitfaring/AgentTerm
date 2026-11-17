@@ -1335,6 +1335,58 @@ final class BrowserUITests: MacUITestCase {
         app.wait("gone again") { pages().isEmpty && !self.app.exists(.id("strip-browser")) }
     }
 
+    /// BROWSER-36 (#122): the sidebar holds the user's pages as the strip
+    /// does: one Browser row in the project, the pages under it. A page's
+    /// row shows that page; the Browser row shows the page the Browser tab
+    /// shows; closed from its menu, it asks first when there are several.
+    func testTheSidebarHoldsTheUsersPagesInOneBrowserRow() throws {
+        func page(_ name: String) throws -> URL {
+            let file = root.appendingPathComponent("\(name).html")
+            try "<!doctype html><title>\(name)</title><body>\(name)</body>".write(to: file, atomically: true, encoding: .utf8)
+            return file
+        }
+        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("tab-b") } }
+        func load(_ name: String) throws {
+            app.wait(for: .id("browser-address"), timeout: 20)
+            app.write(try page(name).absoluteString, into: .id("browser-address"), confirm: true)
+            app.wait("\(name) shown") { self.app.value(of: .id("browser-page")) == name }
+        }
+        /// The sidebar's row of a page, by its title.
+        func row(_ name: String) -> String? { app.nodes().first { $0.identifier.hasPrefix("browser-row-") && $0.label == "\(name), page" }?.identifier }
+        app.press(.id("folder-\(project.path)"))
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait("the first page") { pages().count == 1 }
+        try load("One")
+        for (count, name) in [(2, "Two"), (3, "Three")] {
+            app.press(.id("browser-new-page"))
+            app.wait("page \(count)") { pages().count == count }
+            try load(name)
+        }
+        // One Browser row, its three pages under it.
+        app.wait(for: .id("sidebar-browser"), timeout: 10)
+        XCTAssertEqual(app.nodes().filter { $0.identifier == "sidebar-browser" }.count, 1)
+        XCTAssertEqual(app.first(.id("sidebar-browser"))?.label, "Browser, 3 pages")
+        let all = app.nodes()
+        let group = try XCTUnwrap(all.firstIndex { $0.identifier == "sidebar-browser" })
+        let rows = all.indices.filter { all[$0].identifier.hasPrefix("browser-row-") }
+        XCTAssertEqual(rows.count, 3, "the pages' rows")
+        XCTAssertTrue(rows.allSatisfy { $0 > group }, "a page's row is not under the Browser row")
+        shot("sidebar-browser")
+        // A page's row shows that page.
+        app.press(.id(try XCTUnwrap(row("Two"))))
+        app.wait("Two shown from its row") { self.app.value(of: .id("browser-page")) == "Two" }
+        // With a shell in front, the Browser row shows the page its tab shows.
+        app.press(.button("Shell"))
+        app.wait("the page gone behind the shell") { self.app.value(of: .id("browser-page")) == nil }
+        app.press(.id("sidebar-browser"))
+        app.wait("Two shown from the Browser row") { self.app.value(of: .id("browser-page")) == "Two" }
+        // Closed from its row: asked first, then all three go.
+        app.perform("Close Browser", on: .id("sidebar-browser"))
+        app.wait(for: .text("Close 3 pages?"))
+        app.press(.button("Close 3 Pages"))
+        app.wait("the Browser row gone") { !self.app.exists(.id("sidebar-browser")) && row("One") == nil && pages().isEmpty }
+    }
+
     /// BROWSER-33 (#111): the user's pages and an agent's are never mixed,
     /// whichever is opened first, though both use one profile: the user's
     /// are in the Browser tab and the agent does not list them; the agent's

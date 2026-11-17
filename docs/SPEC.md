@@ -387,7 +387,10 @@ user sees.
   the pages, each shown when picked and closed by its ×, and a + for one
   more. The tab says how many pages it holds; a page closed shows the one
   beside it, the last one closed closes the tab, and closing the tab while
-  it holds several is asked first. A page is started as a shell is: the
+  it holds several is asked first. The list on the left holds them the
+  same way (#122): one Browser row in the project, its pages set in under
+  it; the row shows the page the tab shows, and closes them all from its
+  menu. A page is started as a shell is: the
   Browser button next to Shell in the header, on the launch screen, the +
   of the row, or Browser > New Browser Tab (⌥⌘T). It opens in
   the project on show,
