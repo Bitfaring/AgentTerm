@@ -82,6 +82,7 @@ for _ in $(seq 1 50); do [ -s "$STATE/token" ] && break; sleep 0.1; done
 (cd iOS && xcodegen generate --quiet)
 xcrun simctl bootstatus "$DEVICE" -b >/dev/null
 xcrun simctl keychain "$DEVICE" reset
+software_keyboard "$DEVICE"
 XCODEBUILD=(xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm
     -destination "platform=iOS Simulator,id=$DEVICE"
     -derivedDataPath .build/ios -skipPackagePluginValidation)

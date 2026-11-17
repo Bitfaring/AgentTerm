@@ -9,7 +9,8 @@
 #
 # The hosts use their own state folders and ports, so your real pairing,
 # folders and sessions are not touched. The keychain of the simulator the test
-# runs in is reset, so anything paired in that simulator has to pair again.
+# runs in is reset, so anything paired in that simulator has to pair again,
+# and its software keyboard is shown even after a Mac's keyboard was typed on.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -114,6 +115,7 @@ for _ in $(seq 1 50); do [ -s "$STATE/token" ] && [ -s "$SECOND_STATE/token" ] &
 (cd iOS && xcodegen generate --quiet)
 xcrun simctl bootstatus "$DEVICE" -b >/dev/null
 xcrun simctl keychain "$DEVICE" reset
+software_keyboard "$DEVICE"
 
 # TEST_RUNNER_ variables are handed to the test process without the prefix.
 XCODEBUILD=(xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm

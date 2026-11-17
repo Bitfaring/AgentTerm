@@ -237,6 +237,7 @@ pictures_on() {
     local device="$1" what="$2" into="$3"
     xcrun simctl bootstatus "$device" -b >/dev/null
     xcrun simctl keychain "$device" reset
+    software_keyboard "$device"
     # Named as the store names it: the iPad shows the app's name in its
     # status bar. Its identifier stays the development build's.
     local xcodebuild=(xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm
