@@ -13,6 +13,10 @@ final class AgentLinkTests: XCTestCase {
     private var server: HostServer!
     private var client: AgentTermConnection!
     private var sessions: [SessionInfo] = []
+    /// What the host first said of each agent's link. `sessions` is the
+    /// list as it is by the time it is looked at, and a hook may have been
+    /// heard by then: on CI's runner it had (LINK-2, 2026-11-17).
+    private var firstLink: [SessionID: AgentLink] = [:]
     private let token = "test-token-0123456789abcdef0123456789"
 
     override func setUpWithError() throws {
@@ -48,7 +52,11 @@ final class AgentLinkTests: XCTestCase {
         server = HostServer(configuration: configuration)
         let port = try server.start()
         client = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "mac")
-        client.onMessage = { [weak self] in if case .sessions(let list) = $0 { self?.sessions = list } }
+        client.onMessage = { [weak self] message in
+            guard let self, case .sessions(let list) = message else { return }
+            self.sessions = list
+            for session in list where self.firstLink[session.id] == nil { self.firstLink[session.id] = session.link }
+        }
         client.connect()
     }
 
@@ -71,7 +79,8 @@ final class AgentLinkTests: XCTestCase {
         try start(grace: 30)
         client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
         wait("the session") { sessions.count == 1 }
-        XCTAssertEqual(sessions.first?.link, AgentLink(), "known before it was heard")
+        // As the host first said it, before anything of the agent's ran.
+        XCTAssertEqual(sessions.first.flatMap { firstLink[$0.id] }, AgentLink(), "known before it was heard")
         wait("its hooks heard") { sessions.first?.link?.hooks == true }
         XCTAssertNil(sessions.first?.link?.mcp)
         wait("its key") { FileManager.default.fileExists(atPath: key.path) }
