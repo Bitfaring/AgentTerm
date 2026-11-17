@@ -33,13 +33,17 @@ final class FlowTests: XCTestCase {
     /// two while the menu is open (#65, `IdleWaits`). The entry is waited
     /// for by itself; what picking it is for is the caller's to check.
     /// - Parameter open: Looked at while the menu is open, before the pick.
-    private func pick(_ entry: String, fromMenuOf element: XCUIElement, in app: XCUIApplication, open: () -> Void = {}, file: StaticString = #filePath, line: UInt = #line) {
+    /// - Parameter hold: How long the finger stays on the entry; a tap without it.
+    private func pick(
+        _ entry: String, fromMenuOf element: XCUIElement, in app: XCUIApplication, hold: TimeInterval? = nil, open: () -> Void = {}, file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
         IdleWaits.skipped {
             element.press(forDuration: 1.2)
             let item = app.buttons[entry].firstMatch
             XCTAssertTrue(item.waitForExistence(timeout: 10), "the menu has no “\(entry)”", file: file, line: line)
             open()
-            item.tap()
+            if let hold { item.press(forDuration: hold) } else { item.tap() }
         }
     }
 
@@ -108,7 +112,9 @@ final class FlowTests: XCTestCase {
             guard expected.count >= 2 else { return XCTFail("two listed folders are needed: \(expected)") }
             expected.swapAt(0, 1)
             let started = Date()
-            pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app)
+            // MENU_HOLD: the finger kept on the entry that long, for the
+            // Mac's figures, which come every 3 seconds, to arrive meanwhile.
+            pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app, hold: TimeInterval(ProcessInfo.processInfo.environment["AGENTTERM_MENU_HOLD"] ?? ""))
             let moved = IdleWaits.skipped { () -> Bool in
                 let deadline = Date().addingTimeInterval(8)
                 while Date() < deadline {
@@ -981,8 +987,11 @@ final class FlowTests: XCTestCase {
             countMenuTouches(app)
             return
         }
-        pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app) { capture("15-folder-menu") }
-        XCTAssertTrue(orderBecomes(["home", "project", "demo"]), "Move Down did not move the folder: \(order())")
+        // IOS-10 (#83): the finger kept on the entry 4 seconds, for the
+        // Mac's figures, which come every 3, to be drawn meanwhile. The menu
+        // was made anew under it, and the entry not chosen.
+        pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app, hold: 4) { capture("15-folder-menu") }
+        XCTAssertTrue(orderBecomes(["home", "project", "demo"]), "Move Down, held, did not move the folder: \(order())")
         // Back to the top of the list, so both names are on screen and
         // clear of the bars: one is dragged onto the other.
         app.swipeDown()

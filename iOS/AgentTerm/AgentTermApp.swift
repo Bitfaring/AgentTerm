@@ -15,6 +15,7 @@ struct AgentTermApp: App {
         #if DEBUG
         TouchLog.startIfAsked()
         #endif
+        FingerWatch.start()
         FirebaseSink.start()
         Telemetry.shared.record(.appOpen)
         _privacy = StateObject(wrappedValue: TelemetryPreferences())

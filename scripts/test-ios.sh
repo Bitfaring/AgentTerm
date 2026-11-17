@@ -154,6 +154,8 @@ if [ "${MENU:-}" = after ]; then export TEST_RUNNER_AGENTTERM_MENU_AFTER=1; fi
 # (MENU_KEYBOARD=down: with it down), and nothing else.
 if [ "${MENU:-}" = terminal ]; then export TEST_RUNNER_AGENTTERM_ONLY_TERMINAL_MENU=1 TEST_RUNNER_AGENTTERM_MENU_KEYBOARD="${MENU_KEYBOARD:-up}"; fi
 if [ -n "${MENU:-}" ]; then export TEST_RUNNER_AGENTTERM_MENU_ROUNDS="${MENU_ROUNDS:-20}"; fi
+# MENU_HOLD=4 keeps the finger on the entry 4 seconds rather than tapping it.
+if [ -n "${MENU_HOLD:-}" ]; then export TEST_RUNNER_AGENTTERM_MENU_HOLD="$MENU_HOLD"; fi
 # TOUCHES=/some/file has the app write down every touch it receives (#83).
 if [ -n "${TOUCHES:-}" ]; then export TEST_RUNNER_AGENTTERM_TOUCH_LOG="$TOUCHES"; fi
 # NOTE=only reads a stand-in agent's note on its row (IOS-9), and nothing else.

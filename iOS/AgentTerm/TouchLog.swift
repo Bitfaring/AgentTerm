@@ -24,6 +24,12 @@ enum TouchLog {
             let logged = class_getInstanceMethod(UIApplication.self, #selector(UIApplication.agentterm_sendEvent(_:)))
         else { return }
         method_exchangeImplementations(original, logged)
+        // When an open menu is made anew, and by whom (#83).
+        if let update = class_getInstanceMethod(UIContextMenuInteraction.self, #selector(UIContextMenuInteraction.updateVisibleMenu(_:))),
+            let noted = class_getInstanceMethod(UIContextMenuInteraction.self, #selector(UIContextMenuInteraction.agentterm_updateVisibleMenu(_:)))
+        {
+            method_exchangeImplementations(update, noted)
+        }
         write("started")
     }
 
@@ -44,8 +50,32 @@ enum TouchLog {
         }
     }
 
+    /// A message from the host, by its kind only: what it carries is not
+    /// written down.
+    static func received(_ message: Any) {
+        guard file != nil else { return }
+        let kind = Mirror(reflecting: message).children.first?.label ?? String(describing: message)
+        write("message \(kind)")
+    }
+
+    /// Something the app did, by a name of its own.
+    static func mark(_ what: String) {
+        guard file != nil else { return }
+        write(what)
+    }
+
     private static func write(_ line: String) {
         file?.write(Data("\(clock.string(from: Date())) \(line)\n".utf8))
+    }
+}
+
+extension UIContextMenuInteraction {
+    @objc fileprivate func agentterm_updateVisibleMenu(_ block: @escaping (UIMenu) -> UIMenu) {
+        let callers = Thread.callStackSymbols.dropFirst(1).prefix(14).map { line in
+            line.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).joined(separator: " ").prefix(110)
+        }
+        TouchLog.mark("menu updated, from: " + callers.joined(separator: " | "))
+        agentterm_updateVisibleMenu(block)
     }
 }
 
