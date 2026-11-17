@@ -661,7 +661,9 @@ touch, and a gesture's of high priority, opened the session instead.
 
 **From the agent itself.** When the host starts an agent's session it gives
 the agent hooks for that session only (`AgentHooks`), in the way each agent
-takes them, without a change to the user's configuration:
+takes them, without a change to the user's configuration. How each agent is
+started, what it asks about itself and what was found by running it, with
+its version, is in `docs/AGENT-CLIS.md`.
 
 | Agent | Given by | Events |
 |---|---|---|
