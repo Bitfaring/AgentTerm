@@ -306,6 +306,15 @@ static void CEF_CALLBACK on_before_command_line_processing(cef_app_t *self, cons
     // The browser's own process: the one with no type.
     if (!process_type || process_type->length == 0) {
         if (g_mock_keychain) atc_append_switch(command_line, "use-mock-keychain");
+        // No page process kept in reserve for the next page: with every
+        // tab closed, none is left running (26 MB measured, #117). The
+        // next page waits for its own to start.
+        cef_string_t name, value;
+        atc_set(&name, "disable-features");
+        atc_set(&value, "SpareRendererForSitePerProcess");
+        command_line->append_switch_with_value(command_line, &name, &value);
+        atc_clear(&name);
+        atc_clear(&value);
     }
     ATC_RELEASE(command_line);
 }

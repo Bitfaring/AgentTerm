@@ -1603,6 +1603,18 @@ does nothing on an iPhone, nor on an iPad narrowed to the compact width.
   While the keyboard is up, a button at the end of the key bar puts it
   away (`KeyboardWatcher`); the other screens with something to write in
   have that button in a bar above the keyboard.
+- An open menu is not made anew under a finger (`FingerWatch`, #83). Once
+  a menu is shown, SwiftUI asks UIKit to update it at its next drawing of
+  the view the menu belongs to, and the list is drawn every few seconds,
+  for the Mac's figures if nothing else; drawn while a finger was on an
+  entry, the entry was replaced under it and not chosen. While a finger is
+  down, SwiftUI's update is still worked out at once, as it requires, but
+  the menu shown stays as it is until the finger is lifted. Fingers are
+  read from every touch UIApplication sends on (its `sendEvent(_:)` and
+  `UIContextMenuInteraction.updateVisibleMenu(_:)` are exchanged once, at
+  launch): a gesture recognizer is told a touch is cancelled when a menu
+  takes it over, the finger still down, and the SwiftUI app takes no
+  `UIApplication` of its own.
 - With the phone on its side (`verticalSizeClass == .compact`) the
   terminal screen has no navigation bar: back, the keys, the compose field
   and the session's menu share one row under the terminal. Stacked as they

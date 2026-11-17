@@ -71,3 +71,11 @@ choose_simulator() {
     SIM_UDID="${line%%|*}"
     SIM_NAME="$(printf '%s' "$line" | cut -d'|' -f2)"
 }
+
+# Shows the software keyboard in a simulator, as on a device with no
+# keyboard attached. Once a Mac's keyboard has been typed on in an iPad's
+# simulator, iPadOS remembers it and shrinks its own keyboard to a small
+# bar: a test's steps with the keyboard up then have none to look at.
+software_keyboard() {
+    xcrun simctl spawn "$1" defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool false
+}

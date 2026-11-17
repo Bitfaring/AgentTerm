@@ -227,6 +227,10 @@ final class BrowserTab: ObservableObject, Identifiable {
 
     /// Makes its page in Chromium, if it has none yet.
     func start(_ done: ((Bool) -> Void)? = nil) {
+        // Closed, it has no page again: the pane that showed it is drawn
+        // once more with it before it goes, and asked for one, which
+        // nothing closed afterwards; its process ran on (BROWSER-34).
+        if isClosed { done?(false); return }
         if browserID != 0 { done?(true); return }
         if let done { whenCreated.append(done) }
         guard !starting else { return }
@@ -244,7 +248,13 @@ final class BrowserTab: ObservableObject, Identifiable {
         Chromium.shared.create(
             in: container, url: url.isEmpty ? "about:blank" : url, key: profile, folder: isPrivate ? nil : BrowserProfiles.folder(for: profile)
         ) { [weak self] browser in
-            guard let self else { return }
+            // Closed while its page was being made: the page goes at once.
+            guard let self, !self.isClosed else {
+                if browser != 0 { atc_close(browser) }
+                self?.starting = false
+                self?.flush(false)
+                return
+            }
             self.starting = false
             guard browser != 0 else {
                 self.problem = "Chromium could not open the page."
@@ -269,7 +279,11 @@ final class BrowserTab: ObservableObject, Identifiable {
         await withCheckedContinuation { continuation in start { continuation.resume(returning: $0) } }
     }
 
+    /// Its tab was closed: it never has a page again.
+    private(set) var isClosed = false
+
     func shutDown() {
+        isClosed = true
         guard browserID != 0 else { return }
         Chromium.shared.forget(browserID)
         atc_close(browserID)

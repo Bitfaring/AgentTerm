@@ -253,6 +253,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SIZE-6 | A session open on the iPhone | Turn the phone on its side, bring up the keyboard | The terminal keeps a usable height; one row holds back, the keys, the message field and the menu | L |
 | SIZE-7 | The Mac's launch screen, its line of figures shown | Start a shell | It starts at the size its pane shows it at, not one it is made smaller to afterwards | M |
 | SIZE-8 | A session the Mac and the iPhone show, the iPhone using it | The iPhone goes; the Mac's window is resized; the Mac app is used; the Mac types in it | The session stays at the iPhone's size and nobody drives until the Mac types, then it takes the Mac's; an iPhone coming back takes its own at once, without a button | H |
+| SIZE-9 | A session started on the Mac, in a pane smaller than an iPad's grid | A second device takes control at 300 × 100 | The Mac shows the whole grid, scaled down to fit its pane, as the iPhone shows the Mac's: the last rows, where the prompt is, are not cut off; taken back, it fills the pane again | M |
 
 ### Quick launch and SSH
 
@@ -549,6 +550,7 @@ A second host stands in for the other Mac, with a project of its own.
 | IPAD-2 | The sessions' list on the iPad's screen; then the app narrowed by Split View | Look at it | The list, History, Schedules and Settings keep a column of 760 points in the middle, their background and scroll bar at the edges; narrowed, they fill it as on the iPhone. A terminal and a folder's Git, History and Files take the whole width. Narrowed by the window's handle from 1,032 points to 375, the list went from 728 to 343 (2026-11-15) | P on the iPad (the list's width); `NARROW=only scripts/test-ios.sh "iPad Pro 13-inch (M5)"` narrows the window by its handle, and makes it whole again |
 | IPAD-3 | The app on an iPad | Read Settings, the pairing screen and the messages that name the device | "this iPad", not "this iPhone" | P on the iPad (Settings) |
 | IOS-9 | A stand-in Antigravity's session in the list, its state not known | Touch the mark on its row | A popover with the note in the Mac's words; the session does not open. Before the fix the words were only the mark's accessibility label (#87) | P |
+| IOS-10 (#83) | An entry of an open menu, the Mac's figures arriving every 3 seconds | Keep the finger on the entry 4 seconds, then lift it (`MENU=only MENU_HOLD=4` counts it again and again) | The entry is chosen and the menu goes. Before the fix the menu was made anew under the finger whenever the list was drawn meanwhile, and the entry was not chosen, the menu staying open | P |
 | IOS-8 | A program that asked for bracketed paste, and one that did not; an agent asking a question | Send a message of more than 64 characters, one of several lines, one of a few characters | The long and the multi-line one go inside bracketed paste, then Return 80 ms later, to the program that asked; everything else typed as it is, lines ended with Return. Before the fix Codex 0.169 kept a single line of 437 characters in its input, the Return a new line in it | H (`SentTextTests`); with the real agents, the same bytes through a throwaway host, on 2026-11-15: 4,000 characters submitted in Claude Code 2.1.325, Codex 0.169.0, Copilot CLI 1.0.112 and Antigravity 1.5.8 |
 
 ### Waiting
@@ -752,6 +754,8 @@ and the test talks to the real `agenttermd mcp` with it.
 | BROWSER-14 | A tab, picking on | Pick an element; send it with a note | The picture in the project's `.agentterm/shots/`, the address, selector, HTML and styles typed into the agent's session with the note | hand |
 | BROWSER-16 | Two tabs of the user's, a red page and a blue page | Pick one, the other, the first again, the other again | Each time the page on top in the pane is the tab's own (#92) | M |
 | BROWSER-15 | An agent's page with a form | The agent reads it, types, clicks and takes a picture while it is shown; with the browser hidden; with the window minimized; shown again | Each works within seconds, and each picture shows what was just typed | M |
+| BROWSER-34 | Three pages of the user's of three sites and one with nothing loaded, in the Browser tab | Close Tab on the empty one and on the first; Close Browser for the rest | Their processes end within 20 seconds, one spare at most kept by Chromium: a closed page is not made again by the pane that showed it | M |
+| BROWSER-35 (#117) | A page of the user's shown | Close it, the last one; open one again; close it | No page process is left 20 seconds after, none kept in reserve by Chromium; the page opened again loads | M |
 
 ### Vietnamese input
 

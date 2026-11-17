@@ -1168,6 +1168,9 @@ final class PhoneModel: ObservableObject {
     }
 
     private func handle(_ message: ServerMessage) {
+        #if DEBUG
+        TouchLog.received(message)
+        #endif
         switch message {
         case .welcome(let version, _):
             hostMatch = ProtocolMatch(host: version)

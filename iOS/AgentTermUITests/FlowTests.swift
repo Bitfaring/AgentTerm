@@ -33,20 +33,29 @@ final class FlowTests: XCTestCase {
     /// two while the menu is open (#65, `IdleWaits`). The entry is waited
     /// for by itself; what picking it is for is the caller's to check.
     /// - Parameter open: Looked at while the menu is open, before the pick.
-    private func pick(_ entry: String, fromMenuOf element: XCUIElement, in app: XCUIApplication, open: () -> Void = {}, file: StaticString = #filePath, line: UInt = #line) {
+    /// - Parameter hold: How long the finger stays on the entry; a tap without it.
+    private func pick(
+        _ entry: String, fromMenuOf element: XCUIElement, in app: XCUIApplication, hold: TimeInterval? = nil, open: () -> Void = {}, file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
         IdleWaits.skipped {
             element.press(forDuration: 1.2)
             let item = app.buttons[entry].firstMatch
             XCTAssertTrue(item.waitForExistence(timeout: 10), "the menu has no “\(entry)”", file: file, line: line)
             open()
-            item.tap()
+            if let hold { item.press(forDuration: hold) } else { item.tap() }
         }
     }
 
-    private func gesture(until done: () -> Bool, _ make: () -> Void) {
-        for _ in 0..<3 {
+    private func gesture(until done: () -> Bool, _ make: () -> Void, line: UInt = #line) {
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm:ss.SSS"
+        for attempt in 1...3 {
+            let made = clock.string(from: Date())
             make()
             if done() { return }
+            // #83: when, to set beside the app's own log of touches.
+            print("MEASURE gesture at line \(line) lost, attempt \(attempt), made at \(made), given up at \(clock.string(from: Date()))")
         }
     }
 
@@ -103,7 +112,9 @@ final class FlowTests: XCTestCase {
             guard expected.count >= 2 else { return XCTFail("two listed folders are needed: \(expected)") }
             expected.swapAt(0, 1)
             let started = Date()
-            pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app)
+            // MENU_HOLD: the finger kept on the entry that long, for the
+            // Mac's figures, which come every 3 seconds, to arrive meanwhile.
+            pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app, hold: TimeInterval(ProcessInfo.processInfo.environment["AGENTTERM_MENU_HOLD"] ?? ""))
             let moved = IdleWaits.skipped { () -> Bool in
                 let deadline = Date().addingTimeInterval(8)
                 while Date() < deadline {
@@ -120,6 +131,57 @@ final class FlowTests: XCTestCase {
                 sleep(2)
             }
             print(String(format: "MEASURE menu, round %d: %@ (%.1f s)", round, moved ? "moved" : "LOST", Date().timeIntervalSince(started)))
+        }
+        print("MEASURE menu, lost \(lost) of \(rounds)")
+    }
+
+    /// #83, #99: how often a touch on an entry of the terminal's menu is
+    /// lost, with the keyboard up or down (`AGENTTERM_MENU_KEYBOARD=down`).
+    /// Printed as `MEASURE`, with the time of each touch to set beside the
+    /// app's own log of touches; nothing fails on it.
+    private func countTerminalMenuTouches(_ app: XCUIApplication, compose: XCUIElement) {
+        let rounds = Int(environment["AGENTTERM_MENU_ROUNDS"] ?? "") ?? 20
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm:ss.SSS"
+        if environment["AGENTTERM_MENU_KEYBOARD"] == "down" {
+            if app.buttons["hide-keyboard"].firstMatch.exists { app.buttons["hide-keyboard"].firstMatch.tap() }
+        } else if !app.keyboards.firstMatch.exists {
+            compose.tap()
+        }
+        sleep(1)
+        print("MEASURE menu, keyboard up: \(app.keyboards.firstMatch.exists)")
+        var lost = 0
+        for round in 1...rounds {
+            let name = round % 2 == 1 ? "Larger Text" : "Smaller Text"
+            // What the whole test does right before it opens this menu.
+            if environment["AGENTTERM_MENU_KEYBOARD"] == "busy" {
+                compose.typeText("stty size")
+                app.buttons["Send"].tap()
+                sleep(2)
+                app.buttons["key-Up"].tap()
+                app.buttons["Send"].tap()
+                sleep(1)
+            }
+            app.buttons["session-menu"].tap()
+            let entry = app.buttons[name]
+            guard entry.waitForExistence(timeout: 10) else {
+                print("MEASURE menu, round \(round): the menu did not open")
+                continue
+            }
+            let place = entry.frame
+            let touched = clock.string(from: Date())
+            entry.tap()
+            let taken = entry.waitForNonExistence(timeout: 5)
+            if !taken {
+                lost += 1
+                capture("terminal-menu-lost-\(round)")
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
+                sleep(2)
+            }
+            print(
+                String(
+                    format: "MEASURE menu, round %d: %@ at %@, entry at (%.0f, %.0f) %@", round, taken ? "taken" : "LOST", touched, place.midX, place.midY,
+                    clock.string(from: Date())))
         }
         print("MEASURE menu, lost \(lost) of \(rounds)")
     }
@@ -261,6 +323,8 @@ final class FlowTests: XCTestCase {
         let link = try XCTUnwrap(environment["AGENTTERM_PAIR_URL"], "run this test through scripts/test-ios.sh")
         let launchButton = environment["AGENTTERM_LAUNCH"] ?? "Start Shell"
         let app = XCUIApplication()
+        // #83: the app writes down the touches it receives.
+        if let log = environment["AGENTTERM_TOUCH_LOG"] { app.launchEnvironment["AGENTTERM_TOUCH_LOG"] = log }
         app.launch()
 
         // Pair by opening the link, as tapping an agentterm:// link would: the
@@ -336,6 +400,10 @@ final class FlowTests: XCTestCase {
         }
         if environment["AGENTTERM_ONLY_MENU"] != nil {
             measureMenuTouches(app, launchButton: launchButton)
+            return
+        }
+        if environment["AGENTTERM_ONLY_TERMINAL_MENU"] != nil {
+            countTerminalMenuTouches(app, compose: compose)
             return
         }
         if environment["AGENTTERM_ONLY_NOTE"] != nil {
@@ -919,8 +987,11 @@ final class FlowTests: XCTestCase {
             countMenuTouches(app)
             return
         }
-        pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app) { capture("15-folder-menu") }
-        XCTAssertTrue(orderBecomes(["home", "project", "demo"]), "Move Down did not move the folder: \(order())")
+        // IOS-10 (#83): the finger kept on the entry 4 seconds, for the
+        // Mac's figures, which come every 3, to be drawn meanwhile. The menu
+        // was made anew under it, and the entry not chosen.
+        pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app, hold: 4) { capture("15-folder-menu") }
+        XCTAssertTrue(orderBecomes(["home", "project", "demo"]), "Move Down, held, did not move the folder: \(order())")
         // Back to the top of the list, so both names are on screen and
         // clear of the bars: one is dragged onto the other.
         app.swipeDown()

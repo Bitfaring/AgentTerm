@@ -75,6 +75,12 @@ final class TerminalContainerView: NSView {
     override func accessibilityLabel() -> String? { "Terminal" }
     override func accessibilityIdentifier() -> String { "terminal-view" }
     override func accessibilityValue() -> Any? { controller.map { $0.view.superview === self } == true ? "shown" : "empty" }
+    /// How much of the terminal is in sight, for the tests (SIZE-9): read
+    /// from where its layer is drawn, not from where it was meant to be.
+    override func accessibilityHelp() -> String? {
+        guard let terminal = controller?.view, terminal.superview === self, let drawn = terminal.layer?.frame else { return nil }
+        return bounds.insetBy(dx: -1, dy: -1).contains(drawn) ? "whole grid in sight" : "grid cut off"
+    }
 
     func show(_ controller: TerminalController, foreignSize: TermSize?, focused: Bool = true) {
         if shownController !== controller || Self.owners.object(forKey: controller) == nil {
@@ -142,6 +148,7 @@ final class TerminalContainerView: NSView {
         defer { CATransaction.commit() }
 
         guard foreignSize != nil else {
+            terminal.layer?.setAffineTransform(.identity)
             terminal.frame = bounds
             dim.isHidden = true
             frameLine.isHidden = true
@@ -152,11 +159,22 @@ final class TerminalContainerView: NSView {
         // middle. What would fit this pane is worked out by the controller.
         controller.containerResized(to: bounds.size)
         let grid = controller.gridPixelSize
-        let x = max(0, ((bounds.width - grid.width) / 2).rounded(.down))
-        let y = max(0, ((bounds.height - grid.height) / 2).rounded(.down))
-        // A little slack so rounding never costs the last column or row.
-        let gridRect = NSRect(x: x, y: bounds.height - y - grid.height, width: grid.width + 0.5, height: grid.height + 0.5)
-        terminal.frame = gridRect
+        // A grid larger than this pane, an iPad's in a short part of the
+        // window, is scaled down to fit, as the iPhone shows the Mac's:
+        // placed at its own size, its last rows, where the prompt is, were
+        // cut off under the pane (SIZE-9).
+        let scale = grid.width > 0 && grid.height > 0 ? min(1, bounds.width / grid.width, bounds.height / grid.height) : 1
+        let shown = CGSize(width: grid.width * scale, height: grid.height * scale)
+        let x = max(0, ((bounds.width - shown.width) / 2).rounded(.down))
+        let y = max(0, ((bounds.height - shown.height) / 2).rounded(.down))
+        // Where it is seen. A little slack so rounding never costs the last column or row.
+        let gridRect = NSRect(x: x, y: bounds.height - y - shown.height, width: shown.width + 0.5, height: shown.height + 0.5)
+        // The view keeps the grid's own size, which the emulator works its
+        // rows and columns out from, and its layer is scaled about its
+        // corner, where the frame's origin is.
+        terminal.layer?.setAffineTransform(.identity)
+        terminal.frame = NSRect(origin: gridRect.origin, size: CGSize(width: grid.width + 0.5, height: grid.height + 0.5))
+        if scale < 1 { terminal.layer?.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale)) }
 
         let card = gridRect.insetBy(dx: -10, dy: -10).intersection(bounds.insetBy(dx: 1, dy: 1))
         let outline = CGPath(roundedRect: card, cornerWidth: 10, cornerHeight: 10, transform: nil)
