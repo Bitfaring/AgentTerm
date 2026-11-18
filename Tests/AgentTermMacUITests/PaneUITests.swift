@@ -164,8 +164,10 @@ final class PaneUITests: MacUITestCase {
         XCTAssertTrue(app.exists(.id("item-\(shell.id)")), "a hidden shell left the agent's row")
         XCTAssertTrue(app.exists(.id("terminal-\(agent.id)")))
         XCTAssertTrue(phone.sessions.contains { $0.id == shell.id }, "hiding the shells ended one")
+        shot("agent-shell-hidden")
         app.press(.id("agent-part-shells"))
         app.wait(for: .id("agent-shells"))
+        shot("agent-shell-shown-again")
         // Hidden again, the shell picked in the row is shown.
         app.press(.id("agent-part-shells"))
         app.waitGone(.id("agent-shells"))

@@ -1872,6 +1872,12 @@ final class AppModel: ObservableObject {
         controller.onInput = { [weak self] data in self?.connection?.sendInput(data, to: id) }
         controller.onResize = { [weak self] size in self?.connection?.send(.resize(session: id, size: size)) }
         controller.onClaim = { [weak self] size in self?.connection?.send(.takeControl(session: id, size: size)) }
+        // Files dropped or pasted on it, a picture's ⌘V sent as Control V
+        // (#160); this Mac's sessions only.
+        if let view = controller.view as? FileTakingTerminalView {
+            view.takesFiles = !isRemote
+            view.refused = { [weak self] why in self?.notice = why }
+        }
         return controller
     }
 

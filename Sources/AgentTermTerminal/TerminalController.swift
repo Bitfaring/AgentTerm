@@ -33,7 +33,12 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
 
     public init(session: SessionID, fontSize: CGFloat = 13) {
         self.session = session
+        #if os(macOS)
+        // Takes files dropped or pasted on it (#160).
+        view = FileTakingTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
+        #else
         view = TerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
+        #endif
         super.init()
         view.font = TerminalStyle.font(size: fontSize)
         view.nativeBackgroundColor = TerminalStyle.background

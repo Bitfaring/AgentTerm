@@ -66,6 +66,13 @@ says names the device it runs on.
   brings only what was written since. A session started on the iPhone
   comes whole. The Mac gets all of it.
 - The iPhone's terminal is drawn on the GPU.
+- **Files into a terminal** (Mac, #160): a file dropped on a terminal, or
+  copied in the Finder and pasted, has its path typed into the session,
+  quoted for the shell as Terminal.app does, as a paste, not submitted. A
+  picture on the clipboard with no text, a screenshot say, is sent as
+  Control V when ⌘V is pressed: an agent such as Claude Code then takes the
+  clipboard's picture itself; nothing is saved. A session of another Mac
+  takes neither, and says why: its agent would look on that Mac.
 
 ### Session names
 
