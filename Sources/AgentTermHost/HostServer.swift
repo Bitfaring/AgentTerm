@@ -78,6 +78,11 @@ public final class HostServer {
         /// How long an agent's hooks and MCP server have to be heard from
         /// before its session says they are missing (#129). Tests shorten it.
         public var linkGrace: TimeInterval = 20
+        /// How long a call of one of AgentTerm's own tools, which its agent
+        /// said it is about to make, has to reach the agent's MCP server
+        /// before the agent is taken to wait for leave to make it (#141).
+        /// Tests shorten it.
+        public var leaveGrace: TimeInterval = 2
         /// How often the program in front of each shell is looked at, for an
         /// agent typed by hand (#129). Tests shorten it.
         public var foregroundInterval: TimeInterval = 2
@@ -220,6 +225,12 @@ public final class HostServer {
         /// in it was found (#129). Its hooks and MCP server have until a
         /// grace after it to be heard from.
         var agentSince: Date?
+        /// A call of one of AgentTerm's own tools that its agent said it is
+        /// about to make, and when: until the call comes to its server, or
+        /// the agent says anything else (#141).
+        var announcedCall: (tool: String, at: Date)?
+        /// When its agent's MCP server last asked for what a tool does.
+        var lastToolCall: Date?
         /// The turn its agent is in, from its start (#71).
         var turn: TurnRecord?
         /// What its agent's last turn came to.
@@ -2567,8 +2578,19 @@ public final class HostServer {
             // Its hooks are heard (#129); in a shell, the agent typed in it.
             if heard(.hooks, from: session, agent: agent) { changed = true }
             let at = (record["at"] as? Double).map(Date.init(timeIntervalSince1970:)) ?? Date()
+            // Whatever it says ends the wait for a call it announced.
+            session.announcedCall = nil
             guard case .set(var state) = AgentHooks.change(agent: agent, event: event, input: record["input"] as? [String: Any] ?? [:], now: at)
             else { continue }
+            // About to call one of AgentTerm's own tools (#141): the call
+            // comes to its server, or the agent is held at it.
+            if let tool = AgentHooks.ownToolCall(agent: agent, event: event, input: record["input"] as? [String: Any] ?? [:], server: AppChannel.current.mcpServerName) {
+                if let called = session.lastToolCall, called >= at {
+                    state = .working(since: at)
+                } else {
+                    announce(tool, at: at, in: session)
+                }
+            }
             // Still working is working since it began.
             if case .working = state, case .working(let since)? = session.info.state { state = .working(since: since) }
             let note = AgentHooks.note(agent: session.info.agent, beforeAnyEvent: false)
@@ -2595,6 +2617,35 @@ public final class HostServer {
             if anotherAgentWorks(besides: session) { session.turn?.shared = true }
         }
         if changed { broadcastSessions() }
+    }
+
+    // MARK: An agent held at one of AgentTerm's own tools (#141)
+
+    /// An agent said it is about to call one of AgentTerm's own tools.
+    /// Antigravity asks leave for a tool of an MCP server and says nothing
+    /// while it waits, but a call that is made reaches the session's
+    /// server: one that has not come after a grace is held, and the agent
+    /// waits for leave, with the tool as its own question names it.
+    private func announce(_ tool: String, at: Date, in session: Session) {
+        session.announcedCall = (tool, at)
+        queue.asyncAfter(deadline: .now() + configuration.leaveGrace) { [weak self, weak session] in
+            guard let self, let session, let held = session.announcedCall, held.at == at, self.sessions[session.info.id] === session else { return }
+            session.info.state = .waitingForPermission(AgentQuestion(text: held.tool))
+            session.info.unseen = nil
+            self.broadcastSessions()
+        }
+    }
+
+    /// The session's MCP server asked for what a tool does: the call its
+    /// agent announced came, so it was not held, or no longer is.
+    private func toolCalled(by session: Session) {
+        session.lastToolCall = Date()
+        guard session.announcedCall != nil else { return }
+        session.announcedCall = nil
+        if session.info.state?.isWorking != true {
+            session.info.state = .working(since: Date())
+            broadcastSessions()
+        }
     }
 
     // MARK: What a turn came to (#71)
@@ -2827,8 +2878,10 @@ public final class HostServer {
         if session.arbiter.activity(client.id) { applySize(of: session) }
         used(by: client)
         session.process.write(frame.payload)
-        // It may have stopped the turn, and not every agent says so.
-        if session.info.state?.isWorking == true, AgentHooks.mayStopATurn(frame.payload) {
+        // It may have stopped the turn, and not every agent says so: nor
+        // does Antigravity when its question for leave is cancelled (#141).
+        if session.info.state?.isWorking == true || session.announcedCall != nil, AgentHooks.mayStopATurn(frame.payload) {
+            session.announcedCall = nil
             session.info.state = nil
             session.info.unseen = nil
             endTurn(of: session, at: Date(), end: .stopped, input: [:])
@@ -3026,6 +3079,8 @@ public final class HostServer {
         guard !key.isEmpty, let owner = sessions.values.first(where: { $0.agentKey == key }) else {
             return answer(.refused("This is not the session of an agent AgentTerm started, or that session has ended."))
         }
+        // A tool's call came to the server (#141); its start is no call.
+        if case .started = request {} else { toolCalled(by: owner) }
         /// A shell this agent opened and that still runs.
         func own(_ session: SessionID) -> (Session?, String) {
             guard let shell = sessions[session], shell.info.openedBy == owner.info.id else {
@@ -3403,6 +3458,8 @@ public final class HostServer {
             // The user's, from a device.
             return answerBrowser(waiting, .refused("That is for the user, not for an agent."))
         default:
+            // A tool's call came to the server (#141).
+            toolCalled(by: owner)
             callBrowser(request, agent: owner.info.id, for: waiting)
         }
     }

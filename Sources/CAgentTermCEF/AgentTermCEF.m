@@ -234,20 +234,36 @@ static void atc_emit_text(atc_event_kind kind, cef_browser_t *browser, NSString 
 // MARK: The message pump
 
 static CFRunLoopTimerRef g_timer;
+/// How deep CEF's work is being done: 1 while it is, 2 while it is done
+/// again from inside a right-click menu.
 static int g_working;
+/// A right-click menu is open: CEF shows it from inside its own work, and
+/// does not come back until it is closed (#139).
+static int g_menu_open;
 /// At most this long between two turns of CEF's work, as cefclient does.
 static const double kMaxDelay = 1.0 / 30.0;
 
 static void atc_schedule(double seconds);
 
+/// One turn of CEF's work. It is not done again from inside itself, as CEF
+/// asks, with one exception: while a right-click menu is open. CEF runs
+/// that menu from inside its work, so the turn that opened it lasts until
+/// the menu closes, and with every other turn put off, nothing of Chromium
+/// went on meanwhile: a page was not read again, its title stood still, an
+/// agent's call was not answered. One level more is let in then. Tried with
+/// CEF 156 (2026-11-18): a page's title goes on changing under an open
+/// menu, and the menu is chosen from and closed as before (BROWSER-41).
 static void atc_work(void) {
-    if (!g_started || g_working) {
-        if (g_started) atc_schedule(0);
+    if (!g_started) return;
+    if (g_working >= (g_menu_open ? 2 : 1)) {
+        // Put off, a little: straight away would turn the run loop without
+        // rest for as long as the work it waits for lasts.
+        atc_schedule(g_menu_open ? kMaxDelay : 0);
         return;
     }
-    g_working = 1;
+    g_working++;
     p_cef_do_message_loop_work();
-    g_working = 0;
+    g_working--;
     if (!g_timer || !CFRunLoopTimerIsValid(g_timer)) atc_schedule(kMaxDelay);
 }
 
@@ -661,10 +677,20 @@ static void CEF_CALLBACK on_before_context_menu(cef_context_menu_handler_t *self
         model->add_separator(model);
     }
     atc_menu_add(model, ATC_MENU_INSPECT, "Inspect", 1);
+    // Shown next, from inside this turn of CEF's work (#139).
+    g_menu_open = 1;
     ATC_RELEASE(browser);
     ATC_RELEASE(frame);
     ATC_RELEASE(params);
     ATC_RELEASE(model);
+}
+
+/// The menu is closed, a command chosen or none.
+static void CEF_CALLBACK on_context_menu_dismissed(cef_context_menu_handler_t *self, cef_browser_t *browser, cef_frame_t *frame) {
+    (void)self;
+    g_menu_open = 0;
+    ATC_RELEASE(browser);
+    ATC_RELEASE(frame);
 }
 
 /// The app's own items are told to it; CEF's own it does itself.
@@ -763,6 +789,7 @@ static void atc_make_handlers(void) {
     g_menu = atc_menu_handler_new();
     g_menu->value.on_before_context_menu = on_before_context_menu;
     g_menu->value.on_context_menu_command = on_context_menu_command;
+    g_menu->value.on_context_menu_dismissed = on_context_menu_dismissed;
     g_observer = atc_observer_new();
     g_observer->value.on_dev_tools_message = on_dev_tools_message;
     g_observer->value.on_dev_tools_method_result = on_dev_tools_method_result;

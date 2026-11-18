@@ -753,8 +753,20 @@ What cannot be known:
   and to choose "Trust all and continue" when Codex asks
   (`AgentHooks.note`, AGENT-8).
 - **Antigravity** says nothing when it waits for permission: its question
-  comes after `PreToolUse`, with nothing in between. So while a tool runs,
-  its state is not known, and `stateNote` says so.
+  comes after `PreToolUse`, with nothing in between, and nothing comes
+  while it is shown nor when it is cancelled (Antigravity 1.5.10, tried
+  2026-11-18). So while a tool runs, its state is not known, and
+  `stateNote` says so; except for a tool of AgentTerm's own (#141). Its
+  `PreToolUse` names it (`toolCall.name` `call_mcp_tool`, `args.ServerName`
+  the build's server, `args.ToolName`; `AgentHooks.ownToolCall`), and the
+  call then comes to the host's own server: the host keeps the call it was
+  told of (`Session.announcedCall`), and when no call of the session's
+  comes to its server within `leaveGrace` (2 s), the session waits for
+  permission, its question the tool's name (`<server>/<tool>`). The call
+  that comes (`toolCalled(by:)`, any shell or browser request but a
+  shell's start) makes it work again; input that may stop a turn makes
+  its state not known. A call that came before the hook was read
+  (`lastToolCall`) is not waited for.
 - **The choices of a permission** are in no agent's hooks; those of a
   question are, for all but Codex, which has no question event.
 - **A turn the user stops** is told by Codex (`Interrupt`) and not by the
@@ -1291,7 +1303,13 @@ carries a reference the callback releases, and a struct of ours given to
 CEF carries one CEF releases. CEF runs on the main thread with an
 external message pump: `on_schedule_message_pump_work` sets a run loop
 timer in the common modes, at most a thirtieth of a second away, as
-cefclient does. Chromium wants its application to say whether it is
+cefclient does. A turn of CEF's work is not done from inside another,
+except under a right-click menu (#139): CEF runs the menu from inside the
+turn that opened it, which then lasts until the menu closes, and with
+every other turn put off nothing of Chromium went on (a page asked to
+reload was not read, its title stood still). Between
+`on_before_context_menu` and `on_context_menu_dismissed` one level more
+is let in. Chromium wants its application to say whether it is
 sending an event: `isHandlingSendEvent`, `setHandlingSendEvent:` and a
 wrapped `sendEvent:` are added to `NSApplication` itself. Changing the
 running application's class instead, as first done, crashed the app the

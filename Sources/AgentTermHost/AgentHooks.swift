@@ -196,6 +196,24 @@ public enum AgentHooks {
         }
     }
 
+    /// The tool of AgentTerm's own MCP server that Antigravity says it is
+    /// about to call, as Antigravity names it in its question
+    /// (`<server>/<tool>`); nil for any other event or tool.
+    ///
+    /// Antigravity 1.5.10 has no hook for the leave it asks ("Allow calling
+    /// this tool?"), and says nothing while it waits (tried 2026-11-18): its
+    /// `PreToolUse` comes, with `toolCall` `call_mcp_tool` and the server's
+    /// and the tool's names in `args`, then nothing until it is answered.
+    /// But a call of AgentTerm's own tool, once made, reaches AgentTerm's
+    /// server: one that was announced and does not come is held, which
+    /// Antigravity does for nothing but that question (#141).
+    public static func ownToolCall(agent: String, event: String, input: [String: Any], server: String) -> String? {
+        guard agent == "agy", event == "PreToolUse", let call = input["toolCall"] as? [String: Any], call["name"] as? String == "call_mcp_tool",
+            let args = call["args"] as? [String: Any], args["ServerName"] as? String == server, let tool = args["ToolName"] as? String, !tool.isEmpty
+        else { return nil }
+        return server + "/" + tool
+    }
+
     /// What a tool wants to do, in a line: the command it runs, the file it
     /// changes, else its name.
     static func describe(tool: String?, input: [String: Any]) -> String {
@@ -220,7 +238,7 @@ public enum AgentHooks {
     public static func note(agent: String?, beforeAnyEvent: Bool) -> String? {
         switch agent {
         case "agy":
-            return "Antigravity does not say when it waits for permission: while it runs a tool, its state is not shown."
+            return "Antigravity does not say when it waits for permission. For AgentTerm's own tools it is known; while it runs any other tool, its state is not shown."
         case "codex" where beforeAnyEvent:
             return "Codex shows its state once AgentTerm's hooks run. If it asks to review hooks, choose “Trust all and continue”; without them its state is not known."
         default:

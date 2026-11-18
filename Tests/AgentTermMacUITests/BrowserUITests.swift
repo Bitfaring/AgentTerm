@@ -1486,6 +1486,43 @@ final class BrowserUITests: MacUITestCase {
         app.wait("Two shown") { self.app.value(of: .id("browser-page")) == "Two" }
     }
 
+    /// BROWSER-41 (#139): Chromium's work goes on while a right-click menu
+    /// is open in a page. A page that changes its own title several times a
+    /// second goes on being shown with the title it has, the menu open and
+    /// left open: what the page tells the app (its title, that it was read
+    /// again, an agent's answer) does not wait for the menu to close.
+    ///
+    /// The Mac is left alone while this runs: a menu that is open closes
+    /// when another app comes to the front.
+    func testChromiumsWorkGoesOnWhileARightClickMenuIsOpen() throws {
+        let page = root.appendingPathComponent("ticks.html")
+        try #"<!doctype html><title>Tick 0</title><body><p>The page that ticks</p><script>let n = 0; setInterval(() => { document.title = "Tick " + (++n) }, 200)</script></body>"#
+            .write(to: page, atomically: true, encoding: .utf8)
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait(for: .id("browser-address"), timeout: 20)
+        app.write(page.absoluteString, into: .id("browser-address"), confirm: true)
+        func tick() -> Int { Int((app.value(of: .id("browser-page")) ?? "").replacingOccurrences(of: "Tick ", with: "")) ?? -1 }
+        app.wait("the page ticking") { tick() > 2 }
+
+        func item(_ title: String) -> Node? {
+            app.nodes(menus: true).first { $0.role == kAXMenuItemRole && ($0.title == title || $0.label == title) }
+        }
+        app.perform("AXShowMenu", on: .containing("The page that ticks"), timeout: 20)
+        wait("the page's menu") { item("Reload") != nil }
+        // Open, and left open: the title goes on.
+        let opened = tick()
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        XCTAssertNotNil(item("Reload"), "the menu closed by itself: is another app in front? \(app.screen().prefix(200))")
+        let later = tick()
+        XCTAssertGreaterThan(later, opened + 3, "the page's title stood still while the menu was open: \(opened), then \(later) two seconds later")
+        shot("menu-open-page-ticking")
+        // Closed without a choice.
+        if let menu = app.nodes(menus: true).first(where: { $0.role == kAXMenuRole }) { AXUIElementPerformAction(menu.element, kAXCancelAction as CFString) }
+        wait("the menu closed") { item("Reload") == nil }
+        let closed = tick()
+        app.wait("the page ticking after") { tick() > closed + 2 }
+    }
+
     /// BROWSER-30: the user's pages are one Browser tab of the strip, as a
     /// window of Chrome holds its tabs: a row of them under the strip, a
     /// button for one more, each shown when picked; a page closed shows the

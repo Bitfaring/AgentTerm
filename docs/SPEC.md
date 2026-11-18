@@ -97,8 +97,12 @@ says names the device it runs on.
   Until its hooks first report, a Codex session says that its state shows
   once they run, and to choose "Trust all and continue" if Codex asks;
   told to go on without them, Codex shows no state.
-- Antigravity does not say when it waits for permission: while it runs a
-  tool, its state is not shown, and its session says why.
+- Antigravity does not say when it waits for permission. For a tool of
+  AgentTerm's own (a shell, the browser) AgentTerm knows all the same: the
+  call Antigravity said it is about to make does not come, and its session
+  waits for permission, named by the tool, as Antigravity's question names
+  it, until the call comes or the turn is stopped (#141). While it runs
+  any other tool, its state is not shown, and its session says why.
 
 ### Worktrees
 
