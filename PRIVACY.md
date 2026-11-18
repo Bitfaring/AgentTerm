@@ -49,13 +49,13 @@ the source yourself sends nothing at all.
   goes only to your paired devices. AgentTerm does not copy these files elsewhere. A handoff writes a
   summary file into the project folder, under `.agentterm/handoffs/`.
 - **The agents' own configuration.** AgentTerm writes into an agent's configuration only when you ask,
-  in Settings > Hooks & MCP or with `agenttermd setup`: its hooks, AgentTerm's MCP server and, for
-  Claude Code, its status line, for your user and every folder, with the agent's own commands; Remove
-  takes them out. For Codex it also turns off the background server Codex's sessions share
-  (`codex features disable daemon_auto_start`), a setting of Codex's that holds outside AgentTerm too,
-  and Remove turns it on again. To show what each has, the Mac asks each agent for its plugins, asks
-  Codex for its features and whether its shared server runs, and reads Claude Code's settings and
-  Codex's `config.toml`, on your Mac only.
+  in Settings > Hooks & MCP or with the commands it shows: AgentTerm's MCP server, with the agent's own
+  command (`claude mcp add …`), its hooks and, for Claude Code, its status line, for your user and
+  every folder; Remove takes them out. For Codex it also turns off the background server Codex's
+  sessions share (`codex features disable daemon_auto_start`), a setting of Codex's that holds outside
+  AgentTerm too, and Remove turns it on again. To show what each has, the Mac asks each agent for its
+  plugins and for AgentTerm's MCP server, asks Codex for its features and whether its shared server
+  runs, and reads Claude Code's settings and Codex's `config.toml`, on your Mac only.
 - **Your terminal sessions' environment.** Every session AgentTerm starts, a shell's too, names a file
   for the hooks to write what the agent is doing in, and holds a key with which an agent's MCP server
   in it reaches the AgentTerm host on your Mac, to open shells and pages you see as that session. Any

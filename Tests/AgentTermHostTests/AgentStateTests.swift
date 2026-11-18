@@ -186,7 +186,8 @@ final class AgentStateTests: XCTestCase {
         XCTAssertNil(setup.serverCommand("vim", program: "vim"))
 
         // As typed.
-        XCTAssertEqual(AgentSetup.typed(["claude", "mcp", "add", "--scope", "user", "agentterm", "--", "/Applications/AgentTerm.app/Contents/MacOS/agenttermd", "mcp"]),
+        XCTAssertEqual(
+            AgentSetup.typed(["claude", "mcp", "add", "--scope", "user", "agentterm", "--", "/Applications/AgentTerm.app/Contents/MacOS/agenttermd", "mcp"]),
             "claude mcp add --scope user agentterm -- /Applications/AgentTerm.app/Contents/MacOS/agenttermd mcp")
         let steps = setup.steps(for: "claude", name: "Claude Code")
         XCTAssertEqual(steps.map(\.command), ["claude mcp add --scope user agentterm-dev -- '/Apps/My App'\\''s/agenttermd' mcp", "'/Apps/My App'\\''s/agenttermd' setup claude"])

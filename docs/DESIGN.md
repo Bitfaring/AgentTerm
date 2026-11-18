@@ -1151,26 +1151,40 @@ it in their top banner until it is over or it is closed there, and a closed
 one comes back only after it went away. A host that is not running cannot
 say so itself: that one is the agent's to tell.
 
-**In the agent's own configuration** (#129). The server is in each agent's
-own configuration, at the user's scope, once `agenttermd setup` added it,
-with the agent's own commands, when the user asked: Install in Settings >
-Hooks & MCP, which the host runs (`runAgentSetup`, from this Mac's own app
-only), or the command in a terminal. `AgentSetup` writes a plugin for each
-agent into the build's state folder (`agent-setup/<agent>`), with this
-build's names (`AppChannel.mcpServerName`) and program, and has the agent
-take it, as tried with the real agents on 2026-11-17, each loading it for
-one session only, a stand-in hook and server writing down that they ran:
+**In the agent's own configuration** (#129). What AgentTerm needs of an
+agent is in the agent's own configuration, at the user's scope, once the
+user asked: Install in Settings > Hooks & MCP, which the host runs
+(`runAgentSetup`, from this Mac's own app only), or the commands the pane
+shows, in a terminal. Each part is added with the agent's own command when
+the agent has one, and that command is what the user is shown; AgentTerm's
+own (`agenttermd setup <agent>`) is for what an agent has no command for
+(decided by the owner on 2026-11-18: the user sees a standard command of
+the agent's, knows what it adds, and takes it out the same way). As tried
+with the real agents on 2026-11-18, each in a configuration folder of the
+trial's own (`docs/AGENT-CLIS.md`):
 
-| Agent | How it takes the server and its hooks |
-|---|---|
-| Claude Code 2.1.326 | `claude plugin marketplace add <folder> --scope user`, `claude plugin install <name>@<name> --scope user`; the plugin has `hooks/hooks.json` and `.mcp.json`. Its server's instructions reach the model |
-| Codex 0.169.1 | `codex plugin marketplace add <folder>`, `codex plugin add <name>@<name>`; it reads Claude Code's layout. Its `.mcp.json` names the session's variable in `env_vars`, as Codex passes no other. Its hooks go in `config.toml` (above), read back with `codex features list` and put back as they were when it cannot. The server its sessions share is turned off, `codex features disable daemon_auto_start` (below) |
-| Copilot CLI 1.0.112 | `copilot plugin marketplace add <folder>`, `copilot plugin install <name>@<name>`; it reads the plugin from the folder at each session. It does not give a server's instructions: what it is told is in a folder of instructions its environment names (`COPILOT_CUSTOM_INSTRUCTIONS_DIRS`), in every session |
-| Antigravity 1.5.9 | `agy plugin install <folder>`, a copy; `hooks.json`, `mcp_config.json` and a rule with what it is told. Not tried in a session: its sign-in is in its home |
+| Agent | The MCP server, its own command | What it has no command for, AgentTerm's (`agenttermd setup <agent>`) |
+|---|---|---|
+| Claude Code 2.1.327 | `claude mcp add --scope user <name> -- <agenttermd> mcp` | its hooks, in a plugin of a marketplace in AgentTerm's folder, which it is had to install (`claude plugin marketplace add <folder> --scope user`, `claude plugin install <name>@<name> --scope user`); its status line. Its server's instructions reach the model |
+| Codex 0.169.1 | `codex mcp add <name> -- <agenttermd> mcp`; and for its shared server `codex features disable daemon_auto_start` (below) | its hooks, in `config.toml` (above), read back with `codex features list` and put back as they were when it cannot; the session's variable, `env_vars` in the table its command wrote, which has no option for it and without which Codex gives a server nothing of its session |
+| Copilot CLI 1.0.113 | `copilot mcp add <name> -- <agenttermd> mcp` | its hooks, in a plugin (`copilot plugin marketplace add <folder>`, `copilot plugin install <name>@<name>`), read from the folder at each session. It does not give a server's instructions: what it is told is in a folder of instructions its environment names (`COPILOT_CUSTOM_INSTRUCTIONS_DIRS`), in every session |
+| Antigravity 1.5.10 | `agy mcp add <name> <agenttermd> mcp` | its hooks and a rule with what it is told, in a plugin (`agy plugin install <folder>`, a copy) |
+
+`AgentSetupState.steps` and `removeSteps` (protocol 28) are those commands
+as typed, each with what it is for, the agent's own first; Install and
+Remove run them in that order (`AgentSetup.install`, `.all`), a server of
+before taken out first, as Claude Code and Copilot CLI refuse a name they
+have. `agenttermd setup <agent>` runs AgentTerm's part only (`.own`), and
+says the agent's command for what is still missing. `AgentSetup` writes
+the plugins into the build's state folder (`agent-setup/<agent>`), with
+this build's names (`AppChannel.mcpServerName`) and program; the server is
+in none of them. A plugin that held Codex's server, of a build before, is
+taken out.
 
 `--remove` takes out this build's only, with the same commands. What each
-has is asked of the agent (`plugin list`, Codex's hooks, Claude Code's
-`statusLine`), off the host's queue; a command that fails is kept as the
+has is asked of the agent (`mcp get` or `mcp list` for the server, which
+has to run this build's program; `plugin list`, Codex's hooks, Claude
+Code's `statusLine`), off the host's queue; a command that fails is kept as the
 agent's `problem`, in its own words.
 
 **Codex's hooks, by their own lines** (#142). Each hook is three lines in
@@ -1186,8 +1200,7 @@ their lines too, and what Codex put between the marks stays.
 
 **Codex's shared server** (#140). What a principle asks of an agent is
 arranged with the agent's own command when it has one, and by AgentTerm's
-own writing only when it has none (decided by the owner on 2026-11-18): the
-user sees a setting of the agent's, made the agent's way. Install turns off
+own writing only when it has none (above). Install turns off
 the feature that has Codex start the app server its sessions share (`codex
 features disable daemon_auto_start`), keeps that it did
 (`agent-setup/codex/shared-server-was-on`), and Remove turns it on again
@@ -1200,9 +1213,11 @@ use it waiting, so it is not stopped: `AgentSetupState.sharedServerOff`
 (protocol 27) is false while Codex starts one by itself or one runs (`codex
 app-server daemon version`), the agent then counts as not set up, and its
 `problem` says what to do (`AgentSetupWords.sharedServerRunning`). A Codex
-that has no such feature is asked nothing of it. AgentTerm still puts
-nothing on the command line it starts Codex with (`--no-daemon` would do
-the same for the sessions it starts, and not for one typed by hand). The server finds what to say in the
+that has no such feature is asked nothing of it. Being Codex's own command,
+it is one of the steps shown, and `agenttermd setup codex` leaves it to the
+user who runs the steps by hand. AgentTerm still puts nothing on the
+command line it starts Codex with (`--no-daemon` would do the same for the
+sessions it starts, and not for one typed by hand). The server finds what to say in the
 prompt files the host writes for every agent (`HostServer.promptFile`).
 Every session has its key in its environment (`AGENTTERM_MCP`, which names
 the build), a shell's too; outside a session of this build the server

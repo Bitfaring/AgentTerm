@@ -36,12 +36,22 @@ final class HooksAndMCPUITests: MacUITestCase {
         XCTAssertFalse(app.exists(.id("setup-install-copilot")), "an agent that is not installed can be installed for")
         XCTAssertTrue(app.exists(.text(AgentSetupWords.notInstalled)))
         XCTAssertFalse(app.exists(.id("setup-remove-claude")), "nothing to remove, and Remove offered")
+        // The commands, each part with its own: Claude Code's for the
+        // server, then AgentTerm's for what Claude Code has no command for.
+        XCTAssertTrue(label("setup-command-install-1-claude").hasPrefix("claude mcp add --scope user agentterm-dev -- "), label("setup-command-install-1-claude"))
+        XCTAssertTrue(label("setup-command-install-1-claude").hasSuffix(" mcp"))
+        XCTAssertTrue(label("setup-command-install-2-claude").hasSuffix(" setup claude"), label("setup-command-install-2-claude"))
+        XCTAssertEqual(label("setup-command-remove-1-claude"), "claude mcp remove --scope user agentterm-dev")
+        XCTAssertTrue(app.exists(.text(AgentSetupWords.serverStep("Claude Code"))))
+        XCTAssertTrue(app.exists(.text(AgentSetupWords.ownStep(agent: "claude", name: "Claude Code"))))
         shot("hooks-pane")
 
         app.press(.id("setup-install-claude"))
         app.wait("Claude Code set up", timeout: 30) { self.label("setup-claude-Hooks") == "Hooks, added" }
         XCTAssertEqual(label("setup-claude-MCP server"), "MCP server, added")
         XCTAssertEqual(label("setup-claude-Status line"), "Status line, added")
+        XCTAssertTrue(
+            asked("claude").contains { $0.hasPrefix("mcp add --scope user agentterm-dev -- ") && $0.hasSuffix(" mcp") }, asked("claude").joined(separator: "\n"))
         XCTAssertTrue(asked("claude").contains { $0.hasPrefix("plugin marketplace add ") }, asked("claude").joined(separator: "\n"))
         XCTAssertTrue(asked("claude").contains("plugin install agentterm-dev@agentterm-dev --scope user"), asked("claude").joined(separator: "\n"))
         let settings = try String(contentsOf: home.appendingPathComponent(".claude/settings.json"), encoding: .utf8)
@@ -50,6 +60,8 @@ final class HooksAndMCPUITests: MacUITestCase {
         app.press(.id("setup-remove-claude"))
         app.wait("Claude Code taken out", timeout: 30) { self.label("setup-claude-Hooks") == "Hooks, not added" }
         XCTAssertEqual(label("setup-claude-Status line"), "Status line, not added")
+        XCTAssertEqual(label("setup-claude-MCP server"), "MCP server, not added")
+        XCTAssertTrue(asked("claude").contains("mcp remove --scope user agentterm-dev"), asked("claude").joined(separator: "\n"))
         XCTAssertTrue(asked("claude").contains("plugin uninstall agentterm-dev@agentterm-dev --scope user"))
     }
 
@@ -69,6 +81,11 @@ final class HooksAndMCPUITests: MacUITestCase {
         app.wait("Codex's shared server said on") { self.label("setup-codex-shared-server") == AgentSetupWords.sharedServer(off: false) }
         XCTAssertTrue(app.exists(.containing("codex features disable daemon_auto_start")), "what Install does to Codex is not said before it is pressed")
         XCTAssertFalse(app.exists(.id("setup-problem-codex")))
+        // Its own commands first, the one for its shared server among them.
+        XCTAssertTrue(label("setup-command-install-1-codex").hasPrefix("codex mcp add agentterm-dev -- "), label("setup-command-install-1-codex"))
+        XCTAssertEqual(label("setup-command-install-2-codex"), "codex features disable daemon_auto_start")
+        XCTAssertTrue(label("setup-command-install-3-codex").hasSuffix(" setup codex"), label("setup-command-install-3-codex"))
+        XCTAssertEqual(label("setup-command-remove-2-codex"), "codex features enable daemon_auto_start")
 
         // Turned off, and one from before still runs.
         app.press(.id("setup-install-codex"))

@@ -23,14 +23,17 @@ nothing of AgentTerm's on its command line (#129, decided by the owner on
 2026-11-17); only what the user chose (a resume, a schedule's permissions,
 and for a schedule's run of Antigravity its folder trusted for that run).
 What the agent gets of AgentTerm is in its own configuration, at the user's
-scope, once `agenttermd setup` (Settings > Hooks & MCP) added it:
+scope, once Install in Settings > Hooks & MCP, or the commands it shows,
+added it. Each part is added with the agent's own command when the agent
+has one, and with AgentTerm's (`agenttermd setup <agent>`) when it has none
+(decided by the owner on 2026-11-18):
 
-| Agent | Hooks | MCP server | What AgentTerm tells it (`AgentPrompts`) | Claude Code's status line |
+| Agent | MCP server, with the agent's own command | Hooks, which no agent has a command for | What AgentTerm tells it (`AgentPrompts`) | Besides |
 |---|---|---|---|---|
-| Claude Code | a plugin (`claude plugin marketplace add <folder> --scope user`, `claude plugin install <name>@<name> --scope user`) | the same plugin's `.mcp.json` | the server's instructions, which reach the model | in `~/.claude/settings.json`, the user's kept and run after it |
-| Codex | in `~/.codex/config.toml`, each under a comment that says it is AgentTerm's (#142): it takes hooks nowhere else | a plugin (`codex plugin marketplace add`, `codex plugin add`), `env_vars` naming the session's variable; and the server its sessions share turned off, `codex features disable daemon_auto_start` (#140, below) | the server's instructions | |
-| Copilot CLI | a plugin of its own layout (`copilot plugin marketplace add`, `copilot plugin install`) | the same plugin's `.mcp.json` | a folder of instructions its environment names, in every session: it does not give a server's instructions | |
-| Antigravity | a plugin of its own layout (`agy plugin install <folder>`, a copy) | the same plugin's `mcp_config.json` | a rule of the plugin, always on: installed again after the words change | |
+| Claude Code | `claude mcp add --scope user <name> -- <agenttermd> mcp` | a plugin with them (`claude plugin marketplace add <folder> --scope user`, `claude plugin install <name>@<name> --scope user`) | the server's instructions, which reach the model | its status line in `~/.claude/settings.json`, the user's kept and run after it |
+| Codex | `codex mcp add <name> -- <agenttermd> mcp` | in `~/.codex/config.toml`, each under a comment that says it is AgentTerm's (#142): it takes hooks nowhere else | the server's instructions | the session's variable named for the server (`env_vars`), which `codex mcp add` has no option for; the server its sessions share turned off, `codex features disable daemon_auto_start` (#140, below) |
+| Copilot CLI | `copilot mcp add <name> -- <agenttermd> mcp` | a plugin of its own layout with them (`copilot plugin marketplace add`, `copilot plugin install`) | a folder of instructions its environment names, in every session: it does not give a server's instructions | |
+| Antigravity | `agy mcp add <name> <agenttermd> mcp` | a plugin of its own layout with them (`agy plugin install <folder>`, a copy) | a rule of the plugin, always on: installed again after the words change | |
 
 - Every hook runs `<agenttermd> hook <agent> <event>`, the host's program of
   the build that set it up (`/Applications/AgentTerm.app/Contents/MacOS/agenttermd`
@@ -65,6 +68,37 @@ they ran and whether `AGENTTERM_MCP` reached them:
 | Copilot CLI | 1.0.112 | `copilot plugin marketplace add` takes a local path, and reads a marketplace of Claude Code's layout; a local one's plugin is read live, not copied. `copilot -p "hi"`: sessionStart, userPromptSubmitted and agentStop ran; the server started with the variable; its instructions did not reach the model (`--allow-all-mcp-server-instructions` exists) |
 | Codex | 0.169.0 | `codex plugin marketplace add` takes a local or Git marketplace, of Claude Code's layout too; `codex plugin add` copies the plugin into its cache. `codex exec "hi"`: the server started; the variable reached it only once its `.mcp.json` named it in `env_vars`. No hook of the plugin ran, with `--enable plugin_hooks` either: `codex features list` says `plugin_hooks  removed  false`, and `hooks  stable  true` for those of `config.toml`, which it asks to review |
 | Antigravity | 1.5.9 | `agy plugin install <folder>` converts Claude Code's layout (a hook of an event it has not is skipped and said); `agy plugin validate` says how it loads a plugin, which can hold rules, hooks and servers. Its own `~/.gemini/config/hooks.json` and `mcp_config.json` exist too. Not tried in a session: its sign-in is in its home |
+
+### The agents' own commands for an MCP server (2026-11-18)
+
+Every agent has a command that adds an MCP server to its own configuration,
+and none has one for hooks, nor for what it is told (`--help` of each, and
+of its `mcp`, `plugin` and `config`). Tried with the real agents, each in a
+configuration folder of the trial's own (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+`COPILOT_HOME`; for Antigravity a home of the trial's), so that nothing of
+the user's was written:
+
+| Agent | Version | To add, and what it says | Asked what it has | To take out |
+|---|---|---|---|---|
+| Claude Code | 2.1.327 | `claude mcp add --scope user <name> -- <program> <args>`: "Added stdio MCP server … to user config", in `.claude.json`. A name it has is refused ("already exists in user config", status 1) | `claude mcp get <name>`: its lines, "Command: …" and "Args: …" among them, and it starts the server to say "Status: ✔ Connected"; "No MCP server named …", status 1 | `claude mcp remove --scope user <name>`; status 1 when it has none |
+| Codex | 0.169.1 | `codex mcp add <name> -- <program> <args>`: "Added global MCP server", a table `[mcp_servers.<name>]` with `command` and `args` in `config.toml`. A name it has is written anew. `--env KEY=VALUE` only: **no option for `env_vars`** | `codex mcp get <name> --json`: `transport.command`, `args`, `env_vars`; an error and status 1 | `codex mcp remove <name>`: the table goes, a comment over the table after it stays; status 0 when it has none |
+| Copilot CLI | 1.0.113 | `copilot mcp add <name> -- <program> <args>`: "Added server", in `mcp-config.json`, `"type": "local"`, `"tools": ["*"]`. A name it has is refused ("already exists. To update it, remove it first", status 1) | `copilot mcp get <name> --json`: an object under the name, `command`, `args`, `enabled` | `copilot mcp remove <name>`; status 1 when it has none |
+| Antigravity | 1.5.10 | `agy mcp add <name> <program> <args>`, its flags before the name and no `--`: "Added MCP server … (stdio)", in `~/.gemini/config/mcp_config.json`. A name it has is written anew | no `get`: `agy mcp list`, a row for each (name, type, status, command line), "No MCP servers configured." | `agy mcp remove <name>`; status 1 when it has none |
+
+- A server added this way is started by the agent with the agent's own
+  environment, the session's variable in it, in its terminal: seen for
+  Claude Code (`claude mcp get`, which starts it) and Copilot CLI (`copilot
+  -p`), with a stand-in server that wrote down a variable of the trial's.
+  **Not tried for Antigravity**, which is not signed in in a home of the
+  trial's; the server of its plugin was given it.
+- Codex gives a server none of its environment but what `env_vars` names,
+  so `agenttermd setup codex` writes `env_vars = ["AGENTTERM_MCP"]` under
+  the lines `codex mcp add` wrote, and says when it is missing (`codex mcp
+  add` run again writes the table anew, without it).
+- `agenttermd setup <agent>` of this build, after the agent's own command,
+  with the real Claude Code, Codex and Copilot CLI in those folders: each
+  says it has both, and taken out the same way, neither; Codex's
+  `config.toml` is then the user's to the letter.
 
 ### Who starts a hook and a server, and in which terminal (#140, 2026-11-18)
 

@@ -126,7 +126,7 @@ public enum AgentSetupWords {
     /// Codex has the server, added with its own command, and gives it
     /// nothing of the session: what to do.
     public static let codexVariableMissing =
-        "Codex has AgentTerm's MCP server and gives it nothing of its session: `codex mcp add` has no option for the variable the server knows its session by. Install, or AgentTerm's command below, names it."
+        "Codex has AgentTerm's MCP server and gives it nothing of its session: `codex mcp add` has no option for the variable the server knows its session by. Install, or AgentTerm's own command (`agenttermd setup codex`), names it."
     public static let statusLine = "Status line"
     public static let hooks = "Hooks"
     public static let mcp = "MCP server"

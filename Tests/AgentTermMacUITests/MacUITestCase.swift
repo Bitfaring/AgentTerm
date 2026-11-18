@@ -341,13 +341,49 @@ class MacUITestCase: XCTestCase {
             // once a test gave it one (`shared-server`: whether it starts
             // it by itself; `server-running`: one runs), and answers as
             // Codex 0.169.1 does.
+            // Asked of AgentTerm's MCP server with its own command, each
+            // answers as the real one was seen to (2026-11-18): Claude Code
+            // keeps it by name and refuses one it has; Codex writes a table
+            // into its config.toml, which AgentTerm adds a line to.
+            let servers =
+                name == "claude"
+                ? """
+                      "mcp add")
+                        shift 2; while [ "$1" = "--scope" ]; do shift 2; done; n=$1; shift; [ "$1" = "--" ] && shift
+                        if [ -e '\(plugins)'/server-"$n" ]; then echo "MCP server $n already exists in user config"; exit 1; fi
+                        printf '%s\\n' "$1" > '\(plugins)'/server-"$n"; echo "Added stdio MCP server $n to user config" ;;
+                      "mcp get")
+                        if [ ! -e '\(plugins)'/server-"$3" ]; then echo "No MCP server named \\"$3\\". Run \\`claude mcp add\\` to add one."; exit 1; fi
+                        printf '%s:\\n  Scope: User config (available in all your projects)\\n  Status: ✔ Connected\\n  Type: stdio\\n  Command: %s\\n  Args: mcp\\n' "$3" "$(cat '\(plugins)'/server-"$3")" ;;
+                      "mcp remove")
+                        shift 2; while [ "$1" = "--scope" ]; do shift 2; done
+                        if [ ! -e '\(plugins)'/server-"$1" ]; then echo "No MCP server named \\"$1\\" in user scope"; exit 1; fi
+                        rm -f '\(plugins)'/server-"$1"; echo "Removed MCP server $1 from user config" ;;
+                """
+                : """
+                      "mcp add")
+                        n=$3; shift 3; [ "$1" = "--" ] && shift
+                        mkdir -p "$HOME/.codex"; rest=$(without "$n")
+                        { [ -z "$rest" ] || printf '%s\\n\\n' "$rest"; printf '[mcp_servers.%s]\\ncommand = "%s"\\nargs = ["mcp"]\\n' "$n" "$1"; } > "$conf.new"; mv "$conf.new" "$conf"
+                        echo "Added global MCP server '$n'." ;;
+                      "mcp get")
+                        body=$(table "$3")
+                        if [ -z "$body" ]; then echo "Error: No MCP server named '$3' found."; exit 1; fi
+                        printf '{"name": "%s", "enabled": true, "transport": {"type": "stdio", "command": "%s", "args": ["mcp"], "env": null, "env_vars": [%s], "cwd": null}}\\n' "$3" "$(printf '%s\\n' "$body" | sed -n 's/^command = "\\(.*\\)"$/\\1/p')" "$(printf '%s\\n' "$body" | sed -n 's/^env_vars = \\[\\(.*\\)\\]$/\\1/p')" ;;
+                      "mcp remove")
+                        if [ -n "$(table "$3")" ]; then without "$3" > "$conf.new"; mv "$conf.new" "$conf"; echo "Removed global MCP server '$3'."; else echo "No MCP server named '$3' found."; fi ;;
+                """
             let script = """
                 #!/bin/sh
+                conf="$HOME/.codex/config.toml"
+                table() { awk -v h="[mcp_servers.$1]" '$0==h{on=1;next} on&&(/^\\[/||/^$/){on=0} on' "$conf" 2>/dev/null; }
+                without() { awk -v h="[mcp_servers.$1]" '$0==h{skip=1;pend=0;next} skip&&(/^\\[/||/^$/){skip=0} skip{next} /^$/{pend++;next} {while(pend>0){print "";pend--} print}' "$conf" 2>/dev/null; }
                 case "$1 $2" in
-                  "plugin "*|"features "*|"app-server daemon")
+                  "plugin "*|"features "*|"app-server daemon"|"mcp "*)
                     mkdir -p '\(plugins)'
                     printf '%s\\n' "$*" >> '\(plugins).log'
                     case "$1 $2" in
+                \(servers)
                       "plugin list") for f in '\(plugins)'/plugin-*; do [ -e "$f" ] || continue; n=${f##*/plugin-}; \(listed); done ;;
                       "plugin install"|"plugin add") touch '\(plugins)'/plugin-"$3" ;;
                       "plugin uninstall"|"plugin remove") rm -f '\(plugins)'/plugin-"$3" ;;

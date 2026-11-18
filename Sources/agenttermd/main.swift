@@ -103,7 +103,9 @@ if arguments.first == "setup" {
         // but the last, which is this program's.
         if !remove {
             var missing: [AgentSetupStep] = []
-            if state.mcp == false, let server = state.steps.first { missing.append(server) }
+            // Not for Codex's, added and given nothing of its session: this
+            // program names the variable, as its problem says.
+            if state.mcp == false, state.problem != AgentSetupWords.codexVariableMissing, let server = state.steps.first { missing.append(server) }
             // Not for one that is off and still runs: its problem says what to do.
             if state.sharedServerOff == false, state.problem != AgentSetupWords.sharedServerRunning, state.steps.count > 2 { missing.append(state.steps[1]) }
             for step in missing {

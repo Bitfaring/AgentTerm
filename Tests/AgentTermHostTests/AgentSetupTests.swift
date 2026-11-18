@@ -121,8 +121,9 @@ final class AgentSetupTests: XCTestCase {
             printf '%s\\n' "$*" >> '\(root.appendingPathComponent("\(agent).log").path)'
             conf="$HOME/.codex/config.toml"
             # The lines of a server's table in Codex's config.toml, and the file without it.
-            table() { awk -v h="[mcp_servers.$1]" '$0==h{on=1;next} on&&/^\\[/{on=0} on' "$conf" 2>/dev/null; }
-            without() { awk -v h="[mcp_servers.$1]" '$0==h{skip=1;pend=0;next} skip&&/^\\[/{skip=0} skip{next} /^$/{pend++;next} {while(pend>0){print "";pend--} print}' "$conf" 2>/dev/null; }
+            # A table ends at an empty line: a comment under one is over the next table, and stays with it.
+            table() { awk -v h="[mcp_servers.$1]" '$0==h{on=1;next} on&&(/^\\[/||/^$/){on=0} on' "$conf" 2>/dev/null; }
+            without() { awk -v h="[mcp_servers.$1]" '$0==h{skip=1;pend=0;next} skip&&(/^\\[/||/^$/){skip=0} skip{next} /^$/{pend++;next} {while(pend>0){print "";pend--} print}' "$conf" 2>/dev/null; }
             case "$1 $2" in
             \(servers(agent, state: state))
               "plugin list")
@@ -170,11 +171,12 @@ final class AgentSetupTests: XCTestCase {
         try XCTUnwrap(setup.report().agents.first { $0.agent == agent })
     }
 
-    /// SETUP-1: Claude Code gets a plugin with its own commands (a
-    /// marketplace of AgentTerm's folder, then the plugin), and AgentTerm's
-    /// status line in its settings, the user's own kept; asked again, it
-    /// has all of it; taken out, it has none, and its status line is the
-    /// user's again.
+    /// SETUP-1: Claude Code gets AgentTerm's MCP server with its own command
+    /// (`claude mcp add`), its hooks in a plugin it installs (a marketplace
+    /// of AgentTerm's folder, then the plugin), and AgentTerm's status line
+    /// in its settings, the user's own kept; the commands are said as typed,
+    /// Claude Code's own first; asked again, it has all of it; taken out,
+    /// it has none, and its status line is the user's again.
     func testClaudeIsSetUpWithItsOwnCommandsAndTakenOut() throws {
         let settings = home.appendingPathComponent(".claude/settings.json")
         try FileManager.default.createDirectory(at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -182,11 +184,18 @@ final class AgentSetupTests: XCTestCase {
         let setup = setup()
         let before = try state(setup, "claude")
         XCTAssertEqual([before.hooks, before.mcp, before.statusLine], [false, false, false])
-        XCTAssertEqual(before.command, "'/Apps/AgentTerm Dev.app/agenttermd' setup claude")
-        XCTAssertEqual(before.removeCommand, "'/Apps/AgentTerm Dev.app/agenttermd' setup claude --remove")
+        XCTAssertEqual(
+            before.steps.map(\.command),
+            ["claude mcp add --scope user agentterm-dev -- '/Apps/AgentTerm Dev.app/agenttermd' mcp", "'/Apps/AgentTerm Dev.app/agenttermd' setup claude"])
+        XCTAssertEqual(
+            before.removeSteps.map(\.command), ["claude mcp remove --scope user agentterm-dev", "'/Apps/AgentTerm Dev.app/agenttermd' setup claude --remove"])
+        XCTAssertEqual(before.steps.first?.title, AgentSetupWords.serverStep("Claude Code"))
 
         setup.install("claude")
+        // The server with Claude Code's own command, at the user's scope.
+        XCTAssertTrue(ran("claude").contains("mcp add --scope user agentterm-dev -- /Apps/AgentTerm Dev.app/agenttermd mcp"), ran("claude").joined(separator: "\n"))
         let market = root.appendingPathComponent("setup-agentterm-dev/claude").path
+        XCTAssertFalse(FileManager.default.fileExists(atPath: market + "/plugin/.mcp.json"), "the server is in the plugin too")
         // At the user's scope, for every folder.
         XCTAssertTrue(ran("claude").contains("plugin marketplace add \(market) --scope user"), ran("claude").joined(separator: "\n"))
         XCTAssertTrue(ran("claude").contains("plugin install agentterm-dev@agentterm-dev --scope user"), ran("claude").joined(separator: "\n"))
@@ -197,7 +206,14 @@ final class AgentSetupTests: XCTestCase {
         let set = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as? [String: Any])
         XCTAssertEqual(set["theme"] as? String, "dark")
 
+        // Set up again: the server of before goes first, as Claude Code
+        // refuses a name it has, and all of it is there once.
+        setup.install("claude")
+        XCTAssertNil(try state(setup, "claude").problem)
+        XCTAssertTrue(try state(setup, "claude").isSetUp)
+
         setup.remove("claude")
+        XCTAssertTrue(ran("claude").contains("mcp remove --scope user agentterm-dev"))
         XCTAssertTrue(ran("claude").contains("plugin uninstall agentterm-dev@agentterm-dev --scope user"))
         XCTAssertTrue(ran("claude").contains("plugin marketplace remove agentterm-dev"))
         let removed = try state(setup, "claude")
@@ -206,21 +222,84 @@ final class AgentSetupTests: XCTestCase {
         XCTAssertEqual((back["statusLine"] as? [String: String])?["command"], "printf mine")
     }
 
-    /// SETUP-2: Codex gets a plugin with the server, and its hooks between
-    /// marks in its config.toml, which it reads back; Copilot CLI a plugin
-    /// of a marketplace of AgentTerm's; Antigravity a plugin installed from
-    /// AgentTerm's folder, with the words it is told as a rule. Each with
-    /// its own commands, and taken out the same way.
+    /// Runs an agent's own command as the user does who copied it from
+    /// Settings: the words of `serverCommand`, by the stand-in's path.
+    private func userRuns(_ setup: AgentSetup, _ agent: String, remove: Bool = false) throws {
+        let words = try XCTUnwrap(setup.serverCommand(agent, program: agents.appendingPathComponent(agent).path, remove: remove))
+        XCTAssertEqual(AgentSetup.direct(words, home: home.path)?.status, 0)
+    }
+
+    /// SETUP-9: AgentTerm's own command (`agenttermd setup <agent>`) adds
+    /// only what the agent has no command for, and takes only that out;
+    /// the server is the agent's own command's, which the user runs as it
+    /// is shown. For Codex, whose command has no option for the session's
+    /// variable: added before AgentTerm's command ran, the variable is
+    /// named by it; added after, it is said missing, with what to do.
+    func testAgentTermsOwnCommandAddsOnlyWhatTheAgentHasNoCommandFor() throws {
+        let setup = setup()
+        for agent in ["claude", "copilot", "agy"] {
+            setup.install(agent, .own)
+            XCTAssertFalse(ran(agent).contains { $0.hasPrefix("mcp add") }, "\(agent): AgentTerm's command added the server")
+            var each = try state(setup, agent)
+            XCTAssertEqual([each.hooks, each.mcp], [true, false], agent)
+            XCTAssertTrue(each.needsSetup, agent)
+            try userRuns(setup, agent)
+            each = try state(setup, agent)
+            XCTAssertEqual([each.hooks, each.mcp], [true, true], agent)
+            // Taken out the same way, each its own part.
+            setup.remove(agent, .own)
+            XCTAssertEqual([try state(setup, agent).hooks, try state(setup, agent).mcp], [false, true], agent)
+            try userRuns(setup, agent, remove: true)
+            XCTAssertEqual(try state(setup, agent).mcp, false, agent)
+        }
+
+        // Codex: the server first, then AgentTerm's command.
+        try userRuns(setup, "codex")
+        var codex = try state(setup, "codex")
+        XCTAssertEqual(codex.mcp, false, "a server that is given nothing of its session said to be there")
+        XCTAssertEqual(codex.problem, AgentSetupWords.codexVariableMissing)
+        setup.install("codex", .own)
+        codex = try state(setup, "codex")
+        XCTAssertEqual([codex.hooks, codex.mcp], [true, true])
+        XCTAssertNil(codex.problem)
+        let config = home.appendingPathComponent(".codex/config.toml")
+        XCTAssertTrue(try String(contentsOf: config, encoding: .utf8).contains("args = [\"mcp\"]\nenv_vars = [\"AGENTTERM_MCP\"]\n"))
+        // Codex's command run again writes the table anew, without it.
+        try userRuns(setup, "codex")
+        XCTAssertEqual(try state(setup, "codex").problem, AgentSetupWords.codexVariableMissing)
+        setup.install("codex", .own)
+        XCTAssertEqual(try state(setup, "codex").mcp, true)
+        // Taken out: AgentTerm's line and its hooks; the server is Codex's
+        // command's to take out.
+        setup.remove("codex", .own)
+        let left = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertFalse(left.contains("env_vars") || left.contains("hook codex"), left)
+        XCTAssertTrue(left.contains("[mcp_servers.agentterm-dev]"), left)
+        try userRuns(setup, "codex", remove: true)
+        XCTAssertEqual(try String(contentsOf: config, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), "")
+    }
+
+    /// SETUP-2: Codex gets the server with its own command (`codex mcp
+    /// add`), the session's variable named in the table that wrote, and its
+    /// hooks in its config.toml, which it reads back; Copilot CLI the
+    /// server with its own command and a plugin of a marketplace of
+    /// AgentTerm's with its hooks; Antigravity the same, its plugin from
+    /// AgentTerm's folder, with the words it is told as a rule. Each taken
+    /// out the same way.
     func testCodexCopilotAndAntigravityAreSetUpWithTheirOwnCommands() throws {
         let setup = setup()
         for agent in ["codex", "copilot", "agy"] { setup.install(agent) }
-        XCTAssertTrue(ran("codex").contains("plugin marketplace add \(root.appendingPathComponent("setup-agentterm-dev/codex").path)"))
-        XCTAssertTrue(ran("codex").contains("plugin add agentterm-dev@agentterm-dev"))
+        XCTAssertTrue(ran("codex").contains("mcp add agentterm-dev -- /Apps/AgentTerm Dev.app/agenttermd mcp"), ran("codex").joined(separator: "\n"))
+        XCTAssertFalse(ran("codex").contains { $0.hasPrefix("plugin add") || $0.hasPrefix("plugin marketplace add") }, "Codex was given a plugin")
         XCTAssertTrue(ran("codex").contains("features list"), "Codex did not read its configuration back")
         let config = try String(contentsOf: home.appendingPathComponent(".codex/config.toml"), encoding: .utf8)
         XCTAssertTrue(config.contains("[[hooks.Stop]]") && config.contains("hook codex Stop"), config)
+        XCTAssertTrue(
+            config.contains("[mcp_servers.agentterm-dev]\ncommand = \"/Apps/AgentTerm Dev.app/agenttermd\"\nargs = [\"mcp\"]\nenv_vars = [\"AGENTTERM_MCP\"]\n"), config)
+        XCTAssertTrue(ran("copilot").contains("mcp add agentterm-dev -- /Apps/AgentTerm Dev.app/agenttermd mcp"), ran("copilot").joined(separator: "\n"))
         XCTAssertTrue(ran("copilot").contains("plugin install agentterm-dev@agentterm-dev"), ran("copilot").joined(separator: "\n"))
         let plugin = root.appendingPathComponent("setup-agentterm-dev/agy/plugin")
+        XCTAssertTrue(ran("agy").contains("mcp add agentterm-dev /Apps/AgentTerm Dev.app/agenttermd mcp"), ran("agy").joined(separator: "\n"))
         XCTAssertTrue(ran("agy").contains("plugin install \(plugin.path)"), ran("agy").joined(separator: "\n"))
         XCTAssertTrue(try String(contentsOf: plugin.appendingPathComponent("rules/agentterm-dev.md"), encoding: .utf8).contains("Use the shells."))
         for agent in ["codex", "copilot", "agy"] {
@@ -236,7 +315,11 @@ final class AgentSetupTests: XCTestCase {
             let each = try state(setup, agent)
             XCTAssertEqual([each.hooks, each.mcp], [false, false], agent)
         }
-        XCTAssertFalse(try String(contentsOf: home.appendingPathComponent(".codex/config.toml"), encoding: .utf8).contains("hook codex"))
+        let left = try String(contentsOf: home.appendingPathComponent(".codex/config.toml"), encoding: .utf8)
+        XCTAssertFalse(left.contains("hook codex") || left.contains("mcp_servers.agentterm-dev"), left)
+        XCTAssertTrue(ran("codex").contains("mcp remove agentterm-dev"))
+        XCTAssertTrue(ran("copilot").contains("mcp remove agentterm-dev"))
+        XCTAssertTrue(ran("agy").contains("mcp remove agentterm-dev"))
     }
 
     /// SETUP-3: what does not work is said, in the agent's own words; a
@@ -256,7 +339,9 @@ final class AgentSetupTests: XCTestCase {
         try "model = \"o3\"\n".write(to: config, atomically: true, encoding: .utf8)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("state-codex"), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: root.appendingPathComponent("state-codex/broken").path, contents: nil)
-        setup.install("codex")
+        // AgentTerm's own part, which writes the hooks: the server is
+        // Codex's own command's to write.
+        setup.install("codex", .own)
         XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), "model = \"o3\"\n", "left with what Codex cannot read")
         XCTAssertTrue(try state(setup, "codex").problem?.contains("could not parse config.toml") == true)
     }
