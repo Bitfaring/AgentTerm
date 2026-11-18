@@ -162,6 +162,11 @@ final class Chromium {
     /// Closes every browser and stops Chromium, as the app quits.
     func shutDown() {
         guard isRunning else { return }
+        // A window Chrome opened by itself, an extension's say, held back or
+        // on show, would keep Chromium from stopping (#125).
+        for window in NSApp.windows where BrowserModel.chromiumWindowClass.map(window.isKind(of:)) == true && window.styleMask.contains(.titled) {
+            window.close()
+        }
         atc_shutdown()
     }
 }

@@ -43,7 +43,7 @@ final class AgentShellsMCPTests: XCTestCase {
                 case .read: return .screen("$ ls\nREADME.md")
                 case .send: return .done
                 case .close(let session): return session == 7 ? .done : .refused("not yours")
-                case .run, .command: return .done
+                case .run, .command, .started: return .done
                 }
             }, version: "test")
         XCTAssertEqual(((call(server, "tools/list")["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.count, AgentShellsMCP.tools.count)
@@ -206,196 +206,50 @@ final class AgentShellsMCPTests: XCTestCase {
     }
 }
 
-/// MCP-4: each agent is given the server on its command line, for its
-/// session only, in the way it takes one; nothing when it is off. MCP-11:
-/// Codex is told to pass the session's variable on to it.
+/// MCP-4 (#129): an agent is started with nothing of AgentTerm's on its
+/// command line; what it needs to reach the host is in the session's
+/// environment, every session's, a shell's too.
 final class AgentShellsGivenTests: XCTestCase {
-    private func words(_ arguments: String) -> [String] {
-        let result = Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' x" + arguments])
-        return String(decoding: result?.output ?? Data(), as: UTF8.self).split(separator: "\n").map(String.init).dropFirst().map { $0 }
-    }
-
-    private func object(_ text: String) throws -> [String: Any] {
-        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
-    }
-
-    func testEachAgentIsGivenTheServerForItsSessionOnly() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-given-\(UUID().uuidString)")
+    func testAnAgentIsStartedWithNothingOfAgentTermsOnItsCommandLine() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-given-\(UUID().uuidString)").standardizedFileURL
         defer { try? FileManager.default.removeItem(at: root) }
-        let hooks = root.appendingPathComponent("hooks")
-        let tool = "/Apps/My App's/agenttermd"
-        let server = AgentHooks.Server(name: "agentterm-dev", tool: tool)
-        func given(_ agent: String, _ server: AgentHooks.Server?) throws -> [String] {
-            words(try AgentHooks.launchArguments(agent: agent, tool: tool, usageFile: nil, directory: hooks, home: root.path, prompt: "Told.", server: server))
-        }
-
-        // Claude Code: --mcp-config, before --settings, which ends the words
-        // it takes.
-        let claude = try given("claude", server)
-        XCTAssertEqual(claude.first, "--mcp-config")
-        XCTAssertEqual(claude[2], "--settings")
-        let claudeServers = try XCTUnwrap(try object(claude[1])["mcpServers"] as? [String: [String: Any]])
-        XCTAssertEqual(claudeServers.keys.sorted(), ["agentterm-dev"])
-        XCTAssertEqual(claudeServers["agentterm-dev"]?["command"] as? String, tool)
-        XCTAssertEqual(claudeServers["agentterm-dev"]?["args"] as? [String], ["mcp"])
-        XCTAssertEqual(claudeServers["agentterm-dev"]?["type"] as? String, "stdio")
-
-        // Codex: its table as -c, with the session's variable passed on.
-        let codex = try given("codex", server)
-        XCTAssertTrue(codex.contains(#"mcp_servers.agentterm-dev.command="/Apps/My App's/agenttermd""#), codex.joined(separator: "\n"))
-        XCTAssertTrue(codex.contains(#"mcp_servers.agentterm-dev.args=["mcp"]"#))
-        XCTAssertTrue(codex.contains(#"mcp_servers.agentterm-dev.env_vars=["AGENTTERM_MCP"]"#))
-        XCTAssertEqual(codex.filter { $0 == "-c" }.count, AgentHooks.codexEvents.count + 3)
-
-        // Copilot CLI: --additional-mcp-config, every tool of it.
-        let copilot = try given("copilot", server)
-        let at = try XCTUnwrap(copilot.firstIndex(of: "--additional-mcp-config"))
-        let copilotServer = try XCTUnwrap((try object(copilot[at + 1])["mcpServers"] as? [String: [String: Any]])?["agentterm-dev"])
-        XCTAssertEqual(copilotServer["type"] as? String, "local")
-        XCTAssertEqual(copilotServer["command"] as? String, tool)
-        XCTAssertEqual(copilotServer["tools"] as? [String], ["*"])
-
-        // Antigravity: in the folder it is given, which it reads as a
-        // project's.
-        let agy = try given("agy", server)
-        XCTAssertEqual(Array(agy.prefix(2)), ["--add-dir", hooks.appendingPathComponent("antigravity").path])
-        let file = hooks.appendingPathComponent("antigravity/.agents/mcp_config.json")
-        let agyServers = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])["mcpServers"] as? [String: [String: Any]]
-        XCTAssertEqual(agyServers?["agentterm-dev"]?["command"] as? String, tool)
-        XCTAssertEqual(agyServers?["agentterm-dev"]?["args"] as? [String], ["mcp"])
-
-        // Off: none of them gets it, and Antigravity's file is gone.
-        XCTAssertFalse(try given("claude", nil).contains("--mcp-config"))
-        XCTAssertFalse(try given("codex", nil).joined().contains("mcp_servers"))
-        XCTAssertFalse(try given("copilot", nil).contains("--additional-mcp-config"))
-        _ = try given("agy", nil)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
-    }
-
-    /// The server is always given, and nothing is run in the agents to
-    /// give it.
-    func testTheServerIsGivenAndNothingIsRun() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-given-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        var ran: [[String]] = []
-        let agents = [AgentInfo(id: "claude", name: "Claude Code", path: "/a/claude"), AgentInfo(id: "codex", name: "Codex", path: "/a/codex")]
-        let setup = AgentShellsSetup(directory: root, tool: "/Apps/AgentTerm.app/agenttermd", name: "agentterm") {
-            ran.append($0); return true
-        }
-        XCTAssertEqual(setup.server, AgentHooks.Server(name: "agentterm", tool: "/Apps/AgentTerm.app/agenttermd"))
-        XCTAssertEqual(setup.removeLeftovers(agents: agents), [])
-        XCTAssertEqual(ran, [], "nothing asked of the agents")
-    }
-}
-
-/// MCP-19: what an earlier build put in the agents' configuration is taken
-/// out with each agent's own command, once for each; an agent that refuses
-/// is told to the apps, which warn of it, and is not asked again.
-final class AgentShellsLeftoverTests: XCTestCase {
-    private func recordInstalled(_ agents: [String: String], name: String?, in directory: URL) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        var record: [String: Any] = ["installed": agents]
-        if let name { record["name"] = name }
-        try JSONSerialization.data(withJSONObject: record).write(to: directory.appendingPathComponent("agent-shells.json"))
-    }
-
-    func testWhatAnEarlierBuildInstalledIsTakenOutOnce() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-leftover-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        try recordInstalled(["claude": "/Apps/AgentTerm.app/agenttermd", "codex": "/Apps/AgentTerm.app/agenttermd", "agy": "/x"], name: "agentterm", in: root)
-        var ran: [[String]] = []
-        let agents = [
-            AgentInfo(id: "claude", name: "Claude Code", path: "/a/claude"), AgentInfo(id: "codex", name: "Codex", path: "/a/codex"),
-            AgentInfo(id: "copilot", name: "Copilot CLI", path: "/a/copilot"), AgentInfo(id: "agy", name: "Antigravity", path: nil),
-        ]
-        func leftovers() -> AgentShellsSetup {
-            AgentShellsSetup(directory: root, tool: "/Apps/AgentTerm.app/agenttermd", name: "agentterm") {
-                ran.append($0); return true
-            }
-        }
-        XCTAssertEqual(leftovers().removeLeftovers(agents: agents), [])
-        XCTAssertEqual(
-            ran, [["/a/claude", "mcp", "remove", "--scope", "user", "agentterm"], ["/a/codex", "mcp", "remove", "agentterm"]],
-            "only those it was installed in; one not installed now is left for later")
-        ran = []
-        XCTAssertEqual(leftovers().removeLeftovers(agents: agents.filter { $0.id != "agy" }), [])
-        XCTAssertEqual(ran, [], "taken out: forgotten")
-        // Antigravity installed again: taken out of it then.
-        XCTAssertEqual(leftovers().removeLeftovers(agents: [AgentInfo(id: "agy", name: "Antigravity", path: "/a/agy")]), [])
-        XCTAssertEqual(ran, [["/a/agy", "mcp", "remove", "agentterm"]])
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("agent-shells.json").path), "nothing left to take out")
-    }
-
-    func testAnAgentThatRefusesIsToldToTheApps() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-fault-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let state = root.appendingPathComponent("state")
-        try recordInstalled(["claude": "/old/agenttermd", "codex": "/old/agenttermd"], name: "agentterm", in: state)
-        let agents = [AgentInfo(id: "claude", name: "Claude Code", path: "/a/claude"), AgentInfo(id: "codex", name: "Codex", path: "/a/codex")]
-        var ran: [[String]] = []
+        let agents = root.appendingPathComponent("agents")
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let said = root.appendingPathComponent("said")
+        let channel = AppChannel.current
+        // A stand-in for Claude Code that writes down how it was started.
+        try "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$*\" \"$\(channel.eventsVariable)\" \"$\(channel.usageVariable)\" \"$AGENTTERM_MCP\" >> '\(said.path)'\nexec sleep 600\n".write(
+            to: agents.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agents.appendingPathComponent("claude").path)
         let token = "test-token-0123456789abcdef0123456789"
-        /// A host on that state folder, until `done` with what it told, or
-        /// for a second when nothing is awaited.
-        func host(until done: (([[AgentShellsFault]]) -> Bool)? = nil) throws -> [[AgentShellsFault]] {
-            var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, detectAgents: { agents })
-            configuration.foldersFile = state.appendingPathComponent("folders.json")
-            // Codex refuses.
-            configuration.agentShells = AgentShellsSetup(directory: state, tool: "/usr/bin/true", name: "agentterm") {
-                ran.append($0); return $0.first != "/a/codex"
-            }
-            let server = HostServer(configuration: configuration)
-            let port = try server.start()
-            defer { server.stop() }
-            let client = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "mac")
-            defer { client.close() }
-            var told: [[AgentShellsFault]] = []
-            client.onMessage = { if case .agentShellsFaults(let list) = $0 { told.append(list) } }
-            client.connect()
-            let deadline = Date().addingTimeInterval(done == nil ? 1 : 15)
-            while !(done?(told) ?? false) && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
-            return told
+        var configuration = HostServer.Configuration(
+            port: 0, token: token, listenOnTailscale: false, detectAgents: { AgentDetector.detect(in: agents.path) }, statusLineTool: "/usr/bin/true",
+            usageDirectory: root.appendingPathComponent("usage"))
+        configuration.agentsDirectory = agents.path
+        configuration.foldersFile = root.appendingPathComponent("state/folders.json")
+        let server = HostServer(configuration: configuration)
+        let port = try server.start()
+        defer { server.stop() }
+        let client = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "mac")
+        var sessions: [SessionInfo] = []
+        client.onMessage = { if case .sessions(let list) = $0 { sessions = list } }
+        client.connect()
+        func spin(until condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
         }
-        let refused = [AgentShellsFault(cause: .leftOver, agents: ["Codex"])]
-        XCTAssertEqual(try host { $0.last == refused }.last, refused)
-        XCTAssertEqual(ran, [["/a/claude", "mcp", "remove", "--scope", "user", "agentterm"], ["/a/codex", "mcp", "remove", "agentterm"]])
-
-        // The next host asks none of them again, and has nothing to say.
-        ran = []
-        XCTAssertEqual(try host().last, [])
-        XCTAssertEqual(ran, [])
-    }
-}
-
-/// MCP-15: a released build and a development build each give the server
-/// under a name of their own, and each takes out only what it put in (#57).
-final class AgentShellsBuildsTests: XCTestCase {
-    func testEachBuildTakesOutItsOwnAndLeavesTheOthers() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-builds-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        var ran: [[String]] = []
-        let agents = [AgentInfo(id: "claude", name: "Claude Code", path: "/a/claude"), AgentInfo(id: "codex", name: "Codex", path: "/a/codex")]
-        let releasedState = root.appendingPathComponent("AgentTerm"), devState = root.appendingPathComponent("AgentTerm Dev")
-        for (state, record) in [
-            (releasedState, #"{"installed":{"claude":"/Apps/AgentTerm.app/agenttermd"},"name":"agentterm"}"#),
-            // A development build from before each build had its name, which
-            // installed under the name every build shared.
-            (devState, #"{"installed":{"codex":"/dist/AgentTerm Dev.app/agenttermd"}}"#),
-        ] {
-            try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
-            try record.write(to: state.appendingPathComponent("agent-shells.json"), atomically: true, encoding: .utf8)
-        }
-        let released = AgentShellsSetup(directory: releasedState, tool: "/Apps/AgentTerm.app/agenttermd", name: "agentterm") {
-            ran.append($0); return true
-        }
-        let dev = AgentShellsSetup(directory: devState, tool: "/dist/AgentTerm Dev.app/agenttermd", name: "agentterm-dev") {
-            ran.append($0); return true
-        }
-        dev.removeLeftovers(agents: agents)
-        XCTAssertEqual(ran, [], "the shared name is not the development build's to take out")
-        released.removeLeftovers(agents: agents)
-        XCTAssertEqual(ran, [["/a/claude", "mcp", "remove", "--scope", "user", "agentterm"]])
-        XCTAssertEqual(released.server.name, "agentterm")
-        XCTAssertEqual(dev.server.name, "agentterm-dev")
+        func lines() -> [String] { ((try? String(contentsOf: said, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init) }
+        client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
+        spin { lines().count == 1 }
+        let parts = try XCTUnwrap(lines().first).split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        XCTAssertEqual(parts.count, 4, parts.joined(separator: "|"))
+        XCTAssertEqual(parts.first, "", "something of AgentTerm's on its command line: \(parts[0])")
+        XCTAssertTrue(parts[1].hasPrefix(root.appendingPathComponent("usage").path), "no file for its hooks: \(parts[1])")
+        XCTAssertTrue(parts[2].hasPrefix(root.appendingPathComponent("usage").path), "no file for its status line: \(parts[2])")
+        XCTAssertFalse(parts[3].isEmpty, "no key for its MCP server")
+        // Its session waits to hear from both.
+        spin { sessions.first?.link != nil }
+        XCTAssertEqual(sessions.first?.link, AgentLink())
     }
 }
 
@@ -773,10 +627,10 @@ final class AgentShellsHostTests: XCTestCase {
         // at the shell. The Mac that shows it is the one whose size it takes.
         mac.connection.send(.attach(session: shell.id, size: TermSize(cols: 120, rows: 40)))
         waitUntil("the Mac told the size") {
-            mac.messages.contains { if case .resized(shell.id, _, _) = $0 { return true } else { return false } }
+            mac.messages.contains { if case .resized(shell.id, _, _, _) = $0 { return true } else { return false } }
         }
         let told = mac.messages.compactMap { message -> (TermSize, Bool)? in
-            if case .resized(shell.id, let size, let driver) = message { return (size, driver) } else { return nil }
+            if case .resized(shell.id, let size, let driver, _) = message { return (size, driver) } else { return nil }
         }.last
         XCTAssertEqual(told?.1, true, "the Mac was told another device uses the shell")
         XCTAssertEqual(told?.0, TermSize(cols: 120, rows: 40))
@@ -873,7 +727,9 @@ final class AgentShellsHostTests: XCTestCase {
 
         mac.connection.send(.create(CreateRequest(cwd: root.path, title: "mine")))
         waitUntil("the picked shell started", timeout: 15) { FileManager.default.fileExists(atPath: started.path) }
-        waitUntil("what is run first, run", timeout: 15) { FileManager.default.fileExists(atPath: ran.path) }
+        // `echo … > file` makes the file empty first, then writes into it:
+        // what it holds is waited for, not only the file (#128).
+        waitUntil("what is run first, run", timeout: 15) { (try? String(contentsOf: ran, encoding: .utf8)) == "startup\n" }
         XCTAssertEqual(try String(contentsOf: ran, encoding: .utf8), "startup\n")
     }
 
@@ -1055,7 +911,7 @@ final class AgentsUseShellsTests: XCTestCase {
             usageDirectory: root.appendingPathComponent("usage"))
         configuration.agentsDirectory = agents.path
         configuration.foldersFile = root.appendingPathComponent("state/folders.json")
-        configuration.agentShells = AgentShellsSetup(directory: root.appendingPathComponent("state"), tool: "/usr/bin/true") { _ in true }
+        configuration.agentShells = AgentShellsSetup(directory: root.appendingPathComponent("state"), tool: "/usr/bin/true")
         let server = HostServer(configuration: configuration)
         let port = try server.start()
         defer { server.stop() }
@@ -1073,26 +929,26 @@ final class AgentsUseShellsTests: XCTestCase {
         client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
         spin { lines().count == 1 }
         func says(_ line: String, _ word: String) -> Bool { line.split(separator: "|").first?.split(separator: " ").contains { $0 == word } == true }
+        // What it is told is what its server gives as its instructions
+        // (#129): kept where the server reads it.
+        func toldWords() -> String? { AgentSetup.savedPrompt("claude") }
         let first = try XCTUnwrap(lines().first)
         XCTAssertTrue(says(first, "use"), first)
-        XCTAssertTrue(first.contains("--append-system-prompt"), first)
-        XCTAssertTrue(first.contains("shell_open") && first.contains("browser_open"), first)
+        XCTAssertTrue(toldWords()?.contains("shell_open") == true && toldWords()?.contains("browser_open") == true, toldWords() ?? "nothing")
 
-        // Its words emptied in Settings > Agents: nothing in its system
-        // prompt, and its server asks nothing of it either.
+        // Its words emptied in Settings > Agents: its server asks nothing of
+        // it, and gives no instructions.
         client.send(.setAgentPrompt(agent: "claude", text: ""))
         spin { prompts?["claude"] == "" }
         client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
         spin { lines().count == 2 }
         let second = try XCTUnwrap(lines().last)
         XCTAssertFalse(says(second, "use"), second)
-        XCTAssertFalse(second.contains("--append-system-prompt"), second)
-        XCTAssertFalse(second.contains("shell_open"), second)
+        XCTAssertNil(toldWords())
 
-        // MCP-4: each session is given the server on its command line,
-        // whatever it is asked.
+        // Nothing on its command line, whatever it is told (#129).
         for line in [first, second] {
-            XCTAssertTrue(line.contains("--mcp-config") && line.contains(#""command":"/usr/bin/true""#), line)
+            XCTAssertEqual(line.split(separator: "|", omittingEmptySubsequences: false).last, "", line)
         }
     }
 

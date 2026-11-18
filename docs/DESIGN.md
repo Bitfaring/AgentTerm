@@ -77,7 +77,10 @@ implements "the client being used wins":
 - Every attached client reports the grid that fits its view, and reports
   again when that changes (`resize`).
 - The driver is the client that most recently took control (`takeControl`) or
-  typed. The PTY takes the driver's size.
+  typed. The PTY takes the driver's size. `resized` tells every other client
+  who the driver is (`SizeDriver`, #120): the name the client gave in its
+  `hello`, or the Mac's name for the Mac's own app (a local client that
+  called itself "Mac").
 - Attaching and resizing never make a client the driver, unless it is the only
   one attached. The Mac app attaches to every session to show it; if that took
   the size, a session opened on a phone would jump to the Mac's size a moment
@@ -227,7 +230,7 @@ Client to host:
 | `gitLog(path, branch, skip, limit)` | Commits of a branch, the checked out one when none is named, newest first and a page at a time (`GitActions.log`). Answered with `gitLog(path, branch, skip, commits, more)`. The graph beside the list is worked out by the apps from each commit's parents (`CommitGraphRow.rows`). |
 | `gitShow(path, hash)` | A commit's message and what it changed, a merge against its first parent, each file with its diff unless together they pass `GitActions.showLimit`. Answered with `gitShow(path, hash, details)`. |
 | `gitRevert(path, hash)` / `gitCherryPick(path, hash)` | A new commit on the checked out branch that takes the named one back, or makes its change there too. One that conflicts is left to be resolved and continued, or aborted (`gitResolve`, #42), and says so; a merge is refused, in words. Answered as `gitPush` is. |
-| `gitFetch(path, automatic)` | Ask the remotes for what is new (`git fetch --all --prune`). Answered with `gitFetched(path, problem, automatic)`, then `diff`. The apps send it by themselves every `DisplaySettings.fetchInterval` while a folder's changes are shown and `fetchAutomatically` is on; what an automatic one says when it fails is shown beside the buttons, never in an alert. |
+| `gitFetch(path, automatic)` | Ask the remotes for what is new (`git fetch --all --prune`). Answered with `gitFetched(path, problem, automatic)`, then `diff`. The apps send it by themselves every `DisplaySettings.fetchInterval` while a folder's changes are shown and `fetchAutomatically` is on; what an automatic one says when it fails is shown beside the buttons, never in an alert. It holds no button either: what the user asks for in the folder while it is under way is kept by the client (`RemoteWork`, in `AgentTermProtocol`, which the Mac and the iPhone both go by) and sent when `gitFetched` comes, so that the two are never at the remotes together and nothing asked for is thrown away (#116). |
 | `gitForcePushPreview(path)` | What a forced push would overwrite: the host fetches, then lists `HEAD..@{upstream}`. Answered with `gitForcePushPreview(path, upstream, loses, at)`, `at` being the commit the upstream is at; the apps ask in the words of `ForcePushQuestion` before they send `gitPush(path, force: true, lease: at)`, which is `git push --force-with-lease=<branch.merge>:<at> <branch.remote> HEAD:<branch.merge>`. The lease is named, not left to the remote-tracking branch: the fetch every few minutes moves that one, and a bare `--force-with-lease` then overwrites a commit that came after the question (#50). A forced push without a lease is refused. |
 | `gitPush(path, force, lease)` / `gitPull(path, mode)` | Push the checked out branch, or bring in what its upstream has, the way the repository is set up to or by `merge` or `rebase`. Answered the same way, then with `gitSynced(path)`: a `diff` alone may answer something asked while git was still at work. |
 | `writeCommitMessage(path)` / `cancelCommitMessage(path)` | Have an agent write the message for what is staged, or stop it. Answered with `commitMessage(path, message)`, whose message is nil when it was stopped or failed. |
@@ -253,6 +256,20 @@ Host to client: `welcome`, `sessions`, `agents`, `folders`, `attached`,
 `pairingCode`, `devices`. The session list, the folder list and the host's settings
 (`tabLayout`, `keepAwake`, `keepAwakeOptions`, `commitWriter`) are pushed to
 every client when they change.
+
+`welcome` also says which release the host is from (`release`, "0.10.0")
+and what it is built from (`revision`), from protocol 23 (#121). The
+revision is a hash of the host's sources and of the packages it takes
+(`agenttermd`, `AgentTermHost`, `AgentTermClient`, `AgentTermProtocol`,
+`CAgentTermPTY`, `Package.swift`, `Package.resolved`), which
+`scripts/bundle-mac.sh` writes into the app's Info.plist
+(`AgentTermHostRevision`); the host, which runs from inside the bundle, reads
+the same. A host keeps running across an update of the app, sessions and
+all: when the one that answers speaks this app's protocol but was built from
+other sources, the Mac says from which release it is and offers Restart
+Host…, which asks first. It never restarts it by itself (decided by the
+owner on 2026-11-17), and a release that changes nothing of the host says
+nothing. A build outside an app bundle has no revision, and is not compared.
 
 The protocol version is 15 in 0.7.0. It went up with each message that
 changed while the release was made (principle 6): 8 added `agentShellsFaults`
@@ -555,13 +572,19 @@ event (which carries `rate_limits`), Copilot's last `session.usage_record`,
 Antigravity's last step with `input_tokens`.
 
 Claude Code writes its rate limits nowhere, but hands them to its status
-line command. So a session whose command is `claude` is started with
-`--settings '{"statusLine":{"type":"command","command":"<agenttermd> statusline <file>"}}'`.
-`StatusLineRelay` saves the JSON it is given to `<state>/usage/session-<id>.json`,
-then runs the status line found in the project's or the user's settings
-with the same input and prints what that prints. The host prefers this
-report over the conversation file, since it has the limits and the size of
-the context window. The file is removed when the session ends.
+line command. So `agenttermd setup claude` (#129) puts
+`{"statusLine":{"type":"command","command":"<agenttermd> statusline"}}` in
+its settings, at the user's scope, keeping the one that was there in the
+setup folder (`AgentSetup.previousStatusLine`). In a session of AgentTerm's,
+`StatusLineRelay` saves the JSON it is given to the file the session's
+environment names (`AppChannel.usageVariable`,
+`<state>/usage/session-<id>.json`); anywhere, it then runs the status line
+it took the place of, or the one of the project's or the user's settings,
+with the same input, and prints what that prints. Claude Code has one
+status line: of two builds, the one set up last has it and runs the
+other's after its own, whose own then says it is not known. The host
+prefers this report over the conversation file, since it has the limits
+and the size of the context window. The file is removed when the session ends.
 
 What an account has left is a second thing, `AccountUsage`, kept per agent
 and sent to clients as `accountUsage` when it changes. `AccountUsageFetcher`
@@ -645,24 +668,50 @@ On the iPhone the row keeps room for the mark and the mark is laid over the
 row's link (`overlayPreferenceValue`): inside the link's label, a button's
 touch, and a gesture's of high priority, opened the session instead.
 
-**From the agent itself.** When the host starts an agent's session it gives
-the agent hooks for that session only (`AgentHooks`), in the way each agent
-takes them, without a change to the user's configuration:
+**From the agent itself.** An agent's hooks are in its own
+configuration, at the user's scope, once `agenttermd setup` added them when
+the user asked (`AgentSetup`, #129, below); AgentTerm puts nothing on an
+agent's command line. How each agent is started, what it asks about itself
+and what was found by running it, with its version, is in
+`docs/AGENT-CLIS.md`.
 
-| Agent | Given by | Events |
+| Agent | Where its hooks are | Events |
 |---|---|---|
-| Claude Code | `--settings`, with the status line | `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Notification`, `Stop` |
-| Codex | one `-c hooks.<Event>=...` for each | `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` |
-| Copilot CLI | `--plugin-dir`, a plugin in the host's `hooks/copilot` | `userPromptSubmitted`, `preToolUse`, `permissionRequest`, `postToolUse`, `postToolUseFailure`, `agentStop` |
-| Antigravity | `--add-dir`, the host's `hooks/antigravity` holding `.agents/hooks.json`, trusted for the session by `--settings` with the folders the user trusts | `PreInvocation`, `PreToolUse`, `PostToolUse`, `Stop` |
+| Claude Code | a plugin (`hooks/hooks.json`) | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Notification`, `Stop` |
+| Codex | its `config.toml`, each under a comment that says it is AgentTerm's (below): Codex 0.169 removed plugins' hooks (`plugin_hooks`) | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` |
+| Copilot CLI | a plugin, in its own layout (`hooks.json`) | `sessionStart`, `userPromptSubmitted`, `preToolUse`, `permissionRequest`, `postToolUse`, `postToolUseFailure`, `agentStop` |
+| Antigravity | a plugin, in its own layout (`hooks.json`) | `SessionStart`, `PreInvocation`, `PreToolUse`, `PostToolUse`, `Stop` |
 
 Every hook runs `agenttermd hook <agent> <event>`. It saves what it is told,
-with the agent, the event and the time, in the file `AGENTTERM_EVENTS`
-names: `events/session-<id>.json` in the usage folder, set in the session's
-environment, which the agents pass on to their hooks. The command is the
-same for every session because Codex trusts a hook by its command and asks
-again when it changes. For Antigravity's `PreToolUse` the hook answers
-`{"decision":"allow"}`, which leaves the decision to its own rules.
+with the agent, the event and the time, in the file the session's
+environment names (`AppChannel.eventsVariable`, each build's own, so that
+the other build's hooks leave this one's sessions alone):
+`events/session-<id>.json` in the usage folder. Every session has one, a
+shell's too, for an agent typed in it. Outside a session of AgentTerm's it
+does nothing. The command is the same for every session because Codex
+trusts a hook by its command and asks again when it changes. For
+Antigravity's `PreToolUse` the hook answers `{"decision":"allow"}`, which
+leaves the decision to its own rules. The start's event changes no state:
+it says the hooks are there.
+
+**An agent in no terminal is no session's** (#140). A session's variables
+are in the environment of everything started from it, and stay in a program
+that goes on in the background and works for other terminals after: Codex
+0.169 runs its sessions through one app server they share, started by the
+first of them, which starts every session's hooks and MCP server in that
+first one's environment. So `agenttermd hook`, `agenttermd mcp` and
+`agenttermd statusline` go by their environment only when the agent that
+started them runs in a terminal (`ProcessNames.agentInNoTerminal`): the
+process that started them is looked at, past the shells that only ran their
+command line (`sh -c`, which some agents keep and some do not), and when it
+is an agent's own program with no controlling terminal, they do as outside
+AgentTerm: nothing saved, no tools. What a real agent in a session starts
+is started by that agent, in the session's terminal, as all four were seen
+to on 2026-11-18, whether the hook itself has the terminal or not
+(`docs/AGENT-CLIS.md`). A process that is no agent's, a test that starts
+the server itself, is believed as before. An agent another agent runs
+through its command tool has no terminal either, and is no session's: its
+hooks no longer change the state of the session it was run in.
 
 The host watches that `events` folder, which holds nothing else (Claude
 Code's status line writes its usage next to it several times a second),
@@ -672,6 +721,22 @@ the state from it, from what each agent was seen to tell its hooks on
 2026-11-13 (Claude Code 2.1.323, Copilot CLI 1.0.110, Antigravity 1.5.7;
 Codex 0.167.2 from its documentation, since it runs no hook it was not told
 to trust). Working stays working since it began.
+
+**Whether a session talks to the host** (#129). `SessionInfo.link` has, for
+an agent's session, whether its hooks were heard (any event) and whether
+AgentTerm's MCP server was (it says `started(agent:)` as it starts): true
+once heard, false when not within `linkGrace` (20 seconds) of the agent's
+start, nil until then. Both apps show it as `AgentLinkMark` at the end of the
+usage band. A shell's agent typed by hand is found every
+`foregroundInterval` (2 seconds) from the leader of the terminal's
+foreground process group (`tcgetpgrp`), by the first word of its command
+line (`ProcessNames.command`, `KERN_PROCARGS2`, the last part, as typed;
+`proc_name` gives the file's own name, `2.1.326` for Claude Code's link).
+While it runs, `SessionInfo.typedAgent` names it and the shell is its
+session: what was heard before it was found included; hooks name their
+agent, and the server names the one among its forebears
+(`ProcessNames.agent(above:)`). When the shell is in front again, its agent,
+link, state and turn go.
 
 What cannot be known:
 
@@ -688,8 +753,20 @@ What cannot be known:
   and to choose "Trust all and continue" when Codex asks
   (`AgentHooks.note`, AGENT-8).
 - **Antigravity** says nothing when it waits for permission: its question
-  comes after `PreToolUse`, with nothing in between. So while a tool runs,
-  its state is not known, and `stateNote` says so.
+  comes after `PreToolUse`, with nothing in between, and nothing comes
+  while it is shown nor when it is cancelled (Antigravity 1.5.10, tried
+  2026-11-18). So while a tool runs, its state is not known, and
+  `stateNote` says so; except for a tool of AgentTerm's own (#141). Its
+  `PreToolUse` names it (`toolCall.name` `call_mcp_tool`, `args.ServerName`
+  the build's server, `args.ToolName`; `AgentHooks.ownToolCall`), and the
+  call then comes to the host's own server: the host keeps the call it was
+  told of (`Session.announcedCall`), and when no call of the session's
+  comes to its server within `leaveGrace` (2 s), the session waits for
+  permission, its question the tool's name (`<server>/<tool>`). The call
+  that comes (`toolCalled(by:)`, any shell or browser request but a
+  shell's start) makes it work again; input that may stop a turn makes
+  its state not known. A call that came before the hook was read
+  (`lastToolCall`) is not waited for.
 - **The choices of a permission** are in no agent's hooks; those of a
   question are, for all but Codex, which has no question event.
 - **A turn the user stops** is told by Codex (`Interrupt`) and not by the
@@ -888,6 +965,48 @@ its notification of the session out of Notification Center
 (`AgentNotifications.remove`), as it does when the session is opened on
 the phone itself.
 
+**The Inbox** (#67). Which sessions are done and not seen is the host's,
+so that every device shows the same: `SessionInfo.unseen` is set when a
+hook makes the session's state done, and taken away when its agent works
+again or `noticeSeen` is told for its done state. That message is what a
+device sends both when the session is seen there and when its Inbox item
+is dismissed; a client sends it again while the session is still unseen,
+since an agent done twice with the same words is done twice. The list is
+made by both apps the same way, from the sessions and the failures they
+have (`Inbox.items` in `AgentTermProtocol`, with the words both show): the
+waiting ones, the failures, the unseen ones. The Mac shows it as a place,
+`AppModel.Place.inbox`, with its list (`InboxList`) and the item picked
+in the middle (`InboxDetail`), over the terminals as History is; the item
+picked is kept by its id (`inboxPicked`), and the first is shown when it
+is gone. Open goes to Sessions with the session in front, which is what
+sees it. The iPhone shows it at the top of `SessionsView`, the failure
+cards among its items.
+
+**What a turn came to** (#71). A turn begins when a hook makes the
+session's agent work while no turn is open (`HostServer.beginTurn`): a
+`TurnRecord` keeps when, the prompt the hooks gave, and, taken on a queue
+of its own (`turnQueue`), a `GitSnapshot` of the repository: `git status
+--porcelain=v1 -z --untracked-files=all` and `git diff HEAD --numstat`,
+with each file's size and time of writing. It ends when the agent is done,
+or when the user stops it (Codex's `Interrupt`, a key that may stop a
+turn): on the same queue the folder is looked at again and the two are
+compared (`GitSnapshot.changes`: a file whose status, lines, size or time
+changed, or that came or went), and the agent's own record of the turn is
+read from the end of the file its last event names (`TurnTranscript`: the
+prompt and the answers as handoffs read them, the commands and their exit
+codes in each agent's own way, `docs/AGENT-CLIS.md`). The `TurnResult` is
+kept as the session's `lastTurn`, in memory, and sent to every device
+(`turnResult`), and to a device that connects after its list of sessions.
+Another agent's session working in the same folder, or one inside or
+around it, at any moment of the turn makes it `shared`. A file changed in
+the moment between the prompt and the first look is taken for the folder
+as it was. The Mac shows it in `InboxDetail`; the iPhone in
+`TurnResultScreen`, a route of its own (`Route.result`), which the Inbox
+opens for a done item. Continue is the `answer` a notification's reply
+sends. A session also counts as seen when it
+becomes done while it is already in front: both apps look again when the
+list of sessions comes.
+
 ## The Live Activity
 
 A widget extension, `AgentTermLiveActivity` (`iOS/AgentTermLiveActivity`),
@@ -977,8 +1096,10 @@ any app on the Mac does, with the Mac's own token from the state folder,
 and sends each request as `agentShell(id:key:request:)`. The host looks up
 the session whose key it is and answers `agentShellResult(id:result:)` to
 that connection only. A key names a running agent's session or nothing.
-Without the variable, the server offers no tools. Nor does it in a session
-of the other build: a released build and a development build each install
+Without the variable, the server offers no tools. Nor does it when the
+agent that started it runs in no terminal, whose environment is not the
+session's it works for (#140, "An agent in no terminal is no session's").
+Nor does it in a session of the other build: a released build and a development build each install
 a server of their own (below), so an agent has both, and the one whose
 build the variable does not name stays out rather than sign in to a host
 with another host's token. A variable that names no build is from a host
@@ -994,16 +1115,19 @@ what the user saved for it in Settings > Agents (`setAgentPrompt`, kept in
 whenever the host gives the server (`AgentShellsInstructions.told`), with
 no switch since 2026-11-16 (the owner's decision): the words are the
 switch. An empty text tells nothing, the server's instructions included:
-without `use` the server says only what its shells are. When it starts an agent's session the host writes that text to
-`prompts/<agent>.md` of its folder, which the session's server gives as
-its instructions, and gives it where each agent reads it (MCP-13,
-PROMPT-1 to PROMPT-4): Claude Code is started with
-`--append-system-prompt`; Antigravity gets a rule always on,
-`.agents/rules/agentterm.md` in the folder it is given with `--add-dir`;
-Copilot CLI gets `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` naming a folder of the
-host's with `instructions/agentterm.instructions.md` (after any the user's
-environment names). Copilot CLI takes MCP servers' instructions only from
-servers it allows, and Antigravity not at all. Codex follows the server's.
+without `use` the server says only what its shells are. The host writes that text for every agent to `prompts/<agent>.md` of its
+folder, when it starts and when the user changes it, which the server gives
+as its instructions, and gives it where each agent reads it (MCP-13,
+PROMPT-1 to PROMPT-4), nothing on its command line (#129): Claude Code and
+Codex take the server's instructions (Claude Code 2.1.326 was seen to give
+them to the model); Copilot CLI takes MCP servers' instructions only from
+servers it allows (seen not to, 2026-11-17), so every session's environment
+has `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` naming a folder of the host's with
+`instructions/agentterm.instructions.md` (after any the user's environment
+names); Antigravity gets them as a rule always on of its plugin, which it
+reads everywhere, so the rule says it holds only where the server has
+tools. The server outside a session of AgentTerm's gives no words but that
+it has no tools.
 
 **What it may reach.** A shell it opens is a session like any other, in the
 agent's folder and at its size, with `SessionInfo.openedBy` naming the
@@ -1032,51 +1156,87 @@ token")` and closes), or the connection was lost. Each later call tries
 the host once more, so it fails as fast while the host is gone and works
 again once it is back; only a host that is up and silent is waited for,
 fifteen seconds. The host notes a sign-in it refused from a client on this
-Mac named `MCP`, and the agents `AgentShellsSetup.removeLeftovers` could
-not take an earlier build's server out of, and tells every client
-`agentShellsFaults`: an `AgentShellsFault` per cause (`leftOver`, with the
-agents' names; `signIn`), none when nothing is wrong. A sign-in fault lasts
-until an `MCP` client signs in or the server is set up again; a leftover
-fault for as long as the host that found it runs. Both apps show each in their
-top banner until it is over or it is closed there, and a closed one comes
-back only after it went away. A host that is not running cannot say so
-itself: that one is the agent's to tell.
+Mac named `MCP`, and tells every client `agentShellsFaults`: an
+`AgentShellsFault` per cause (`signIn`), none when nothing is wrong. It lasts
+until an `MCP` client signs in or the server is set up again. Both apps show
+it in their top banner until it is over or it is closed there, and a closed
+one comes back only after it went away. A host that is not running cannot
+say so itself: that one is the agent's to tell.
 
-**Given to each session.** A session's agent is given the server on its
-command line, with its hooks (`AgentHooks.launchArguments`, `server`), for
-that session only; nothing is written into the agent's own configuration,
-and an agent started outside AgentTerm does not get it:
+**In the agent's own configuration** (#129). What AgentTerm needs of an
+agent is in the agent's own configuration, at the user's scope, once the
+user asked: Install in Settings > Hooks & MCP, which the host runs
+(`runAgentSetup`, from this Mac's own app only), or the commands the pane
+shows, in a terminal. Each part is added with the agent's own command when
+the agent has one, and that command is what the user is shown; AgentTerm's
+own (`agenttermd setup <agent>`) is for what an agent has no command for
+(decided by the owner on 2026-11-18: the user sees a standard command of
+the agent's, knows what it adds, and takes it out the same way). As tried
+with the real agents on 2026-11-18, each in a configuration folder of the
+trial's own (`docs/AGENT-CLIS.md`):
 
-| Agent | Given by |
-|---|---|
-| Claude Code | `--mcp-config '{"mcpServers":{"agentterm":{"type":"stdio","command":"<agenttermd>","args":["mcp"]}}}'`, before `--settings`, since it takes every word after it up to the next option |
-| Codex | `-c mcp_servers.agentterm.command=…`, `….args=["mcp"]` and `….env_vars=["AGENTTERM_MCP"]`: Codex gives a server only a few variables of its own and those `env_vars` names, and without the session's the server offers no tools |
-| Copilot CLI | `--additional-mcp-config '{"mcpServers":{"agentterm":{"type":"local",…,"tools":["*"]}}}'` |
-| Antigravity | `.agents/mcp_config.json` in the folder of the host's it is given with `--add-dir`, which it reads as a project's; it takes no server on its command line (`--settings` refuses `mcpServers`) |
+| Agent | The MCP server, its own command | What it has no command for, AgentTerm's (`agenttermd setup <agent>`) |
+|---|---|---|
+| Claude Code 2.1.327 | `claude mcp add --scope user <name> -- <agenttermd> mcp` | its hooks, in a plugin of a marketplace in AgentTerm's folder, which it is had to install (`claude plugin marketplace add <folder> --scope user`, `claude plugin install <name>@<name> --scope user`); its status line. Its server's instructions reach the model |
+| Codex 0.169.1 | `codex mcp add <name> -- <agenttermd> mcp`; and for its shared server `codex features disable daemon_auto_start` (below) | its hooks, in `config.toml` (above), read back with `codex features list` and put back as they were when it cannot; the session's variable, `env_vars` in the table its command wrote, which has no option for it and without which Codex gives a server nothing of its session |
+| Copilot CLI 1.0.113 | `copilot mcp add <name> -- <agenttermd> mcp` | its hooks, in a plugin (`copilot plugin marketplace add <folder>`, `copilot plugin install <name>@<name>`), read from the folder at each session. It does not give a server's instructions: what it is told is in a folder of instructions its environment names (`COPILOT_CUSTOM_INSTRUCTIONS_DIRS`), in every session |
+| Antigravity 1.5.10 | `agy mcp add <name> <agenttermd> mcp` | its hooks and a rule with what it is told, in a plugin (`agy plugin install <folder>`, a copy) |
 
-Each was tried with the real agent on 2026-11-16 (Claude Code 2.1.325,
-Codex 0.169.0, Copilot CLI 1.0.112, Antigravity 1.5.9), with the very
-arguments `launchArguments` writes: each started the server and listed its
-tools. The name is the build's (`AppChannel.mcpServerName`): `agentterm`
-for the released build, `agentterm-dev` for a development build; the
-instructions an agent is given name its build's server. It is always
-given, as the hooks are, with no switch (decided by the owner on
-2026-11-16): `AgentShellsSetup.server`.
+`AgentSetupState.steps` and `removeSteps` (protocol 28) are those commands
+as typed, each with what it is for, the agent's own first; Install and
+Remove run them in that order (`AgentSetup.install`, `.all`), a server of
+before taken out first, as Claude Code and Copilot CLI refuse a name they
+have. `agenttermd setup <agent>` runs AgentTerm's part only (`.own`), and
+says the agent's command for what is still missing. `AgentSetup` writes
+the plugins into the build's state folder (`agent-setup/<agent>`), with
+this build's names (`AppChannel.mcpServerName`) and program; the server is
+in none of them. A plugin that held Codex's server, of a build before, is
+taken out.
 
-**What earlier builds left.** Builds before 0.8.0 installed the server in
-each agent's configuration, for the whole user, with `<agent> mcp add`, and
-recorded in `agent-shells.json` which agents have it under which name. The
-host takes out what is recorded under its own name when it starts, off
-its queue, with each agent's own command through the login shell (`claude
-mcp remove --scope user <name>`, `<agent> mcp remove <name>` for the
-others), once for each agent: it forgets each, whether the agent took it
-out or refused, so that one taken out by hand is not asked again and
-warned of for ever; one that refused is a `leftOver` fault for as long as
-that host runs. One that is not installed now is left for when it is, and
-the record is deleted once nothing is left in it. What a development build of 0.6
-installed under the name every build shared is the released build's to
-take out. A host with a state folder of its own (a test, a trial run)
-neither gives the server nor takes anything out.
+`--remove` takes out this build's only, with the same commands. What each
+has is asked of the agent (`mcp get` or `mcp list` for the server, which
+has to run this build's program; `plugin list`, Codex's hooks, Claude
+Code's `statusLine`), off the host's queue; a command that fails is kept as the
+agent's `problem`, in its own words.
+
+**Codex's hooks, by their own lines** (#142). Each hook is three lines in
+`config.toml`: a comment that names the build (`# AgentTerm's hook
+(agentterm), added by …`), its table (`[[hooks.Stop]]`) and its command. A
+build's hooks are taken out by those lines, wherever Codex has them by
+then, and nothing else is. They were between two marks before: Codex keeps
+the comments a file ends with at its end and writes a table it adds above
+them, so the closing mark took in what Codex added after, a folder the user
+trusted or a server they added, and Install Again and Remove took that out
+with the hooks. Hooks a build before wrote between marks are taken out by
+their lines too, and what Codex put between the marks stays.
+
+**Codex's shared server** (#140). What a principle asks of an agent is
+arranged with the agent's own command when it has one, and by AgentTerm's
+own writing only when it has none (above). Install turns off
+the feature that has Codex start the app server its sessions share (`codex
+features disable daemon_auto_start`), keeps that it did
+(`agent-setup/codex/shared-server-was-on`), and Remove turns it on again
+(`codex features enable`), unless the user had it off, or another build of
+AgentTerm is still set up in Codex and needs it off as much. The row says
+so before Install is pressed (`AgentSetupWords.sharedServerNote`): the
+setting is all of Codex's, outside AgentTerm too. A server that runs is
+used whatever the feature says, and stopping it leaves the sessions that
+use it waiting, so it is not stopped: `AgentSetupState.sharedServerOff`
+(protocol 27) is false while Codex starts one by itself or one runs (`codex
+app-server daemon version`), the agent then counts as not set up, and its
+`problem` says what to do (`AgentSetupWords.sharedServerRunning`). A Codex
+that has no such feature is asked nothing of it. Being Codex's own command,
+it is one of the steps shown, and `agenttermd setup codex` leaves it to the
+user who runs the steps by hand. AgentTerm still puts nothing on the
+command line it starts Codex with (`--no-daemon` would do the same for the
+sessions it starts, and not for one typed by hand). The server finds what to say in the
+prompt files the host writes for every agent (`HostServer.promptFile`).
+Every session has its key in its environment (`AGENTTERM_MCP`, which names
+the build), a shell's too; outside a session of this build the server
+offers no tools. A host with a state folder of its own (a test) sets up
+only its stand-in agents, in its own home, and never the user's. What
+builds before 0.8.0 put in the agents' configuration (`agent-shells.json`)
+is no longer taken out (principle 6).
 
 ## The browser
 
@@ -1086,11 +1246,56 @@ Embedded Framework (CEF 156.0.30, Chromium 156.0.8078.96, tried on
 fetches the minimal binary distribution, pinned with its SHA-1, into
 `.build/cef/<name>` and points `.build/cef/current` at it.
 
+**The right-click menu** (#131). The client's context menu handler sets
+the items from what was clicked (`on_before_context_menu`: the type flags,
+the media type, the edit state's flags), each labelled by the app; CEF
+shows them in its own menu, and does the ones that are its own (Back,
+Forward, Reload, Cut, Copy, Paste, Select All). The app's own, from
+`MENU_ID_USER_FIRST` (`ATC_MENU_*`), are told to Swift as an event,
+`ATC_EVENT_MENU_COMMAND` with the link's and the image's address:
+`BrowserTab.menuCommand` opens them as a page (as a page that asked for a
+new window is), copies them, or shows the DevTools. A page is laid out for
+accessibility only for the UI tests (`AGENTTERM_WEB_ACCESSIBILITY`, set
+when a browser is made): Chromium does it for a reader at a cost.
+
+**A button's label is of one shape** (#134). The Show As button on a
+page's bar shows a picture, and a device's name beside it when the page is
+shown as one. With the name there only for a device (`if let`), SwiftUI
+made the button anew when the first device was picked: its accessibility
+element was another, so that a press on the one found before did nothing
+and was still reported as done, and a list open under it was closed with
+the state it is shown by left as it was, so that the next press closed
+what was not there. The name is always in the label, empty and of no
+height for this Mac, so that the button is as large as it was.
+A button drawn by AppKit, the bordered ones of the Git panel, keeps its
+element through such a change: its Push, found before a commit, pushes
+after it, as tried.
+
+**Windows of Chrome's own** (#125). Chrome's own interface opens windows
+of its own kind, an extension's page say, outside the app's views; CEF
+gives them no client of the app's (`get_default_client` would, but a
+window made through it is not the one an extension opens, and hiding
+those that are broke an install, as tried on 2026-11-17). So the app
+watches its windows instead (`BrowserModel.watchChromeWindows`, on
+`didUpdate` and the windows' key, main and occlusion changes): one of
+Chromium's (`NativeWidgetMacNSWindow`, looked up once the framework is
+loaded), with a title bar, resizable, and with no parent (not a bubble or
+a dialog), that the app did not ask for, is ordered out and held, and
+kept out of sight when Chrome shows it again; held, not closed, so that
+what made it goes on. Open in Chrome Window shows them
+(`atc_open_chrome_window` makes one for a page, in the page's request
+context, marked `agentterm.chrome-window`); they are closed before
+Chromium stops, which they would keep from stopping.
+
 **The bridge.** `CAgentTermCEF` is C and Objective-C on CEF's C API, its
 headers read from `.build/cef/current` (`headerSearchPath`) with
 `CEF_API_VERSION` 15600 pinned, so that a later build of the same API is
 taken without a change. Built without the headers (`__has_include`), it
-compiles to stubs and the browser says it is not in the build. The
+compiles to stubs and the browser says it is not in the build. Each
+function of the header has its stub, and a build with the headers never
+compiles them: one that is missing stops only the linker of a build
+without them, which CodeQL's is (#133), so BROWSER-39 compiles the file
+as such a build does and looks for each. The
 framework is never linked: it is loaded with `dlopen` the first time a
 browser is wanted, and the dozen functions used are looked up by name.
 Reference counting follows the C API: a struct a callback receives
@@ -1098,7 +1303,13 @@ carries a reference the callback releases, and a struct of ours given to
 CEF carries one CEF releases. CEF runs on the main thread with an
 external message pump: `on_schedule_message_pump_work` sets a run loop
 timer in the common modes, at most a thirtieth of a second away, as
-cefclient does. Chromium wants its application to say whether it is
+cefclient does. A turn of CEF's work is not done from inside another,
+except under a right-click menu (#139): CEF runs the menu from inside the
+turn that opened it, which then lasts until the menu closes, and with
+every other turn put off nothing of Chromium went on (a page asked to
+reload was not read, its title stood still). Between
+`on_before_context_menu` and `on_context_menu_dismissed` one level more
+is let in. Chromium wants its application to say whether it is
 sending an event: `isHandlingSendEvent`, `setHandlingSendEvent:` and a
 wrapped `sendEvent:` are added to `NSApplication` itself. Changing the
 running application's class instead, as first done, crashed the app the
@@ -1358,16 +1569,18 @@ The middle of the window shows the project on show's one pane (#69). The
 user does not split it: no button, menu item, shortcut or action does, and
 a layout split by an earlier build is put back together into one pane by
 `syncPanes`, its tab in front kept. What is shown side by side is an
-agent's area, its shells and pages beside it (below). `PaneLayout`
+agent's area, its page and its shell beside it (below). `PaneLayout`
 (`AgentTermProtocol`, so that `swift test` reaches it) can still hold a tree
 of splits,
 each with an axis and the share of its first side, whose leaves are panes;
 a pane has the ids of its tabs, the one in front, and whether it was split
 off empty to be given one. `TabLayout`, which the host keeps for every
-device, still decides the order, pins and groups of all the tabs; a pane's
-strip shows `TabLayout.items(front:among:)`, the items among its own tabs.
-A tab is in one pane at most: the window is one client of the host, and
-`SizeArbiter` keeps one size for each client.
+device, decides the order and the pins of the tabs, and has no groups
+(#127); a pane's strip shows `TabLayout.strip(among:)`, its own tabs in
+that order. The Mac and the phones keep the same sessions in it,
+`SessionInfo.withTabs` (the agents'), or each would take out what the
+other put in. A tab is in one pane at most: the window is one client of
+the host, and `SizeArbiter` keeps one size for each client.
 
 The app keeps a `PaneLayout` for each project, by its folder ("" for the
 sessions of no listed folder), in its preferences under `paneLayouts` for
@@ -1376,43 +1589,60 @@ the iPhone has none. A tab's project is the listed folder its session
 belongs to as the list at the left has it (`WorktreePath.belongs`), or the
 folder that holds its file, the diff's folder or the browser tab's
 project. `syncPanes` runs whenever the tabs change, after `syncTabs`: it
-drops what is gone, puts a new tab in the pane the keyboard is in, keeps
-each pane's tabs in the strip's order, and closes a pane left empty by a
-tab that went, unless it was split off empty or is the only one. It waits,
-as `syncTabs` does, until the host has listed its sessions and sent its
-`TabLayout`, so that nothing saved is dropped at launch.
+drops what is gone, puts a new tab in its project's pane, and keeps each
+pane's tabs in the strip's order. It waits, as `syncTabs` does, until the
+host has listed its sessions and sent its `TabLayout`, so that nothing
+saved is dropped at launch.
 
-The rest of the app knows one tab in front: `selectedSession`,
-`files.active`, `diffInFront` and `browserInFront`, in that order of
-priority the other way round. That is the front of the pane the keyboard is
-in. Setting it (`frontChanged`) shows the project of that tab and brings the
-tab to the front of its pane, with the keyboard; focusing a pane
-(`focusPane`, a click found in `paneFrames`, ⌘⌥ and an arrow) sets it to that
-pane's front (`adoptFocusedFront`), or to nothing. A session that ends
-leaves the tab before it in front of its pane, not a tab of another pane or
-project. A terminal takes the keyboard only when its pane and part have it
-(`TerminalPane`'s `focused`), and a terminal moved to another container
-keeps the keyboard it had, so that a layout that changes as an agent opens
-a shell does not take it from where the user types.
+**Tabs that hold items** (#127). A tab of the strip is a group: an
+agent's session, by its tab id, or one of a project's holders of the
+user's own, `TabID.holder(kind, project)` (`h:<kind>:<project>`, a
+`HolderKind` of `AgentTermProtocol`: shells, browser, diffs, files). Only
+groups are in the `TabLayout` and the panes (`liveTabIDs`); an item is in
+no pane. `stripTab(of:)` gives an item's group: an agent's own shell or
+page (`companions`: a running shell whose `openedBy` names a running
+agent, a browser tab it opened) is its agent's; the user's shell, page,
+diff or file is the holder of its kind in its project. `members(of:)`
+lists a group's items in the order of its row (an agent, its pages, its
+shells). The pane shows `GroupRow`, the items with + where one more can
+be made, over what the group shows. One of the user's groups shows one
+item, the whole pane for it (`MemberContent`): `groupShown`, by group,
+its first when that one is gone. An agent's tab shows its area (below).
+A shell the user opens for an agent (+ Shell) is created with
+`CreateRequest.openedBy`, which the host takes for a shell of that
+agent's: in its folder, its marks prepared for `shell_run`, listed by
+`shell_list` to that agent only. When the agent's session ends, its
+shells and pages are the user's, in the Shells and Browser holders.
 
-**An agent's area.** The running shells whose `openedBy` names a running
-agent, and the browser tabs an agent opened, are always its companions
-(`companions`): they are in no pane, are not dragged, pinned or moved, and
-the agent's pane shows `AgentAreaView`, the agent and its browser side by
-side over its shells. What is remembered of each (the shares, a
-part closed, the shell and page in front) is an `AgentArea`, by the agent's
-tab id, in `agentAreas`; which part has the keyboard is `agentAreaFocus`.
-Picking a companion brings its agent's area, with it in front and its part
-shown. When the agent's session ends, its shells are tabs again.
+The rest of the app knows one item in front: `selectedSession`,
+`files.active`, `diffInFront` (with `diffShownID` among `diffTabs`) and
+`browserInFront`, in that order of priority the other way round. That is
+what the group in front of the pane the keyboard is in shows. Setting it
+(`frontChanged`) shows the project of that item, has its group show it
+and brings the group to the front of its pane, with the keyboard; picking
+a group (`selectStripTab`, a click on its tab, ⌘ and a number) sets it
+to what that group shows. What acts on the item in front does not change
+(⌘W, the Browser menu); what acts on a strip (the number shortcuts,
+pinning, moving, closing many) takes `frontStripTab`, the group, and
+closes what a group holds with it.
 
-**The user's pages.** The pages no agent has beside it are, for each
-project, one tab of its pane's strip: the first of them stands for all in
-the pane's layout (`stripTab(of:)`), the others are in no pane, and the
-pane shows `UserBrowserView`, a row of the pages over the one shown
-(`browserShown`, by project). The tab in front is still the page itself
-(`browserInFront`), so what acts on the page in front does not change;
-what acts on a strip (the number shortcuts, pinning, moving) takes
-`frontStripTab`.
+**An agent's area** (#69). An agent with a page or a shell of its own
+(`hasArea`) is shown by `AgentAreaView`: the agent and the page picked
+side by side (`SplitContainer`) over the shell picked, the agent's usage
+under all of it. What is remembered of each (the shares, a part hidden,
+the shell and the page picked) is an `AgentArea`, by the agent's tab id,
+in `agentAreas`, kept in the app's preferences for each Mac; which part
+has the keyboard is `agentAreaFocus`, and a part shown alone for a while
+`agentAreaAlone`. The parts have no strips of their own: since #127 their
+tabs are the agent's row under the strip, which marks the items on show
+(`itemsOnShow`) and the one the keyboard is in (`shownMember(of:)`, what
+the rest of the app has in front), and whose two buttons hide a part and
+show it again (`toggleAgentPart`). Putting a companion in front (`place`)
+makes it the one its part shows, shows that part if it was hidden, and
+puts the keyboard there. An agent opening a shell or a page changes
+neither what has the keyboard nor, when one was picked, what its part
+shows. A click in a part puts the keyboard in it (`paneClicked`, by the
+frames `PaneFrameReader` reports for each part).
 
 ## A part that stopped
 
@@ -1658,6 +1888,55 @@ Its layout is non-contiguous, and its coordinator keeps the text it last
 gave its owner or was given (`held`), so that an update that only brings
 the editor's own change back compares nothing. Each file has an editor of
 its own (`.id(path)`), since the storage is chosen when it is made.
+
+Typing tells no view (#104). The text of an open file as it is edited is
+in a box of its own (`EditedText`), which `OpenDocument` holds by
+reference: a key changes what the box holds, and `FilesModel.setText`
+changes the published `documents` only when the key makes the file differ
+from the disk's, or no longer differ (`isDirty`, kept by the model, which
+is what changes the text and what the disk has). Kept in the document
+itself, the text made every view that watches the open files (the strip,
+the row of the tab, the list, the tree, the content) work out its body
+again at each key, and the window lay itself out: 20 to 30 ms a key in a
+debug build, whatever the file's size. Whether a text differs from the
+disk's is told by their lengths first (`OpenDocument.same`): Swift's `==`
+reads both through to where they differ.
+
+A text of 1 MB or more is not resized by AppKit (#104): for that AppKit
+works out again, at each key, the room the whole text takes
+(`usedRectForTextContainer`, through every line laid out), a frame or more
+for 5 MB. Its view (`EditorTextView`) sizes itself. Its height is the
+count of its lines times their height: lines are not wrapped, each is one
+line of the layout, and all are of one height, as tried on macOS 27.2 with
+Vietnamese, Chinese and Japanese, emoji and tabs. The count is taken when
+the text is given (Foundation's line ends, 16 ms for 5 MB), follows each
+change by the breaks about where it was made (`shouldChangeText`, then
+`didChangeText`: one unit more on each side, for a carriage return and a
+line feed the change parts or brings together), and is taken again off the
+main thread a second after the last change, which puts right a change that
+was missed. The layout breaks a line at a line feed, a carriage return, a
+vertical tab, a form feed, U+0085, U+2028 and U+2029 (`LineBreaks`);
+Foundation's line ends leave out the vertical tab and the form feed, which
+the count off the main thread adds. Its width is its longest line's, taken
+as so many letters of the font, made wider by any line on show
+(`viewWillDraw`) or typed in that is wider: a tab and a wide letter take
+more room than a letter, read from the layout of the line. A full layout
+to find the exact room took 1.2 s for 5 MB, and is not made.
+
+Every line is one line of the layout because the text's paragraph style
+has tabs without end (`EditorTextView.paragraphs`, #132): AppKit's own has
+twelve tab stops and none after, and the layout goes to a new line at the
+thirteenth tab. The style has to be an attribute of the text: a text
+without it is laid out with AppKit's own, whatever the view's default is,
+what is typed at the end of a text comes with AppKit's own, and the storage
+that colors replaces the attributes of what it colors. So the view is its
+storage's delegate, and gives what was put in or given attributes the
+style (`willProcessEditing`).
+
+Each change of the editor's size still has the window's layout worked out
+again (`NSHostingView`'s constraints, about 19 ms in a debug build): a line
+added, or a line typed past the right edge when it is the widest. That is
+the same for a small text, which AppKit sizes.
 
 A file's diff in one panel (`PatchView`) is one `NSTextView`: the patch as
 an attributed string, colored off the main thread, with a layout manager

@@ -56,9 +56,10 @@ class MacUITestCase: XCTestCase {
         home = root.appendingPathComponent("home")
         state = root.appendingPathComponent("state")
         try makeFixtures()
+        try beforeTheHostStarts()
         port = Self.nextPort
         Self.nextPort += 1
-        host = try startHost(state: state, home: home, port: port)
+        host = try startHost(state: state, home: hostHome, port: port, extra: hostArguments)
         forgetPreferences()
         try beforeTheAppStarts()
         app = try launchApp()
@@ -133,6 +134,53 @@ class MacUITestCase: XCTestCase {
     /// Called with the host running and the app not started yet.
     func beforeTheAppStarts() throws {}
 
+    /// Called with the fixtures made and the host not started yet.
+    func beforeTheHostStarts() throws {}
+
+    /// The home folder the test's host is given: the test's own. Only the
+    /// test of the real agents, run by hand, gives the user's, so that the
+    /// agents are signed in.
+    var hostHome: URL { home }
+
+    /// More arguments for the test's host, which a test class may give.
+    var hostArguments: [String] { [] }
+
+    // MARK: The app as it is shipped
+
+    /// The app bundle `scripts/test-mac.sh` builds, under an identifier of
+    /// its own, for the tests that need the app as it is shipped: Chromium,
+    /// the Info.plist.
+    static var testBundle: URL? {
+        ProcessInfo.processInfo.environment["AGENTTERM_TEST_BUNDLE"].map { URL(fileURLWithPath: $0) }
+    }
+
+    /// Starts the bundle with the test's home, state and port, as the
+    /// unbundled app is started otherwise. Its preferences are forgotten
+    /// first when `fresh`.
+    func launchBundledApp(fresh: Bool) throws -> MacDriver {
+        let bundle = try XCTUnwrap(Self.testBundle)
+        if fresh { forgetBundlePreferences(bundle) }
+        var environment = Self.ownHome(home)
+        environment.merge(appEnvironment) { _, own in own }
+        environment["AGENTTERM_STATE_DIR"] = state.path
+        environment["AGENTTERM_PORT"] = String(appPort)
+        environment["CFFIXED_USER_HOME"] = home.path
+        let driver = try MacDriver(executable: bundle.appendingPathComponent("Contents/MacOS/AgentTerm"), environment: environment)
+        driver.wait(for: .id("mac-switcher"), timeout: 30)
+        return driver
+    }
+
+    func forgetBundlePreferences(_ bundle: URL) {
+        guard let identifier = Bundle(url: bundle)?.bundleIdentifier, identifier.contains("uitest") else { return }
+        let defaults = Process()
+        defaults.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        defaults.arguments = ["delete", identifier]
+        defaults.standardOutput = FileHandle.nullDevice
+        defaults.standardError = FileHandle.nullDevice
+        try? defaults.run()
+        defaults.waitUntilExit()
+    }
+
     // MARK: What the host has to show
 
     @discardableResult
@@ -199,6 +247,85 @@ class MacUITestCase: XCTestCase {
         }
     }
 
+    /// Whether the app is the one in front of every other.
+    var appIsInFront: Bool { NSRunningApplication(processIdentifier: app.pid)?.isActive == true }
+
+    /// Through accessibility, as the rest is done: macOS does not let a
+    /// program that is not in front itself put another one there. For what
+    /// the app does only while it is in front: a banner seen (NOTE-9), the
+    /// remotes asked by itself (GIT-77).
+    func bringAppToFront() {
+        if !appIsInFront {
+            NSRunningApplication(processIdentifier: app.pid)?.activate(options: [.activateAllWindows])
+            AXUIElementSetAttributeValue(AXUIElementCreateApplication(app.pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        }
+        wait("the app in front") { appIsInFront }
+    }
+
+    /// The file a remote made slow by `makeSlowRepository` writes when it is
+    /// asked for what is new: the second it was asked at.
+    func fetchAsked(of repository: URL) -> URL {
+        repository.deletingLastPathComponent().appendingPathComponent(repository.lastPathComponent + "-fetch-asked")
+    }
+
+    static let slowRemoteSeconds = 5
+    static let commitBeforeTheFetch = "feat: made before the fetch"
+
+    /// A repository apart from the test's own, with a commit its remote
+    /// does not have, and a remote that takes five seconds to answer a
+    /// fetch and says when it was asked. For what happens while the app
+    /// asks the remotes by itself (#116), which it does once for a folder,
+    /// within three seconds of its changes being shown with the app in
+    /// front: this one's are not shown until the test picks it. A push is
+    /// not slowed.
+    func makeSlowRepository(named name: String, under parent: URL) throws -> (folder: URL, remote: URL) {
+        let folder = parent.appendingPathComponent(name), remote = parent.appendingPathComponent(name + ".git")
+        try makeRepository(folder, remote: remote)
+        try write("first line\nsecond line\n", to: "notes.txt", in: folder)
+        git("commit", "-q", "-am", Self.commitBeforeTheFetch, in: folder)
+        let program = parent.appendingPathComponent(name + "-slow-upload-pack")
+        try """
+        #!/bin/sh
+        date +%s > '\(fetchAsked(of: folder).path)'
+        sleep \(Self.slowRemoteSeconds)
+        exec git upload-pack "$@"
+
+        """.write(to: program, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: program.path)
+        git("config", "remote.origin.uploadpack", program.path, in: folder)
+        return (folder, remote)
+    }
+
+    /// With the folder of `makeSlowRepository` just picked and its changes
+    /// on show: waits for the app's own fetch to be under way, checks that
+    /// no button waits on it, presses Push, and checks that the push is
+    /// made, and only once the fetch is over (GIT-77, REMOTE-21).
+    func pushWhileTheAppFetchesByItself(_ slow: (folder: URL, remote: URL), file: StaticString = #filePath, line: UInt = #line) {
+        let asked = fetchAsked(of: slow.folder)
+        // The app asks the remotes by itself only while it is in front.
+        bringAppToFront()
+        wait("the app's own fetch to be under way", timeout: 20, file: file, line: line) { FileManager.default.fileExists(atPath: asked.path) }
+        let began =
+            (try? String(contentsOf: asked, encoding: .utf8)).flatMap { TimeInterval($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .map(Date.init(timeIntervalSince1970:)) ?? Date()
+        // No button waits on it. Looked at as they are now, without
+        // waiting: held, Fetch turns and is no button to be found.
+        for name in ["Fetch", "Pull", "Push, 1 commit"] {
+            XCTAssertEqual(app.first(.button(name))?.enabled, true, "\(name) is held while the app fetches by itself", file: file, line: line)
+        }
+        XCTAssertLessThan(
+            Date().timeIntervalSince(began), TimeInterval(Self.slowRemoteSeconds) - 1.5, "the fetch may have been over when the buttons were looked at", file: file,
+            line: line)
+        app.press(.button("Push, 1 commit"), file: file, line: line)
+        wait("the remote to have the commit", timeout: 40, file: file, line: line) {
+            self.git("log", "-1", "--format=%s", "main", in: slow.remote) == Self.commitBeforeTheFetch
+        }
+        // Not beside the fetch: after it.
+        XCTAssertGreaterThanOrEqual(
+            Date().timeIntervalSince(began), TimeInterval(Self.slowRemoteSeconds) - 1, "the push was made while the fetch was under way", file: file, line: line)
+        app.wait(for: .button("Push"), timeout: 15, file: file, line: line)
+    }
+
     /// Small programs under the agents' names. Asked for one answer (`-p`,
     /// `exec`), they give a commit message; started in a terminal, they say
     /// so, write down what they were started with (`agentStarts`), and then
@@ -206,8 +333,68 @@ class MacUITestCase: XCTestCase {
     func makeAgents(_ directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for name in ["claude", "codex"] {
+            // Asked of its plugins (#129), as the real one answers: in a
+            // folder of its own, what it was given and how it was asked.
+            let plugins = directory.appendingPathComponent("plugins-\(name)").path
+            let listed = name == "claude" ? #"printf '  ❯ %s\n    Status: ✔ enabled\n' "$n""# : #"printf '%s  installed, enabled  1.0\n' "$n""#
+            // Codex's is asked of the server its sessions share too (#140),
+            // once a test gave it one (`shared-server`: whether it starts
+            // it by itself; `server-running`: one runs), and answers as
+            // Codex 0.169.1 does.
+            // Asked of AgentTerm's MCP server with its own command, each
+            // answers as the real one was seen to (2026-11-18): Claude Code
+            // keeps it by name and refuses one it has; Codex writes a table
+            // into its config.toml, which AgentTerm adds a line to.
+            let servers =
+                name == "claude"
+                ? """
+                      "mcp add")
+                        shift 2; while [ "$1" = "--scope" ]; do shift 2; done; n=$1; shift; [ "$1" = "--" ] && shift
+                        if [ -e '\(plugins)'/server-"$n" ]; then echo "MCP server $n already exists in user config"; exit 1; fi
+                        printf '%s\\n' "$1" > '\(plugins)'/server-"$n"; echo "Added stdio MCP server $n to user config" ;;
+                      "mcp get")
+                        if [ ! -e '\(plugins)'/server-"$3" ]; then echo "No MCP server named \\"$3\\". Run \\`claude mcp add\\` to add one."; exit 1; fi
+                        printf '%s:\\n  Scope: User config (available in all your projects)\\n  Status: ✔ Connected\\n  Type: stdio\\n  Command: %s\\n  Args: mcp\\n' "$3" "$(cat '\(plugins)'/server-"$3")" ;;
+                      "mcp remove")
+                        shift 2; while [ "$1" = "--scope" ]; do shift 2; done
+                        if [ ! -e '\(plugins)'/server-"$1" ]; then echo "No MCP server named \\"$1\\" in user scope"; exit 1; fi
+                        rm -f '\(plugins)'/server-"$1"; echo "Removed MCP server $1 from user config" ;;
+                """
+                : """
+                      "mcp add")
+                        n=$3; shift 3; [ "$1" = "--" ] && shift
+                        mkdir -p "$HOME/.codex"; rest=$(without "$n")
+                        { [ -z "$rest" ] || printf '%s\\n\\n' "$rest"; printf '[mcp_servers.%s]\\ncommand = "%s"\\nargs = ["mcp"]\\n' "$n" "$1"; } > "$conf.new"; mv "$conf.new" "$conf"
+                        echo "Added global MCP server '$n'." ;;
+                      "mcp get")
+                        body=$(table "$3")
+                        if [ -z "$body" ]; then echo "Error: No MCP server named '$3' found."; exit 1; fi
+                        printf '{"name": "%s", "enabled": true, "transport": {"type": "stdio", "command": "%s", "args": ["mcp"], "env": null, "env_vars": [%s], "cwd": null}}\\n' "$3" "$(printf '%s\\n' "$body" | sed -n 's/^command = "\\(.*\\)"$/\\1/p')" "$(printf '%s\\n' "$body" | sed -n 's/^env_vars = \\[\\(.*\\)\\]$/\\1/p')" ;;
+                      "mcp remove")
+                        if [ -n "$(table "$3")" ]; then without "$3" > "$conf.new"; mv "$conf.new" "$conf"; echo "Removed global MCP server '$3'."; else echo "No MCP server named '$3' found."; fi ;;
+                """
             let script = """
                 #!/bin/sh
+                conf="$HOME/.codex/config.toml"
+                table() { awk -v h="[mcp_servers.$1]" '$0==h{on=1;next} on&&(/^\\[/||/^$/){on=0} on' "$conf" 2>/dev/null; }
+                without() { awk -v h="[mcp_servers.$1]" '$0==h{skip=1;pend=0;next} skip&&(/^\\[/||/^$/){skip=0} skip{next} /^$/{pend++;next} {while(pend>0){print "";pend--} print}' "$conf" 2>/dev/null; }
+                case "$1 $2" in
+                  "plugin "*|"features "*|"app-server daemon"|"mcp "*)
+                    mkdir -p '\(plugins)'
+                    printf '%s\\n' "$*" >> '\(plugins).log'
+                    case "$1 $2" in
+                \(servers)
+                      "plugin list") for f in '\(plugins)'/plugin-*; do [ -e "$f" ] || continue; n=${f##*/plugin-}; \(listed); done ;;
+                      "plugin install"|"plugin add") touch '\(plugins)'/plugin-"$3" ;;
+                      "plugin uninstall"|"plugin remove") rm -f '\(plugins)'/plugin-"$3" ;;
+                      "features list") [ -e '\(plugins)/shared-server' ] && printf 'daemon_auto_start                        stable             %s\\n' "$(cat '\(plugins)/shared-server')" ;;
+                      "features disable") [ -e '\(plugins)/shared-server' ] || exit 1; echo false > '\(plugins)/shared-server' ;;
+                      "features enable") [ -e '\(plugins)/shared-server' ] || exit 1; echo true > '\(plugins)/shared-server' ;;
+                      "app-server daemon")
+                        if [ -e '\(plugins)/server-running' ]; then echo '{"status":"running","backend":"pid"}'; else echo "Error: failed to connect"; exit 1; fi ;;
+                    esac
+                    exit 0 ;;
+                esac
                 case " $* " in
                   *" -p "*) cat > /dev/null; echo "feat: written by the stand-in \(name)"; exit 0 ;;
                 esac
@@ -240,6 +427,12 @@ class MacUITestCase: XCTestCase {
             ["--port", String(port), "--local-only", "--no-account-usage", "--home", home.path, "--agents", root.appendingPathComponent("agents").path] + extra
         var environment = Self.ownHome(home)
         environment["AGENTTERM_STATE_DIR"] = state.path
+        // An agent's hooks and MCP server are said missing after 3 seconds,
+        // not 20 (#129).
+        environment["AGENTTERM_LINK_GRACE"] = "3"
+        // What it throws away stays in the test's folder, also when its
+        // home is the user's.
+        if home != self.home { environment["AGENTTERM_TRASH_DIR"] = root.appendingPathComponent("trash").path }
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -273,7 +466,9 @@ class MacUITestCase: XCTestCase {
     }
 
     /// What a test has the app started with besides, when it starts it again.
-    var appEnvironment: [String: String] = [:]
+    /// The onboarding is not shown, but in the test of it (#129): the
+    /// stand-in agents are not set up, and it would cover the window.
+    var appEnvironment: [String: String] = ["AGENTTERM_NO_ONBOARDING": "1"]
 
     /// Starts the app on the test's host. Its preferences are its own too:
     /// with a home of its own it reads and writes none of the real app's.
@@ -345,7 +540,7 @@ class MacUITestCase: XCTestCase {
         var failures: [PartFailure]? { last { if case .failures(let list) = $0 { return list } else { return nil } } }
         /// The size a session has now, as told to a device that is attached to it.
         func size(of session: SessionID) -> TermSize? {
-            last { if case .resized(session, let size, _) = $0 { return size } else { return nil } }
+            last { if case .resized(session, let size, _, _) = $0 { return size } else { return nil } }
         }
         func text(_ session: SessionID) -> String { String(decoding: output[session] ?? Data(), as: UTF8.self) }
         func send(_ message: ClientMessage) { connection.send(message) }

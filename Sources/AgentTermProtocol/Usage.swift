@@ -36,19 +36,29 @@ public struct SessionUsage: Codable, Equatable, Sendable {
     public var limits: [UsageLimit]
     /// Premium requests the session has spent (Copilot).
     public var premiumRequests: Double?
+    /// How hard the model thinks, in the agent's own word ("xhigh",
+    /// "medium"), as it records it (#130).
+    public var effort: String?
 
     public init(
         model: String? = nil, contextTokens: Int? = nil, contextWindow: Int? = nil,
-        limits: [UsageLimit] = [], premiumRequests: Double? = nil
+        limits: [UsageLimit] = [], premiumRequests: Double? = nil, effort: String? = nil
     ) {
         self.model = model
         self.contextTokens = contextTokens
         self.contextWindow = contextWindow
         self.limits = limits
         self.premiumRequests = premiumRequests
+        self.effort = effort
     }
 
-    public var isEmpty: Bool { model == nil && contextTokens == nil && limits.isEmpty && premiumRequests == nil }
+    /// The name the bar under a terminal shows: the model, with how hard it
+    /// thinks when that is known.
+    public func modelLine(or name: String) -> String {
+        [model ?? name, effort].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    public var isEmpty: Bool { model == nil && contextTokens == nil && limits.isEmpty && premiumRequests == nil && effort == nil }
 
     /// Share of the context in use, from 0 to 1, when the window is known.
     public var contextFraction: Double? {

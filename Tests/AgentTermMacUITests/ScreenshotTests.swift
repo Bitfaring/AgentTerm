@@ -177,14 +177,15 @@ final class ScreenshotTests: XCTestCase {
         pause(2)
         capture("mac-files.png")
 
-        // The agent's area, the first picture: the agent, the page it
-        // opened in AgentTerm's browser and the shell it ran a command in,
-        // beside it (#69, #76).
+        // The agent's tab, the first picture: the agent, the page it opened
+        // in AgentTerm's browser and the shell it ran a command in, beside
+        // it (#69, #76), each in the row under the strip (#127).
         let server = try openTheAgentsPage(shell: true)
         defer { server.stop() }
         app.press(.id("tab-1"), timeout: 15)
         app.wait(for: .id("agent-browser"), timeout: 30)
         app.wait(for: .id("agent-shells"), timeout: 30)
+        wait("the agent's page and shell in its row", timeout: 30) { self.app.nodes().filter { $0.identifier.hasPrefix("item-") }.count == 3 }
         // What the terminals and the page draw cannot be read from here:
         // time for the agent to draw its screen for its narrower room.
         pause(5)
@@ -213,8 +214,8 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// With the Mac app closed, so that no session is at its size: more
-    /// sessions for the iPhone to list, in two folders, one pinned and the
-    /// others in groups.
+    /// sessions for the iPhone to list, in two folders, one pinned, and a
+    /// shell of the user's.
     func testPart2TheSessionsForTheiPhone() throws {
         try connect()
         // Without the Mac's part, the session it would have left.
@@ -225,7 +226,7 @@ final class ScreenshotTests: XCTestCase {
         client.send(.attach(session: first.id, size: phone))
         client.send(.takeControl(session: first.id, size: phone))
         wait("the first session at a phone's size") {
-            self.messages.contains { if case .resized(first.id, phone, _) = $0 { return true } else { return false } }
+            self.messages.contains { if case .resized(first.id, phone, _, _) = $0 { return true } else { return false } }
         }
         client.send(.detach(session: first.id))
         try converse("Fix the flaky parser tests", in: project)
@@ -237,15 +238,12 @@ final class ScreenshotTests: XCTestCase {
         try start(nil, name: "zsh", in: website)
 
         // The host keeps the arrangement its clients give it: this one
-        // lists every session, as an app does for the tabs it shows.
+        // lists the agents' sessions, as an app does for the tabs it shows.
         var layout = messages.compactMap { message -> TabLayout? in if case .tabLayout(let layout) = message { return layout } else { return nil } }.last ?? TabLayout()
-        layout.sync(with: sessions.map(\.layoutID))
+        layout.sync(with: SessionInfo.withTabs(sessions).map(\.layoutID))
         layout.setPinned(first.layoutID, true)
-        let api = try XCTUnwrap(layout.newGroup(with: codex.layoutID, name: "api"))
-        layout.add(upload.layoutID, toGroup: api)
-        layout.setColor("blue", of: api)
-        let docs = try XCTUnwrap(layout.newGroup(with: copilot.layoutID, name: "docs"))
-        layout.setColor("green", of: docs)
+        layout.move(upload.layoutID, before: codex.layoutID)
+        layout.move(copilot.layoutID, before: codex.layoutID)
         client.send(.setTabLayout(layout))
         // The sessions are named after their conversations a little later.
         wait("the sessions to be named", timeout: 60) {

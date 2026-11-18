@@ -17,7 +17,9 @@ struct Node {
 
     /// Everything a person, or VoiceOver, would know it by.
     var text: String { [title, label, value].filter { !$0.isEmpty }.joined(separator: " | ") }
-    var summary: String { "\(role) id=\(identifier) title=\(title) label=\(label) value=\(value.prefix(60))" }
+    /// What cannot be pressed says so: a button that did nothing may have
+    /// been held just then (#116).
+    var summary: String { "\(role) id=\(identifier) title=\(title) label=\(label) value=\(value.prefix(60))" + (enabled ? "" : " (disabled)") }
 }
 
 /// Starts the Mac app against a host of its own and drives it the way
@@ -138,9 +140,11 @@ final class MacDriver {
     /// A way to pick an element: by identifier, or by what it says.
     enum Query: CustomStringConvertible {
         case id(String)
-        /// An identifier that ends like this: for one that holds a path,
-        /// which the same folder has more than one of.
-        case idEnding(String)
+        /// An identifier that ends like this, and begins with `prefix`:
+        /// for one that holds a path, which the same folder has more than
+        /// one of, and the list, a tab's row and the Files panel each have
+        /// one of (#127).
+        case idEnding(String, prefix: String = "")
         /// A button, of whatever kind, that says exactly this.
         case button(String)
         /// Anything whose title, label or value is exactly this.
@@ -152,7 +156,7 @@ final class MacDriver {
         var description: String {
             switch self {
             case .id(let id): return "id \(id)"
-            case .idEnding(let end): return "id ending in \(end)"
+            case .idEnding(let end, let prefix): return "id \(prefix)… ending in \(end)"
             case .button(let name): return "button \"\(name)\""
             case .text(let text): return "\"\(text)\""
             case .containing(let text): return "something with \"\(text)\""
@@ -163,7 +167,7 @@ final class MacDriver {
         func matches(_ node: Node) -> Bool {
             switch self {
             case .id(let id): return node.identifier == id
-            case .idEnding(let end): return node.identifier.hasSuffix(end)
+            case .idEnding(let end, let prefix): return node.identifier.hasPrefix(prefix) && node.identifier.hasSuffix(end)
             case .button(let name):
                 return [kAXButtonRole, kAXMenuButtonRole, kAXPopUpButtonRole, kAXMenuItemRole, kAXCheckBoxRole, kAXRadioButtonRole].contains(node.role)
                     && (node.title == name || node.label == name)
@@ -204,9 +208,15 @@ final class MacDriver {
         wait("\(query) to go away", timeout: timeout, file: file, line: line) { !self.exists(query) }
     }
 
-    /// What is on screen, one element a line, for a failure's message.
+    /// What is on screen, one element a line, for a failure's message. The
+    /// app in front is named first: when it is not this one, the Mac was
+    /// used meanwhile, and a menu the app had open was closed by that
+    /// (#135).
     func screen() -> String {
-        nodes().filter { !$0.text.isEmpty || !$0.identifier.isEmpty }.map { String(repeating: " ", count: min($0.depth, 10)) + $0.summary }
+        let front = NSWorkspace.shared.frontmostApplication
+        let inFront = "In front: \(front?.localizedName ?? "no app")" + (front?.processIdentifier == pid ? "" : ", not the app under test")
+        return inFront + "\n"
+            + nodes().filter { !$0.text.isEmpty || !$0.identifier.isEmpty }.map { String(repeating: " ", count: min($0.depth, 10)) + $0.summary }
             .joined(separator: "\n")
     }
 
@@ -255,11 +265,14 @@ final class MacDriver {
     /// Picks an item of the app's menu bar, such as ["File", "New Shell"].
     func menu(_ path: [String], file: StaticString = #filePath, line: UInt = #line) {
         var current = nodes(menus: true).first { $0.role == kAXMenuBarRole }?.element
-        for name in path {
+        for (index, name) in path.enumerated() {
             guard let parent = current else { break }
             var next: AXUIElement?
+            // The first name is one of the menu bar's own: an item of the
+            // Tab menu named after a tab, "Browser", is not the Browser menu.
+            let deepest = index == 0 ? 1 : 4
             func search(_ element: AXUIElement, _ depth: Int) {
-                guard next == nil, depth < 4, let children = Self.attribute(element, kAXChildrenAttribute) as? [AXUIElement] else { return }
+                guard next == nil, depth < deepest, let children = Self.attribute(element, kAXChildrenAttribute) as? [AXUIElement] else { return }
                 for child in children where next == nil {
                     if Self.string(child, kAXTitleAttribute) == name { next = child } else { search(child, depth + 1) }
                 }
@@ -393,11 +406,19 @@ final class MacDriver {
     }
 
     /// A picture of the app's window, for a failure that words do not explain.
+    /// The one in front, a sheet when one is open, that is a window to look
+    /// at: once a popover has been shown, the first in the list is one of
+    /// two points by one that it leaves behind, and the picture was of that.
     func capture(to url: URL) {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        func isToLookAt(_ window: [String: Any]) -> Bool {
+            guard let bounds = window[kCGWindowBounds as String] as? NSDictionary, let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
+            return frame.width > 40 && frame.height > 40
+        }
         guard
-            let id = windows.first(where: { ($0[kCGWindowOwnerPID as String] as? Int32) == pid && (($0[kCGWindowLayer as String] as? Int) ?? 1) == 0 })?[
-                kCGWindowNumber as String] as? Int
+            let id = windows.first(where: {
+                ($0[kCGWindowOwnerPID as String] as? Int32) == pid && (($0[kCGWindowLayer as String] as? Int) ?? 1) == 0 && isToLookAt($0)
+            })?[kCGWindowNumber as String] as? Int
         else { return }
         let capture = Process()
         capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")

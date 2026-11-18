@@ -57,6 +57,82 @@ final class BrowserModel: ObservableObject {
     /// A tab's page took the keyboard.
     var focused: ((BrowserTab) -> Void)?
 
+    /// The windows Chrome's own interface opened by itself, an extension's
+    /// page say, held back out of sight (#125): told in the Browser tab, the
+    /// last first, with a button that shows it.
+    @Published private(set) var heldChromeWindows: [NSWindow] = []
+    private var chromeWatch: [NSObjectProtocol] = []
+
+    /// Watches for a window of Chrome's own that the app did not ask for: a
+    /// browser window, with a title bar and a size of its own, in none of
+    /// the app's views. Dialogs and bubbles, an extension's install prompt
+    /// say, are left as they are. It is hidden, not closed: what made it
+    /// (installing an extension) goes on.
+    func watchChromeWindows() {
+        let names: [Notification.Name] = [
+            NSApplication.didUpdateNotification, NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification,
+            NSWindow.didChangeOcclusionStateNotification,
+        ]
+        chromeWatch = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.holdChromeWindows() }
+            }
+        }
+    }
+
+    /// Chromium's windows are of its own kind (`NativeWidgetMacNSWindow`, a
+    /// browser's a kind of it). Looked up each time: the framework that has
+    /// it is loaded only once the browser starts.
+    static var chromiumWindowClass: AnyClass? { NSClassFromString("NativeWidgetMacNSWindow") }
+
+    static func isChromeBrowserWindow(_ window: NSWindow) -> Bool {
+        guard let kind = chromiumWindowClass, window.isKind(of: kind) else { return false }
+        // A bubble or a dialog is a window of the one it belongs to.
+        return window.parent == nil && window.styleMask.contains(.titled) && window.styleMask.contains(.resizable)
+            && window.identifier?.rawValue != "agentterm.chrome-window"
+    }
+
+    private func holdChromeWindows() {
+        // One Chrome closed by itself is no longer held.
+        let open = Set(NSApp.windows.map(ObjectIdentifier.init))
+        if heldChromeWindows.contains(where: { !open.contains(ObjectIdentifier($0)) }) {
+            heldChromeWindows.removeAll { !open.contains(ObjectIdentifier($0)) }
+        }
+        // Chrome shows a window it made more than once as it opens it: one
+        // held back is kept out of sight until it is asked for.
+        for window in heldChromeWindows where window.isVisible { window.orderOut(nil) }
+        for window in NSApp.windows where window.isVisible && Self.isChromeBrowserWindow(window) && !heldChromeWindows.contains(window) {
+            window.orderOut(nil)
+            heldChromeWindows.append(window)
+        }
+    }
+
+    /// Shows the windows that were held back, outside the app, and stops
+    /// holding them: what Chrome opened together goes together.
+    func showHeld() {
+        let held = heldChromeWindows
+        heldChromeWindows = []
+        for window in held {
+            window.identifier = NSUserInterfaceItemIdentifier("agentterm.chrome-window")
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    /// Closes the windows that were held back: Chrome's own closing.
+    func dismissHeld() {
+        let held = heldChromeWindows
+        heldChromeWindows = []
+        held.forEach { $0.close() }
+    }
+
+    /// Closes the held windows before Chromium stops: a window Chrome opened
+    /// by itself would keep it from stopping.
+    func closeHeldWindows() {
+        let held = heldChromeWindows
+        heldChromeWindows = []
+        held.forEach { $0.close() }
+    }
+
     func tabChanged() { changed?() }
 
     // MARK: Not kept
@@ -339,8 +415,29 @@ final class BrowserTab: ObservableObject, Identifiable {
             loading = false
         case ATC_EVENT_FOCUS:
             model?.focused?(self)
+        case ATC_EVENT_MENU_COMMAND:
+            menuCommand(event.a, link: event.text, image: event.text2)
         default:
             break
+        }
+    }
+
+    /// An item of the page's right-click menu that the app does itself
+    /// (#131): a link or an image opened as a new page, its address copied,
+    /// the page's DevTools.
+    func menuCommand(_ command: Int32, link: String?, image: String?) {
+        func copy(_ text: String?) {
+            guard let text, !text.isEmpty else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+        switch command {
+        case ATC_MENU_OPEN_LINK: if let link, !link.isEmpty { model?.popup?(self, link) }
+        case ATC_MENU_COPY_LINK: copy(link)
+        case ATC_MENU_OPEN_IMAGE: if let image, !image.isEmpty { model?.popup?(self, image) }
+        case ATC_MENU_COPY_IMAGE: copy(image)
+        case ATC_MENU_INSPECT: showDevTools()
+        default: break
         }
     }
 
@@ -401,6 +498,13 @@ final class BrowserTab: ObservableObject, Identifiable {
     }
 
     func showDevTools() { atc_show_devtools(browserID) }
+
+    /// Its page, or another address, in a window of Chrome's own, outside
+    /// the app, in its profile: where an extension's buttons are (#125).
+    func openInChromeWindow(_ address: String? = nil) {
+        guard browserID != 0 else { return }
+        atc_open_chrome_window(browserID, address ?? url)
+    }
 
     func answerPermission(_ allow: Bool) {
         guard let permission else { return }

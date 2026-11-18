@@ -15,6 +15,8 @@ enum LinkStatus: Equatable {
 /// A screen that can be pushed onto the navigation stack.
 enum Route: Hashable {
     case session(SessionID)
+    /// What an agent's last turn came to, opened from the Inbox (#71).
+    case result(SessionID)
     /// An agent's screen with one of its own shells ("s:<id>") or pages
     /// ("b:<id>") in front.
     case companion(agent: SessionID, item: String)
@@ -279,23 +281,33 @@ final class PhoneModel: ObservableObject {
         commitWriter.writer(among: agents)
     }
 
-    /// "push" or "pull" while one is under way in a folder.
-    @Published private(set) var syncing: [String: String] = [:]
+    /// What is asked of each folder's git on the Mac (#116): what the user
+    /// asked for holds the folder, the fetch the app makes by itself holds
+    /// nothing, and what is asked for meanwhile is sent when it is over.
+    @Published private var remoteWork = RemoteWork<ClientMessage>()
+    /// "push", "pull" and the rest while one the user asked for is under
+    /// way in a folder.
+    var syncing: [String: String] { remoteWork.busy }
+
+    /// Asks the Mac for something of a folder's git that holds the folder
+    /// until it is over. Refused while something else asked for is under
+    /// way, the buttons being held then; kept while the app asks the
+    /// folder's remotes by itself, and sent when that is over.
+    private func ask(_ what: String, in folder: String, _ message: ClientMessage) {
+        guard status == .connected else { return }
+        if remoteWork.ask(what, in: folder, keeping: message) == .begin { connection?.send(message) }
+    }
 
     /// Pushes the folder's branch. For a branch that follows nothing yet
     /// the Mac picks the remote the changes name, and sets it to be followed.
     func push(in folder: String) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = "push"
-        connection?.send(.gitPush(path: folder))
+        ask("push", in: folder, .gitPush(path: folder))
     }
 
     /// Brings in what the upstream has: the way the repository is set up
     /// to (`mode` nil), by "merge" or by "rebase" (#37).
     func pull(in folder: String, mode: String? = nil) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = "pull"
-        connection?.send(.gitPull(path: folder, mode: mode))
+        ask("pull", in: folder, .gitPull(path: folder, mode: mode))
     }
 
     /// What the last fetch no one asked for said when it failed, by folder.
@@ -315,12 +327,25 @@ final class PhoneModel: ObservableObject {
     }
 
     /// Asks the folder's remotes on the Mac for what is new. `automatic`
-    /// when no one asked: its failure is noted, and interrupts no one.
+    /// when no one asked: its failure is noted, and interrupts no one. It
+    /// holds no button either (#116): what is asked for while it is under
+    /// way is sent when it is over.
     func fetch(in folder: String, automatic: Bool = false) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = "fetch"
+        guard status == .connected else { return }
+        let message = ClientMessage.gitFetch(path: folder, automatic: automatic)
+        if automatic {
+            guard remoteWork.beginQuietFetch(in: folder) else { return }
+        } else {
+            switch remoteWork.ask("fetch", in: folder, keeping: message) {
+            case .refused: return
+            case .kept:
+                fetchedAt[folder] = Date()
+                return
+            case .begin: break
+            }
+        }
         fetchedAt[folder] = Date()
-        connection?.send(.gitFetch(path: folder, automatic: automatic))
+        connection?.send(message)
     }
 
     /// Fetches the folder on screen when it is time to: the setting on, a
@@ -339,9 +364,7 @@ final class PhoneModel: ObservableObject {
     }
 
     func forcePushConfirmed(_ push: ForcePush) {
-        guard status == .connected, syncing[push.folder] == nil else { return }
-        syncing[push.folder] = "push"
-        connection?.send(.gitPush(path: push.folder, force: true, lease: push.lease))
+        ask("push", in: push.folder, .gitPush(path: push.folder, force: true, lease: push.lease))
     }
 
     /// How the Mac is doing: processor, memory, network, heat, battery, uptime.
@@ -413,6 +436,9 @@ final class PhoneModel: ObservableObject {
         // A notice hides by itself once its session is opened, however the
         // user got there, and does not come back when they leave it (#60).
         didSet {
+            // What a done agent's turn came to is what its notice told: the
+            // notice goes, and the session is seen only once it is opened.
+            if case .result(let id)? = path.last, agentNotice?.session == id { agentNotice = nil }
             guard let open = openSessionID else { return }
             if agentNotice?.session == open { agentNotice = nil }
             sawNotice(of: open)
@@ -425,7 +451,10 @@ final class PhoneModel: ObservableObject {
     private func sawNotice(of session: SessionID) {
         guard let mac = pairing?.id else { return }
         notifications.remove(mac: mac, session: session)
-        guard let state = sessions.first(where: { $0.id == session })?.state, !state.isWorking, noticeSeenTold?.session != session || noticeSeenTold?.state != state
+        // Told again while the host still has it unseen (#67): the same
+        // words said twice are two turns.
+        guard let info = sessions.first(where: { $0.id == session }), let state = info.state, !state.isWorking,
+            info.unseen == true || noticeSeenTold?.session != session || noticeSeenTold?.state != state
         else { return }
         noticeSeenTold = (session, state)
         connection?.send(.noticeSeen(session: session, state: state))
@@ -505,9 +534,9 @@ final class PhoneModel: ObservableObject {
     /// the user was asked in the words of `CommitActionQuestion`. One that
     /// conflicts is left to be resolved, as on the Mac, and said.
     func apply(_ action: CommitActionQuestion.Action, _ commit: CommitInfo, in folder: String) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = action == .revert ? "revert" : "cherry-pick"
-        connection?.send(action == .revert ? .gitRevert(path: folder, hash: commit.hash) : .gitCherryPick(path: folder, hash: commit.hash))
+        ask(
+            action == .revert ? "revert" : "cherry-pick", in: folder,
+            action == .revert ? .gitRevert(path: folder, hash: commit.hash) : .gitCherryPick(path: folder, hash: commit.hash))
     }
 
     func loadCommit(_ hash: String, in folder: String) {
@@ -575,6 +604,8 @@ final class PhoneModel: ObservableObject {
     @Published var showBrowser = false
     @Published private(set) var controller: TerminalController?
     @Published private(set) var foreignSize: TermSize?
+    /// Who decides it, when the host says (#120).
+    @Published private(set) var sizeDriver: SizeDriver?
     @Published var message: String?
     @Published private(set) var fontSize: Double
 
@@ -713,6 +744,44 @@ final class PhoneModel: ObservableObject {
 
     func dismissAgentNotice() { agentNotice = nil }
 
+    // MARK: The Inbox (#67)
+
+    /// An agent's name as the Mac lists it, its id when it is not listed.
+    func agentName(_ id: String) -> String { agents.first { $0.id == id }?.name ?? (id == "shell" ? "Shell" : id) }
+
+    /// What needs the user on the Mac on show, the most pressing first: at
+    /// the top of the Sessions list.
+    var inboxItems: [InboxItem] { Inbox.items(sessions: sessions, failures: failures) }
+
+    /// Opens the session an item is about.
+    func open(_ item: InboxItem) {
+        guard let notice = item.notice else { return }
+        // A done agent shows what its turn came to first; its terminal is
+        // a touch away. One that asks opens where it is answered.
+        if case .done = notice.state {
+            tab = "sessions"
+            path = [.result(notice.session)]
+        } else {
+            open(notice)
+        }
+    }
+
+    /// The last turn of each session's agent, as the host told it (#71).
+    @Published private(set) var turnResults: [SessionID: TurnResult] = [:]
+
+    /// Takes an item out of the Inbox without opening it, on every device:
+    /// a done session is seen, a failure dismissed. A question stays until
+    /// it is answered.
+    func dismiss(_ item: InboxItem) {
+        switch item.kind {
+        case .session(let info):
+            guard let state = info.state, !state.isWaiting else { return }
+            connection?.send(.noticeSeen(session: info.id, state: state))
+        case .failure(let failure):
+            dismiss(failure)
+        }
+    }
+
     /// A reply to an agent where it was told of: typed into its session by
     /// the host only while the agent still asks what it answers.
     func answer(session: SessionID, to state: AgentState, text: String) {
@@ -757,25 +826,34 @@ final class PhoneModel: ObservableObject {
 
     // MARK: Arranging sessions
 
-    /// What a folder's section lists: its sessions in the order chosen,
-    /// pinned ones first, and the label of each group before its sessions.
+    /// What a folder's section lists, as the Mac's strip holds it (#127):
+    /// each agent in the order chosen, pinned ones first, its own pages and
+    /// shells under it; then the user's shells, then the user's pages, each
+    /// under a heading of their kind.
     enum SessionItem: Identifiable {
-        case label(TabGroup, count: Int)
         case session(SessionInfo)
         /// The heading of an agent's own shells or pages, under it: "Shells", "Browser".
         case part(agent: SessionID, title: String)
+        /// The heading of the user's own shells or pages, with how many
+        /// there are, as the Mac's tab of them says it.
+        case heading(HolderKind, folder: String, count: Int)
         /// A shell an agent opened, under it.
         case shell(SessionInfo)
-        /// A page of the Mac's browser: an agent's under it, or the user's.
-        case page(BrowserTabInfo, nested: Bool)
+        /// A shell of the user's, under the Shells heading.
+        case userShell(SessionInfo)
+        /// A page of the Mac's browser an agent opened, under it.
+        case page(BrowserTabInfo)
+        /// A page of the user's, or of an agent that ended, under the
+        /// Browser heading.
+        case userPage(BrowserTabInfo)
 
         var id: String {
             switch self {
-            case .label(let group, _): return "g:" + group.id
             case .session(let session): return session.layoutID
             case .part(let agent, let title): return "p:\(agent):\(title)"
-            case .shell(let shell): return "s:" + shell.layoutID
-            case .page(let tab, _): return "b:" + tab.id
+            case .heading(let kind, let folder, _): return "h:\(kind.rawValue):\(folder)"
+            case .shell(let shell), .userShell(let shell): return "s:" + shell.layoutID
+            case .page(let tab), .userPage(let tab): return "b:" + tab.id
             }
         }
     }
@@ -783,11 +861,16 @@ final class PhoneModel: ObservableObject {
     /// Whether a session is a shell an agent opened that still runs: shown
     /// under its agent, as on the Mac, not on its own.
     private func isCompanion(_ session: SessionInfo) -> Bool {
-        session.openedBy.map { agent in sessions.contains { $0.id == agent } } ?? false
+        // An agent's session only: one an agent typed in a shell opened is
+        // the user's (#129), as on the Mac.
+        session.openedBy.map { agent in sessions.contains { $0.id == agent && $0.agent != nil } } ?? false
     }
 
     /// An agent's own shells and pages, in the order of the tabs.
     func companions(of agent: SessionID) -> (shells: [SessionInfo], pages: [BrowserTabInfo]) {
+        // An agent's session only: what an agent typed in a shell opened is
+        // the user's (#129), listed so, as on the Mac.
+        guard sessions.contains(where: { $0.id == agent && $0.agent != nil }) else { return ([], []) }
         let order = Dictionary(sessionLayout.order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         let shells = sessions.filter { $0.openedBy == agent }.sorted { (order[$0.layoutID] ?? .max, $0.id) < (order[$1.layoutID] ?? .max, $1.id) }
         return (shells, browserTabs.filter { $0.openedBy == agent })
@@ -796,47 +879,46 @@ final class PhoneModel: ObservableObject {
     private func companionItems(of agent: SessionInfo) -> [SessionItem] {
         let (shells, pages) = companions(of: agent.id)
         var items: [SessionItem] = []
+        if !pages.isEmpty { items += [.part(agent: agent.id, title: "Browser")] + pages.map(SessionItem.page) }
         if !shells.isEmpty { items += [.part(agent: agent.id, title: "Shells")] + shells.map(SessionItem.shell) }
-        if !pages.isEmpty { items += [.part(agent: agent.id, title: "Browser")] + pages.map { .page($0, nested: true) } }
         return items
     }
 
     /// The pages of the user's, and of agents that ended, that no folder shows.
     var loosePages: [BrowserTabInfo] {
         let paths = Set(groups.compactMap(\.path))
-        let running = Set(sessions.map(\.id))
+        let running = Set(sessions.filter { $0.agent != nil }.map(\.id))
         return browserTabs.filter { tab in !(tab.openedBy.map(running.contains) ?? false) && !paths.contains(tab.project) }
     }
 
     func items(for group: FolderGroup) -> [SessionItem] {
         let own = Dictionary(group.sessions.map { ($0.layoutID, $0) }, uniquingKeysWith: { $1 })
         var items: [SessionItem] = []
-        var announced: Set<String> = []
+        // The agents, in the order of the Mac's strip, each with its own.
+        var listed: Set<String> = []
         for id in sessionLayout.order {
-            guard let session = own[id], !isCompanion(session) else { continue }
-            if let tabGroup = sessionLayout.group(of: id) {
-                if announced.insert(tabGroup.id).inserted {
-                    let count = sessionLayout.members(of: tabGroup.id).filter { own[$0] != nil }.count
-                    items.append(.label(tabGroup, count: count))
-                }
-                if tabGroup.isCollapsed { continue }
-            }
+            guard let session = own[id], session.agent != nil, !isCompanion(session) else { continue }
+            listed.insert(id)
             items.append(.session(session))
             items += companionItems(of: session)
         }
-        // Sessions the arrangement has not heard of yet.
-        let known = Set(sessionLayout.order)
-        for session in group.sessions where !known.contains(session.layoutID) && !isCompanion(session) {
+        // Agents the arrangement has not heard of yet.
+        for session in group.sessions where session.agent != nil && !listed.contains(session.layoutID) && !isCompanion(session) {
             items.append(.session(session))
             items += companionItems(of: session)
         }
-        // The user's pages of the folder, after its sessions, as on the Mac.
-        let running = Set(sessions.map(\.id))
-        items += browserTabs.filter { tab in !(tab.openedBy.map(running.contains) ?? false) && tab.project == group.path }.map { .page($0, nested: false) }
+        let folder = group.path ?? ""
+        // The user's shells of the folder, under one heading.
+        let shells = group.sessions.filter { $0.agent == nil && !isCompanion($0) }
+        if !shells.isEmpty { items += [.heading(.shells, folder: folder, count: shells.count)] + shells.map(SessionItem.userShell) }
+        // The user's pages of the folder, under one heading, as on the Mac.
+        let running = Set(sessions.filter { $0.agent != nil }.map(\.id))
+        let pages = browserTabs.filter { tab in !(tab.openedBy.map(running.contains) ?? false) && tab.project == group.path }
+        if !pages.isEmpty { items += [.heading(.browser, folder: folder, count: pages.count)] + pages.map(SessionItem.userPage) }
         return items
     }
 
-    /// Moves a session one place up (-1) or down (+1) among the sessions
+    /// Moves an agent's session one place up (-1) or down (+1) among those
     /// its folder shows.
     func move(_ session: SessionInfo, by offset: Int, in group: FolderGroup) {
         let shown = items(for: group).compactMap { item -> String? in
@@ -866,11 +948,12 @@ final class PhoneModel: ObservableObject {
     }
 
     /// Brings the arrangement up to date with the sessions that run. Only
-    /// sessions: the Mac's window has tabs of its own in there, for files.
+    /// the agents' sessions, the ones with a tab of their own: the Mac's
+    /// window has tabs of its own in there, for shells, pages and files.
     private func syncSessionLayout() {
         guard sessionsKnown, layoutKnown else { return }
         var layout = sessionLayout
-        layout.sync(with: sessions.map(\.layoutID), owns: SessionInfo.isLayoutID)
+        layout.sync(with: SessionInfo.withTabs(sessions).map(\.layoutID), owns: SessionInfo.isLayoutID)
         sessionLayout = layout
     }
 
@@ -943,7 +1026,7 @@ final class PhoneModel: ObservableObject {
     }
 
     func agentID(for session: SessionInfo) -> String {
-        session.agent ?? "shell"
+        session.agent ?? session.typedAgent ?? "shell"
     }
 
     // MARK: Pairing
@@ -1036,12 +1119,13 @@ final class PhoneModel: ObservableObject {
         schedules = []
         worktrees = [:]
         writingCommitMessage = []
-        syncing = [:]
+        remoteWork.forgetAll()
         sshHosts = []
         system.stats = nil
         hostVersion = 0
         hostMatch = .same
         failures = []
+        turnResults = [:]
         sessions = []
         folders = []
         agents = []
@@ -1172,7 +1256,7 @@ final class PhoneModel: ObservableObject {
         TouchLog.received(message)
         #endif
         switch message {
-        case .welcome(let version, _):
+        case .welcome(let version, _, _, _):
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             status = .connected
@@ -1182,7 +1266,7 @@ final class PhoneModel: ObservableObject {
             reattachAfterConnect = true
             // Whatever was under way when the connection dropped got no answer.
             writingCommitMessage = []
-            syncing = [:]
+            remoteWork.forgetAll()
             connection?.send(.agents(refresh: false))
             // A Mac from before 0.4.0 does not know the request, and would
             // answer with an error for the user to wonder about.
@@ -1191,6 +1275,7 @@ final class PhoneModel: ObservableObject {
         case .sessions(let list):
             sessions = list
             sessionsKnown = true
+            turnResults = turnResults.filter { id, _ in list.contains { $0.id == id } }
             tellOfAgents(list)
             updateLiveActivity()
             if let pairing { pruneComposeDrafts(of: pairing.id, keeping: list) }
@@ -1200,6 +1285,9 @@ final class PhoneModel: ObservableObject {
                 path.removeLast()
                 controller = nil
                 foreignSize = nil
+            } else if let open = openSessionID, active {
+                // Done or asking while its terminal is on screen: seen (#67).
+                sawNotice(of: open)
             }
             if reattachAfterConnect {
                 reattachAfterConnect = false
@@ -1222,6 +1310,8 @@ final class PhoneModel: ObservableObject {
             startAtLogin = on
         case .agentShellsFaults(let faults):
             took(faults)
+        case .turnResult(let session, let result):
+            turnResults[session] = result
         case .noticeSeen(let session, let state):
             // Seen on the Mac, or on another device.
             if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
@@ -1303,6 +1393,9 @@ final class PhoneModel: ObservableObject {
             writingCommitMessage.remove(folder)
             // A draft: it goes in the field, to be read before committing.
             if let text { commitDrafts[folder] = text }
+        case .agentSetup:
+            // Set up on the Mac only (#129).
+            break
         case .sshHosts(let list):
             sshHosts = list
         case .systemStats(let stats):
@@ -1359,11 +1452,12 @@ final class PhoneModel: ObservableObject {
                 // and the Mac had it at its own, without a button.
                 if !paging { controller?.claimSize() }
             }
-        case .resized(let id, let size, let driver):
+        case .resized(let id, let size, let driver, let by):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
             guard let controller, controller.session == id else { return }
             controller.hostResized(to: size, driver: driver)
             foreignSize = controller.foreignSize
+            sizeDriver = driver ? nil : by
         case .exited:
             break
         case .paired(_, let token):
@@ -1395,7 +1489,7 @@ final class PhoneModel: ObservableObject {
                 // will never answer it.
                 openCreatedSession = false
                 writingCommitMessage = []
-                syncing = [:]
+                remoteWork.forgetAll()
                 self.message = "The AgentTerm on the Mac is an older version and cannot do this. Update it, and restart its host."
             } else {
                 // A request that was going to open a session failed.
@@ -1441,7 +1535,13 @@ final class PhoneModel: ObservableObject {
                 amending[folder] = nil
             }
         case .gitFetched(let folder, let problem, let automatic):
-            syncing[folder] = nil
+            // What was asked for while the app fetched by itself is sent
+            // now (#116).
+            if automatic {
+                if let kept = remoteWork.quietFetchEnded(in: folder) { connection?.send(kept) }
+            } else {
+                remoteWork.ended(in: folder)
+            }
             if let problem {
                 if automatic { fetchProblems[folder] = problem } else { self.message = problem }
             } else {
@@ -1458,7 +1558,7 @@ final class PhoneModel: ObservableObject {
         case .gitSynced(let folder):
             // Not at the `diff` before it: one asked for while git was still
             // at work would free the buttons for a second push beside the first.
-            let was = syncing.removeValue(forKey: folder)
+            let was = remoteWork.ended(in: folder)
             // A revert or a pick made a commit: the list is another now.
             if was == "revert" || was == "cherry-pick", commits[folder] != nil { loadCommits(folder) }
         case .diffFile(let folder, let file):
@@ -1734,16 +1834,12 @@ final class PhoneModel: ObservableObject {
     /// conflicts on the Mac, once the user was asked. Resolving the files
     /// is done on the Mac.
     func abortOperation(in folder: String) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = "abort"
-        connection?.send(.gitAbort(path: folder))
+        ask("abort", in: folder, .gitAbort(path: folder))
     }
 
     /// Goes on with it, once every file was resolved on the Mac.
     func continueOperation(in folder: String) {
-        guard status == .connected, syncing[folder] == nil else { return }
-        syncing[folder] = "continue"
-        connection?.send(.gitContinue(path: folder))
+        ask("continue", in: folder, .gitContinue(path: folder))
     }
 
     // MARK: Amend and undo the last commit (#41)
@@ -1801,9 +1897,7 @@ final class PhoneModel: ObservableObject {
                 }
                 return
             }
-            guard status == .connected, syncing[pending.folder] == nil else { return }
-            syncing[pending.folder] = "undo"
-            connection?.send(.gitUndoCommit(path: pending.folder))
+            ask("undo", in: pending.folder, .gitUndoCommit(path: pending.folder))
         }
     }
 

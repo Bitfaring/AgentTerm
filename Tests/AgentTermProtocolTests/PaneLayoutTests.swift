@@ -152,18 +152,16 @@ final class PaneLayoutTests: XCTestCase {
         XCTAssertFalse(layout.panes.map(\.id).contains(new))
     }
 
-    func testAStripShowsItsOwnTabsAndTheirGroups() {
+    func testAStripShowsItsOwnTabs() {
         var tabs = TabLayout()
         tabs.sync(with: ["a", "b", "c", "d"])
-        let group = tabs.newGroup(with: "b")!
-        tabs.add("c", toGroup: group)
-        let items = tabs.items(among: ["a", "c"])
-        XCTAssertEqual(items.count, 3)
-        guard case .group(_, let count) = items[1] else { return XCTFail("no group label") }
-        XCTAssertEqual(count, 1)
-        XCTAssertEqual(tabs.items(among: ["d"]), [.tab("d")])
+        tabs.move("c", before: "a")
+        XCTAssertEqual(tabs.strip(among: ["a", "c"]), ["c", "a"])
+        XCTAssertEqual(tabs.strip(among: ["d"]), ["d"])
     }
 
+    /// PANE-21 (#69, #127): an agent's area shows the shell and the page
+    /// picked while they are there, the last of them otherwise.
     func testAnAgentAreaShowsAShellThatRuns() {
         var area = AgentArea()
         XCTAssertEqual(area.shownShell(among: ["s1", "s2"]), "s2")
@@ -171,5 +169,8 @@ final class PaneLayoutTests: XCTestCase {
         XCTAssertEqual(area.shownShell(among: ["s1", "s2"]), "s1")
         XCTAssertEqual(area.shownShell(among: ["s2"]), "s2")
         XCTAssertNil(area.shownShell(among: []))
+        area.browserFront = "b:1"
+        XCTAssertEqual(area.shownBrowser(among: ["b:1", "b:2"]), "b:1")
+        XCTAssertEqual(area.shownBrowser(among: ["b:2", "b:3"]), "b:3")
     }
 }

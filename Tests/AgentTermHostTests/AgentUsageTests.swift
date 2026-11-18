@@ -65,6 +65,27 @@ final class AgentUsageTests: XCTestCase {
         XCTAssertEqual(usage, SessionUsage(contextTokens: 12500))
     }
 
+    /// USAGE-12 (#130): each agent's thinking level, where each records it,
+    /// as the four were found writing it on 2026-11-17.
+    func testEachAgentSaysHowHardItThinks() {
+        XCTAssertEqual(parse("codex", [#"{"type":"turn_context","payload":{"model":"gpt-6-astra","effort":"medium","summary":"none"}}"#])?.effort, "medium")
+        XCTAssertEqual(
+            parse(
+                "copilot",
+                [#"{"type":"session.usage_record","data":{"usage":{"model":"gpt-5.6-luna","inputTokens":100,"maxPromptTokens":272000,"reasoningEffort":"high"}}}"#]
+            )?.effort, "high")
+        XCTAssertEqual(
+            parse("copilot", [#"{"type":"session.model_change","data":{"newModel":"gpt-5.6-luna","reasoningEffort":"medium"}}"#])?.effort, "medium")
+        XCTAssertEqual(
+            parse("agy", [#"{"step_index":1,"model":"gemini-4-hydrogen-medium","input_tokens":11408,"cache_read_tokens":0}"#]),
+            SessionUsage(contextTokens: 11408, effort: "medium"))
+        XCTAssertNil(AgentUsage.antigravityEffort(of: "gemini-4-hydrogen"), "a name without a level says none")
+        let status = Data(#"{"model":{"id":"claude-opus-5-5","display_name":"Opus 5.5"},"effort":{"level":"xhigh"},"thinking":{"enabled":true}}"#.utf8)
+        XCTAssertEqual(StatusLineRelay.usage(from: status)?.effort, "xhigh")
+        XCTAssertEqual(SessionUsage(model: "Opus 5.5", effort: "xhigh").modelLine(or: "Claude Code"), "Opus 5.5 · xhigh")
+        XCTAssertEqual(SessionUsage().modelLine(or: "Claude Code"), "Claude Code", "nothing is shown of a level not known")
+    }
+
     func testNothingRecordedIsNil() {
         XCTAssertNil(parse("claude", [#"{"type":"user","message":{"content":"hi"}}"#]))
         XCTAssertNil(parse("codex", []))
@@ -158,18 +179,44 @@ final class StatusLineRelayTests: XCTestCase {
         XCTAssertEqual(StatusLineRelay.userCommand(project: nil, home: home, environment: ["CLAUDE_CONFIG_DIR": other.path]), "echo other")
     }
 
-    func testLaunchArgumentsSurviveTheShell() throws {
-        let arguments = StatusLineRelay.launchArguments(tool: "/Apps/My App's/agenttermd", file: "/tmp/a b/session-1.json")
-        // What the shell hands the program after its own unquoting.
-        let result = Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' x" + arguments])
-        let lines = String(decoding: result?.output ?? Data(), as: UTF8.self).split(separator: "\n").map(String.init)
-        XCTAssertEqual(lines.prefix(2), ["x", "--settings"])
-        let settings = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(lines[2].utf8)) as? [String: [String: String]])
-        XCTAssertEqual(settings["statusLine"]?["type"], "command")
-        // And the status line command, once the shell has unquoted that too.
-        let command = try XCTUnwrap(settings["statusLine"]?["command"])
-        let inner = Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' " + command])
-        XCTAssertEqual(String(decoding: inner?.output ?? Data(), as: UTF8.self), "/Apps/My App's/agenttermd\nstatusline\n/tmp/a b/session-1.json\n")
+    /// USAGE-13 (#129): Claude Code's status line, which
+    /// `agenttermd setup claude` put in its settings, keeps the one the user
+    /// had and runs it after AgentTerm's, puts it back when taken out, and
+    /// saves nothing outside a session of AgentTerm's.
+    func testTheStatusLineKeepsTheUsersOwn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-line-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let settings = home.appendingPathComponent(".claude/settings.json")
+        try FileManager.default.createDirectory(at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"model":"opus","statusLine":{"type":"command","command":"printf mine"}}"#.write(to: settings, atomically: true, encoding: .utf8)
+        let setup = AgentSetup(
+            directory: root.appendingPathComponent("setup"), tool: "/Apps/My App's/agenttermd", home: home.path, environment: [:], locate: { [] },
+            run: { _ in nil })
+        try setup.setClaudeStatusLine()
+        let set = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as? [String: Any])
+        XCTAssertEqual((set["statusLine"] as? [String: String])?["command"], "'/Apps/My App'\\''s/agenttermd' statusline")
+        XCTAssertEqual(set["model"] as? String, "opus", "the user's own settings changed")
+        // The command runs as the shell unquotes it.
+        let words = Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' " + setup.statusLineCommand])
+        XCTAssertEqual(String(decoding: words?.output ?? Data(), as: UTF8.self), "/Apps/My App's/agenttermd\nstatusline\n")
+
+        // Run: it saves what it is given in its session's file, then shows
+        // what the user's own line printed.
+        let previous = AgentSetup.previousStatusLine(in: root.appendingPathComponent("setup"))
+        let file = root.appendingPathComponent("usage/session-1.json").path
+        let shown = StatusLineRelay.run(input: Data(#"{"model":{"id":"opus"}}"#.utf8), file: file, previous: previous, home: home.path, environment: [:])
+        XCTAssertEqual(String(decoding: shown, as: UTF8.self), "mine")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file))
+        // Outside a session of AgentTerm's: nothing saved, theirs shown.
+        let outside = StatusLineRelay.run(input: Data(#"{"model":{"id":"opus"}}"#.utf8), file: nil, previous: previous, home: home.path, environment: [:])
+        XCTAssertEqual(String(decoding: outside, as: UTF8.self), "mine")
+
+        // Taken out: the user's own again.
+        try setup.restoreClaudeStatusLine()
+        let back = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as? [String: Any])
+        XCTAssertEqual((back["statusLine"] as? [String: String])?["command"], "printf mine")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: previous.path))
     }
 }
 

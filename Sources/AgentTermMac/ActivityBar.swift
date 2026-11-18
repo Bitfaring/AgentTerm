@@ -11,6 +11,7 @@ struct ActivityBar: View {
     var body: some View {
         VStack(spacing: 4) {
             item(.sessions, "Sessions", "terminal")
+            item(.inbox, Inbox.title, "tray", count: model.inboxItems.count)
             item(.history, "History", "clock.arrow.circlepath")
             item(.schedules, "Schedules", "calendar.badge.clock")
             Spacer(minLength: 0)
@@ -22,10 +23,10 @@ struct ActivityBar: View {
         .background(Theme.activityBar)
     }
 
-    private func item(_ place: AppModel.Place, _ title: String, _ symbol: String) -> some View {
+    private func item(_ place: AppModel.Place, _ title: String, _ symbol: String, count: Int = 0) -> some View {
         ActivityBarItem(
             title: title, symbol: symbol, selected: model.place == place, listShown: model.showSidebar,
-            shortcut: place == .settings ? " (⌘,)" : ""
+            shortcut: place == .settings ? " (⌘,)" : "", count: count
         ) { model.show(place) }
         .accessibilityIdentifier("place-\(place.rawValue)")
     }
@@ -37,6 +38,8 @@ private struct ActivityBarItem: View {
     let selected: Bool
     let listShown: Bool
     let shortcut: String
+    /// How many items it holds, shown on it when there are some: the Inbox's.
+    var count = 0
     let action: () -> Void
     @State private var hovering = false
 
@@ -50,12 +53,24 @@ private struct ActivityBarItem: View {
                     // Which place is shown, as VS Code marks it.
                     if selected { Rectangle().fill(Color.accentColor).frame(width: 2) }
                 }
+                .overlay(alignment: .topTrailing) {
+                    if count > 0 {
+                        Text(count > 99 ? "99+" : "\(count)")
+                            .font(.system(size: 9.5, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .frame(minWidth: 15, minHeight: 15)
+                            .background(Capsule().fill(Color.accentColor))
+                            .padding(.top, 4)
+                            .padding(.trailing, 5)
+                    }
+                }
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(selected && listShown ? "Hide the list of \(title)" : title + shortcut)
-        .accessibilityLabel(title)
+        .accessibilityLabel(count > 0 ? "\(title), \(count) \(count == 1 ? "item" : "items")" : title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -76,7 +91,8 @@ struct SettingsSections: View {
     @EnvironmentObject private var model: AppModel
 
     static let panes: [(tag: String, title: String, symbol: String)] = [
-        ("general", "General", "gearshape"), ("shell", "Shell", "terminal"), ("agents", "Agents", "sparkles"), ("git", "Git", "arrow.triangle.branch"), ("browser", "Browser", "globe"),
+        ("general", "General", "gearshape"), ("shell", "Shell", "terminal"), ("agents", "Agents", "sparkles"), ("hooks", AgentLinkWords.title, "puzzlepiece.extension"),
+        ("git", "Git", "arrow.triangle.branch"), ("browser", "Browser", "globe"),
         ("permissions", "Permissions", "lock.shield"), ("privacy", "Privacy", "hand.raised"),
     ]
 
@@ -135,6 +151,7 @@ struct SettingsPane: View {
             case "git": ScrollView { GitSettingsView() }
             case "browser": ScrollView { BrowserSettingsView() }
             case "agents": AgentPromptsView()
+            case "hooks": ScrollView { HooksAndMCPSettingsView() }
             case "shell": ScrollView { ShellSettingsView() }
             case "permissions": ScrollView { PermissionsView() }
             case "privacy": ScrollView { PrivacySettingsView() }

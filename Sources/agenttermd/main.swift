@@ -13,18 +13,109 @@ var port = agenttermDefaultPort
 var listenOnTailscale = true
 var askServices = true
 var protocolVersion = agenttermProtocolVersion
+var release = AppVersion.current
+var revision = AppVersion.hostRevision
 var home = NSHomeDirectory()
 var agentsDirectory: String?
 var arguments = CommandLine.arguments.dropFirst()
 
-// `agenttermd statusline <file>` is what Claude Code sessions started by
-// AgentTerm run as their status line. See StatusLineRelay.
+/// Where `agenttermd setup` keeps the plugins it gives the agents (#129).
+var setupDirectory: URL { HostEnvironment.supportDirectory.appendingPathComponent("agent-setup", isDirectory: true) }
+
+enum StartedBy {
+    /// Whether the agent that started this program runs in no terminal
+    /// (#140), as Codex's shared app server does. Looked at once, when it
+    /// is first asked.
+    static let anAgentInNoTerminal = ProcessNames.agentInNoTerminal(startedBy: getppid(), known: { SessionSummaries.agent(forCommand: $0) }) != nil
+}
+
+/// What the environment says of the session this was started in, by the
+/// name of a variable: nothing when the agent that started it runs in no
+/// terminal (#140). Codex's shared app server has the environment of the
+/// session that started it, not of the session it works for. A hook, the
+/// MCP server and the status line then do as they do outside AgentTerm.
+/// See `ProcessNames.agentInNoTerminal`.
+func sessionEnvironment(_ name: String) -> String? {
+    guard !StartedBy.anAgentInNoTerminal else { return nil }
+    return ProcessInfo.processInfo.environment[name].flatMap { $0.isEmpty ? nil : $0 }
+}
+
+// `agenttermd statusline` is Claude Code's status line, once
+// `agenttermd setup claude` put it in its settings (#129): it saves what it
+// is given in the file its session names, then runs the status line the
+// user had before. See StatusLineRelay.
 if arguments.first == "statusline" {
     arguments.removeFirst()
-    guard let file = arguments.popFirst() else { fail("statusline needs a file", status: 2) }
-    let output = StatusLineRelay.run(input: FileHandle.standardInput.readDataToEndOfFile(), file: file)
+    let file = arguments.popFirst() ?? sessionEnvironment(AppChannel.current.usageVariable)
+    let output = StatusLineRelay.run(
+        input: FileHandle.standardInput.readDataToEndOfFile(), file: file, previous: AgentSetup.previousStatusLine(in: setupDirectory))
     FileHandle.standardOutput.write(output)
     exit(0)
+}
+
+// `agenttermd setup [claude|codex|copilot|agy|all] [--remove]` adds to the
+// agents' own configuration what they have no command of their own for:
+// their hooks, Claude Code's status line, and for Codex the session's
+// variable its server needs; or takes that out. AgentTerm's MCP server is
+// added with each agent's own command (`claude mcp add …`), which this
+// says when the server is missing; `setup status` says what each has
+// (#129). Only when the user runs it: Install in Settings > Hooks & MCP
+// runs the agents' commands and this.
+if arguments.first == "setup" {
+    arguments.removeFirst()
+    var agent: String?
+    var remove = false
+    var statusOnly = false
+    while let argument = arguments.popFirst() {
+        switch argument {
+        case "--remove": remove = true
+        case "status": statusOnly = true
+        case "all": agent = nil
+        case let name where AgentDetector.known.contains { $0.id == name }: agent = name
+        default: fail("setup: \(argument) is no agent; name claude, codex, copilot or agy, all, or status, and --remove to take them out", status: 2)
+        }
+    }
+    guard let tool = Bundle.main.executablePath else { fail("setup: the path of this program is not known", status: 1) }
+    let setup = AgentSetup(directory: setupDirectory, tool: tool)
+    if !statusOnly {
+        let agents = agent.map { [$0] } ?? setup.report().agents.filter(\.installed).map(\.agent)
+        for each in agents {
+            print((remove ? "Removing from " : "Setting up ") + (AgentDetector.known.first { $0.id == each }?.name ?? each) + "…")
+            if remove { setup.remove(each, .own) } else { setup.install(each, .own) }
+        }
+    }
+    var failed = false
+    for state in setup.report().agents where agent == nil || state.agent == agent {
+        guard state.installed else {
+            print("\(state.name): not installed")
+            continue
+        }
+        func mark(_ value: Bool?) -> String { value.map { $0 ? "yes" : "no" } ?? "not known" }
+        var line = "\(state.name): hooks \(mark(state.hooks)), MCP server \(mark(state.mcp))"
+        if let statusLine = state.statusLine { line += ", status line " + (statusLine ? "yes" : "no") }
+        if let off = state.sharedServerOff { line += ", " + AgentSetupWords.sharedServer(off: off).lowercased() }
+        print(line)
+        if let problem = state.problem {
+            print("  " + problem)
+            failed = true
+        }
+        // What is still to add, with the agent's own command: every step
+        // but the last, which is this program's.
+        if !remove {
+            var missing: [AgentSetupStep] = []
+            // Not for Codex's, added and given nothing of its session: this
+            // program names the variable, as its problem says.
+            if state.mcp == false, state.problem != AgentSetupWords.codexVariableMissing, let server = state.steps.first { missing.append(server) }
+            // Not for one that is off and still runs: its problem says what to do.
+            if state.sharedServerOff == false, state.problem != AgentSetupWords.sharedServerRunning, state.steps.count > 2 { missing.append(state.steps[1]) }
+            for step in missing {
+                print("  " + step.title)
+                print("    " + step.command)
+            }
+        }
+        if let note = state.note, !remove, !statusOnly { print("  " + note) }
+    }
+    exit(failed ? 1 : 0)
 }
 
 // `agenttermd hook <agent> <event>` is what the hooks of an agent started by
@@ -35,32 +126,37 @@ if arguments.first == "hook" {
     let agent = arguments.popFirst() ?? ""
     let event = arguments.popFirst() ?? ""
     let input = FileHandle.standardInput.readDataToEndOfFile()
-    if let file = ProcessInfo.processInfo.environment[AgentHooks.eventsVariable], !file.isEmpty {
+    if let file = sessionEnvironment(AppChannel.current.eventsVariable) {
         AgentHooks.save(input, agent: agent, event: event, to: file)
     }
     if let reply = AgentHooks.reply(agent: agent, event: event) { print(reply) }
     exit(0)
 }
 
-// `agenttermd mcp` is the MCP server agents are given (#10). Inside a session
-// of an agent this build of AgentTerm started, it asks the host on this Mac,
-// as that session, for what the agent's tools do; elsewhere, a session of
-// the other build included (#57), it offers no tools.
+// `agenttermd mcp` is AgentTerm's MCP server, which `agenttermd setup` adds to
+// the agents' own configuration (#10, #129). Inside a session of this build
+// of AgentTerm, an agent's or a shell's an agent was typed in, it asks the
+// host on this Mac, as that session, for what the agent's tools do, and says
+// it started; elsewhere, a session of the other build included (#57), it
+// offers no tools. Nor does it when the agent that started it runs in no
+// terminal (#140): it cannot be any one session's.
 if arguments.first == "mcp" {
     var ask: AgentShellsMCP.Ask?
     var askBrowser: AgentShellsMCP.AskBrowser?
-    let session = AgentShellsMCP.Session(variable: ProcessInfo.processInfo.environment[HostServer.agentShellsVariable])
+    let session = AgentShellsMCP.Session(variable: sessionEnvironment(HostServer.agentShellsVariable))
+    // The agent it serves: the session's, or the one that started it, for
+    // one typed in a shell.
+    let agent = session?.agent ?? ProcessNames.agent(above: getppid(), known: { SessionSummaries.agent(forCommand: $0) })
     if let session, let token = try? HostEnvironment.loadOrCreateToken() {
         let link = AgentShellsLink(port: session.port, key: session.key, token: token)
         link.start()
+        link.announce(agent: agent)
         ask = link.ask
         askBrowser = link.askBrowser
     }
     // What the host worked out for this session's agent, the user's words
     // in Settings or the default: the server's instructions.
-    let instructions = session?.agent.flatMap { agent in
-        (try? String(contentsOf: HostServer.promptFile(for: agent), encoding: .utf8)).flatMap { $0.isEmpty ? nil : $0 }
-    }
+    let instructions = session == nil ? nil : agent.flatMap { AgentSetup.savedPrompt($0) }
     let server = AgentShellsMCP(
         ask: ask, askBrowser: askBrowser, version: AppChannel.current.appName, useShells: session?.useShells ?? false, instructions: instructions)
     // Lines are read in turn, off the main queue, where the connection's
@@ -161,6 +257,14 @@ while let argument = arguments.popFirst() {
         // For testing the apps against a host of another release. Not in the help.
         guard let value = arguments.popFirst().flatMap(Int.init) else { fail("--protocol-version needs a number", status: 2) }
         protocolVersion = value
+    case "--app-version":
+        // For testing the Mac against a host left from another release (#121). Not in the help.
+        guard let value = arguments.popFirst() else { fail("--app-version needs a version", status: 2) }
+        release = value
+    case "--host-revision":
+        // For testing the Mac against a host built from other sources (#121). Not in the help.
+        guard let value = arguments.popFirst() else { fail("--host-revision needs a value", status: 2) }
+        revision = value
     case "--home":
         guard let value = arguments.popFirst() else { fail("--home needs a folder", status: 2) }
         home = value
@@ -203,13 +307,25 @@ do {
         port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home,
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
+    configuration.release = release
+    configuration.revision = revision
     configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)
+    // For the tests of the apps, which do not wait the whole grace. Not in the help.
+    if let grace = ProcessInfo.processInfo.environment["AGENTTERM_LINK_GRACE"].flatMap(TimeInterval.init) { configuration.linkGrace = grace }
     // Gives the agents' sessions the MCP server, and takes out what earlier
     // builds put in the agents' own configuration, for this Mac's host
     // only: not for one with a state folder of its own (a test, a trial
     // run), which must leave the user's agents alone.
     if (ProcessInfo.processInfo.environment["AGENTTERM_STATE_DIR"] ?? "").isEmpty, agentsDirectory == nil, let tool = Bundle.main.executablePath {
         configuration.agentShells = AgentShellsSetup(directory: HostEnvironment.supportDirectory, tool: tool)
+        // Sets the agents up when the user asks, in Settings > Hooks & MCP.
+        configuration.agentSetup = AgentSetup(directory: setupDirectory, tool: tool)
+    } else if let agentsDirectory, let tool = Bundle.main.executablePath {
+        // A test's: its stand-in agents, in its own home, and nothing of
+        // the user's.
+        configuration.agentSetup = AgentSetup(
+            directory: setupDirectory, tool: tool, home: home, environment: [:], locate: { AgentDetector.detect(in: agentsDirectory) },
+            run: { AgentSetup.direct($0, home: home) })
     }
     // Notes that it runs, so the next host knows whether this one died.
     configuration.stateDirectory = HostEnvironment.supportDirectory

@@ -109,6 +109,15 @@ public final class PTYProcess {
     }
 
     /// Changes the terminal size. The kernel sends SIGWINCH to the program.
+    /// The command the program in front of the terminal was started by:
+    /// the leader of its foreground process group (#129). The shell itself
+    /// at its prompt; nil when it cannot be told.
+    public var foregroundCommand: String? {
+        let group = tcgetpgrp(master)
+        guard group > 0 else { return nil }
+        return ProcessNames.command(of: group)
+    }
+
     public func resize(_ size: TermSize) {
         guard !finished else { return }
         Self.setSize(size, on: master)

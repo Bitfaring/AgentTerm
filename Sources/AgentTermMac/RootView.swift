@@ -97,6 +97,9 @@ private struct WindowSheets: ViewModifier {
             .sheet(isPresented: $model.showPairMac) {
                 PairMacSheet()
             }
+            .sheet(isPresented: $model.showOnboarding) {
+                OnboardingView()
+            }
             .sheet(isPresented: $model.showBrowseFolders) {
                 BrowseFoldersSheet()
             }
@@ -122,7 +125,7 @@ private struct WindowQuestions: ViewModifier {
     private var closeQuestion: String {
         guard let request = model.pendingCloseRequest else { return "" }
         let count = model.sessionsEnded(by: request).count
-        let kept = request.keepSession != nil || request.keepFile != nil || request.keepDiff
+        let kept = request.keepGroup != nil
         return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
     }
 
@@ -463,22 +466,38 @@ struct LaunchButton: View {
 private struct HostVersionBanner: View {
     @EnvironmentObject private var model: AppModel
     let match: ProtocolMatch
+    /// The same protocol, another build of the host (#121).
+    var otherBuild: AppModel.OtherBuildOfHost?
     @State private var confirming = false
+
+    private var title: String {
+        guard let otherBuild else {
+            return match == .hostOlder ? "The host that is running is from an older version of AgentTerm." : "The host that is running is from a newer version of AgentTerm."
+        }
+        guard let release = otherBuild.release, release != "dev", match != .same else {
+            return "The host that is running was built from other sources than this app's."
+        }
+        return "The host that is running is from AgentTerm \(release), \(match == .hostOlder ? "older" : "newer") than this app."
+    }
+
+    private var detail: String {
+        if otherBuild != nil, match == .same { return "Restart it to use the host this app comes with." }
+        if otherBuild != nil, match == .hostOlder { return "It kept running when the app was updated. Restart it to use this version's host." }
+        return match == .hostOlder
+            ? "It kept running when the app was updated. Some things will not work until it is restarted."
+            : "Update this app, or restart the host to use this app's own. Some things will not work until then."
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
             VStack(alignment: .leading, spacing: 2) {
-                Text(match == .hostOlder ? "The host that is running is from an older version of AgentTerm." : "The host that is running is from a newer version of AgentTerm.")
+                Text(title)
                     .font(.system(size: 12, weight: .medium))
-                Text(
-                    match == .hostOlder
-                        ? "It kept running when the app was updated. Some things will not work until it is restarted."
-                        : "Update this app, or restart the host to use this app's own. Some things will not work until then."
-                )
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
             Spacer(minLength: 8)
             // Another Mac's host is restarted on that Mac, by its own app.
@@ -707,6 +726,7 @@ private struct PlaceList: View {
     var body: some View {
         switch model.place {
         case .sessions: SidebarView()
+        case .inbox: InboxList()
         case .history: HistorySidebar()
         case .schedules: SchedulesSidebar()
         case .settings: SettingsSections()
@@ -743,6 +763,8 @@ private struct Banners: View {
             OtherHostBanner(path: path)
         } else if model.hostMatch != .same {
             HostVersionBanner(match: model.hostMatch)
+        } else if let other = model.otherBuildOfHost {
+            HostVersionBanner(match: other.match, otherBuild: other)
         }
         // What stopped without being asked to, until it is dismissed.
         ForEach(model.failures) { failure in
@@ -781,6 +803,7 @@ private struct PlaceInTheMiddle: View {
     var body: some View {
         switch model.place {
         case .sessions: EmptyView()
+        case .inbox: InboxDetail().background(Theme.canvas)
         case .history: ConversationDetail()
         case .schedules: SchedulesView().background(Theme.canvas)
         case .settings: SettingsPane()
@@ -805,7 +828,8 @@ struct TerminalAreaReader: View {
     /// What to take off for the padding a terminal gets.
     let insets: CGSize
     /// False on the launch screen with no session: the strip of tabs a
-    /// session brings is taken off too.
+    /// session brings is taken off too, and the row of its tab's items
+    /// under it (#127).
     var stripShown = true
     /// Whether this is the place a new session would be shown in.
     var reports = true
@@ -821,7 +845,7 @@ struct TerminalAreaReader: View {
 
     private func report(_ size: CGSize) {
         guard reports else { return }
-        let strip = stripShown ? 0 : model.tabStripHeight
+        let strip = stripShown ? 0 : model.tabStripHeight + GroupRow.height
         model.terminalArea = CGSize(width: size.width - insets.width, height: size.height - insets.height - strip)
     }
 }
@@ -835,8 +859,9 @@ struct ForeignSizeBanner: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "iphone").foregroundStyle(.secondary)
-            Text("Another device is using this session, so it is shown at that device's size (\(size.cols) × \(size.rows)).")
+            let driver = model.sizeDrivers[session]
+            Image(systemName: SizeDriver.symbol(for: driver)).foregroundStyle(.secondary)
+            Text(SizeDriver.inUse(by: driver, size: size))
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .truncationMode(.tail)

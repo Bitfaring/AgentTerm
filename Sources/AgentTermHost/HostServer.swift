@@ -14,6 +14,11 @@ public final class HostServer {
         /// The protocol version the host says it speaks. Only tests change
         /// it, to see what a client does with a host of another release.
         public var protocolVersion = agenttermProtocolVersion
+        /// The release the host says it is from. Only tests change it, to
+        /// see what the Mac does with a host left from another release (#121).
+        public var release = AppVersion.current
+        /// What the host says it is built from; tests change it (#121).
+        public var revision = AppVersion.hostRevision
         public var listenOnTailscale: Bool
         /// Bytes of recent output kept per session, for a client that comes
         /// back after losing its connection: it is sent what it missed.
@@ -70,6 +75,21 @@ public final class HostServer {
         public var refreshInterval: TimeInterval = 6
         /// How often schedules are looked at, in seconds (#11). Tests shorten it.
         public var scheduleInterval: TimeInterval = 20
+        /// How long an agent's hooks and MCP server have to be heard from
+        /// before its session says they are missing (#129). Tests shorten it.
+        public var linkGrace: TimeInterval = 20
+        /// How long a call of one of AgentTerm's own tools, which its agent
+        /// said it is about to make, has to reach the agent's MCP server
+        /// before the agent is taken to wait for leave to make it (#141).
+        /// Tests shorten it.
+        public var leaveGrace: TimeInterval = 2
+        /// How often the program in front of each shell is looked at, for an
+        /// agent typed by hand (#129). Tests shorten it.
+        public var foregroundInterval: TimeInterval = 2
+        /// Adds AgentTerm's hooks and MCP server to the agents' own
+        /// configuration when a client asks (#129). Nil does nothing: a
+        /// test's host.
+        public var agentSetup: AgentSetup?
         /// The time, for schedules. A test sets its own clock.
         public var now: () -> Date = Date.init
         /// Where the host notes that it is running (`HostMarker`), so the
@@ -129,6 +149,9 @@ public final class HostServer {
         let connection: NWConnection
         /// Whether the connection arrived on the loopback interface.
         let isLocal: Bool
+        /// What it called itself when it said hello: "Mac" for the Mac's own
+        /// app, a device's name for a device.
+        var name = ""
         var identity: DeviceRegistry.Identity?
         var attached: Set<SessionID> = []
         /// Sessions whose screen is being written out for this client, with
@@ -198,10 +221,23 @@ public final class HostServer {
         var usageFailureReported = false
         /// The last event its agent's hooks saved, as read.
         var lastEvent: Data?
-        /// Its agent was given hooks: its state can be known.
-        var hooked = false
-        /// What its agent's MCP server names it by, to open and reach the
-        /// shells it opens (#10). Agents' sessions only.
+        /// Since when its agent runs: the session's start, or when one typed
+        /// in it was found (#129). Its hooks and MCP server have until a
+        /// grace after it to be heard from.
+        var agentSince: Date?
+        /// A call of one of AgentTerm's own tools that its agent said it is
+        /// about to make, and when: until the call comes to its server, or
+        /// the agent says anything else (#141).
+        var announcedCall: (tool: String, at: Date)?
+        /// When its agent's MCP server last asked for what a tool does.
+        var lastToolCall: Date?
+        /// The turn its agent is in, from its start (#71).
+        var turn: TurnRecord?
+        /// What its agent's last turn came to.
+        var lastTurn: TurnResult?
+        /// What an agent's MCP server names it by, to open and reach the
+        /// shells it opens (#10). Every session has one (#129): an agent
+        /// typed in a shell uses it too.
         var agentKey: String?
         /// When a schedule's run last wrote anything, by the host's clock:
         /// one whose agent's state is not known is taken to be done once it
@@ -228,6 +264,9 @@ public final class HostServer {
 
     private let configuration: Configuration
     private let queue = DispatchQueue(label: "agentterm.host")
+    /// Where what a turn came to is worked out (#71): git and the agents'
+    /// records, away from the host's queue.
+    private let turnQueue = DispatchQueue(label: "agentterm.host.turns", qos: .utility)
     private let detectionQueue = DispatchQueue(label: "agentterm.host.detect")
     /// Git and file reading for clients, kept off the queue that moves terminal bytes.
     private let workQueue = DispatchQueue(label: "agentterm.host.work", qos: .userInitiated, attributes: .concurrent)
@@ -286,9 +325,6 @@ public final class HostServer {
     /// Parts that stopped without being asked to, until the user has seen
     /// them on one of the clients.
     private var failures: [PartFailure] = []
-    /// The agents an earlier build's MCP server could not be taken out of,
-    /// by name, for as long as this host runs: each is tried once.
-    private var agentShellsLeftOver: [String] = []
     /// An agent's MCP server was refused when it signed in, and none has
     /// signed in since.
     private var agentShellsRefused = false
@@ -563,8 +599,8 @@ public final class HostServer {
         queue.sync {
             summaryTimer = summaries
             watchEvents()
-            // What earlier builds put in the agents' configuration taken out.
-            removeAgentShellsLeftovers()
+            // What AgentTerm tells each agent, for its MCP server to give.
+            writePromptsForServers()
             loadSchedules()
             loadHistoryMarks()
             startAtLoginByDefault()
@@ -573,6 +609,11 @@ public final class HostServer {
             timer.setEventHandler { [weak self] in self?.checkSchedules() }
             timer.resume()
             scheduleTimer = timer
+            let links = DispatchSource.makeTimerSource(queue: queue)
+            links.schedule(deadline: .now() + configuration.foregroundInterval, repeating: configuration.foregroundInterval)
+            links.setEventHandler { [weak self] in self?.lookAtAgentLinks() }
+            links.resume()
+            linkTimer = links
             systemTimer = system
             scheduleKeepAwakeEnd()
         }
@@ -601,6 +642,8 @@ public final class HostServer {
             summaryTimer?.cancel()
             scheduleTimer?.cancel()
             scheduleTimer = nil
+            linkTimer?.cancel()
+            linkTimer = nil
             eventsWatch?.cancel()
             eventsWatch = nil
             summaryTimer = nil
@@ -720,6 +763,8 @@ public final class HostServer {
     /// When each run's session was first seen done, to close it a day later.
     private var runDoneAt: [SessionID: Date] = [:]
     private var scheduleTimer: DispatchSourceTimer?
+    /// Looks for agents typed in shells, and for links not heard from (#129).
+    private var linkTimer: DispatchSourceTimer?
 
     static let maxRunsAtOnce = 2
     /// How long a run whose agent's state is not known may write nothing
@@ -1777,6 +1822,7 @@ public final class HostServer {
 
     private func handle(_ message: ClientMessage, from client: Client) {
         if case .hello(let token, let name) = message {
+            client.name = name
             guard let identity = registry.authenticate(token: token, isLocal: client.isLocal) else {
                 // An agent's server that is refused leaves its agent without
                 // shells, and nothing else would say so (#58).
@@ -1806,6 +1852,13 @@ public final class HostServer {
         switch message {
         case .hello, .pair:
             break
+        case .agentSetupStatus:
+            if let report = lastAgentSetup { send(.agentSetup(report), to: client) }
+            reportAgentSetup(to: client)
+        case .runAgentSetup(let agent, let remove):
+            // Into this Mac's agents' configuration: from its own app only.
+            guard client.isAdmin else { return send(.error("Only AgentTerm on this Mac sets its agents up."), to: client) }
+            runAgentSetup(agent: agent, remove: remove)
         case .createPairingCode:
             guard client.isAdmin else { return send(.error("not allowed"), to: client) }
             let created = registry.createCode()
@@ -1826,7 +1879,19 @@ public final class HostServer {
         case .agents(let refresh):
             requestAgents(for: client, refresh: refresh)
         case .create(let request):
-            create(request, for: client)
+            if let agent = request.openedBy {
+                // A shell for an agent, opened by the user in its group
+                // (#127): a shell only, for an agent that runs, in its folder.
+                guard request.command == nil, let owner = sessions[agent], owner.info.agent != nil else {
+                    send(.error("A shell can be opened only for an agent that runs."), to: client)
+                    return
+                }
+                var shell = request
+                shell.cwd = owner.info.cwd
+                create(shell, for: client, openedBy: agent)
+            } else {
+                create(request, for: client)
+            }
         case .agentShell(let id, let key, let request):
             handleAgentShell(id: id, key: key, request: request, from: client)
         case .agentBrowser(let id, let key, let request):
@@ -1857,8 +1922,13 @@ public final class HostServer {
         case .noticeSeen(let id, let state):
             // Only what the agent still says: what it said before is gone
             // from every device already.
-            guard sessions[id]?.info.state == state else { return }
+            guard let session = sessions[id], session.info.state == state else { return }
             noticesSeen[id] = state
+            // Shown on one device is shown: it leaves every one's Inbox (#67).
+            if case .done = state, session.info.unseen == true {
+                session.info.unseen = nil
+                broadcastSessions()
+            }
             for other in clients.values where other.authenticated && other !== client { send(.noticeSeen(session: id, state: state), to: other) }
         case .answer(let id, let state, let text):
             // Only while the agent still asks what the reply answers: one
@@ -2497,7 +2567,7 @@ public final class HostServer {
     /// every client of a state that changed.
     private func readEvents() {
         var changed = false
-        for session in sessions.values where session.hooked {
+        for session in sessions.values {
             guard let file = eventsFile(for: session.info.id), let data = FileManager.default.contents(atPath: file.path),
                 data != session.lastEvent
             else { continue }
@@ -2505,18 +2575,131 @@ public final class HostServer {
             guard let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                 let agent = record["agent"] as? String, let event = record["event"] as? String
             else { continue }
+            // Its hooks are heard (#129); in a shell, the agent typed in it.
+            if heard(.hooks, from: session, agent: agent) { changed = true }
             let at = (record["at"] as? Double).map(Date.init(timeIntervalSince1970:)) ?? Date()
+            // Whatever it says ends the wait for a call it announced.
+            session.announcedCall = nil
             guard case .set(var state) = AgentHooks.change(agent: agent, event: event, input: record["input"] as? [String: Any] ?? [:], now: at)
             else { continue }
+            // About to call one of AgentTerm's own tools (#141): the call
+            // comes to its server, or the agent is held at it.
+            if let tool = AgentHooks.ownToolCall(agent: agent, event: event, input: record["input"] as? [String: Any] ?? [:], server: AppChannel.current.mcpServerName) {
+                if let called = session.lastToolCall, called >= at {
+                    state = .working(since: at)
+                } else {
+                    announce(tool, at: at, in: session)
+                }
+            }
             // Still working is working since it began.
             if case .working = state, case .working(let since)? = session.info.state { state = .working(since: since) }
             let note = AgentHooks.note(agent: session.info.agent, beforeAnyEvent: false)
+            let input = record["input"] as? [String: Any] ?? [:]
+            if state?.isWorking == true, session.turn == nil { beginTurn(of: session, at: at, input: input) }
             guard state != session.info.state || note != session.info.stateNote else { continue }
+            // Done anew: in the Inbox until a device shows it (#67). Any
+            // other state takes it out; a question is listed by itself.
+            if case .done = state {
+                if session.info.state != state { session.info.unseen = true }
+                endTurn(of: session, at: at, end: .done, input: input)
+            } else {
+                session.info.unseen = nil
+                // Codex says when the user stopped the turn.
+                if state == nil, event == "Interrupt" { endTurn(of: session, at: at, end: .stopped, input: input) }
+            }
             session.info.state = state
             session.info.stateNote = note
             changed = true
         }
+        // An agent working in the same repository as a turn makes its
+        // changes not all that turn's.
+        for session in sessions.values where session.turn?.shared == false {
+            if anotherAgentWorks(besides: session) { session.turn?.shared = true }
+        }
         if changed { broadcastSessions() }
+    }
+
+    // MARK: An agent held at one of AgentTerm's own tools (#141)
+
+    /// An agent said it is about to call one of AgentTerm's own tools.
+    /// Antigravity asks leave for a tool of an MCP server and says nothing
+    /// while it waits, but a call that is made reaches the session's
+    /// server: one that has not come after a grace is held, and the agent
+    /// waits for leave, with the tool as its own question names it.
+    private func announce(_ tool: String, at: Date, in session: Session) {
+        session.announcedCall = (tool, at)
+        queue.asyncAfter(deadline: .now() + configuration.leaveGrace) { [weak self, weak session] in
+            guard let self, let session, let held = session.announcedCall, held.at == at, self.sessions[session.info.id] === session else { return }
+            session.info.state = .waitingForPermission(AgentQuestion(text: held.tool))
+            session.info.unseen = nil
+            self.broadcastSessions()
+        }
+    }
+
+    /// The session's MCP server asked for what a tool does: the call its
+    /// agent announced came, so it was not held, or no longer is.
+    private func toolCalled(by session: Session) {
+        session.lastToolCall = Date()
+        guard session.announcedCall != nil else { return }
+        session.announcedCall = nil
+        if session.info.state?.isWorking != true {
+            session.info.state = .working(since: Date())
+            broadcastSessions()
+        }
+    }
+
+    // MARK: What a turn came to (#71)
+
+    /// A turn begins when its agent starts working: what the folder looks
+    /// like then is taken, away from the host's queue.
+    private func beginTurn(of session: Session, at: Date, input: [String: Any]) {
+        // Turned off in Settings: nothing is looked at.
+        guard displaySettings?.turnResults ?? true else { return }
+        let request = (input["prompt"] as? String) ?? (input["lastUserInput"] as? String)
+        let record = TurnRecord(startedAt: at, directory: session.info.cwd, request: request)
+        record.shared = anotherAgentWorks(besides: session)
+        session.turn = record
+        turnQueue.async { record.before = GitSnapshot.take(of: record.directory) }
+    }
+
+    /// The turn ended: what it came to is made from the agent's record and
+    /// the folder as it is now, and told to every device.
+    private func endTurn(of session: Session, at: Date, end: TurnResult.End, input: [String: Any]) {
+        guard let record = session.turn, let agent = session.info.agent ?? session.info.typedAgent else { return }
+        session.turn = nil
+        if anotherAgentWorks(besides: session) { record.shared = true }
+        let shared = record.shared
+        let ownWorktree = WorktreePath.project(of: record.directory) != nil && !sessions.values.contains { $0 !== session && $0.info.cwd == record.directory }
+        let transcript = (input["transcript_path"] as? String) ?? (input["transcriptPath"] as? String)
+        let turnID = input["turn_id"] as? String
+        let said = (input["last_assistant_message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let id = session.info.id
+        turnQueue.async { [weak self] in
+            let read = transcript.flatMap { TurnTranscript.read(agent: agent, file: $0, turnID: turnID) }
+            var changes: TurnResult.Changes?
+            if let before = record.before, let after = GitSnapshot.take(of: record.directory) {
+                changes = TurnResult.Changes(files: GitSnapshot.changes(from: before, to: after), shared: shared, ownWorktree: ownWorktree)
+            }
+            let result = TurnResult(
+                request: record.request ?? read?.request, reply: said ?? read?.reply, startedAt: record.startedAt, endedAt: at, end: end,
+                commands: read?.commands, changes: changes)
+            self?.queue.async {
+                guard let self, let session = self.sessions[id] else { return }
+                session.lastTurn = result
+                for client in self.clients.values where client.authenticated { self.send(.turnResult(session: id, result: result), to: client) }
+            }
+        }
+    }
+
+    /// Whether the agent of another session works in the same folder, or
+    /// one inside it or around it.
+    private func anotherAgentWorks(besides session: Session) -> Bool {
+        let folder = session.info.cwd
+        return sessions.values.contains { other in
+            guard other !== session, other.info.agent != nil, other.turn != nil || other.info.state?.isWorking == true else { return false }
+            let path = other.info.cwd
+            return path == folder || path.hasPrefix(folder + "/") || folder.hasPrefix(path + "/")
+        }
     }
 
     private func refreshSummaries() {
@@ -2579,6 +2762,7 @@ public final class HostServer {
                     if let known = session.info.usage {
                         used.contextTokens = used.contextTokens ?? known.contextTokens
                         used.contextWindow = used.contextWindow ?? known.contextWindow
+                        used.effort = used.effort ?? known.effort
                     }
                     guard session.info.usage != used else { continue }
                     session.info.usage = used
@@ -2612,7 +2796,10 @@ public final class HostServer {
 
     private func admit(_ client: Client, as identity: DeviceRegistry.Identity) {
         client.identity = identity
-        send(.welcome(version: configuration.protocolVersion, host: Host.current().localizedName ?? "Mac"), to: client)
+        send(
+            .welcome(
+                version: configuration.protocolVersion, host: Host.current().localizedName ?? "Mac", release: configuration.release,
+                revision: configuration.revision), to: client)
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
         // What stopped before this client came, until someone has seen it.
         send(.failures(failures), to: client)
@@ -2627,6 +2814,10 @@ public final class HostServer {
         // as its agent still says it.
         noticesSeen = noticesSeen.filter { sessions[$0.key]?.info.state == $0.value }
         for (id, state) in noticesSeen { send(.noticeSeen(session: id, state: state), to: client) }
+        // What the last turns came to, kept while the device was away (#71).
+        for session in sessions.values {
+            if let result = session.lastTurn { send(.turnResult(session: session.info.id, result: result), to: client) }
+        }
         send(.schedules(schedules), to: client)
         send(.schedulesPaused(schedulesPaused), to: client)
         send(.browserTabs(browserTabsList), to: client)
@@ -2687,9 +2878,13 @@ public final class HostServer {
         if session.arbiter.activity(client.id) { applySize(of: session) }
         used(by: client)
         session.process.write(frame.payload)
-        // It may have stopped the turn, and not every agent says so.
-        if session.info.state?.isWorking == true, AgentHooks.mayStopATurn(frame.payload) {
+        // It may have stopped the turn, and not every agent says so: nor
+        // does Antigravity when its question for leave is cancelled (#141).
+        if session.info.state?.isWorking == true || session.announcedCall != nil, AgentHooks.mayStopATurn(frame.payload) {
+            session.announcedCall = nil
             session.info.state = nil
+            session.info.unseen = nil
+            endTurn(of: session, at: Date(), end: .stopped, input: [:])
             broadcastSessions()
         }
     }
@@ -2736,29 +2931,31 @@ public final class HostServer {
         var command = request.command
         var environment = HostEnvironment.sessionEnvironment()
         let agent = SessionSummaries.agent(forCommand: command)
-        var hooked = false
-        // What the agent is told: the user's words for it, or the default.
-        // Its MCP server gives the same as its instructions.
-        let prompt = agent.flatMap { agentPrompt(for: $0) }
-        if let agent { writePromptForServer(prompt, agent: agent) }
-        if let agent, let tool = configuration.statusLineTool, let events = eventsFile(for: id) {
-            // Claude Code reports its usage through its status line, and
-            // every agent what it is doing through its hooks.
-            let usage = agent == "claude" ? usageFile(for: id) : nil
-            for file in [usage, events].compactMap({ $0 }) { try? FileManager.default.removeItem(at: file) }
-            if let more = try? AgentHooks.launchArguments(
-                agent: agent, tool: tool, usageFile: usage?.path, directory: configuration.hooksDirectory, home: configuration.home,
-                trust: run.map { [$0.folder] } ?? [], prompt: prompt, server: configuration.agentShells?.server)
-            {
-                command = (command ?? "") + more
-                environment[AgentHooks.eventsVariable] = events.path
-                if let told = try? AgentHooks.instructionsEnvironment(
-                    agent: agent, directory: configuration.hooksDirectory, prompt: prompt, current: environment)
-                {
-                    environment.merge(told) { _, new in new }
-                }
-                hooked = true
-            }
+        // AgentTerm starts an agent with no arguments of its own (#129): its
+        // hooks, AgentTerm's MCP server, Claude Code's status line and what
+        // it is told come from its own configuration, which
+        // `agenttermd setup` adds to. Every session, a shell's too, has
+        // what they need to reach this host: an agent typed by hand in it
+        // is heard as one started from a button.
+        if let events = eventsFile(for: id) {
+            try? FileManager.default.removeItem(at: events)
+            environment[AppChannel.current.eventsVariable] = events.path
+        }
+        if let usage = usageFile(for: id) {
+            try? FileManager.default.removeItem(at: usage)
+            environment[AppChannel.current.usageVariable] = usage.path
+        }
+        // Copilot CLI does not take an MCP server's instructions: it reads
+        // what it is told from a folder its environment names.
+        if let told = try? AgentHooks.instructionsEnvironment(
+            agent: "copilot", directory: configuration.hooksDirectory, prompt: agentPrompt(for: "copilot"), current: environment)
+        {
+            environment.merge(told) { _, new in new }
+        }
+        // A schedule's run of Antigravity trusts the schedule's folder, as
+        // the user asked by scheduling it there; for that run only.
+        if let run, agent == "agy", let trust = AgentHooks.antigravityTrust([run.folder], home: configuration.home) {
+            command = (command ?? "") + trust
         }
         if let directory = configuration.agentsDirectory, let agent = SessionSummaries.agent(forCommand: command), let text = command,
             text == agent || text.hasPrefix(agent + " ")
@@ -2787,13 +2984,12 @@ public final class HostServer {
             marksPrepared = true
             startup = nil
         }
-        // The agent's MCP server tells the host which session's it is.
-        let agentKey = agent.map { _ in UUID().uuidString + UUID().uuidString }
-        if let agentKey {
-            // Without words of its own, the server tells the agent of the
-            // shells and asks nothing of it: the user emptied what it is told.
-            environment[Self.agentShellsVariable] = AgentShellsMCP.Session(port: boundPort, key: agentKey, useShells: prompt != nil, agent: agent).variable()
-        }
+        // The MCP server of the agent in it, started or typed, tells the host
+        // which session's it is (#129: every session's).
+        let agentKey = UUID().uuidString + UUID().uuidString
+        environment[Self.agentShellsVariable] = AgentShellsMCP.Session(
+            port: boundPort, key: agentKey, useShells: agent.map { agentPrompt(for: $0) != nil } ?? true, agent: agent
+        ).variable()
         let process: PTYProcess
         do {
             process = try PTYProcess(
@@ -2819,11 +3015,14 @@ public final class HostServer {
             // A session started with an agent's own resume command is that
             // conversation's, whoever typed the command.
             conversationID: conversationID ?? SessionSummaries.resumedConversation(inCommand: request.command),
-            stateNote: hooked ? AgentHooks.note(agent: agent, beforeAnyEvent: true) : nil
+            stateNote: agent.flatMap { AgentHooks.note(agent: $0, beforeAnyEvent: true) }
         )
         let session = Session(info: info, process: process, screenLines: configuration.screenLines)
-        session.hooked = hooked
         session.agentKey = agentKey
+        if agent != nil {
+            session.info.link = AgentLink()
+            session.agentSince = configuration.now()
+        }
         session.marksPrepared = marksPrepared
         session.info.openedBy = openedBy
         session.pendingTyped = request.typed.flatMap { $0.isEmpty ? nil : $0 }
@@ -2880,6 +3079,8 @@ public final class HostServer {
         guard !key.isEmpty, let owner = sessions.values.first(where: { $0.agentKey == key }) else {
             return answer(.refused("This is not the session of an agent AgentTerm started, or that session has ended."))
         }
+        // A tool's call came to the server (#141); its start is no call.
+        if case .started = request {} else { toolCalled(by: owner) }
         /// A shell this agent opened and that still runs.
         func own(_ session: SessionID) -> (Session?, String) {
             guard let shell = sessions[session], shell.info.openedBy == owner.info.id else {
@@ -2966,6 +3167,135 @@ public final class HostServer {
             shell.process.hangUp()
             queue.asyncAfter(deadline: .now() + 3) { [weak shell] in shell?.process.forceKill() }
             answer(.done)
+        case .started(let agent):
+            // The session's agent has AgentTerm's MCP server (#129).
+            if heard(.mcp, from: owner, agent: agent) { broadcastSessions() }
+            answer(.done)
+        }
+    }
+
+    // MARK: Whether an agent talks to the host (#129)
+
+    private enum LinkPart: Hashable { case hooks, mcp }
+
+    /// What a shell heard before the agent typed in it was found, for when
+    /// it is.
+    private var heardEarly: [SessionID: Set<LinkPart>] = [:]
+
+    /// Something of an agent's link to this host was heard from: its hooks,
+    /// which name their agent, or its MCP server, which names the agent it
+    /// was started by when it can. In a shell it is of an agent typed there.
+    /// Returns whether the session changed.
+    private func heard(_ part: LinkPart, from session: Session, agent: String?) -> Bool {
+        let before = session.info
+        if session.info.agent == nil {
+            if session.info.typedAgent == nil, let agent, SessionSummaries.agent(forCommand: agent) != nil {
+                typedAgentFound(agent, in: session)
+            }
+            guard session.info.typedAgent != nil else {
+                heardEarly[session.info.id, default: []].insert(part)
+                return false
+            }
+        }
+        switch part {
+        case .hooks: session.info.link?.hooks = true
+        case .mcp: session.info.link?.mcp = true
+        }
+        return session.info != before
+    }
+
+    /// An agent typed by hand in a shell was found: the shell is its session
+    /// while it runs, what was heard before it included.
+    private func typedAgentFound(_ agent: String, in session: Session) {
+        session.info.typedAgent = agent
+        session.agentSince = configuration.now()
+        let early = heardEarly.removeValue(forKey: session.info.id) ?? []
+        session.info.link = AgentLink(hooks: early.contains(.hooks) ? true : nil, mcp: early.contains(.mcp) ? true : nil)
+    }
+
+    /// Looks at each session's agent: one typed in a shell is found from
+    /// the program in front of its terminal, and goes when the shell is in
+    /// front again; hooks and an MCP server not heard from within a grace
+    /// of the agent's start are said missing.
+    private func lookAtAgentLinks() {
+        var changed = false
+        let now = configuration.now()
+        for session in sessions.values {
+            if session.info.agent == nil, let front = session.process.foregroundCommand {
+                let typed = SessionSummaries.agent(forCommand: front)
+                if let typed, typed != session.info.typedAgent {
+                    typedAgentFound(typed, in: session)
+                    changed = true
+                } else if typed == nil, session.info.typedAgent != nil {
+                    // It ended: a shell again, with nothing of the agent's.
+                    session.info.typedAgent = nil
+                    session.info.link = nil
+                    session.info.state = nil
+                    session.info.unseen = nil
+                    session.turn = nil
+                    session.agentSince = nil
+                    heardEarly[session.info.id] = nil
+                    changed = true
+                }
+            }
+            guard var link = session.info.link, let since = session.agentSince, now.timeIntervalSince(since) >= configuration.linkGrace else { continue }
+            if link.hooks == nil { link.hooks = false }
+            if link.mcp == nil { link.mcp = false }
+            if link != session.info.link {
+                session.info.link = link
+                changed = true
+            }
+        }
+        if changed { broadcastSessions() }
+    }
+
+    // MARK: Setting the agents up (#129)
+
+    /// The agents being set up or taken out now.
+    private var agentSetupBusy: Set<String> = []
+    /// What was last found, for a client that asks while it is looked at again.
+    private var lastAgentSetup: AgentSetupReport?
+
+    /// Asks each agent what it has of AgentTerm's, off the host's queue, and
+    /// tells the client that asked, or every client.
+    private func reportAgentSetup(to client: Client?) {
+        guard let setup = configuration.agentSetup else { return }
+        workQueue.async { [weak self] in
+            let found = setup.report()
+            self?.queue.async {
+                guard let self else { return }
+                var report = found
+                report.busy = self.agentSetupBusy.sorted()
+                self.lastAgentSetup = report
+                if let client {
+                    self.send(.agentSetup(report), to: client)
+                } else {
+                    for client in self.clients.values where client.authenticated { self.send(.agentSetup(report), to: client) }
+                }
+            }
+        }
+    }
+
+    /// Adds AgentTerm's hooks and MCP server to an agent's own
+    /// configuration, or every installed one's, or takes them out; every
+    /// client is told when it starts and when it is done.
+    private func runAgentSetup(agent: String?, remove: Bool) {
+        guard let setup = configuration.agentSetup else { return }
+        let agents = agent.map { [$0] } ?? (lastAgentSetup?.agents.filter(\.installed).map(\.agent) ?? AgentDetector.known.map(\.id))
+        agentSetupBusy.formUnion(agents)
+        if var report = lastAgentSetup {
+            report.busy = agentSetupBusy.sorted()
+            for client in clients.values where client.authenticated { send(.agentSetup(report), to: client) }
+        }
+        workQueue.async { [weak self] in
+            for agent in agents {
+                if remove { setup.remove(agent) } else { setup.install(agent) }
+            }
+            self?.queue.async {
+                guard let self else { return }
+                self.agentSetupBusy.subtract(agents)
+                self.reportAgentSetup(to: nil)
+            }
         }
     }
 
@@ -2999,6 +3329,13 @@ public final class HostServer {
         HostEnvironment.supportDirectory.appendingPathComponent("prompts", isDirectory: true).appendingPathComponent(agent + ".md")
     }
 
+    /// Writes what each agent is told where its MCP server finds it: at the
+    /// start, and when the user changes it. The server gives it as its
+    /// instructions, to an agent started from a button or typed in a shell.
+    private func writePromptsForServers() {
+        for agent in AgentDetector.known.map(\.id) { writePromptForServer(agentPrompt(for: agent), agent: agent) }
+    }
+
     private func writePromptForServer(_ prompt: String?, agent: String) {
         let file = Self.promptFile(for: agent)
         guard let prompt else {
@@ -3016,6 +3353,7 @@ public final class HostServer {
             try? FileManager.default.createDirectory(at: Self.agentPromptsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: Self.agentPromptsFile, options: .atomic)
         }
+        writePromptForServer(agentPrompt(for: agent), agent: agent)
         broadcastAgentPrompts()
     }
 
@@ -3120,6 +3458,8 @@ public final class HostServer {
             // The user's, from a device.
             return answerBrowser(waiting, .refused("That is for the user, not for an agent."))
         default:
+            // A tool's call came to the server (#141).
+            toolCalled(by: owner)
             callBrowser(request, agent: owner.info.id, for: waiting)
         }
     }
@@ -3144,31 +3484,12 @@ public final class HostServer {
         }
     }
 
-    /// Takes out what earlier builds left in the agents' configuration, off
-    /// the queue the sessions use, and tells every client of the agents that
-    /// refused.
-    private func removeAgentShellsLeftovers() {
-        guard let agentShells = configuration.agentShells else { return }
-        let known = agents
-        let detect = configuration.detectAgents
-        workQueue.async { [weak self] in
-            let refused = agentShells.removeLeftovers(agents: known ?? detect())
-            guard !refused.isEmpty else { return }
-            self?.queue.async {
-                guard let self else { return }
-                self.agentShellsLeftOver = refused.map(\.name)
-                self.broadcastAgentShellsFaults()
-            }
-        }
-    }
-
     /// The name an agent's MCP server signs in under.
     public static let agentShellsClient = "MCP"
 
     /// What keeps the agents from opening shells, for the apps to warn of.
     private var agentShellsFaults: [AgentShellsFault] {
-        (agentShellsLeftOver.isEmpty ? [] : [AgentShellsFault(cause: .leftOver, agents: agentShellsLeftOver)])
-            + (agentShellsRefused ? [AgentShellsFault(cause: .signIn)] : [])
+        agentShellsRefused ? [AgentShellsFault(cause: .signIn)] : []
     }
 
     private func setAgentShellsRefused(_ refused: Bool) {
@@ -3303,10 +3624,20 @@ public final class HostServer {
     }
 
     private func announceSize(of session: Session) {
+        let driver = session.arbiter.driver
+        let by = driver.flatMap { clients[$0] }.map(sizeDriver)
         for id in session.arbiter.clients {
             guard let client = clients[id] else { continue }
-            send(.resized(session: session.info.id, size: session.info.size, driver: session.arbiter.driver == id), to: client)
+            let drives = driver == id
+            send(.resized(session: session.info.id, size: session.info.size, driver: drives, by: drives ? nil : by), to: client)
         }
+    }
+
+    /// Who a client is, for the others' banners (#120): the Mac's own app
+    /// by the Mac's name, a device by the name it gave.
+    private func sizeDriver(_ client: Client) -> SizeDriver {
+        if client.identity == .local, client.name == "Mac" { return SizeDriver(name: Host.current().localizedName ?? "Mac", isMac: true) }
+        return SizeDriver(name: client.name.isEmpty ? "another device" : client.name, isMac: false)
     }
 
     /// Ends a session as closing its window does, and kills what is left of

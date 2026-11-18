@@ -158,7 +158,7 @@ public struct UsageBar: View {
                 Image(systemName: AgentStyle.symbol(for: agent))
                     .font(.system(size: compact ? 11 : 11.5, weight: .semibold))
                     .foregroundStyle(AgentStyle.accent(for: agent))
-                Text(usage?.model ?? name)
+                Text(usage?.modelLine(or: name) ?? name)
                     .font(.system(size: compact ? 11.5 : 12, weight: .medium))
                     .foregroundStyle(.primary.opacity(0.9))
                     .lineLimit(1)
@@ -263,6 +263,7 @@ public struct UsageDetails: View {
             if let usage, usage.model != nil || usage.contextTokens != nil {
                 section("This session") {
                     if let model = usage.model { fact("Model", model) }
+                    if let effort = usage.effort { fact("Thinking", effort) }
                     if let tokens = usage.contextTokens {
                         if let fraction = usage.contextFraction, let window = usage.contextWindow {
                             row(

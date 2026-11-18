@@ -117,6 +117,14 @@ final class MainThreadMeasurements: MacUITestCase {
                     usleep(100_000)
                 }
             }
+            // #104: the same line typed on until it is wider than the
+            // window, each letter then making the editor's room wider.
+            measured("a hundred letters more, the line growing past the window's edge", for: 16) {
+                for _ in 0..<100 {
+                    AXUIElementSetAttributeValue(editor.element, kAXSelectedTextAttribute as CFString, "x" as CFString)
+                    usleep(100_000)
+                }
+            }
             if let bar = tallestScrollBar() { measured("the 5 MB file scrolled from top to bottom in a second") { self.scroll(bar) } }
         } else {
             print("MEASURE main thread, typing into the 5 MB file: not measured, the editor was not found")

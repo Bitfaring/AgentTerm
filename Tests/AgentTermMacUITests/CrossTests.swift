@@ -84,6 +84,17 @@ final class CrossTests: XCTestCase {
         let number = try XCTUnwrap(shell.text.range(of: #"shell \d+"#, options: .regularExpression).flatMap { Int(shell.text[$0].dropFirst(6)) }, shell.text)
         let ran = server.text("shell_run", ["session": number, "command": "echo wide-line-$(printf 'x%.0s' $(seq 1 70))-end"])
         XCTAssertFalse(ran.failed, ran.text)
+        // LINK-8 (#129): a shell opened with a shell's own key, as an agent
+        // typed in a shell does, is the user's, for the phone to list.
+        let shellsKey = told.deletingLastPathComponent().appendingPathComponent("shell-variable")
+        let wrote = server.text("shell_run", ["session": number, "command": "printf '%s' \"$AGENTTERM_MCP\" > '\(shellsKey.path)'"])
+        XCTAssertFalse(wrote.failed, wrote.text)
+        let fromShell = try MCPServerProcess(
+            tool: URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_CROSS_TOOL"])), variable: try String(contentsOf: shellsKey, encoding: .utf8),
+            state: URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_CROSS_STATE"])))
+        defer { fromShell.stop() }
+        let opened = fromShell.text("shell_open", ["title": "from-a-shell"])
+        XCTAssertFalse(opened.failed, opened.text)
         let page = server.text("browser_open", ["url": try XCTUnwrap(environment["AGENTTERM_CROSS_PAGE"])])
         XCTAssertFalse(page.failed, page.text)
         app.wait(for: .id("agent-browser"), timeout: 20)

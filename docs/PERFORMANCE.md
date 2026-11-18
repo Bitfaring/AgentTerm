@@ -168,8 +168,49 @@ What was changed for them:
 Still over the threshold, and not changed here: the two-panel diff, which
 is rows of views in code the iPhone shares (`SplitDiffView`); opening a
 large diff's or a large file's tab, 50 to 130 ms; and stalls of 20 to 35
-ms here and there, typing in a 5 MB file among them (9 ms over at most). The figures are of a debug build; a release build was not
+ms here and there. The figures are of a debug build; a release build was not
 measured, and neither was the iPhone app's main thread.
+
+### Typing into a large file (#104)
+
+By 2026-11-16 every letter typed into the 5 MB file held the window up,
+where three to five of twenty had two days before. Taken again on
+2026-11-17 with the same measurement, three runs each:
+
+| What | 0.9.0 (2026-11-16) | Now |
+|---|---|---|
+| Twenty letters typed into it, one at a time | 18 to 21 times, the longest 35 to 53 ms, 526 to 621 ms in all | 1 to 3 times, the longest 24 to 42 ms, 24 to 71 ms in all |
+| A hundred letters more on that line, which grows past the window's edge | not measured | 5 to 8 times, the longest 18 to 39 ms, 86 to 144 ms in all |
+| The 5 MB file opened in the editor | once or twice, the longest 27 to 35 ms | once, 64 to 66 ms |
+
+Two hundred letters typed where no line grows past the widest (a file
+with a longer line in it): never over 16 ms in one run, twice in another
+(38 ms the longest).
+
+Where the time went, from samples of the app while it was typed into
+(`sample`, the main thread):
+
+- **Every key told every view that watches the open files.** The text as
+  edited was part of the document, and the documents are published: the
+  strip, the row under it, the list, the tree and the content worked out
+  their bodies again, and the window laid itself out, 20 to 30 ms a key,
+  whatever the file's size. The text is now in a box of its own, which a
+  key changes without a word; the document says only whether it differs
+  from the disk's, which changes at the first key, one of the stalls left.
+- **AppKit worked out the room of the whole text again at each key**
+  (`usedRectForTextContainer`), 14 ms a key for 5 MB. A text of 1 MB or
+  more sizes itself: its lines' count times their height, the count
+  following each change. With this alone and the first not: 16 to 22 of
+  twenty still, and a stall of 1.2 s a second after the last key, the
+  full layout that was to make the room exact; it is not made, and what
+  the count may have missed is counted again off the main thread.
+
+Still there: each change of the editor's size has the window's layout
+worked out again (`NSHostingView`'s constraints, about 19 ms), a line
+added or the widest line typed past the window's edge; the same for a
+small text, which AppKit sizes. Opening the file takes 30 ms more than it
+did: its lines are counted then (the text copied, 11 ms, and its line
+ends found, 13 ms).
 
 ## Not measured yet
 

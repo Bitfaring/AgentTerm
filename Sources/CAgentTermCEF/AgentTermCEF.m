@@ -172,6 +172,7 @@ ATC_COUNTED(cef_download_handler_t, atc_downloads)
 ATC_COUNTED(cef_permission_handler_t, atc_permissions)
 ATC_COUNTED(cef_find_handler_t, atc_finder)
 ATC_COUNTED(cef_focus_handler_t, atc_focus_handler)
+ATC_COUNTED(cef_context_menu_handler_t, atc_menu_handler)
 ATC_COUNTED(cef_dev_tools_message_observer_t, atc_observer)
 
 /// Hands a struct of ours to CEF, which releases what it is given.
@@ -194,6 +195,9 @@ static atc_downloads *g_download_handler;
 static atc_permissions *g_permission_handler;
 static atc_finder *g_finder;
 static atc_focus_handler *g_focus;
+static atc_menu_handler *g_menu;
+/// The windows of Chrome's own that the user asked for (#125).
+static atc_client *g_window_client;
 static atc_observer *g_observer;
 
 /// A browser that is open, by CEF's id for it.
@@ -230,20 +234,36 @@ static void atc_emit_text(atc_event_kind kind, cef_browser_t *browser, NSString 
 // MARK: The message pump
 
 static CFRunLoopTimerRef g_timer;
+/// How deep CEF's work is being done: 1 while it is, 2 while it is done
+/// again from inside a right-click menu.
 static int g_working;
+/// A right-click menu is open: CEF shows it from inside its own work, and
+/// does not come back until it is closed (#139).
+static int g_menu_open;
 /// At most this long between two turns of CEF's work, as cefclient does.
 static const double kMaxDelay = 1.0 / 30.0;
 
 static void atc_schedule(double seconds);
 
+/// One turn of CEF's work. It is not done again from inside itself, as CEF
+/// asks, with one exception: while a right-click menu is open. CEF runs
+/// that menu from inside its work, so the turn that opened it lasts until
+/// the menu closes, and with every other turn put off, nothing of Chromium
+/// went on meanwhile: a page was not read again, its title stood still, an
+/// agent's call was not answered. One level more is let in then. Tried with
+/// CEF 156 (2026-11-18): a page's title goes on changing under an open
+/// menu, and the menu is chosen from and closed as before (BROWSER-41).
 static void atc_work(void) {
-    if (!g_started || g_working) {
-        if (g_started) atc_schedule(0);
+    if (!g_started) return;
+    if (g_working >= (g_menu_open ? 2 : 1)) {
+        // Put off, a little: straight away would turn the run loop without
+        // rest for as long as the work it waits for lasts.
+        atc_schedule(g_menu_open ? kMaxDelay : 0);
         return;
     }
-    g_working = 1;
+    g_working++;
     p_cef_do_message_loop_work();
-    g_working = 0;
+    g_working--;
     if (!g_timer || !CFRunLoopTimerIsValid(g_timer)) atc_schedule(kMaxDelay);
 }
 
@@ -334,6 +354,39 @@ ATC_GETTER(get_download_handler, cef_download_handler_t, g_download_handler)
 ATC_GETTER(get_permission_handler, cef_permission_handler_t, g_permission_handler)
 ATC_GETTER(get_find_handler, cef_find_handler_t, g_finder)
 ATC_GETTER(get_focus_handler, cef_focus_handler_t, g_focus)
+ATC_GETTER(get_context_menu_handler, cef_context_menu_handler_t, g_menu)
+
+// MARK: Windows of Chrome's own (#125)
+
+void atc_open_chrome_window(int browser, const char *url) {
+    ATCBrowser *open = g_browsers[@(browser)];
+    if (!open || !url) return;
+    cef_browser_host_t *host = open.browser->get_host(open.browser);
+    if (!host) return;
+    // The same profile, where the extensions it installed are.
+    cef_request_context_t *context = host->get_request_context(host);
+    ATC_RELEASE(host);
+    cef_window_info_t info;
+    memset(&info, 0, sizeof(info));
+    info.size = sizeof(info);
+    info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+    cef_browser_settings_t settings;
+    memset(&settings, 0, sizeof(settings));
+    settings.size = sizeof(settings);
+    cef_string_t address;
+    atc_set(&address, url);
+    cef_browser_t *made = p_cef_browser_host_create_browser_sync(&info, ATC_GIVE(g_window_client), &address, &settings, NULL, context);
+    atc_clear(&address);
+    if (!made) return;
+    // Asked for: the app leaves it on show, unlike one Chrome opened.
+    cef_browser_host_t *window = made->get_host(made);
+    if (window) {
+        NSView *view = (__bridge NSView *)window->get_window_handle(window);
+        view.window.identifier = @"agentterm.chrome-window";
+        ATC_RELEASE(window);
+    }
+    ATC_RELEASE(made);
+}
 
 static int CEF_CALLBACK on_before_popup(cef_life_span_handler_t *self, cef_browser_t *browser, cef_frame_t *frame, int popup_id,
                                         const cef_string_t *target_url, const cef_string_t *target_frame_name,
@@ -351,6 +404,16 @@ static int CEF_CALLBACK on_before_popup(cef_life_span_handler_t *self, cef_brows
 
 static void CEF_CALLBACK on_after_created(cef_life_span_handler_t *self, cef_browser_t *browser) {
     (void)self;
+    // The Mac's UI tests read a page as VoiceOver does, which Chromium
+    // lays out only when asked (BROWSER-37): never for the user, whose
+    // pages would be slower for it.
+    if (getenv("AGENTTERM_WEB_ACCESSIBILITY")) {
+        cef_browser_host_t *host = browser->get_host(browser);
+        if (host) {
+            host->set_accessibility_state(host, STATE_ENABLED);
+            ATC_RELEASE(host);
+        }
+    }
     atc_emit_text(ATC_EVENT_CREATED, browser, nil, nil, 0, 0, 0);
     ATC_RELEASE(browser);
 }
@@ -568,6 +631,85 @@ static void CEF_CALLBACK on_take_focus(cef_focus_handler_t *self, cef_browser_t 
     ATC_RELEASE(browser);
 }
 
+// MARK: The right-click menu (#131)
+
+static void atc_menu_add(cef_menu_model_t *model, int command, const char *label, int enabled) {
+    cef_string_t text;
+    atc_set(&text, label);
+    model->add_item(model, command, &text);
+    atc_clear(&text);
+    if (!enabled) model->set_enabled(model, command, 0);
+}
+
+/// The items for what was clicked, as Chrome has them: a field's editing,
+/// a selection's Copy, a link's and an image's, else the page's Back,
+/// Forward and Reload; Inspect always.
+static void CEF_CALLBACK on_before_context_menu(cef_context_menu_handler_t *self, cef_browser_t *browser, cef_frame_t *frame,
+                                                cef_context_menu_params_t *params, cef_menu_model_t *model) {
+    (void)self;
+    model->clear(model);
+    cef_context_menu_type_flags_t flags = params->get_type_flags(params);
+    cef_context_menu_edit_state_flags_t edit = params->get_edit_state_flags(params);
+    if (flags & CM_TYPEFLAG_EDITABLE) {
+        atc_menu_add(model, MENU_ID_CUT, "Cut", (edit & CM_EDITFLAG_CAN_CUT) != 0);
+        atc_menu_add(model, MENU_ID_COPY, "Copy", (edit & CM_EDITFLAG_CAN_COPY) != 0);
+        atc_menu_add(model, MENU_ID_PASTE, "Paste", (edit & CM_EDITFLAG_CAN_PASTE) != 0);
+        atc_menu_add(model, MENU_ID_SELECT_ALL, "Select All", (edit & CM_EDITFLAG_CAN_SELECT_ALL) != 0);
+        model->add_separator(model);
+    } else if (flags & CM_TYPEFLAG_SELECTION) {
+        atc_menu_add(model, MENU_ID_COPY, "Copy", 1);
+        model->add_separator(model);
+    }
+    if (flags & CM_TYPEFLAG_LINK) {
+        atc_menu_add(model, ATC_MENU_OPEN_LINK, "Open Link in New Tab", 1);
+        atc_menu_add(model, ATC_MENU_COPY_LINK, "Copy Link Address", 1);
+        model->add_separator(model);
+    }
+    if ((flags & CM_TYPEFLAG_MEDIA) && params->get_media_type(params) == CM_MEDIATYPE_IMAGE) {
+        atc_menu_add(model, ATC_MENU_OPEN_IMAGE, "Open Image in New Tab", 1);
+        atc_menu_add(model, ATC_MENU_COPY_IMAGE, "Copy Image Address", 1);
+        model->add_separator(model);
+    }
+    if (!(flags & (CM_TYPEFLAG_EDITABLE | CM_TYPEFLAG_SELECTION | CM_TYPEFLAG_LINK | CM_TYPEFLAG_MEDIA))) {
+        atc_menu_add(model, MENU_ID_BACK, "Back", browser->can_go_back(browser));
+        atc_menu_add(model, MENU_ID_FORWARD, "Forward", browser->can_go_forward(browser));
+        atc_menu_add(model, MENU_ID_RELOAD, "Reload", 1);
+        model->add_separator(model);
+    }
+    atc_menu_add(model, ATC_MENU_INSPECT, "Inspect", 1);
+    // Shown next, from inside this turn of CEF's work (#139).
+    g_menu_open = 1;
+    ATC_RELEASE(browser);
+    ATC_RELEASE(frame);
+    ATC_RELEASE(params);
+    ATC_RELEASE(model);
+}
+
+/// The menu is closed, a command chosen or none.
+static void CEF_CALLBACK on_context_menu_dismissed(cef_context_menu_handler_t *self, cef_browser_t *browser, cef_frame_t *frame) {
+    (void)self;
+    g_menu_open = 0;
+    ATC_RELEASE(browser);
+    ATC_RELEASE(frame);
+}
+
+/// The app's own items are told to it; CEF's own it does itself.
+static int CEF_CALLBACK on_context_menu_command(cef_context_menu_handler_t *self, cef_browser_t *browser, cef_frame_t *frame,
+                                                cef_context_menu_params_t *params, int command_id, cef_event_flags_t event_flags) {
+    (void)self, (void)event_flags;
+    int handled = 0;
+    if (command_id >= ATC_MENU_OPEN_LINK && command_id <= ATC_MENU_INSPECT) {
+        NSString *link = atc_take(params->get_link_url(params));
+        NSString *source = atc_take(params->get_source_url(params));
+        atc_emit_text(ATC_EVENT_MENU_COMMAND, browser, link, source, command_id, 0, 0);
+        handled = 1;
+    }
+    ATC_RELEASE(browser);
+    ATC_RELEASE(frame);
+    ATC_RELEASE(params);
+    return handled;
+}
+
 static int CEF_CALLBACK on_dev_tools_message(cef_dev_tools_message_observer_t *self, cef_browser_t *browser, const void *message, size_t size) {
     (void)self, (void)message, (void)size;
     ATC_RELEASE(browser);
@@ -613,6 +755,7 @@ static void atc_make_handlers(void) {
     g_client->value.get_permission_handler = get_permission_handler;
     g_client->value.get_find_handler = get_find_handler;
     g_client->value.get_focus_handler = get_focus_handler;
+    g_client->value.get_context_menu_handler = get_context_menu_handler;
     g_life_span = atc_life_span_new();
     g_life_span->value.on_before_popup = on_before_popup;
     g_life_span->value.on_after_created = on_after_created;
@@ -642,6 +785,11 @@ static void atc_make_handlers(void) {
     g_focus->value.on_got_focus = on_got_focus;
     g_focus->value.on_set_focus = on_set_focus;
     g_focus->value.on_take_focus = on_take_focus;
+    g_window_client = atc_client_new();
+    g_menu = atc_menu_handler_new();
+    g_menu->value.on_before_context_menu = on_before_context_menu;
+    g_menu->value.on_context_menu_command = on_context_menu_command;
+    g_menu->value.on_context_menu_dismissed = on_context_menu_dismissed;
     g_observer = atc_observer_new();
     g_observer->value.on_dev_tools_message = on_dev_tools_message;
     g_observer->value.on_dev_tools_method_result = on_dev_tools_method_result;
@@ -1132,6 +1280,7 @@ void atc_focus(int browser, int focus) { (void)browser, (void)focus; }
 void atc_resized(int browser) { (void)browser; }
 int atc_devtools(int browser, const char *json, size_t size) { (void)browser, (void)json, (void)size; return 0; }
 void atc_show_devtools(int browser) { (void)browser; }
+void atc_open_chrome_window(int browser, const char *url) { (void)browser, (void)url; }
 void atc_answer_permission(int prompt, int allow) { (void)prompt, (void)allow; }
 void atc_cancel_download(int download) { (void)download; }
 int atc_chrome_major(void) { return 0; }

@@ -177,6 +177,8 @@ private struct SettingsTab: View {
                             "Fetch automatically", isOn: Binding(get: { model.display.fetchAutomatically }, set: { on in model.setDisplay { $0.fetchAutomatically = on } })
                         )
                         .accessibilityIdentifier("fetch-automatically")
+                        Toggle(TurnResult.setting, isOn: Binding(get: { model.display.turnResults }, set: { on in model.setDisplay { $0.turnResults = on } }))
+                            .accessibilityIdentifier("turn-results")
                     }
                     .disabled(!online)
                 } header: {

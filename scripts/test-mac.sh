@@ -34,12 +34,21 @@ if [ -n "${1:-}" ]; then FILTER="AgentTermMacUITests\..*$1"; fi
 # The half of the test with the iPhone app is run by test-both.sh.
 LOG="$(mktemp)"
 if swift test --skip-build --filter "$FILTER" --skip "CrossTests" > "$LOG" 2>&1; then
+    # A name that matches no test runs none, which `swift test` takes for a
+    # pass: it is not one, and is said (#137).
+    if ! grep -qE "Executed [1-9][0-9]* test" "$LOG"; then
+        tail -3 "$LOG" >&2
+        echo "test-mac.sh: no test was run, full log in $LOG" >&2
+        exit 1
+    fi
     grep -E "^MEASURE " "$LOG" | sed 's/^MEASURE //' || true
     grep -E "Test Case .* (passed|skipped)|Executed [1-9][0-9]* test" "$LOG" | sed 's/^Test Case .-\[AgentTermMacUITests\.//; s/\]. / /' | uniq
     echo "Mac UI tests passed."
     rm -f "$LOG"
 else
-    grep -E "error:|Test Case .* failed" "$LOG" | cut -c1-600 >&2
+    # Nothing of the kind when the run ended some other way: what it said
+    # last is given instead, and the log is named all the same.
+    grep -E "error:|Test Case .* failed" "$LOG" | cut -c1-600 >&2 || tail -3 "$LOG" >&2
     echo "test-mac.sh: failed, full log in $LOG" >&2
     exit 1
 fi

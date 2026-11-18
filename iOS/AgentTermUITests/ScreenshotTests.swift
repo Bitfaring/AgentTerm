@@ -31,7 +31,8 @@ final class ScreenshotTests: XCTestCase {
         pinned.tap()
         let compose = app.descendants(matching: .any)["compose"].firstMatch
         XCTAssertTrue(compose.waitForExistence(timeout: 15))
-        let band = app.staticTexts["Fable 5.2"].firstMatch
+        // The model, then its thinking level (#130).
+        let band = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Fable 5.2")).firstMatch
         XCTAssertTrue(band.waitForExistence(timeout: 60), "the session shows no usage")
         sleep(3)
         compose.tap()

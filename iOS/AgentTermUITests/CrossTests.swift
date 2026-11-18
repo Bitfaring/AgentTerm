@@ -96,6 +96,10 @@ final class CrossTests: XCTestCase {
         let pageURL = try XCTUnwrap(environment["AGENTTERM_PAGE_URL"])
         XCTAssertTrue(app.staticTexts["SHELLS"].waitForExistence(timeout: 15), "the agent's shell is not under it")
         XCTAssertTrue(app.staticTexts["BROWSER"].exists, "the agent's page is not under it")
+        // LINK-8 (#129): the shell a shell opened is the user's, listed with
+        // the folder's shells, not lost for want of an agent's.
+        let fromShell = app.buttons.matching(NSPredicate(format: "label CONTAINS 'from-a-shell'")).firstMatch
+        XCTAssertTrue(fromShell.waitForExistence(timeout: 10), "the shell a shell opened is not listed")
 
         // #108: the agent's shell, opened here, takes the phone's size, not
         // the Mac's agent's area's, so that none of its characters are cut

@@ -138,6 +138,7 @@ public enum AgentUsage {
         for line in newest(data, containing: "\"turn_context\"") {
             if let model = (line["payload"] as? [String: Any])?["model"] as? String {
                 usage.model = model
+                usage.effort = (line["payload"] as? [String: Any])?["effort"] as? String
                 break
             }
         }
@@ -162,6 +163,7 @@ public enum AgentUsage {
                 let record = (line["data"] as? [String: Any])?["usage"] as? [String: Any]
             else { continue }
             usage.model = record["modelDisplayName"] as? String ?? record["model"] as? String
+            usage.effort = record["reasoningEffort"] as? String
             usage.contextTokens = int(record["inputTokens"])
             usage.contextWindow = int(record["maxPromptTokens"])
             break
@@ -170,6 +172,7 @@ public enum AgentUsage {
             for line in newest(data, containing: "session.model_change") {
                 if let model = (line["data"] as? [String: Any])?["newModel"] as? String {
                     usage.model = model
+                    usage.effort = (line["data"] as? [String: Any])?["reasoningEffort"] as? String
                     break
                 }
             }
@@ -185,11 +188,25 @@ public enum AgentUsage {
     // MARK: Antigravity
 
     private static func antigravity(_ data: Data) -> SessionUsage {
+        var usage = SessionUsage()
         for line in newest(data, containing: "\"input_tokens\"") {
             guard let sent = int(line["input_tokens"]), sent > 0 else { continue }
-            return SessionUsage(contextTokens: sent + (int(line["cache_read_tokens"]) ?? 0))
+            usage.contextTokens = sent + (int(line["cache_read_tokens"]) ?? 0)
+            break
         }
-        return SessionUsage()
+        for line in newest(data, containing: "\"model\"") {
+            guard let model = line["model"] as? String else { continue }
+            usage.effort = antigravityEffort(of: model)
+            break
+        }
+        return usage
+    }
+
+    /// Antigravity names the level only as the end of its model's id
+    /// ("gemini-4-hydrogen-medium", shown as "Gemini 4 Hydrogen (Medium)").
+    static func antigravityEffort(of model: String) -> String? {
+        guard let last = model.split(separator: "-").last.map(String.init) else { return nil }
+        return ["minimal", "low", "medium", "high", "xhigh", "max"].contains(last) ? last : nil
     }
 }
 #endif

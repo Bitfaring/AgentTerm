@@ -3,6 +3,29 @@ import XCTest
 
 /// The Git tab of the Mac app: changes, staging, the commit message, commit, push.
 final class GitTests: MacUITestCase {
+    /// For GIT-77: a second folder, whose remote is slow to answer a fetch.
+    private var slow: (folder: URL, remote: URL)?
+
+    override func beforeTheHostStarts() throws {
+        guard name.contains("WhileTheAppFetchesByItself") else { return }
+        let slow = try makeSlowRepository(named: "slow", under: root)
+        try JSONEncoder().encode([project.path, slow.folder.path]).write(to: state.appendingPathComponent("folders.json"))
+        self.slow = slow
+    }
+
+    /// GIT-77 (#116): the fetch the app makes by itself holds no button, and
+    /// what is asked for while it is under way is done when it is over.
+    /// Pull, Push and the rest were held meanwhile, and a press that got
+    /// through as the fetch began was thrown away without a word.
+    func testWhatIsAskedWhileTheAppFetchesByItselfIsDoneAfter() throws {
+        let slow = try XCTUnwrap(slow)
+        // Picked now: its remotes are asked within three seconds of its
+        // changes being shown.
+        app.press(.id("folder-\(slow.folder.path)"), timeout: 15)
+        app.press(.button("Git"))
+        pushWhileTheAppFetchesByItself(slow)
+    }
+
     func testStagingWritingTheMessageCommittingAndPushing() throws {
         app.press(.button("Git"))
         // GIT-1: what changed, by file.

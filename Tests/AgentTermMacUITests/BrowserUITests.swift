@@ -1,4 +1,5 @@
 import AgentTermProtocol
+import ApplicationServices
 import XCTest
 
 /// The browser (#76), in the app as it is shipped: Chromium runs in the app
@@ -8,9 +9,7 @@ import XCTest
 /// The test plays the agent: it starts a stand-in agent, takes the key of
 /// its session, and talks to AgentTerm's MCP server as that agent would.
 final class BrowserUITests: MacUITestCase {
-    private static var bundle: URL? {
-        ProcessInfo.processInfo.environment["AGENTTERM_TEST_BUNDLE"].map { URL(fileURLWithPath: $0) }
-    }
+    private static var bundle: URL? { testBundle }
 
     private var site: URL!
     /// The app was started once in this test: what it kept is kept when
@@ -19,39 +18,21 @@ final class BrowserUITests: MacUITestCase {
 
     override func setUpWithError() throws {
         try XCTSkipUnless(Self.bundle != nil, "the app bundle is built by scripts/test-mac.sh")
+        // What a page holds, readable as VoiceOver reads it (BROWSER-37).
+        if name.contains("RightClick") || name.contains("ExtensionTrial") { appEnvironment["AGENTTERM_WEB_ACCESSIBILITY"] = "1" }
         try super.setUpWithError()
     }
 
     /// The app bundle, with the test's home, state and port, as the
     /// unbundled app is started otherwise.
     override func launchApp() throws -> MacDriver {
-        let bundle = try XCTUnwrap(Self.bundle)
-        if !launched { forgetBundlePreferences(bundle) }
-        launched = true
-        var environment = Self.ownHome(home)
-        environment.merge(appEnvironment) { _, own in own }
-        environment["AGENTTERM_STATE_DIR"] = state.path
-        environment["AGENTTERM_PORT"] = String(appPort)
-        environment["CFFIXED_USER_HOME"] = home.path
-        let driver = try MacDriver(executable: bundle.appendingPathComponent("Contents/MacOS/AgentTerm"), environment: environment)
-        driver.wait(for: .id("mac-switcher"), timeout: 30)
-        return driver
+        defer { launched = true }
+        return try launchBundledApp(fresh: !launched)
     }
 
     override func tearDown() {
         super.tearDown()
         if let bundle = Self.bundle { forgetBundlePreferences(bundle) }
-    }
-
-    private func forgetBundlePreferences(_ bundle: URL) {
-        guard let identifier = Bundle(url: bundle)?.bundleIdentifier, identifier.contains("uitest") else { return }
-        let defaults = Process()
-        defaults.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-        defaults.arguments = ["delete", identifier]
-        defaults.standardOutput = FileHandle.nullDevice
-        defaults.standardError = FileHandle.nullDevice
-        try? defaults.run()
-        defaults.waitUntilExit()
     }
 
     private typealias Server = MCPServerProcess
@@ -133,7 +114,7 @@ final class BrowserUITests: MacUITestCase {
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait(for: .id("browser-agent-bar"))
         XCTAssertTrue(app.exists(.id("tab-\(agent.id)")))
-        XCTAssertFalse(app.exists(.id("tab-b\(tab)")), "the agent's page is a tab of the strip")
+        XCTAssertFalse(app.exists(.id("strip-browser")), "the agent's page is in the user's Browser tab")
         // In the list at the left, under its project, as its agent's.
         app.wait(for: .id("browser-row-\(tab)"))
         XCTAssertTrue(app.first(.id("browser-row-\(tab)"))?.label.contains("opened by") ?? false)
@@ -211,7 +192,8 @@ final class BrowserUITests: MacUITestCase {
             XCTAssertLessThan(Date().timeIntervalSince(started), 15, "\(when): slow")
         }
         use("shown")
-        app.press(.button("Hide Browser"))
+        // Hidden from the agent's row (#127), where its part's own button was.
+        app.press(.id("agent-part-browser"))
         app.waitGone(.id("agent-browser"))
         use("hidden")
         app.minimize(true)
@@ -282,7 +264,7 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertFalse(server.text("browser_navigate", ["tab": tab, "url": page.absoluteString]).failed)
     }
 
-    /// BROWSER-31: the + of an agent's Browser part opens one more page
+    /// BROWSER-31: the + Page of an agent's row (#127) opens one more page
     /// beside the agent: the agent's, which it lists, and the user's to use
     /// until it is given back; not a page of the user's Browser tab.
     func testTheUserOpensAPageBesideAnAgent() throws {
@@ -312,6 +294,32 @@ final class BrowserUITests: MacUITestCase {
         app.press(.id("browser-control"))
         app.wait(for: .containing("is using this tab"))
         XCTAssertFalse(server.text("browser_navigate", ["tab": second, "url": page.absoluteString]).failed)
+    }
+
+    /// PANE-20 (#127): the + Shell of an agent's row starts a shell in the
+    /// agent's folder, in the agent's tab, shown with the keyboard in it;
+    /// not in the user's Shells tab. The agent lists it and runs a command
+    /// in it, as in a shell it opened itself.
+    func testTheUserOpensAShellForAnAgent() throws {
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let phone = try device()
+        app.wait(for: .id("agent-new-shell"), timeout: 20)
+        app.press(.id("agent-new-shell"))
+        wait("the shell for the agent") { phone.sessions.contains { $0.openedBy == agent.id } }
+        let shell = try XCTUnwrap(phone.sessions.first { $0.openedBy == agent.id })
+        XCTAssertEqual(shell.cwd, agent.cwd)
+        XCTAssertNil(shell.agent)
+        app.wait(for: .id("item-\(shell.id)"))
+        app.waitForKeyboard(in: "terminal-\(shell.id)", "the new shell")
+        XCTAssertFalse(app.exists(.id("strip-shells")), "the shell is in the user's Shells tab")
+        XCTAssertFalse(app.exists(.id("tab-\(shell.id)")), "the shell has a tab of its own")
+        let listed = server.text("shell_list")
+        XCTAssertFalse(listed.failed, listed.text)
+        XCTAssertTrue(listed.text.contains("\(shell.id)"), "the agent does not list it: \(listed.text)")
+        let ran = server.text("shell_run", ["session": Int(shell.id), "command": "echo from-the-$((40 + 2))-agent"])
+        XCTAssertFalse(ran.failed, ran.text)
+        XCTAssertTrue(ran.text.contains("from-the-42-agent"), ran.text)
     }
 
     /// BROWSER-32: Show As is a button of the page's bar, in sight, which
@@ -344,6 +352,49 @@ final class BrowserUITests: MacUITestCase {
         app.wait("the page as wide as before, \(whole), not \(width())") { abs(width() - whole) < 2 }
     }
 
+    /// BROWSER-40 (#134): Show As is one button whatever the page is shown
+    /// as. Its label was of another shape with a device's name in it, and
+    /// the button was made anew when the first device was picked: a list
+    /// open under it was closed with the button left as open, so that the
+    /// next press did nothing, and a press on the button as it was found
+    /// before was lost, though it was reported as done.
+    func testShowAsIsOneButtonWhateverThePageIsShownAs() throws {
+        let page = try makeSite()
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait(for: .id("browser-address"), timeout: 20)
+        app.write(page.absoluteString, into: .id("browser-address"), confirm: true)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
+        // Pressed with no wait after, which `app.press` has.
+        func press(_ node: Node) { AXUIElementPerformAction(node.element, kAXPressAction as CFString) }
+
+        // The first device picked and the button pressed again at once: its
+        // list is open when the page comes to be shown as the device.
+        app.press(.id("browser-show-as"))
+        let phone = try XCTUnwrap(app.wait(for: .id("show-as-iPhone SE")))
+        let button = try XCTUnwrap(app.first(.id("browser-show-as")))
+        press(phone)
+        press(button)
+        app.wait("the bar to name iPhone SE") { self.app.value(of: .id("browser-show-as")) == "iPhone SE" }
+        // Longer than the list of the pick takes to go.
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertEqual(app.first(.id("show-as-iPhone SE"))?.value, "shown", "the list opened again at once was closed when the page came to be shown as a device")
+
+        // Back to this Mac, from that list.
+        app.press(.id("show-as-this-mac"))
+        app.wait("the bar to name this Mac") { self.app.value(of: .id("browser-show-as")) == "This Mac" }
+        app.waitGone(.id("show-as-this-mac"))
+        // The button as it is found now still opens its list once a device
+        // is picked.
+        let before = try XCTUnwrap(app.first(.id("browser-show-as")))
+        app.press(.id("browser-show-as"))
+        app.press(.id("show-as-iPad Mini"))
+        app.wait("the bar to name iPad Mini") { self.app.value(of: .id("browser-show-as")) == "iPad Mini" }
+        app.waitGone(.id("show-as-this-mac"))
+        press(before)
+        app.wait(for: .id("show-as-this-mac"))
+        XCTAssertEqual(app.first(.id("show-as-iPad Mini"))?.value, "shown")
+    }
+
     /// BROWSER-8: a server of the project that is not running is said so;
     /// a tab the agent did not open, the user's, it neither sees nor
     /// reaches; the device size is pretended; and Settings has no switch
@@ -362,8 +413,11 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertEqual(server.text("browser_click", ["tab": "999", "ref": "e1"]).text, BrowserWords.notYours("999"))
         // The user's own tab: not listed to the agent, and not reached.
         app.menu(["Browser", "New Browser Tab"])
-        app.wait("the user's tab") { self.app.nodes().contains { $0.identifier.hasPrefix("tab-b") } }
-        let users = try XCTUnwrap(app.nodes().first { $0.identifier.hasPrefix("tab-b") }.map { String($0.identifier.dropFirst(5)) })
+        func usersPage() -> String? {
+            app.nodes().first { $0.identifier.hasPrefix("item-b") && $0.identifier != "item-b\(tab)" }.map { String($0.identifier.dropFirst(6)) }
+        }
+        app.wait("the user's tab") { usersPage() != nil }
+        let users = try XCTUnwrap(usersPage())
         XCTAssertNotEqual(users, tab)
         let listed = server.text("browser_tabs").text.split(separator: "\n").map { String($0.prefix { $0 != ":" }) }
         XCTAssertEqual(listed, [tab], "the agent is listed other tabs than its own")
@@ -858,7 +912,7 @@ final class BrowserUITests: MacUITestCase {
         server.standardError = FileHandle.nullDevice
         try server.run()
         defer { server.terminate() }
-        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("tab-b") } }
+        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("item-b") } }
         let before = Set(renderers().keys)
         let urls = ["http://127.0.0.1:\(port)/\(page.lastPathComponent)", "http://localhost:\(port)/\(page.lastPathComponent)", page.absoluteString]
         for (index, url) in urls.enumerated() {
@@ -1070,10 +1124,12 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertEqual(server.text("browser_tabs").text, "You have no tab. Open one with browser_open.")
     }
 
-    /// PANE-19 (#69): an agent with its page beside it and a shell under
-    /// both. The View menu's commands (⌥⌘ and ←, → or ↓) put the keyboard in
-    /// its page, its shells and the agent again; the part it is in is shown
-    /// alone, filling the area, and all of them again (⇧⌘Return).
+    /// PANE-19 (#69, #127): an agent with its page beside it and a shell
+    /// under both, each in its row, in that order. The View menu's commands
+    /// (⌥⌘ and ←, → or ↓) put the keyboard in its page, its shells and the
+    /// agent again, and the row says which has it; the part it is in is
+    /// shown alone, filling the area, and all of them again (⇧⌘Return); the
+    /// button at the end of the row hides its page, and shows it again.
     func testTheKeyboardMovesAboutAnAgentsArea() throws {
         let (server, agent) = try startAgent()
         defer { server.stop() }
@@ -1088,11 +1144,18 @@ final class BrowserUITests: MacUITestCase {
         let shell = try XCTUnwrap(phone.sessions.first { $0.openedBy == agent.id })
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait(for: .id("agent-shells"), timeout: 20)
+        XCTAssertEqual(app.nodes().map(\.identifier).filter { $0.hasPrefix("item-") }, ["item-\(agent.id)", "item-b\(tab)", "item-\(shell.id)"])
+        XCTAssertFalse(app.exists(.id("tab-\(shell.id)")), "the agent's shell has a tab of its own")
+        /// The item of the row that says it has the keyboard.
+        func keyboardItem() -> [String] { app.nodes().filter { $0.identifier.hasPrefix("item-") && $0.value == "has the keyboard" }.map(\.identifier) }
 
         app.press(.id("session-\(agent.id)"))
         app.waitForKeyboard(in: "terminal-\(agent.id)", "the agent")
+        app.wait("the row says the agent has the keyboard") { keyboardItem() == ["item-\(agent.id)"] }
         app.menu(["View", "Keyboard to Its Page"])
         app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page")
+        app.wait("the row says its page has the keyboard") { keyboardItem() == ["item-b\(tab)"] }
+        XCTAssertTrue(app.exists(.id("terminal-\(agent.id)")), "the agent is not shown beside its page")
         app.menu(["View", "Keyboard to Its Shells"])
         app.waitForKeyboard(in: "terminal-\(shell.id)", "its shell")
         shot("keyboard-in-its-shell")
@@ -1109,6 +1172,18 @@ final class BrowserUITests: MacUITestCase {
         shot("page-alone")
         app.menu(["View", "Show This Part Alone"])
         app.wait("all of them again") { self.app.exists(.id("agent-shells")) && self.app.exists(.id("terminal-\(agent.id)")) && !self.app.exists(.id("agent-alone")) }
+
+        // Its page hidden from the row: the keyboard goes to the agent, the
+        // page stays open and in the row; shown again from the row.
+        app.press(.id("agent-part-browser"))
+        app.waitGone(.id("agent-browser"))
+        app.waitForKeyboard(in: "terminal-\(agent.id)", "the agent, its page hidden")
+        XCTAssertTrue(app.exists(.id("item-b\(tab)")), "a hidden page left the agent's row")
+        let listed = server.text("browser_tabs").text
+        XCTAssertTrue(listed.split(separator: "\n").contains { $0.hasPrefix("\(tab):") }, "hiding the page closed it: \(listed)")
+        app.press(.id("item-b\(tab)"))
+        app.wait(for: .id("agent-browser"))
+        app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page, picked in the row")
     }
 
     /// The id `browser_open` said it opened.
@@ -1285,8 +1360,8 @@ final class BrowserUITests: MacUITestCase {
         var tabs: [String] = []
         for url in [red, blue] {
             app.menu(["Browser", "New Browser Tab"])
-            app.wait("a new tab") { self.app.nodes().filter { $0.identifier.hasPrefix("tab-b") }.count == tabs.count + 1 }
-            let id = try XCTUnwrap(app.nodes().map(\.identifier).first { $0.hasPrefix("tab-b") && !tabs.contains($0) })
+            app.wait("a new tab") { self.app.nodes().filter { $0.identifier.hasPrefix("item-b") }.count == tabs.count + 1 }
+            let id = try XCTUnwrap(app.nodes().map(\.identifier).first { $0.hasPrefix("item-b") && !tabs.contains($0) })
             tabs.append(id)
             app.wait(for: .id("browser-address"), timeout: 20)
             app.write(url.absoluteString, into: .id("browser-address"), confirm: true)
@@ -1304,17 +1379,161 @@ final class BrowserUITests: MacUITestCase {
         }
     }
 
+    /// BROWSER-38 (#125), by hand only (`AGENTTERM_EXTENSION_TRIAL=1
+    /// scripts/test-mac.sh ExtensionTrial`): an extension from the Chrome
+    /// Web Store is installed in the test's own profile; the window of
+    /// Chrome's own it opens is held back and said in the Browser tab, and
+    /// shown when asked for. It reaches Google's site.
+    func testExtensionTrial() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["AGENTTERM_EXTENSION_TRIAL"] != nil, "reaches the Web Store: run by hand")
+        func windows() -> [String] {
+            let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
+            return list.compactMap { info -> String? in
+                let owner = info[kCGWindowOwnerName as String] as? String ?? ""
+                guard owner.contains("AgentTerm") else { return nil }
+                let bounds = info[kCGWindowBounds as String] as? [String: Any] ?? [:]
+                return
+                    "\(owner) pid=\(info[kCGWindowOwnerPID as String] ?? 0) layer=\(info[kCGWindowLayer as String] ?? 0) title=\(info[kCGWindowName as String] ?? "") \(bounds["Width"] ?? 0)x\(bounds["Height"] ?? 0)"
+            }
+        }
+        print("MEASURE windows before: \(windows())")
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait(for: .id("browser-address"), timeout: 20)
+        app.write("https://chromewebstore.google.com/detail/dark-reader/eimadpbcbfnmbkopoojfekhnkhdbieeh", into: .id("browser-address"), confirm: true)
+        app.wait(for: .containing("Add to Chrome"), timeout: 60)
+        shot("store")
+        app.press(.containing("Add to Chrome"))
+        Thread.sleep(forTimeInterval: 6)
+        shot("after-add")
+        print("MEASURE windows after Add: \(windows())")
+        let texts = app.nodes().map(\.text).filter { $0.contains("extension") || $0.contains("Extension") || $0.contains("Add") }
+        print("MEASURE texts after Add: \(texts.prefix(20))")
+        app.press(.containing("Add extension"), timeout: 20)
+        Thread.sleep(forTimeInterval: 10)
+        print("MEASURE windows after install: \(windows())")
+        shot("after-install")
+        // Installed, the extension opens a page of its own: in a window of
+        // Chrome's, which is held back and said in the Browser tab.
+        app.wait(for: .id("browser-held-window"), timeout: 30)
+        XCTAssertFalse(windows().contains { $0.contains("title=Help") }, "Chrome's window opened by itself")
+        app.press(.id("browser-open-held"))
+        wait("Chrome's window, asked for", timeout: 20) { self.windowsNamed("Dark Reader") }
+        print("MEASURE windows after Open in Chrome Window: \(windows())")
+        Thread.sleep(forTimeInterval: 2)
+        print("MEASURE held after: \(app.nodes().filter { $0.text.contains("of its own") }.map(\.text))")
+    }
+
+    private func windowsNamed(_ text: String) -> Bool {
+        let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
+        return list.contains { ($0[kCGWindowOwnerName as String] as? String ?? "").contains("AgentTerm") && ($0[kCGWindowName as String] as? String ?? "").contains(text) }
+    }
+
+    /// BROWSER-37 (#131): a right click in a page opens a menu as Chrome's:
+    /// on a link, Open Link in New Tab and Copy Link Address; on the page,
+    /// Back, Forward, Reload; Inspect always. Reload reads the page again,
+    /// as it is on disk by then. Open Link in New Tab opens the link as
+    /// another page of the Browser tab. Copy is not pressed: it would write
+    /// to the user's pasteboard.
+    ///
+    /// A menu that is open closes when another app comes to the front
+    /// (#135): the Mac is left alone while this runs.
+    func testARightClickOpensAMenuAsChromes() throws {
+        let two = root.appendingPathComponent("two.html")
+        try "<!doctype html><title>Two</title><body>Two</body>".write(to: two, atomically: true, encoding: .utf8)
+        let one = root.appendingPathComponent("one.html")
+        try #"<!doctype html><title>One</title><body><p>The first page</p><p><a href="two.html">Go to two</a></p></body>"#.write(to: one, atomically: true, encoding: .utf8)
+        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("item-b") } }
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait("the first page") { pages().count == 1 }
+        app.wait(for: .id("browser-address"), timeout: 20)
+        app.write(one.absoluteString, into: .id("browser-address"), confirm: true)
+        app.wait("One shown") { self.app.value(of: .id("browser-page")) == "One" }
+
+        // The items of the menu that is open, and not the window's.
+        func item(_ title: String) -> Node? {
+            app.nodes(menus: true).first { $0.role == kAXMenuItemRole && ($0.title == title || $0.label == title) }
+        }
+        func choose(_ title: String) {
+            guard let node = item(title) else { return XCTFail("no item \(title)") }
+            AXUIElementPerformAction(node.element, kAXPressAction as CFString)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        // On the page.
+        app.perform("AXShowMenu", on: .containing("The first page"), timeout: 20)
+        wait("the page's menu") { item("Reload") != nil }
+        shot("page-menu")
+        XCTAssertNotNil(item("Back"))
+        XCTAssertNotNil(item("Forward"))
+        XCTAssertNotNil(item("Inspect"))
+        XCTAssertNil(item("Open Link in New Tab"), "a link's items on the page")
+        // The file is another by now: Reload reads it again, and the test
+        // goes on once it has.
+        try #"<!doctype html><title>One</title><body><p>The page, read again</p><p><a href="two.html">Go to two</a></p></body>"#.write(to: one, atomically: true, encoding: .utf8)
+        choose("Reload")
+        wait("the menu closed") { item("Reload") == nil }
+        app.wait(for: .containing("The page, read again"), timeout: 20)
+        XCTAssertEqual(app.value(of: .id("browser-page")), "One")
+
+        // On the link.
+        app.perform("AXShowMenu", on: .containing("Go to two"), timeout: 20)
+        wait("the link's menu") { item("Open Link in New Tab") != nil }
+        shot("link-menu")
+        XCTAssertNotNil(item("Copy Link Address"))
+        XCTAssertNotNil(item("Inspect"))
+        XCTAssertNil(item("Reload"), "the page's items on a link")
+        choose("Open Link in New Tab")
+        app.wait("the link opened as another page") { pages().count == 2 }
+        app.wait("Two shown") { self.app.value(of: .id("browser-page")) == "Two" }
+    }
+
+    /// BROWSER-41 (#139): Chromium's work goes on while a right-click menu
+    /// is open in a page. A page that changes its own title several times a
+    /// second goes on being shown with the title it has, the menu open and
+    /// left open: what the page tells the app (its title, that it was read
+    /// again, an agent's answer) does not wait for the menu to close.
+    ///
+    /// The Mac is left alone while this runs: a menu that is open closes
+    /// when another app comes to the front.
+    func testChromiumsWorkGoesOnWhileARightClickMenuIsOpen() throws {
+        let page = root.appendingPathComponent("ticks.html")
+        try #"<!doctype html><title>Tick 0</title><body><p>The page that ticks</p><script>let n = 0; setInterval(() => { document.title = "Tick " + (++n) }, 200)</script></body>"#
+            .write(to: page, atomically: true, encoding: .utf8)
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait(for: .id("browser-address"), timeout: 20)
+        app.write(page.absoluteString, into: .id("browser-address"), confirm: true)
+        func tick() -> Int { Int((app.value(of: .id("browser-page")) ?? "").replacingOccurrences(of: "Tick ", with: "")) ?? -1 }
+        app.wait("the page ticking") { tick() > 2 }
+
+        func item(_ title: String) -> Node? {
+            app.nodes(menus: true).first { $0.role == kAXMenuItemRole && ($0.title == title || $0.label == title) }
+        }
+        app.perform("AXShowMenu", on: .containing("The page that ticks"), timeout: 20)
+        wait("the page's menu") { item("Reload") != nil }
+        // Open, and left open: the title goes on.
+        let opened = tick()
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        XCTAssertNotNil(item("Reload"), "the menu closed by itself: is another app in front? \(app.screen().prefix(200))")
+        let later = tick()
+        XCTAssertGreaterThan(later, opened + 3, "the page's title stood still while the menu was open: \(opened), then \(later) two seconds later")
+        shot("menu-open-page-ticking")
+        // Closed without a choice.
+        if let menu = app.nodes(menus: true).first(where: { $0.role == kAXMenuRole }) { AXUIElementPerformAction(menu.element, kAXCancelAction as CFString) }
+        wait("the menu closed") { item("Reload") == nil }
+        let closed = tick()
+        app.wait("the page ticking after") { tick() > closed + 2 }
+    }
+
     /// BROWSER-30: the user's pages are one Browser tab of the strip, as a
-    /// window of Chrome holds its tabs: a row of them inside, a button for
-    /// one more, each shown when picked; a page closed shows the one beside
-    /// it, and closing the tab, of several pages, is asked first.
+    /// window of Chrome holds its tabs: a row of them under the strip, a
+    /// button for one more, each shown when picked; a page closed shows the
+    /// one beside it, and closing the tab, of several pages, is asked first.
     func testTheUsersPagesAreOneBrowserTab() throws {
         func page(_ name: String) throws -> URL {
             let file = root.appendingPathComponent("\(name).html")
             try "<!doctype html><title>\(name)</title><body>\(name)</body>".write(to: file, atomically: true, encoding: .utf8)
             return file
         }
-        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("tab-b") } }
+        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("item-b") } }
         func load(_ name: String) throws {
             app.wait(for: .id("browser-address"), timeout: 20)
             app.write(try page(name).absoluteString, into: .id("browser-address"), confirm: true)
@@ -1357,18 +1576,70 @@ final class BrowserUITests: MacUITestCase {
         app.wait("gone again") { pages().isEmpty && !self.app.exists(.id("strip-browser")) }
     }
 
+    /// BROWSER-36 (#122): the sidebar holds the user's pages as the strip
+    /// does: one Browser row in the project, the pages under it. A page's
+    /// row shows that page; the Browser row shows the page the Browser tab
+    /// shows; closed from its menu, it asks first when there are several.
+    func testTheSidebarHoldsTheUsersPagesInOneBrowserRow() throws {
+        func page(_ name: String) throws -> URL {
+            let file = root.appendingPathComponent("\(name).html")
+            try "<!doctype html><title>\(name)</title><body>\(name)</body>".write(to: file, atomically: true, encoding: .utf8)
+            return file
+        }
+        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("item-b") } }
+        func load(_ name: String) throws {
+            app.wait(for: .id("browser-address"), timeout: 20)
+            app.write(try page(name).absoluteString, into: .id("browser-address"), confirm: true)
+            app.wait("\(name) shown") { self.app.value(of: .id("browser-page")) == name }
+        }
+        /// The sidebar's row of a page, by its title.
+        func row(_ name: String) -> String? { app.nodes().first { $0.identifier.hasPrefix("browser-row-") && $0.label == "\(name), page" }?.identifier }
+        app.press(.id("folder-\(project.path)"))
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait("the first page") { pages().count == 1 }
+        try load("One")
+        for (count, name) in [(2, "Two"), (3, "Three")] {
+            app.press(.id("browser-new-page"))
+            app.wait("page \(count)") { pages().count == count }
+            try load(name)
+        }
+        // One Browser row, its three pages under it.
+        app.wait(for: .id("sidebar-browser"), timeout: 10)
+        XCTAssertEqual(app.nodes().filter { $0.identifier == "sidebar-browser" }.count, 1)
+        XCTAssertEqual(app.first(.id("sidebar-browser"))?.label, "Browser, 3 pages")
+        let all = app.nodes()
+        let group = try XCTUnwrap(all.firstIndex { $0.identifier == "sidebar-browser" })
+        let rows = all.indices.filter { all[$0].identifier.hasPrefix("browser-row-") }
+        XCTAssertEqual(rows.count, 3, "the pages' rows")
+        XCTAssertTrue(rows.allSatisfy { $0 > group }, "a page's row is not under the Browser row")
+        shot("sidebar-browser")
+        // A page's row shows that page.
+        app.press(.id(try XCTUnwrap(row("Two"))))
+        app.wait("Two shown from its row") { self.app.value(of: .id("browser-page")) == "Two" }
+        // With a shell in front, the Browser row shows the page its tab shows.
+        app.press(.button("Shell"))
+        app.wait("the page gone behind the shell") { self.app.value(of: .id("browser-page")) == nil }
+        app.press(.id("sidebar-browser"))
+        app.wait("Two shown from the Browser row") { self.app.value(of: .id("browser-page")) == "Two" }
+        // Closed from its row: asked first, then all three go.
+        app.perform("Close Browser", on: .id("sidebar-browser"))
+        app.wait(for: .text("Close 3 pages?"))
+        app.press(.button("Close 3 Pages"))
+        app.wait("the Browser row gone") { !self.app.exists(.id("sidebar-browser")) && row("One") == nil && pages().isEmpty }
+    }
+
     /// BROWSER-33 (#111): the user's pages and an agent's are never mixed,
     /// whichever is opened first, though both use one profile: the user's
     /// are in the Browser tab and the agent does not list them; the agent's
-    /// are beside it and not in the Browser tab.
+    /// are in its tab and not in the Browser tab.
     func testTheUsersPagesAndAnAgentsAreNotMixed() throws {
         func page(_ name: String) throws -> URL {
             let file = root.appendingPathComponent("\(name).html")
             try "<!doctype html><title>\(name)</title><body>\(name)</body>".write(to: file, atomically: true, encoding: .utf8)
             return file
         }
-        /// The pages of a part of the window, by their names.
-        func pages(in part: String) -> [String] {
+        /// The pages of the row of the tab in front, by their names.
+        func pages(in part: String = "group-row") -> [String] {
             let all = app.nodes()
             guard let start = all.firstIndex(where: { $0.identifier == part }) else { return [] }
             let depth = all[start].depth
@@ -1388,26 +1659,25 @@ final class BrowserUITests: MacUITestCase {
         app.wait(for: .id("tab-1"), timeout: 10)
         let opened = server.text("browser_open", ["url": try page("Agents").absoluteString])
         XCTAssertFalse(opened.failed, opened.text)
-        app.wait(for: .id("agent-browser"), timeout: 20)
-        app.wait("the agent's page beside it") { pages(in: "agent-browser") == ["Agents"] }
+        app.wait("the agent's page in its row, not \(pages())", timeout: 20) { pages() == ["Agents"] }
         XCTAssertEqual(server.text("browser_tabs").text.split(separator: "\n").count, 1, "the agent lists a page that is not its own")
         XCTAssertTrue(server.text("browser_tabs").text.contains("Agents"))
-        // One more of the user's, from the header, while the agent's area is in front.
+        // One more of the user's, from the header, while the agent's tab is in front.
         app.menu(["Browser", "New Browser Tab"])
-        app.wait("a second page of the user's") { self.app.nodes().filter { $0.identifier.hasPrefix("tab-b") }.count == 2 }
+        app.wait("a second page of the user's") { self.app.nodes().filter { $0.identifier.hasPrefix("item-b") }.count == 2 }
         app.write(try page("Mine too").absoluteString, into: .id("browser-address"), confirm: true)
         app.wait("the user's second page") { self.app.value(of: .id("browser-page")) == "Mine too" }
-        XCTAssertEqual(pages(in: "user-browser"), ["Mine", "Mine too"], "the user's Browser tab")
+        XCTAssertEqual(pages(), ["Mine", "Mine too"], "the user's Browser tab")
         // And one more of the agent's.
         XCTAssertFalse(server.text("browser_open", ["url": try page("Agents too").absoluteString]).failed)
         wait("the agent to list its two") { server.text("browser_tabs").text.split(separator: "\n").count == 2 }
         let listed = server.text("browser_tabs").text
         XCTAssertFalse(listed.contains("Mine"), "the agent lists the user's page: \(listed)")
-        // Back to the agent: its two beside it, none of the user's.
+        // Back to the agent: its two in its row, none of the user's.
         app.press(.id("tab-1"))
-        app.wait("the agent's two pages beside it, not \(pages(in: "agent-browser"))") { Set(pages(in: "agent-browser")) == ["Agents", "Agents too"] }
+        app.wait("the agent's two pages in its row, not \(pages())") { Set(pages()) == ["Agents", "Agents too"] }
         app.press(.id("strip-browser"))
-        app.wait("the user's two pages in the Browser tab, not \(pages(in: "user-browser"))") { pages(in: "user-browser") == ["Mine", "Mine too"] }
+        app.wait("the user's two pages in the Browser tab, not \(pages())") { pages() == ["Mine", "Mine too"] }
         XCTAssertEqual(app.first(.id("strip-browser"))?.label, "Browser, 2 pages")
     }
 
@@ -1425,6 +1695,6 @@ final class BrowserUITests: MacUITestCase {
         // Long enough for the host to have listed its sessions, which tabs
         // once came back after.
         RunLoop.current.run(until: Date().addingTimeInterval(3))
-        XCTAssertFalse(app.nodes().contains { $0.identifier.hasPrefix("browser-row-") || $0.identifier.hasPrefix("tab-b") }, "a tab came back")
+        XCTAssertFalse(app.nodes().contains { $0.identifier.hasPrefix("browser-row-") || $0.identifier.hasPrefix("item-b") }, "a tab came back")
     }
 }

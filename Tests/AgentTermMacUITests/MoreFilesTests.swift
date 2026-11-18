@@ -14,7 +14,8 @@ final class MoreFilesTests: MacUITestCase {
     }
 
     /// A file's row in the tree, as apart from its tab.
-    private func row(_ name: String) -> MacDriver.Query { .idEnding("/project/" + name) }
+    /// The Files panel's row of a file.
+    private func row(_ name: String) -> MacDriver.Query { .idEnding("/project/" + name, prefix: "file-") }
 
     func testMakingRenamingAndRemovingFiles() throws {
         app.press(.button("Files"))

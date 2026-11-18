@@ -8,7 +8,7 @@ final class RemoteMacTests: MacUITestCase {
     private var otherProject: URL!
     private var otherPort: UInt16 = 0
 
-    private func startOtherMac() throws {
+    private func startOtherMac(alsoWith folders: [URL] = []) throws {
         otherState = root.appendingPathComponent("other/state")
         otherHome = root.appendingPathComponent("other/home")
         otherProject = root.appendingPathComponent("other/work")
@@ -16,7 +16,7 @@ final class RemoteMacTests: MacUITestCase {
         try FileManager.default.createDirectory(at: otherHome.appendingPathComponent("Sites/blog"), withIntermediateDirectories: true)
         try makeRepository(otherProject, remote: nil)
         try write("first line\nchanged on the other Mac\n", to: "notes.txt", in: otherProject)
-        try JSONEncoder().encode([otherProject.path]).write(to: otherState.appendingPathComponent("folders.json"))
+        try JSONEncoder().encode([otherProject.path] + folders.map(\.path)).write(to: otherState.appendingPathComponent("folders.json"))
         otherPort = port + 200
         try startHost(state: otherState, home: otherHome, port: otherPort)
     }
@@ -73,6 +73,24 @@ final class RemoteMacTests: MacUITestCase {
         app.press(.button("Git"))
         app.press(.id("change-notes.txt"), timeout: 15)
         app.wait(for: .containing("+and from here"), timeout: 15)
+    }
+
+    /// REMOTE-21 (#116): on another Mac too, the fetch the app makes by
+    /// itself holds no button, and what is asked for while it is under way
+    /// is done when it is over. This is where a push was lost at times: the
+    /// app asks the other Mac's remotes about when REMOTE-12 presses Push.
+    func testWhatIsAskedWhileTheAppFetchesByItselfIsDoneAfterOnTheOtherMac() throws {
+        // A second folder on the other Mac, whose remote is slow to answer
+        // a fetch.
+        let slow = try makeSlowRepository(named: "slow", under: root.appendingPathComponent("other"))
+        try startOtherMac(alsoWith: [slow.folder])
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        // Picked now: its remotes are asked within three seconds of its
+        // changes being shown.
+        app.press(.id("folder-\(slow.folder.path)"), timeout: 15)
+        app.press(.button("Git"))
+        pushWhileTheAppFetchesByItself(slow)
     }
 
     func testPushingWritingTheMessageAndHandingOffOnTheOtherMac() throws {
@@ -226,7 +244,11 @@ final class RemoteMacTests: MacUITestCase {
         app.menu(["File", "New Shell"])
         wait("a session here") { phone.sessions.count == 1 }
         let own = try XCTUnwrap(phone.sessions.first)
-        wait("this Mac's host to have its tab") { phone.tabLayout?.order == [own.layoutID] }
+        // A shell of the user's is held in the Shells tab of its project
+        // (#127): that tab is this Mac's.
+        wait("this Mac's host to have its tab") { phone.tabLayout?.order.contains { $0.hasPrefix("h:shells:") } == true }
+        let ownOrder = try XCTUnwrap(phone.tabLayout?.order)
+        XCTAssertFalse(ownOrder.contains(own.layoutID), "a shell of the user's has a tab of its own: \(ownOrder)")
         pair()
         app.wait(for: .text("work, folder"), timeout: 15)
         app.press(.button("Shell"))
@@ -234,11 +256,11 @@ final class RemoteMacTests: MacUITestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(2))
         // Nothing the other Mac's host was ever told names a tab of this Mac.
         let told = otherDevice.messages.compactMap { message -> TabLayout? in if case .tabLayout(let layout) = message { return layout } else { return nil } }
-        XCTAssertFalse(told.contains { $0.order.contains(own.layoutID) }, "the other Mac was given this Mac's tabs: \(told.map(\.order))")
+        XCTAssertFalse(told.contains { !Set($0.order).isDisjoint(with: ownOrder) }, "the other Mac was given this Mac's tabs: \(told.map(\.order))")
         // This Mac's own are as they were.
         switchTo("This Mac")
         RunLoop.current.run(until: Date().addingTimeInterval(1))
-        XCTAssertEqual(phone.tabLayout?.order, [own.layoutID])
+        XCTAssertEqual(phone.tabLayout?.order, ownOrder)
     }
 
     /// REMOTE-17.

@@ -36,6 +36,53 @@ final class FilesTests: MacUITestCase {
         XCTAssertFalse(app.all(.button("notes.txt")).isEmpty, "the file that was open did not come back as a tab")
     }
 
+    /// FILE-11 (#104): what is typed is the file's text, though no view is
+    /// told of it at each key. Save and Revert show while it differs from
+    /// the disk's, and go when it is typed back; Revert gives the disk's
+    /// text back, in the editor too; what is saved is the last of what was
+    /// typed; a file with edits of its own keeps them when the disk's
+    /// changes.
+    func testAFilesEditsAreKeptSavedAndThrownAway() throws {
+        app.press(.button("Files"))
+        app.press(.button("notes.txt"), timeout: 15)
+        let editor = MacDriver.Query.role(kAXTextAreaRole as String)
+        let saved = "first line\nsecond line\n"
+        wait("the file's text in the editor") { self.app.value(of: editor) == saved }
+        XCTAssertFalse(app.exists(.button("Save")), "a file without edits offers to save")
+        XCTAssertFalse(app.exists(.button("Revert")))
+        // Edited: it differs from the disk's.
+        app.write(saved + "third", into: editor)
+        app.wait(for: .button("Save"))
+        app.wait(for: .button("Revert"))
+        // More typed: still to save.
+        app.write(saved + "third line", into: editor)
+        XCTAssertTrue(app.exists(.button("Save")))
+        // Typed back to what the disk has: nothing to save.
+        app.write(saved, into: editor)
+        app.waitGone(.button("Save"))
+        // Of the disk's length, and another text: an edit.
+        app.write("first line\nsecond LINE\n", into: editor)
+        app.wait(for: .button("Save"))
+        app.press(.button("Revert"))
+        wait("the disk's text back in the editor") { self.app.value(of: editor) == saved }
+        app.waitGone(.button("Save"))
+        XCTAssertEqual(read("notes.txt"), saved)
+        // Typed, typed again, saved: the last of it is on disk.
+        app.write(saved + "a", into: editor)
+        app.write(saved + "all of it\n", into: editor)
+        app.press(.button("Save"))
+        wait("the file on disk") { self.read("notes.txt") == saved + "all of it\n" }
+        app.waitGone(.button("Save"))
+        // With edits of its own it keeps them when the disk's changes (FILE-6 is the file without).
+        app.write(saved + "mine\n", into: editor)
+        app.wait(for: .button("Save"))
+        try write("rewritten by an agent\n", to: "notes.txt")
+        app.press(.button("Refresh"))
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertEqual(app.value(of: editor), saved + "mine\n", "the edits went with the disk's change")
+        XCTAssertTrue(app.exists(.button("Save")))
+    }
+
     /// FIND-9 (#45): Go to File finds a file by part of its name and opens
     /// it; Find in Files finds a word with its file and line, and opens the
     /// file there, a Markdown file in its source.

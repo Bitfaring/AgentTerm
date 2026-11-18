@@ -98,77 +98,193 @@ final class AgentStateTests: XCTestCase {
         XCTAssertEqual(change("codex", "Interrupt", #"{"hook_event_name":"Interrupt"}"#), .set(nil))
     }
 
-    // MARK: - What each agent is given
+    // MARK: - What each agent is given, in its own configuration (#129)
 
-    /// The command a hook runs is the same for every session, so that
-    /// Codex, which trusts a hook by its command, asks once.
-    func testEachAgentIsGivenHooksThatAreTheSameForEverySession() throws {
+    private func setup(_ root: URL, name: String = "agentterm-dev", prompt: String? = nil) -> AgentSetup {
+        AgentSetup(
+            directory: root.appendingPathComponent("setup"), tool: "/Apps/My App's/agenttermd", home: root.appendingPathComponent("home").path, name: name,
+            environment: [:], locate: { [] }, prompt: { _ in prompt }, run: { _ in nil })
+    }
+
+    private func json(_ file: URL) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    }
+
+    /// AGENT-13 (#129): each agent's plugin, which `agenttermd setup` adds to
+    /// its own configuration, has its hooks, the one of its start among
+    /// them, each running `agenttermd hook <agent> <event>`: the same
+    /// command for every session, so that an agent that trusts a hook by
+    /// its command asks once. AgentTerm's MCP server is in none of them:
+    /// each agent has a command of its own for that (AGENT-15).
+    func testEachAgentsPluginHasItsHooksTheSameForEverySession() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-hooks-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let home = root.appendingPathComponent("home")
-        try FileManager.default.createDirectory(at: home.appendingPathComponent(".gemini/antigravity-cli"), withIntermediateDirectories: true)
-        try #"{"trustedWorkspaces":["/Users/someone/work"],"model":"x"}"#.write(
-            to: home.appendingPathComponent(".gemini/antigravity-cli/settings.json"), atomically: true, encoding: .utf8)
-        let tool = "/Apps/My App's/agenttermd"
-        let hooks = root.appendingPathComponent("hooks")
+        let setup = setup(root)
 
-        func words(_ arguments: String) -> [String] {
-            let result = Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' x" + arguments])
-            return String(decoding: result?.output ?? Data(), as: UTF8.self).split(separator: "\n").map(String.init).dropFirst().map { $0 }
-        }
-
-        // Claude Code: one --settings, with the status line and the hooks.
-        let claude = words(try AgentHooks.launchArguments(agent: "claude", tool: tool, usageFile: "/tmp/s 1.json", directory: nil, home: home.path))
-        XCTAssertEqual(claude.first, "--settings")
-        let settings = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(claude[1].utf8)) as? [String: Any])
-        XCTAssertNotNil(settings["statusLine"])
-        let stop = try XCTUnwrap(((settings["hooks"] as? [String: Any])?["Stop"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])
+        // Claude Code: a marketplace of one plugin, with its hooks.
+        let claude = try setup.writeClaudeMarketplace()
+        let market = try json(claude.appendingPathComponent(".claude-plugin/marketplace.json"))
+        XCTAssertEqual(market["name"] as? String, "agentterm-dev")
+        XCTAssertEqual((market["plugins"] as? [[String: Any]])?.first?["source"] as? String, "./plugin")
+        let hooks = try XCTUnwrap(try json(claude.appendingPathComponent("plugin/hooks/hooks.json"))["hooks"] as? [String: Any])
+        XCTAssertEqual(Set(hooks.keys), Set(["SessionStart"] + AgentHooks.claudeEvents))
+        let stop = try XCTUnwrap((hooks["Stop"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])
         XCTAssertEqual(stop.first?["command"] as? String, "'/Apps/My App'\\''s/agenttermd' hook claude Stop")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: claude.appendingPathComponent("plugin/.mcp.json").path), "the server is in the plugin")
 
-        // Codex: one -c for each event, as TOML.
-        let codex = words(try AgentHooks.launchArguments(agent: "codex", tool: tool, usageFile: nil, directory: nil, home: home.path))
-        XCTAssertEqual(codex.filter { $0 == "-c" }.count, AgentHooks.codexEvents.count)
-        XCTAssertTrue(codex.contains(#"hooks.Stop=[{hooks=[{type="command",command="'/Apps/My App'\\''s/agenttermd' hook codex Stop"}]}]"#), codex.joined(separator: "\n"))
+        // Codex has no plugin: its hooks are in config.toml (AGENT-14).
 
-        // Copilot CLI: a plugin of the host's.
-        let copilot = words(try AgentHooks.launchArguments(agent: "copilot", tool: tool, usageFile: nil, directory: hooks, home: home.path))
-        XCTAssertEqual(copilot, ["--plugin-dir", hooks.appendingPathComponent("copilot").path])
-        let plugin = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: hooks.appendingPathComponent("copilot/hooks.json"))) as? [String: Any])
+        // Copilot CLI: its own layout, with the hooks of its own names.
+        let copilot = try setup.writeCopilotMarketplace()
+        let plugin = try json(copilot.appendingPathComponent("plugin/hooks.json"))
         XCTAssertEqual(plugin["version"] as? Int, 1)
-        XCTAssertNotNil(FileManager.default.contents(atPath: hooks.appendingPathComponent("copilot/plugin.json").path))
+        let copilotHooks = try XCTUnwrap(plugin["hooks"] as? [String: [[String: Any]]])
+        XCTAssertEqual(Set(copilotHooks.keys), Set(["sessionStart"] + AgentHooks.copilotEvents))
+        XCTAssertEqual(copilotHooks["agentStop"]?.first?["bash"] as? String, "'/Apps/My App'\\''s/agenttermd' hook copilot agentStop")
+        XCTAssertNotNil(FileManager.default.contents(atPath: copilot.appendingPathComponent("plugin/plugin.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copilot.appendingPathComponent("plugin/.mcp.json").path), "the server is in the plugin")
 
-        // Antigravity: a folder of the host's, trusted for the session next
-        // to the folders the user trusts, whose settings are left as they are.
-        let agy = words(try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: home.path))
-        let folder = hooks.appendingPathComponent("antigravity").path
-        XCTAssertEqual(Array(agy.prefix(3)), ["--add-dir", folder, "--settings"])
-        let trusted = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(agy[3].utf8)) as? [String: Any])
-        XCTAssertEqual(trusted["trustedWorkspaces"] as? [String], ["/Users/someone/work", folder])
-        XCTAssertNotNil(FileManager.default.contents(atPath: folder + "/.agents/hooks.json"))
-        XCTAssertEqual(
-            try String(contentsOf: home.appendingPathComponent(".gemini/antigravity-cli/settings.json"), encoding: .utf8),
-            #"{"trustedWorkspaces":["/Users/someone/work"],"model":"x"}"#)
+        // Antigravity: its own layout: a tool's hooks for every tool.
+        let agy = try setup.writeAntigravityPlugin()
+        let agyHooks = try XCTUnwrap(try json(agy.appendingPathComponent("hooks.json"))["agentterm-dev"] as? [String: [[String: Any]]])
+        XCTAssertEqual(Set(agyHooks.keys), Set(["SessionStart"] + AgentHooks.antigravityEvents))
+        XCTAssertEqual(agyHooks["PreToolUse"]?.first?["matcher"] as? String, "*")
+        XCTAssertEqual(agyHooks["Stop"]?.first?["command"] as? String, "'/Apps/My App'\\''s/agenttermd' hook agy Stop")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: agy.appendingPathComponent("mcp_config.json").path), "the server is in the plugin")
 
         // Nothing of a session is in any of it.
-        for arguments in [claude, codex, copilot] { XCTAssertFalse(arguments.joined().contains("session-"), arguments.joined()) }
+        for folder in [claude, copilot, agy] {
+            let files = FileManager.default.enumerator(atPath: folder.path)?.compactMap { $0 as? String } ?? []
+            for file in files {
+                let text = (try? String(contentsOf: folder.appendingPathComponent(file), encoding: .utf8)) ?? ""
+                XCTAssertFalse(text.contains("session-"), file)
+            }
+        }
+    }
+
+    /// AGENT-15 (#129): AgentTerm's MCP server is added with each agent's
+    /// own command, and taken out with it, as each agent's `mcp add --help`
+    /// says and as each was tried (2026-11-18); shown to the user as typed
+    /// in a terminal, by the agent's name, a word quoted only when it has
+    /// to be. What an agent has no command for is AgentTerm's own command,
+    /// last. For Codex, the session's variable is named in the table its
+    /// command wrote, which has no option for it.
+    func testTheServerIsAddedWithEachAgentsOwnCommand() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-server-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let setup = setup(root)
+        let tool = "/Apps/My App's/agenttermd"
+        XCTAssertEqual(setup.serverCommand("claude", program: "claude"), ["claude", "mcp", "add", "--scope", "user", "agentterm-dev", "--", tool, "mcp"])
+        XCTAssertEqual(setup.serverCommand("claude", program: "claude", remove: true), ["claude", "mcp", "remove", "--scope", "user", "agentterm-dev"])
+        XCTAssertEqual(setup.serverCommand("codex", program: "/bin/codex"), ["/bin/codex", "mcp", "add", "agentterm-dev", "--", tool, "mcp"])
+        XCTAssertEqual(setup.serverCommand("copilot", program: "copilot"), ["copilot", "mcp", "add", "agentterm-dev", "--", tool, "mcp"])
+        // Antigravity takes the program and its arguments after the name.
+        XCTAssertEqual(setup.serverCommand("agy", program: "agy"), ["agy", "mcp", "add", "agentterm-dev", tool, "mcp"])
+        for agent in ["codex", "copilot", "agy"] {
+            XCTAssertEqual(setup.serverCommand(agent, program: agent, remove: true), [agent, "mcp", "remove", "agentterm-dev"])
+        }
+        XCTAssertNil(setup.serverCommand("vim", program: "vim"))
+
+        // As typed.
+        XCTAssertEqual(
+            AgentSetup.typed(["claude", "mcp", "add", "--scope", "user", "agentterm", "--", "/Applications/AgentTerm.app/Contents/MacOS/agenttermd", "mcp"]),
+            "claude mcp add --scope user agentterm -- /Applications/AgentTerm.app/Contents/MacOS/agenttermd mcp")
+        let steps = setup.steps(for: "claude", name: "Claude Code")
+        XCTAssertEqual(steps.map(\.command), ["claude mcp add --scope user agentterm-dev -- '/Apps/My App'\\''s/agenttermd' mcp", "'/Apps/My App'\\''s/agenttermd' setup claude"])
+        XCTAssertEqual(steps.map(\.title), [AgentSetupWords.serverStep("Claude Code"), AgentSetupWords.ownStep(agent: "claude", name: "Claude Code")])
+        XCTAssertEqual(
+            setup.steps(for: "agy", name: "Antigravity", remove: true).map(\.command), ["agy mcp remove agentterm-dev", "'/Apps/My App'\\''s/agenttermd' setup agy --remove"])
+
+        // Codex's table, as `codex mcp add` writes it: the variable goes
+        // under its own lines, once, and the rest is left as it was.
+        let table = "model = \"o3\"\n\n[mcp_servers.agentterm-dev]\ncommand = \"/x/agenttermd\"\nargs = [\"mcp\"]\n\n[features]\ndaemon_auto_start = false\n"
+        let named = try XCTUnwrap(setup.withCodexServerVariable(table))
+        XCTAssertEqual(
+            named, "model = \"o3\"\n\n[mcp_servers.agentterm-dev]\ncommand = \"/x/agenttermd\"\nargs = [\"mcp\"]\nenv_vars = [\"AGENTTERM_MCP\"]\n\n[features]\ndaemon_auto_start = false\n")
+        XCTAssertEqual(setup.withCodexServerVariable(named), named)
+        XCTAssertNil(setup.withCodexServerVariable("model = \"o3\"\n\n[mcp_servers.agentterm]\ncommand = \"/x\"\n"), "another build's server taken for this one's")
+        // The last table of the file.
+        XCTAssertEqual(
+            setup.withCodexServerVariable("[mcp_servers.agentterm-dev]\ncommand = \"/x\"\nargs = [\"mcp\"]\n"),
+            "[mcp_servers.agentterm-dev]\ncommand = \"/x\"\nargs = [\"mcp\"]\nenv_vars = [\"AGENTTERM_MCP\"]\n")
+        // Not under the comment over the table that comes next: that one
+        // says whose a hook is, and stays right over it.
+        XCTAssertEqual(
+            setup.withCodexServerVariable("[mcp_servers.agentterm-dev]\ncommand = \"/x\"\nargs = [\"mcp\"]\n\n# AgentTerm's hook (agentterm-dev), added\n[[hooks.Stop]]\n"),
+            "[mcp_servers.agentterm-dev]\ncommand = \"/x\"\nargs = [\"mcp\"]\nenv_vars = [\"AGENTTERM_MCP\"]\n\n# AgentTerm's hook (agentterm-dev), added\n[[hooks.Stop]]\n")
+    }
+
+    /// SCHED-23 (#11, #129): a schedule's run of Antigravity trusts the
+    /// schedule's folder for that run, next to those the user trusts, whose
+    /// settings are left as they are.
+    func testAScheduledAntigravityTrustsItsFolderForThatRun() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-trust-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".gemini/antigravity-cli"), withIntermediateDirectories: true)
+        let settingsFile = home.appendingPathComponent(".gemini/antigravity-cli/settings.json")
+        try #"{"trustedWorkspaces":["/Users/someone/work"],"model":"x"}"#.write(to: settingsFile, atomically: true, encoding: .utf8)
+        let arguments = try XCTUnwrap(AgentHooks.antigravityTrust(["/Users/someone/project"], home: home.path))
+        let words = String(decoding: Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' x" + arguments])?.output ?? Data(), as: UTF8.self).split(separator: "\n").map(String.init)
+        XCTAssertEqual(words.dropFirst().first, "--settings")
+        let trusted = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(words[2].utf8)) as? [String: Any])
+        XCTAssertEqual(trusted["trustedWorkspaces"] as? [String], ["/Users/someone/work", "/Users/someone/project"])
+        XCTAssertEqual(try String(contentsOf: settingsFile, encoding: .utf8), #"{"trustedWorkspaces":["/Users/someone/work"],"model":"x"}"#)
+    }
+
+    /// AGENT-14 (#129, #142, principle 7): Codex keeps hooks only in its
+    /// config.toml, where each build's are its own, each under a comment
+    /// that names the build, after the user's own; set up again they are
+    /// there once, and taking one build's out leaves the other's and the
+    /// user's as they were.
+    func testEachBuildsCodexHooksAreItsOwn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-codex-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = root.appendingPathComponent("home/.codex/config.toml")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let own = "model = \"o3\"\n\n[mcp_servers.mine]\ncommand = \"mine\"\n"
+        try own.write(to: config, atomically: true, encoding: .utf8)
+        let release = setup(root, name: "agentterm"), development = setup(root, name: "agentterm-dev")
+        try release.addCodexHooks(path: "/no/codex")
+        try development.addCodexHooks(path: "/no/codex")
+        try release.addCodexHooks(path: "/no/codex")
+        let text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(text.hasPrefix(own), text)
+        // Each of a build's hooks once, under its comment.
+        let hooks = AgentSetup.events(of: "codex").count
+        XCTAssertEqual(text.components(separatedBy: "# AgentTerm's hook (agentterm),").count - 1, hooks, "the release's hooks twice: \(text)")
+        XCTAssertEqual(text.components(separatedBy: "# AgentTerm's hook (agentterm-dev),").count - 1, hooks)
+        XCTAssertEqual(text.components(separatedBy: "[[hooks.Stop]]").count, 3)
+        XCTAssertTrue(text.contains(#"hooks = [{ type = "command", command = "'/Apps/My App'\\''s/agenttermd' hook codex SessionStart" }]"#), text)
+        XCTAssertTrue(release.codexHooksAreThere(in: text))
+        try release.removeCodexHooks()
+        let left = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(left.hasPrefix(own), left)
+        XCTAssertFalse(left.contains("hook (agentterm),"), left)
+        XCTAssertEqual(left.components(separatedBy: "# AgentTerm's hook (agentterm-dev),").count - 1, hooks, left)
+        XCTAssertEqual(left.components(separatedBy: "[[hooks.Stop]]").count, 2, left)
+        try development.removeCodexHooks()
+        XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), own)
     }
 
     /// MCP-13: Copilot CLI and Antigravity are told to run their commands in
-    /// shells the user sees as Claude Code is, through instructions files of
-    /// the host's, which they read; not when they are told nothing.
+    /// shells the user sees as Claude Code and Codex are by AgentTerm's MCP
+    /// server, which they do not hear: Copilot CLI through a folder of
+    /// instructions its environment names, in every session; Antigravity
+    /// through a rule of its plugin. Not when they are told nothing.
     func testCopilotAndAntigravityAreToldToUseTheShells() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-told-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let hooks = root.appendingPathComponent("hooks")
-        let tool = "/Apps/AgentTerm.app/agenttermd"
 
-        // Antigravity: a rule always on, in the folder it is given.
-        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, prompt: AgentShellsInstructions.useShells)
-        let rule = hooks.appendingPathComponent("antigravity/.agents/rules/agentterm.md")
+        // Antigravity: a rule always on, in its plugin.
+        let plugin = try setup(root, prompt: AgentShellsInstructions.useShells).writeAntigravityPlugin()
+        let rule = plugin.appendingPathComponent("rules/agentterm-dev.md")
         let text = try String(contentsOf: rule, encoding: .utf8)
         XCTAssertTrue(text.hasPrefix("---\ntrigger: always_on\n---\n"), text)
         XCTAssertTrue(text.contains(AgentShellsInstructions.useShells))
-        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, prompt: nil)
+        // Read outside AgentTerm too: it says when it holds.
+        XCTAssertTrue(text.contains("inside AgentTerm and nowhere else"), text)
+        _ = try setup(root, prompt: nil).writeAntigravityPlugin()
         XCTAssertFalse(FileManager.default.fileExists(atPath: rule.path), "turned off, the rule is still there")
 
         // Copilot CLI: a folder of instructions it is told of, next to any
@@ -183,22 +299,18 @@ final class AgentStateTests: XCTestCase {
         XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "claude", directory: hooks, prompt: AgentShellsInstructions.useShells, current: [:]), [:])
     }
 
-    /// PROMPT-1: Claude Code is told what AgentTerm says in its system
-    /// prompt, the user's words or the default, and nothing when there is
-    /// nothing to say; the default names the browser's tools and the
-    /// server they are of.
-    func testClaudeIsToldInItsSystemPrompt() throws {
-        func words(_ arguments: String) -> [String] {
-            let result = Subprocess.run("/bin/sh", ["-c", "printf '%s\\n' x" + arguments])
-            return String(decoding: result?.output ?? Data(), as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).map(String.init).dropFirst()
-                .filter { !$0.isEmpty }
+    /// PROMPT-1 (#129): Claude Code and Codex are told what AgentTerm says
+    /// through its MCP server's instructions, which both give the model
+    /// (Claude Code 2.1.326 was seen to on 2026-11-17): the user's words or
+    /// the default, and nothing when there is nothing to say; the default
+    /// names the browser's tools and the server they are of.
+    func testClaudeAndCodexAreToldThroughTheServersInstructions() throws {
+        func initialize(_ server: AgentShellsMCP) -> [String: Any]? {
+            let line = server.handle(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#)
+            return (line.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any])?["result"] as? [String: Any]
         }
-        let tool = "/Apps/AgentTerm.app/agenttermd"
-        let told = words(try AgentHooks.launchArguments(agent: "claude", tool: tool, usageFile: nil, directory: nil, home: "/tmp", prompt: "Use AgentTerm's browser."))
-        let at = try XCTUnwrap(told.firstIndex(of: "--append-system-prompt"))
-        XCTAssertEqual(told[at + 1], "Use AgentTerm's browser.")
-        let silent = words(try AgentHooks.launchArguments(agent: "claude", tool: tool, usageFile: nil, directory: nil, home: "/tmp", prompt: nil))
-        XCTAssertFalse(silent.contains("--append-system-prompt"))
+        let told = AgentShellsMCP(ask: { _ in .done }, version: "test", useShells: true, instructions: "Use AgentTerm's browser.")
+        XCTAssertEqual(initialize(told)?["instructions"] as? String, "Use AgentTerm's browser.")
 
         let both = try XCTUnwrap(AgentShellsInstructions.told(useShells: true, browser: true, server: "agentterm-dev"))
         XCTAssertTrue(both.contains("shell_open") && both.contains("browser_open"), both)
@@ -311,6 +423,141 @@ final class AgentStateHostTests: XCTestCase {
         """.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         return script
+    }
+
+    /// INBOX-1 (#67): an agent that is done is unseen, on every device,
+    /// until one of them shows its session; working again takes it out of
+    /// the Inbox, and done again puts it back.
+    func testADoneAgentIsUnseenUntilADeviceShowsIt() throws {
+        let script = root.appendingPathComponent("claude")
+        let hook = Handoff.shellQuote(tool.path) + " hook claude"
+        try """
+        #!/bin/sh
+        read line; printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"go"}' | \(hook) UserPromptSubmit
+        read line; printf '%s' '{"hook_event_name":"Stop","last_assistant_message":"Done once."}' | \(hook) Stop
+        read line; printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"again"}' | \(hook) UserPromptSubmit
+        read line; printf '%s' '{"hook_event_name":"Stop","last_assistant_message":"Done twice."}' | \(hook) Stop
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let mac = Client(port: port, token: token, name: "mac")
+        let phone = Client(port: port, token: token, name: "phone")
+        waitUntil("both connected") { !mac.messages.isEmpty && !phone.messages.isEmpty }
+        mac.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let id = try XCTUnwrap(mac.sessions.first?.id)
+        mac.connection.send(.attach(session: id, size: TermSize(cols: 80, rows: 24)))
+        func session(_ client: Client) -> SessionInfo? { client.sessions.first { $0.id == id } }
+        func step(_ what: String, _ condition: @escaping () -> Bool) {
+            mac.connection.sendInput(Data("\n".utf8), to: id)
+            waitUntil(what, condition)
+        }
+
+        step("working") { session(mac)?.state?.isWorking == true }
+        XCTAssertNotEqual(session(mac)?.unseen, true, "unseen while it works")
+        step("done") { session(mac)?.state == .done(said: "Done once.") }
+        waitUntil("unseen on both devices") { session(mac)?.unseen == true && session(phone)?.unseen == true }
+        XCTAssertEqual(Inbox.items(sessions: phone.sessions, failures: []).map(\.id), ["session-\(id)"])
+
+        // Shown on the phone: seen on the Mac too.
+        phone.connection.send(.noticeSeen(session: id, state: .done(said: "Done once.")))
+        waitUntil("seen on the Mac") { session(mac)?.unseen != true }
+        XCTAssertTrue(Inbox.items(sessions: mac.sessions, failures: []).isEmpty)
+
+        // Working again, then done again: unseen again.
+        step("working again") { session(mac)?.state?.isWorking == true }
+        step("done again") { session(mac)?.state == .done(said: "Done twice.") }
+        waitUntil("unseen again") { session(phone)?.unseen == true }
+        // A device that connects later is told it too.
+        let later = Client(port: port, token: token, name: "later")
+        waitUntil("the later device to be told") { session(later)?.unseen == true }
+    }
+
+    /// TURN-1 (#71): when a turn ends, every device is told what it came
+    /// to: the prompt, the last answer, the commands with their exit codes
+    /// from the agent's record, and the files of the folder that changed
+    /// while it worked; a device that connects later is told it too; with
+    /// its switch off in Settings, a turn is not looked at.
+    func testWhatATurnCameToIsToldToEveryDevice() throws {
+        let repository = root.appendingPathComponent("repository")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        func git(_ arguments: String...) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-C", repository.path, "-c", "user.name=Test", "-c", "user.email=test@example.com"] + arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+        }
+        try git("init", "-q")
+        try "one\n".write(to: repository.appendingPathComponent("parser.txt"), atomically: true, encoding: .utf8)
+        try "one\n".write(to: repository.appendingPathComponent("before.txt"), atomically: true, encoding: .utf8)
+        try git("add", ".")
+        try git("commit", "-qm", "first")
+        // Changed before the turn, and not by it.
+        try "one\nmine\n".write(to: repository.appendingPathComponent("before.txt"), atomically: true, encoding: .utf8)
+        let transcript = root.appendingPathComponent("transcript.jsonl")
+        try [
+            #"{"type":"user","message":{"role":"user","content":"Fix the parser"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"swift test"}}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"ok"}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"make lint"}}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"Exit code 2\nlint failed"}]}}"#,
+        ].joined(separator: "\n").write(to: transcript, atomically: true, encoding: .utf8)
+        let script = root.appendingPathComponent("claude")
+        let hook = Handoff.shellQuote(tool.path) + " hook claude"
+        let stop = #"{"hook_event_name":"Stop","last_assistant_message":"Fixed; lint fails.","transcript_path":"\#(transcript.path)"}"#
+        try """
+        #!/bin/sh
+        read line; printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"Fix the parser"}' | \(hook) UserPromptSubmit
+        read line; printf 'two\\n' >> parser.txt; printf 'new\\n' > added.txt
+        printf '%s' '\(stop)' | \(hook) Stop
+        read line; printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"Again"}' | \(hook) UserPromptSubmit
+        read line; printf '%s' '{"hook_event_name":"Stop","last_assistant_message":"Again."}' | \(hook) Stop
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let mac = Client(port: port, token: token, name: "mac")
+        waitUntil("connected") { !mac.messages.isEmpty }
+        mac.connection.send(.create(CreateRequest(command: script.path, cwd: repository.path, title: "agent")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let id = try XCTUnwrap(mac.sessions.first?.id)
+        mac.connection.send(.attach(session: id, size: TermSize(cols: 80, rows: 24)))
+        func result(_ client: Client) -> TurnResult? {
+            client.messages.compactMap { if case .turnResult(id, let result) = $0 { return result } else { return nil } }.last
+        }
+        mac.connection.sendInput(Data("\n".utf8), to: id)
+        waitUntil("working") { mac.sessions.first?.state?.isWorking == true }
+        // The folder is looked at as the turn begins, away from the host's queue.
+        Thread.sleep(forTimeInterval: 1)
+        mac.connection.sendInput(Data("\n".utf8), to: id)
+        waitUntil("what the turn came to", timeout: 20) { result(mac) != nil }
+        let told = try XCTUnwrap(result(mac))
+        XCTAssertEqual(told.end, .done)
+        XCTAssertEqual(told.request, "Fix the parser")
+        XCTAssertEqual(told.reply, "Fixed; lint fails.")
+        XCTAssertEqual(told.commands, [TurnResult.Command(command: "swift test", exitCode: 0), TurnResult.Command(command: "make lint", exitCode: 2)])
+        XCTAssertEqual(
+            told.changes?.files, [TurnResult.File(path: "added.txt", status: "??"), TurnResult.File(path: "parser.txt", status: "M", added: 1, removed: 0)])
+        XCTAssertEqual(told.changes?.shared, false)
+        // A device that connects later is told it too.
+        let later = Client(port: port, token: token, name: "later")
+        waitUntil("the later device to be told") { result(later) == told }
+
+        // Turned off in Settings: the next turn is not looked at.
+        mac.connection.send(.setDisplaySettings(DisplaySettings(turnResults: false)))
+        waitUntil("turned off, as the other device is told") {
+            later.messages.contains { if case .displaySettings(let told?) = $0 { return !told.turnResults } else { return false } }
+        }
+        func results() -> Int { mac.messages.filter { if case .turnResult(id, _) = $0 { return true } else { return false } }.count }
+        let before = results()
+        mac.connection.sendInput(Data("\n".utf8), to: id)
+        waitUntil("working again") { mac.sessions.first?.state?.isWorking == true }
+        mac.connection.sendInput(Data("\n".utf8), to: id)
+        waitUntil("done again") { mac.sessions.first?.state == .done(said: "Again.") }
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertEqual(results(), before, "a turn was looked at with the switch off")
     }
 
     /// AGENT-5, AGENT-6, AGENT-7: each state is told when it begins, once,
@@ -673,8 +920,8 @@ final class AgentStateWatchTests: XCTestCase {
         let script = root.appendingPathComponent("claude")
         try """
         #!/bin/sh
-        read line; printf '{"agent":"claude","event":"UserPromptSubmit","at":%s,"input":{}}' "$(date +%s)" > "$AGENTTERM_EVENTS.new"; mv "$AGENTTERM_EVENTS.new" "$AGENTTERM_EVENTS"
-        read line; printf '{"agent":"claude","event":"Stop","at":%s,"input":{}}' "$(date +%s)" > "$AGENTTERM_EVENTS.new"; mv "$AGENTTERM_EVENTS.new" "$AGENTTERM_EVENTS"
+        read line; printf '{"agent":"claude","event":"UserPromptSubmit","at":%s,"input":{}}' "$(date +%s)" > "$\(AppChannel.current.eventsVariable).new"; mv "$\(AppChannel.current.eventsVariable).new" "$\(AppChannel.current.eventsVariable)"
+        read line; printf '{"agent":"claude","event":"Stop","at":%s,"input":{}}' "$(date +%s)" > "$\(AppChannel.current.eventsVariable).new"; mv "$\(AppChannel.current.eventsVariable).new" "$\(AppChannel.current.eventsVariable)"
         exec sleep 600
         """.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)

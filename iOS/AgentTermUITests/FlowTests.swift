@@ -21,13 +21,6 @@ final class FlowTests: XCTestCase {
     /// The main screens with the phone on its side, from a session's terminal.
     /// PERF-6: how smoothly a terminal of 5,000 lines scrolls, as the time
     /// frames were late while it coasted after a fast swipe.
-    /// Makes a gesture until what it is for has happened, three times at
-    /// most. A touch or a drag was now and then lost in the grouping steps:
-    /// the picture taken after "Orange" was touched showed the menu still
-    /// open, with nothing chosen. That was seen while each step around a
-    /// menu waited a minute for the app to settle (#65); whether it still
-    /// happens now that they do not is not known, so this stays. What the
-    /// gesture is for is still asserted by the caller.
     /// Opens an element's menu with a long press and picks an entry of it,
     /// without the minute the test would wait before and after each of the
     /// two while the menu is open (#65, `IdleWaits`). The entry is waited
@@ -44,18 +37,6 @@ final class FlowTests: XCTestCase {
             XCTAssertTrue(item.waitForExistence(timeout: 10), "the menu has no “\(entry)”", file: file, line: line)
             open()
             if let hold { item.press(forDuration: hold) } else { item.tap() }
-        }
-    }
-
-    private func gesture(until done: () -> Bool, _ make: () -> Void, line: UInt = #line) {
-        let clock = DateFormatter()
-        clock.dateFormat = "HH:mm:ss.SSS"
-        for attempt in 1...3 {
-            let made = clock.string(from: Date())
-            make()
-            if done() { return }
-            // #83: when, to set beside the app's own log of touches.
-            print("MEASURE gesture at line \(line) lost, attempt \(attempt), made at \(made), given up at \(clock.string(from: Date()))")
         }
     }
 
@@ -191,14 +172,19 @@ final class FlowTests: XCTestCase {
     /// up to a minute; a step that takes about that long found the app
     /// busy all the while. Printed as `MEASURE`, and nothing fails on it.
     private func measureIdle(_ app: XCUIApplication, launchButton: String, compose: XCUIElement) {
-        // Two sessions in the list.
+        // Two agents' sessions in the list: an agent's menu has Pin, a
+        // shell's only End Session (#127).
         app.navigationBars.buttons.firstMatch.tap()
-        XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10))
-        app.buttons[launchButton].firstMatch.tap()
-        XCTAssertTrue(compose.waitForExistence(timeout: 10))
-        app.navigationBars.buttons.firstMatch.tap()
-        XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10))
-        let rows = app.staticTexts.matching(identifier: "zsh")
+        let claude = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Claude Code")).firstMatch
+        for _ in 0..<2 {
+            XCTAssertTrue(claude.waitForExistence(timeout: 10), "no Claude Code to start")
+            claude.tap()
+            XCTAssertTrue(compose.waitForExistence(timeout: 10))
+            app.navigationBars.buttons.firstMatch.tap()
+        }
+        // The rows' names: the buttons that start one say "Claude".
+        let rows = app.staticTexts.matching(identifier: "Claude Code")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10))
         XCTAssertEqual(rows.count, 2)
 
         func timed(_ what: String, _ step: () -> Void) {
@@ -411,6 +397,11 @@ final class FlowTests: XCTestCase {
             readANote(app, compose: compose)
             return
         }
+        if environment["AGENTTERM_ONLY_INBOX"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            useTheInbox(app, compose: compose)
+            return
+        }
         if environment["AGENTTERM_ONLY_NARROW"] != nil {
             app.navigationBars.buttons.firstMatch.tap()
             narrowTheWindow(app)
@@ -424,6 +415,10 @@ final class FlowTests: XCTestCase {
         if environment["AGENTTERM_EXPECT_MAC_TAKEOVER"] != nil {
             let fit = app.buttons["Fit This Screen"]
             XCTAssertTrue(fit.waitForExistence(timeout: 30), "the Mac did not take the session")
+            // SIZE-10 (#120): the Mac is named, by its own name.
+            let named = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "In use on ")).firstMatch
+            XCTAssertTrue(named.waitForExistence(timeout: 5), "the banner does not say who uses the session")
+            XCTAssertFalse(named.label.hasPrefix("In use on another device"), named.label)
             sleep(1)
             capture("3b-mac-in-control")
             // The Mac's terminal can be scrolled back and forth here while
@@ -835,6 +830,14 @@ final class FlowTests: XCTestCase {
         if startAgent.exists {
             startAgent.tap()
             XCTAssertTrue(compose.waitForExistence(timeout: 15), "no terminal opened for the agent")
+            // LINK-7 (#129): the mark of whether its hooks and AgentTerm's
+            // MCP server are heard, at the end of its usage band. The
+            // stand-in runs them as one `agenttermd setup` set up does
+            // (scripts/demo-agent.py): both heard.
+            let mark = app.buttons["agent-link"].firstMatch
+            XCTAssertTrue(mark.waitForExistence(timeout: 10), "no mark of the agent's hooks and MCP server")
+            let connected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Hooks and MCP connected"), object: mark)
+            XCTAssertEqual(XCTWaiter().wait(for: [connected], timeout: 15), .completed, mark.label)
             app.buttons["session-menu"].tap()
             let handOff = app.buttons["Hand Off…"]
             XCTAssertTrue(handOff.waitForExistence(timeout: 5), "an agent's session offers no handoff")
@@ -889,8 +892,9 @@ final class FlowTests: XCTestCase {
         XCTAssertFalse(versionCard.exists, "the warning about the second Mac's version is still shown on the first")
         capture("10-back-on-first")
 
-        // Sessions can be arranged: grouped, pinned, dragged. Three in the
-        // project now, under one more in another folder.
+        // The user's shells are listed under one Shells heading in their
+        // folder (#127), as the Mac holds them in one Shells tab: three in
+        // the project now, and one in another folder under a heading of its own.
         guard environment["AGENTTERM_TEST_PROJECT"] != nil else { return }
         for _ in 0..<2 {
             app.buttons[launchButton].firstMatch.tap()
@@ -900,69 +904,12 @@ final class FlowTests: XCTestCase {
         }
         let rows = app.staticTexts.matching(identifier: "zsh")
         XCTAssertEqual(rows.count, 4)
-        // The list is longer than the screen now. Bring the project's
-        // sessions to the middle, clear of the bars, before dragging them.
-        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
-        from.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42)))
-        let group = app.buttons["session-group"].firstMatch
-        func groupSays(_ text: String) -> Bool {
-            let wanted = NSPredicate(format: "label CONTAINS %@", text)
-            return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: wanted, object: group)], timeout: 6) == .completed
-        }
-        pick("Add to New Group", fromMenuOf: rows.element(boundBy: 0), in: app)
-        XCTAssertTrue(group.waitForExistence(timeout: 5), "no group was made")
-        XCTAssertTrue(groupSays("1 sessions"), group.label)
-        // Dropped on the group's label, a session joins it. Dropped on a
-        // session of the group, it joins too.
-        gesture(until: { groupSays("2 sessions") }) {
-            rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: group, withVelocity: .slow, thenHoldForDuration: 0.6)
-        }
-        XCTAssertTrue(groupSays("2 sessions"), "dropping on the label did not add the session: \(group.label)")
-        gesture(until: { groupSays("3 sessions") }) {
-            rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: rows.element(boundBy: 0), withVelocity: .slow, thenHoldForDuration: 0.6)
-        }
-        XCTAssertTrue(groupSays("3 sessions"), "dropping on a grouped session did not add the session: \(group.label)")
-        capture("11-grouped")
-        // A pinned session leaves its group and goes first.
-        pick("Pin", fromMenuOf: rows.element(boundBy: 1), in: app)
-        XCTAssertTrue(groupSays("2 sessions"), "pinning did not take the session out of the group: \(group.label)")
-        // The group is renamed, recolored and folded away.
-        pick("Rename Group…", fromMenuOf: group, in: app)
-        let name = app.alerts.textFields.firstMatch
-        XCTAssertTrue(name.waitForExistence(timeout: 5))
-        name.typeText(" api")
-        app.alerts.buttons["Rename"].tap()
-        XCTAssertTrue(groupSays("Group 1 api"), group.label)
-        // Chosen, the menu goes. The colors are a menu inside the menu:
-        // open all the while, so none of these steps waits for the app.
-        let orange = app.buttons["Orange"]
-        func menuIsGone() -> Bool {
-            let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: orange)
-            return XCTWaiter().wait(for: [gone], timeout: 4) == .completed
-        }
-        pick("Color", fromMenuOf: group, in: app)
-        IdleWaits.skipped {
-            XCTAssertTrue(orange.waitForExistence(timeout: 5), "the colors are not offered")
-            capture("12-colors")
-            gesture(until: menuIsGone) { if orange.exists { orange.tap() } }
-        }
-        XCTAssertFalse(orange.exists, "the color was not chosen: its menu is still open")
-        capture("13-arranged")
-        gesture(until: { groupSays("collapsed") }) { group.tap() }
-        XCTAssertTrue(groupSays("collapsed"), group.label)
-        XCTAssertEqual(rows.count, 2, "a collapsed group still shows its sessions")
-        capture("14-collapsed")
-
-        // The Mac keeps the arrangement: it is there again after looking at
-        // another Mac, which has none of it.
-        app.buttons["mac-menu"].tap()
-        app.buttons["Second Mac"].tap()
-        XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 10))
-        XCTAssertFalse(group.exists, "the first Mac's group must not show under the second")
-        app.buttons["mac-menu"].tap()
-        app.buttons["First Mac"].tap()
-        XCTAssertTrue(group.waitForExistence(timeout: 10), "the arrangement did not come back from the Mac")
-        XCTAssertTrue(groupSays("Group 1 api, 2 sessions, collapsed"), group.label)
+        let headings = app.descendants(matching: .any).matching(identifier: "heading-Shells")
+        XCTAssertEqual(headings.count, 2, "the shells are not under one heading in each folder")
+        let three = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'heading-Shells' AND label == %@", "Shells, 3 shells")).firstMatch
+        XCTAssertTrue(three.exists, "the project's heading does not say it holds three: \((0..<headings.count).map { headings.element(boundBy: $0).label })")
+        XCTAssertFalse(app.buttons["session-group"].exists, "a group of sessions is still listed")
+        capture("11-shells")
 
         // Listed folders can be put in another order, from the menu of a
         // folder's name and by dragging one onto another. A second folder
@@ -1038,6 +985,41 @@ final class FlowTests: XCTestCase {
     /// too. A stand-in Antigravity, whose session always has a note:
     /// touched, its mark shows the words, and the session does not open.
     /// Starts in the sessions list.
+    /// INBOX-4 (#67, #71): an agent done while its terminal is not on
+    /// screen is at the top of the Sessions list, under Inbox, with what it
+    /// said; touched, it shows what its turn came to, without being seen;
+    /// Open shows its terminal, and it is then seen: it leaves the Inbox.
+    private func useTheInbox(_ app: XCUIApplication, compose: XCUIElement) {
+        // The stand-in Claude Code says it is done a few seconds after it
+        // starts (scripts/test-ios.sh): by then the list is on screen.
+        let claude = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Claude Code")).firstMatch
+        XCTAssertTrue(claude.waitForExistence(timeout: 10), "no Claude Code to start")
+        claude.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10), "the Claude Code session did not open")
+        app.navigationBars.buttons.firstMatch.tap()
+        let title = app.descendants(matching: .any)["inbox-title"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 15), "nothing came to the Inbox")
+        let item = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "inbox-session-")).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "the agent that is done is not in the Inbox")
+        XCTAssertTrue(item.label.contains("is done"), item.label)
+        XCTAssertTrue(item.label.contains("Decide what you want there"), item.label)
+        capture("18-inbox")
+        item.tap()
+        let said = app.descendants(matching: .any)["result-said"].firstMatch
+        XCTAssertTrue(said.waitForExistence(timeout: 10), "the item did not show what the turn came to")
+        let request = app.descendants(matching: .any)["result-request"].firstMatch
+        XCTAssertTrue(request.waitForExistence(timeout: 5), "what the agent was asked is not shown")
+        XCTAssertTrue(request.label.contains("Explain in short lines"), request.label)
+        capture("19-result")
+        app.buttons["result-open"].tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10), "Open did not show the terminal")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(said.waitForExistence(timeout: 5), "back from the terminal is not the result")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 10), "the session seen stayed in the Inbox")
+        capture("20-inbox-seen")
+    }
+
     private func readANote(_ app: XCUIApplication, compose: XCUIElement) {
         let antigravity = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Antigravity")).firstMatch
         XCTAssertTrue(antigravity.waitForExistence(timeout: 10), "no Antigravity to start")
@@ -1046,6 +1028,15 @@ final class FlowTests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
         let mark = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "state-note-")).firstMatch
         XCTAssertTrue(mark.waitForExistence(timeout: 10), "no note on the Antigravity session's row")
+        // TAB-6 (#127): an agent's session pinned from here, from the menu
+        // of its row; it runs on, for scripts/test-ios.sh to find the pin
+        // kept by the host. Its name, on the row of its note's mark: the
+        // folder's buttons to start one say it too.
+        let names = app.staticTexts.matching(identifier: "Antigravity")
+        let name = (0..<names.count).map { names.element(boundBy: $0) }.first { abs($0.frame.midY - mark.frame.midY) < 20 }
+        XCTAssertNotNil(name, "the Antigravity session's row has no name")
+        if let name { pick("Pin", fromMenuOf: name, in: app) }
+        XCTAssertTrue(app.images["Pinned"].waitForExistence(timeout: 10), "the session's row does not say it is pinned")
         capture("17a-before-note")
         mark.tap()
         let note = app.staticTexts["state-note-text"]

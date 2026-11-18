@@ -129,6 +129,293 @@ enum Highlighting {
 }
 
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
+/// The line breaks of a text, as the layout makes lines of it. Tried on
+/// macOS 27.2 with the editor's font, lines not wrapped: a line feed, a
+/// carriage return (with a line feed after it, one break), a vertical tab,
+/// a form feed, U+0085, U+2028 and U+2029 each start a new line, and a text
+/// has one line more than it has breaks, an empty one after a break at its
+/// end.
+enum LineBreaks {
+    static func isBreak(_ unit: unichar) -> Bool {
+        unit == 0x0A || unit == 0x0D || unit == 0x0B || unit == 0x0C || unit == 0x85 || unit == 0x2028 || unit == 0x2029
+    }
+
+    /// Those of part of a text, unit by unit: for the few about a change.
+    static func count(in text: NSString, range: NSRange) -> Int {
+        var count = 0
+        var index = range.location
+        let end = NSMaxRange(range)
+        while index < end {
+            let unit = text.character(at: index)
+            // A carriage return and the line feed after it are one break.
+            if unit == 0x0D, index + 1 < end, text.character(at: index + 1) == 0x0A { index += 1 }
+            if isBreak(unit) { count += 1 }
+            index += 1
+        }
+        return count
+    }
+
+    /// Those of a whole text, and its longest line's length, by
+    /// Foundation's own search for line ends: about 16 ms for 5 MB, where
+    /// a loop over its units takes 390 ms in a build that is not optimized.
+    /// Foundation leaves out the vertical tab and the form feed; `odd`
+    /// counts those too, 14 ms more, which is done off the main thread.
+    static func measure(_ text: NSString, odd: Bool) -> (breaks: Int, longest: Int) {
+        var breaks = 0
+        var longest = 0
+        var at = 0
+        let length = text.length
+        while at < length {
+            var start = 0
+            var end = 0
+            var contentsEnd = 0
+            text.getLineStart(&start, end: &end, contentsEnd: &contentsEnd, for: NSRange(location: at, length: 0))
+            longest = max(longest, contentsEnd - start)
+            if end > contentsEnd { breaks += 1 }
+            at = end
+        }
+        guard odd else { return (breaks, longest) }
+        let others = CharacterSet(charactersIn: "\u{0B}\u{0C}")
+        var from = 0
+        while from < length {
+            let found = text.rangeOfCharacter(from: others, options: [], range: NSRange(location: from, length: length - from))
+            guard found.location != NSNotFound else { break }
+            breaks += 1
+            from = NSMaxRange(found)
+        }
+        return (breaks, longest)
+    }
+}
+
+/// The editor's text view. A large file's (#104) is not resized by AppKit:
+/// for that AppKit works out the room the whole text takes again at each
+/// key (`usedRectForTextContainer`, which goes through every line laid
+/// out), a frame or more for a file of 5 MB. It sizes itself.
+///
+/// Its lines are not wrapped, each is one line of the layout (`paragraphs`),
+/// and all are of one height whatever is on them (tried with Vietnamese,
+/// Chinese and Japanese, emoji and tabs: 15 points each at 12.5), so its
+/// height is its lines' count times that. The count is
+/// taken when the text is given, follows each change by the breaks about
+/// where it was made, and is taken again off the main thread a second after
+/// the last change: should a change have been missed, it is put right then.
+///
+/// Its width is its longest line's, taken as so many letters of the font,
+/// and is made wider by any line on show, or typed in, that is wider than
+/// that: a tab and a wide letter take more room than a letter of the
+/// font, and how much is read from the layout made to show the line.
+final class EditorTextView: NSTextView {
+    /// From this length, in UTF-16 units, the view sizes itself.
+    static let selfSizedFrom = 1024 * 1024
+    /// The longest change whose breaks are counted unit by unit as it is
+    /// made; for a longer one the whole text is counted again.
+    static let largestCounted = 16 * 1024
+
+    private(set) var selfSized = false
+    /// The text's lines: its breaks and one.
+    private(set) var lines = 1
+    /// How far right the widest line known goes, in the text container.
+    private var widest: CGFloat = 0
+
+    /// A change about to be made to the text.
+    private enum Change {
+        /// None to its characters.
+        case none
+        /// One counted here: the units about it, and their breaks before it.
+        case counted(around: NSRange, breaks: Int, grows: Int)
+        /// One too long to count here, or several at once.
+        case uncounted
+    }
+    private var change = Change.none
+    /// Goes up with every change, for a count made off the main thread to
+    /// be of the text as it still is.
+    private var changes = 0
+    private var check: DispatchWorkItem?
+    /// What the lines on show were last measured for: the part of the view
+    /// on show, and the text as it was. Measuring them takes 1 to 3 ms, and
+    /// the view is drawn again for more than a change of either.
+    private var measured: (shown: NSRect, changes: Int)?
+
+    /// Every line's paragraph style: tabs at AppKit's own distance, with no
+    /// end to them. AppKit's own style has twelve tab stops and none after,
+    /// and the layout breaks a line at its thirteenth tab (tried on macOS
+    /// 27.2: thirty tabs and a word were three lines, #132), in an editor
+    /// whose lines are not wrapped. A text without the style as an attribute
+    /// is laid out with AppKit's own, whatever the view's default is.
+    static let paragraphs: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.tabStops = []
+        style.defaultTabInterval = 28
+        return style
+    }()
+
+    /// Sizes for a whole new text, which the view was just given.
+    func fit() {
+        // Whatever storage holds it now: `Highlighting.fit` may have given
+        // the layout another.
+        if let storage = textStorage, storage.delegate !== self {
+            storage.delegate = self
+            storage.addAttribute(.paragraphStyle, value: Self.paragraphs, range: NSRange(location: 0, length: storage.length))
+        }
+        let was = selfSized
+        selfSized = (textStorage?.length ?? 0) >= Self.selfSizedFrom
+        isVerticallyResizable = !selfSized
+        isHorizontallyResizable = !selfSized
+        change = .none
+        changes += 1
+        measured = nil
+        check?.cancel()
+        guard selfSized, let text = whole() else {
+            // AppKit's own sizing again, after a text that was large.
+            if was { sizeToFit() }
+            return
+        }
+        let found = LineBreaks.measure(text, odd: false)
+        lines = found.breaks + 1
+        widest = CGFloat(found.longest) * characterWidth + 2 * (textContainer?.lineFragmentPadding ?? 0)
+        resize()
+        // With its vertical tabs and form feeds, if it has any.
+        countAgain(text)
+    }
+
+    /// The whole text as it is now, apart from the storage: its line ends
+    /// are found three times as fast in it as through the storage (7 ms
+    /// and 20 for 5 MB, the copy 4), and it can be read off the main thread.
+    private func whole() -> NSString? { textStorage?.mutableString.copy() as? NSString }
+
+    override func shouldChangeText(inRanges affectedRanges: [NSValue], replacementStrings: [String]?) -> Bool {
+        guard super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings) else { return false }
+        change = .none
+        // Without strings it is a change of attributes: the lines stay.
+        guard selfSized, let replacementStrings, let text = textStorage?.mutableString else { return true }
+        change = .uncounted
+        if affectedRanges.count == 1, replacementStrings.count == 1 {
+            let range = affectedRanges[0].rangeValue
+            let given = (replacementStrings[0] as NSString).length
+            if range.length <= Self.largestCounted, given <= Self.largestCounted {
+                // One unit more on each side: a carriage return and a line
+                // feed that the change parts, or brings together, are both
+                // in what is counted before it and after.
+                let from = max(range.location - 1, 0)
+                let around = NSRange(location: from, length: min(NSMaxRange(range) + 1, text.length) - from)
+                change = .counted(around: around, breaks: LineBreaks.count(in: text, range: around), grows: given - range.length)
+            }
+        }
+        return true
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        guard selfSized else { return }
+        let made = change
+        change = .none
+        changes += 1
+        let before = frame.size
+        switch made {
+        case .counted(let around, let breaks, let grows):
+            let text: NSString = textStorage?.mutableString ?? ""
+            let now = NSRange(location: around.location, length: around.length + grows)
+            if now.length >= 0, NSMaxRange(now) <= text.length {
+                lines = max(1, lines + LineBreaks.count(in: text, range: now) - breaks)
+            } else {
+                lines = LineBreaks.measure(whole() ?? "", odd: true).breaks + 1
+            }
+        case .uncounted:
+            lines = LineBreaks.measure(whole() ?? "", odd: true).breaks + 1
+        case .none:
+            break
+        }
+        widenToInsertionPoint()
+        resize()
+        // The insertion point may be past where the room ended.
+        if frame.size != before { scrollRangeToVisible(selectedRange()) }
+        check?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let text = self.whole() else { return }
+            self.countAgain(text)
+        }
+        check = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        guard selfSized else { return }
+        let shown = visibleRect
+        if measured?.shown != shown || measured?.changes != changes {
+            measured = (shown, changes)
+            widenToShown()
+        }
+        // And the window's own size may have changed.
+        resize()
+    }
+
+    /// Counts the whole text again, off the main thread, and takes the
+    /// count if the text is still the one counted: `text`, as it is now.
+    private func countAgain(_ text: NSString) {
+        check = nil
+        guard selfSized else { return }
+        let counted = changes
+        DispatchQueue.global(qos: .userInitiated).async {
+            let found = LineBreaks.measure(text, odd: true)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.selfSized, self.changes == counted else { return }
+                self.lines = found.breaks + 1
+                self.resize()
+            }
+        }
+    }
+
+    private var characterWidth: CGFloat { (font ?? .monospacedSystemFont(ofSize: 12, weight: .regular)).maximumAdvancement.width }
+
+    private var lineHeight: CGFloat {
+        guard let layout = layoutManager, let font else { return 16 }
+        return layout.defaultLineHeight(for: font)
+    }
+
+    /// The lines on show, measured: the room is made as wide as the widest.
+    private func widenToShown() {
+        guard let layout = layoutManager, let container = textContainer, (textStorage?.length ?? 0) > 0 else { return }
+        let origin = textContainerOrigin
+        let shown = layout.glyphRange(forBoundingRect: visibleRect.offsetBy(dx: -origin.x, dy: -origin.y), in: container)
+        layout.enumerateLineFragments(forGlyphRange: shown) { _, used, _, _, _ in
+            self.widest = max(self.widest, used.maxX)
+        }
+    }
+
+    /// The line the insertion point is on, measured: it may have grown
+    /// wider than the room.
+    private func widenToInsertionPoint() {
+        guard let layout = layoutManager, let length = textStorage?.length, length > 0 else { return }
+        let glyph = layout.glyphIndexForCharacter(at: min(selectedRange().location, length - 1))
+        widest = max(widest, layout.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil).maxX)
+    }
+
+    private func resize() {
+        let inset = textContainerInset
+        let room = enclosingScrollView?.contentSize ?? .zero
+        let size = NSSize(width: max(widest + 2 * inset.width, room.width), height: max(CGFloat(lines) * lineHeight + 2 * inset.height, room.height))
+        if frame.size != size { setFrameSize(size) }
+    }
+}
+
+extension EditorTextView: NSTextStorageDelegate {
+    /// What was just put in, or given attributes, keeps the lines'
+    /// paragraph style: what is typed at the end of a text comes with
+    /// AppKit's own, and a storage that colors gives what it colored
+    /// attributes that have none.
+    func textStorage(
+        _ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions, range editedRange: NSRange, changeInLength delta: Int
+    ) {
+        guard editedRange.location != NSNotFound, editedRange.length > 0, NSMaxRange(editedRange) <= textStorage.length else { return }
+        var same = NSRange(location: 0, length: 0)
+        let style = textStorage.attribute(.paragraphStyle, at: editedRange.location, longestEffectiveRange: &same, in: editedRange) as? NSParagraphStyle
+        if style != Self.paragraphs || NSMaxRange(same) < NSMaxRange(editedRange) {
+            textStorage.addAttribute(.paragraphStyle, value: Self.paragraphs, range: editedRange)
+        }
+    }
+}
+
 /// A plain text editor with syntax coloring.
 public struct CodeEditor: NSViewRepresentable {
     @Binding var text: String
@@ -159,7 +446,7 @@ public struct CodeEditor: NSViewRepresentable {
         container.widthTracksTextView = false
         layout.addTextContainer(container)
 
-        let textView = NSTextView(frame: .zero, textContainer: container)
+        let textView = EditorTextView(frame: .zero, textContainer: container)
         textView.delegate = context.coordinator
         textView.isRichText = false
         textView.allowsUndo = true
@@ -190,6 +477,8 @@ public struct CodeEditor: NSViewRepresentable {
         scroll.hasHorizontalScroller = true
         scroll.drawsBackground = true
         scroll.backgroundColor = EditorStyle.background
+        // In its scroll view, whose room it fills at least.
+        textView.fit()
         context.coordinator.textView = textView
         context.coordinator.path = path
         context.coordinator.held = text
@@ -206,6 +495,7 @@ public struct CodeEditor: NSViewRepresentable {
             context.coordinator.path = path
             if let layout = textView.layoutManager { Highlighting.fit(layout, path: path, fontSize: fontSize, length: text.utf16.count) }
             textView.string = text
+            (textView as? EditorTextView)?.fit()
             context.coordinator.held = text
             textView.undoManager?.removeAllActions()
             textView.scrollToBeginningOfDocument(nil)
@@ -217,7 +507,10 @@ public struct CodeEditor: NSViewRepresentable {
             // text at each key is what made typing in a large file slow.
             context.coordinator.held = text
             if let layout = textView.layoutManager { Highlighting.fit(layout, path: path, fontSize: fontSize, length: text.utf16.count) }
-            if textView.string != text { textView.string = text }
+            if textView.string != text {
+                textView.string = text
+                (textView as? EditorTextView)?.fit()
+            }
         }
         context.coordinator.go(to: target)
     }

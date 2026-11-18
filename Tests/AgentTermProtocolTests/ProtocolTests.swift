@@ -8,6 +8,57 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(ProtocolMatch(host: agenttermProtocolVersion + 1), .hostNewer)
     }
 
+    /// HOST-12 (#121): a host left running from an earlier release is told
+    /// apart by the release it says it is from, whatever the protocol.
+    func testAHostOfAnEarlierReleaseIsToldApart() {
+        XCTAssertEqual(AppVersion.match(host: "0.10.0", own: "0.10.1"), .hostOlder)
+        XCTAssertEqual(AppVersion.match(host: "0.9.0", own: "0.10.0"), .hostOlder)
+        XCTAssertEqual(AppVersion.match(host: "0.10.0", own: "0.9.0"), .hostNewer)
+        XCTAssertEqual(AppVersion.match(host: "0.10.0", own: "0.10.0"), .same)
+        XCTAssertEqual(AppVersion.match(host: "0.10.0-beta.2", own: "0.10.0"), .hostOlder)
+        XCTAssertEqual(AppVersion.match(host: "0.10.0-beta.2", own: "0.10.0-beta.10"), .hostOlder)
+        // Not known: a host before protocol 23, a build outside an app bundle.
+        XCTAssertEqual(AppVersion.match(host: nil, own: "0.10.0"), .same)
+        XCTAssertEqual(AppVersion.match(host: "dev", own: "0.10.0"), .same)
+        XCTAssertEqual(AppVersion.match(host: "0.9.0", own: "dev"), .same)
+    }
+
+    /// A host before protocol 23 sends no release: its welcome is still
+    /// read, for the app to tell its protocol apart.
+    func testAWelcomeWithoutAReleaseIsRead() {
+        let old = Data(#"{"welcome":{"version":22,"host":"Mac"}}"#.utf8)
+        XCTAssertEqual(MessageCoding.decode(ServerMessage.self, from: old), .welcome(version: 22, host: "Mac", release: nil, revision: nil))
+    }
+
+    /// INBOX-2 (#67): what is in the Inbox, and in which order: the agents
+    /// that wait, what stopped, then the agents done and not seen.
+    func testWhatIsInTheInbox() {
+        func session(_ id: SessionID, _ state: AgentState?, unseen: Bool? = nil) -> SessionInfo {
+            var info = SessionInfo(id: id, title: "s\(id)", cwd: "/p", size: .default, createdAt: Date(), agent: "claude", state: state)
+            info.unseen = unseen
+            return info
+        }
+        let sessions = [
+            session(1, .done(said: "seen already"), unseen: nil),
+            session(2, .done(said: "not seen"), unseen: true),
+            session(3, .working(since: Date())),
+            session(4, .waitingForPermission(AgentQuestion(text: "make test"))),
+            session(5, nil),
+            session(6, .waitingForAnswer(AgentQuestion(text: "Red or blue?", choices: ["Red", "Blue"]))),
+        ]
+        let failure = PartFailure(id: "f", part: .host, at: Date(), restarted: true)
+        let items = Inbox.items(sessions: sessions, failures: [failure])
+        XCTAssertEqual(items.map(\.id), ["session-4", "session-6", "failure-f", "session-2"])
+        XCTAssertEqual(items.map(\.canBeDismissed), [false, false, true, true])
+        XCTAssertEqual(items[0].notice?.why, "needs permission")
+        XCTAssertEqual(items[3].notice?.detail, "not seen")
+        // Next: the one after, the first after the last, the first when gone.
+        XCTAssertEqual(Inbox.item(after: "session-6", in: items)?.id, "failure-f")
+        XCTAssertEqual(Inbox.item(after: "session-2", in: items)?.id, "session-4")
+        XCTAssertEqual(Inbox.item(after: "session-9", in: items)?.id, "session-4")
+        XCTAssertNil(Inbox.item(after: nil, in: []))
+    }
+
     func testClientMessagesRoundTrip() {
         let messages: [ClientMessage] = [
             .hello(token: "secret", client: "iPhone"),
@@ -90,12 +141,27 @@ final class ProtocolTests: XCTestCase {
         let info = SessionInfo(id: 3, title: "zsh", cwd: "/Users/me", size: .default, createdAt: Date(timeIntervalSince1970: 1_800_000_000))
         let messages: [ServerMessage] = [
             .welcome(version: agenttermProtocolVersion, host: "Mac"),
+            .welcome(version: agenttermProtocolVersion, host: "Mac", release: "0.10.0", revision: "1f3a9c0d2b4e6f70"),
             .sessions([info]),
             .agents([AgentInfo(id: "claude", name: "Claude Code", path: "/usr/local/bin/claude"), AgentInfo(id: "agy", name: "Antigravity", path: nil)]),
             .folders(["/Users/me/app"]),
             .attached(info),
             .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: true),
+            .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: false, by: SizeDriver(name: "Manh's iPad", isMac: false)),
             .exited(session: 3, status: 130),
+            .turnResult(
+                session: 3,
+                result: TurnResult(
+                    request: "Fix the parser", reply: "Fixed.", startedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                    endedAt: Date(timeIntervalSince1970: 1_800_000_060), end: .done,
+                    commands: [TurnResult.Command(command: "swift test", exitCode: 0), TurnResult.Command(command: "make", failed: true)],
+                    changes: TurnResult.Changes(
+                        files: [TurnResult.File(path: "a.swift", status: "M", added: 3, removed: 1, changedBefore: true)], shared: true))),
+            .turnResult(
+                session: 4,
+                result: TurnResult(
+                    request: nil, reply: nil, startedAt: Date(timeIntervalSince1970: 1_800_000_000), endedAt: Date(timeIntervalSince1970: 1_800_000_001),
+                    end: .stopped, commands: nil, changes: nil)),
             .error("nope"),
             .paired(device: "d-1", token: "t0ken"),
             .pairingCode(code: "c0de", expiresAt: Date(timeIntervalSince1970: 1_800_000_300)),
@@ -324,14 +390,52 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(second, Data(repeating: 1, count: 300_000))
     }
 
+    /// LINK-5 (#129): what the mark of an agent's session says of its hooks
+    /// and MCP server, in the same words on both apps; and what the host
+    /// and the apps say of them goes through the protocol whole.
+    func testAnAgentsLinkInWordsAndOnTheWire() throws {
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink()), "Connecting…")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: true, mcp: true)), "Hooks and MCP connected")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: false, mcp: true)), "No hooks")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: true, mcp: false)), "No MCP")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: false, mcp: false)), "No hooks, no MCP")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: true)), "Connecting…")
+        XCTAssertTrue(AgentLinkWords.hooks(false).contains("does not come to the Inbox"))
+        XCTAssertTrue(AgentLinkWords.mcp(false).contains("cannot open shells and pages"))
+        XCTAssertTrue(AgentLink(hooks: false).isMissing)
+        XCTAssertFalse(AgentLink(hooks: true).isMissing)
+
+        var shell = SessionInfo(id: 3, title: "zsh", cwd: "/p", size: .default, createdAt: Date(timeIntervalSince1970: 7))
+        shell.typedAgent = "codex"
+        shell.link = AgentLink(hooks: true, mcp: false)
+        let state = AgentSetupState(
+            agent: "claude", name: "Claude Code", installed: true, hooks: true, mcp: false, statusLine: true,
+            steps: [
+                AgentSetupStep(title: AgentSetupWords.serverStep("Claude Code"), command: "claude mcp add --scope user agentterm -- x mcp"),
+                AgentSetupStep(title: AgentSetupWords.ownStep(agent: "claude", name: "Claude Code"), command: "x setup claude"),
+            ], removeSteps: [AgentSetupStep(title: "", command: "claude mcp remove --scope user agentterm")], note: nil, problem: "It said no.")
+        let messages: [ServerMessage] = [.sessions([shell]), .agentSetup(AgentSetupReport(agents: [state], busy: ["claude"]))]
+        for message in messages {
+            XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
+        }
+        let asked: [ClientMessage] = [.agentSetupStatus, .runAgentSetup(agent: nil, remove: true), .agentShell(id: 0, key: "k", request: .started(agent: "agy"))]
+        for message in asked {
+            XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ClientMessage.self, from: MessageCoding.encode(message))), message)
+        }
+        XCTAssertTrue(AgentSetupReport(agents: [state]).needsSetup)
+        XCTAssertFalse(AgentSetupReport(agents: [AgentSetupState(agent: "agy", name: "Antigravity", installed: false)]).needsSetup)
+        // What is in the way counts as not set up.
+        var codex = AgentSetupState(agent: "codex", name: "Codex", installed: true, hooks: true, mcp: true, sharedServerOff: true)
+        XCTAssertTrue(codex.isSetUp)
+        codex.sharedServerOff = false
+        XCTAssertTrue(codex.needsSetup)
+    }
+
     /// MCP-19: what is wrong with the agents' server, in words, and a cause
     /// this build does not know still read.
     func testAnAgentShellsFaultInWords() throws {
-        let install = AgentShellsFault(cause: .leftOver, agents: ["Codex", "Copilot CLI"])
-        XCTAssertEqual(install.headline(), "The MCP server an earlier AgentTerm put in the settings of Codex and Copilot CLI could not be taken out.")
-        XCTAssertEqual(
-            install.headline(on: "Studio"), "The MCP server an earlier AgentTerm put in the settings of Codex and Copilot CLI on Studio could not be taken out.")
-        XCTAssertTrue(install.advice.contains("mcp remove \(AppChannel.current.mcpServerName)"), install.advice)
+        let install = AgentShellsFault(cause: .signIn, agents: ["Codex"])
+        XCTAssertEqual(AgentShellsFault(cause: .signIn).headline(on: "Studio"), "An agent's MCP server was refused by the AgentTerm host on Studio.")
         XCTAssertEqual(AgentShellsFault(cause: .signIn).headline(), "An agent's MCP server was refused by the AgentTerm host.")
         XCTAssertTrue(AgentShellsFault(cause: .signIn).advice.contains("Start that agent's session again"))
         let message = ServerMessage.agentShellsFaults([install, AgentShellsFault(cause: .init(rawValue: "later"))])

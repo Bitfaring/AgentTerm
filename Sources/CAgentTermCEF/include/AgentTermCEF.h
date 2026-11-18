@@ -35,7 +35,16 @@ typedef enum {
     ATC_EVENT_FOCUS = 15,         // the page took the keyboard's focus
     ATC_EVENT_PROGRESS = 16,      // a: progress in thousandths
     ATC_EVENT_READY = 17,         // browser 0: browsers can be made from now on
+    ATC_EVENT_MENU_COMMAND = 18,  // a: one of ATC_MENU_*, text: the link's URL, text2: the image's URL
 } atc_event_kind;
+
+/// The items of a page's right-click menu (#131) that the app does itself;
+/// Back, Forward, Reload, Cut, Copy, Paste and Select All are CEF's own.
+#define ATC_MENU_OPEN_LINK 26500
+#define ATC_MENU_COPY_LINK 26501
+#define ATC_MENU_OPEN_IMAGE 26502
+#define ATC_MENU_COPY_IMAGE 26503
+#define ATC_MENU_INSPECT 26504
 
 typedef struct {
     atc_event_kind kind;
@@ -109,6 +118,9 @@ void atc_resized(int browser);
 int atc_devtools(int browser, const char *json, size_t size);
 /// Opens Chromium's own DevTools for the page, in a window of their own.
 void atc_show_devtools(int browser);
+/// Opens `url` in a window of Chrome's own, outside the app, in the profile
+/// of `browser`: its extensions' buttons are there (#125).
+void atc_open_chrome_window(int browser, const char *url);
 /// Answers a permission prompt: 1 allows what was asked, 0 refuses it.
 void atc_answer_permission(int prompt, int allow);
 void atc_cancel_download(int download);
