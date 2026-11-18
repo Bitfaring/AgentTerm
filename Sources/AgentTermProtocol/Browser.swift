@@ -484,6 +484,10 @@ public enum BrowserWords {
     public static func noProfile(_ name: String, _ names: [String]) -> String {
         "There is no browser profile called “\(name)”. The profiles: \(names.joined(separator: ", "))."
     }
+    /// Typed into an element that shows nothing of it afterwards (#161).
+    public static let typedButNotShown =
+        "The text was typed, but the element shows none of it: the page's editor did not take it. Take a browser_screenshot to see, click into the field and try again, or tell the user."
+
     /// What a page of another Mac's lacks here (#147): what is done in its
     /// Mac's own Chromium.
     public static let onTheOtherMac =

@@ -1036,6 +1036,62 @@ final class BrowserUITests: MacUITestCase {
         app.wait(for: .button("Pick an Element for an Agent"))
     }
 
+    /// BROWSER-45 (#161): typing into an editor that keeps its own state, as
+    /// Draft.js does (X's post box): it handles the input itself and draws
+    /// its text into a node of its own. The text typed shows in it, once;
+    /// typed again, it replaces what was there, in the editor's state too.
+    func testTypingIntoAnEditorThatKeepsItsOwnState() throws {
+        let folder = root.appendingPathComponent("site")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = folder.appendingPathComponent("editor.html")
+        try """
+        <!doctype html>
+        <html><head><title>Editor page</title></head>
+        <body>
+          <div id="editor" contenteditable="true" role="textbox" aria-label="Post text"><div data-contents="true"><br></div></div>
+          <p id="count">0</p>
+          <script>
+            // As Draft.js: the text is the editor's own, every input is
+            // handled by it, and drawn again into its node.
+            let state = '';
+            const editor = document.getElementById('editor');
+            const contents = editor.querySelector('[data-contents]');
+            // Empty, a line with a <br> in it, as Draft.js draws one.
+            function render() {
+              contents.textContent = state;
+              if (!state) contents.appendChild(document.createElement('br'));
+              document.getElementById('count').textContent = String(state.length);
+            }
+            editor.addEventListener('beforeinput', (event) => {
+              event.preventDefault();
+              const selected = getSelection().toString();
+              const all = state.length > 0 && selected.length >= state.length;
+              if (event.inputType.startsWith('insert')) state = (all ? '' : state) + (event.data || '');
+              else if (event.inputType.startsWith('delete')) state = all ? '' : state.slice(0, -1);
+              render();
+            });
+          </script>
+        </body></html>
+        """.write(to: page, atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let snapshot = server.text("browser_snapshot", ["tab": tab])
+        let box = try XCTUnwrap(ref(in: snapshot.text, "textbox \"Post text\""), snapshot.text)
+        func shown() -> String {
+            server.text("browser_evaluate", ["tab": tab, "script": "document.getElementById('editor').innerText.trim() + '|' + document.getElementById('count').textContent"]).text
+        }
+
+        let first = server.text("browser_type", ["tab": tab, "ref": box, "text": "Hello from AgentTerm"])
+        XCTAssertFalse(first.failed, first.text)
+        XCTAssertTrue(first.text.contains("“Hello from AgentTerm”"), first.text)
+        XCTAssertTrue(shown().contains("Hello from AgentTerm|20"), shown())
+        let second = server.text("browser_type", ["tab": tab, "ref": box, "text": "Second post"])
+        XCTAssertFalse(second.failed, second.text)
+        XCTAssertTrue(shown().contains("Second post|11"), "typed again, it was not replaced: \(shown())")
+    }
+
     /// BROWSER-44 (#148): a page the user opens belongs to no folder: one
     /// Browser, its row above the folders in the list, its tab in the strip
     /// of every folder, the same page shown from each.

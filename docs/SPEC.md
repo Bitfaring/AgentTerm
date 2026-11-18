@@ -620,7 +620,11 @@ user sees.
   its tab (see Panes), reads a page as text with a ref for what can be
   acted on (`browser_snapshot`), clicks, types, picks, presses keys,
   scrolls and waits (`browser_click`, `browser_type`, `browser_select`,
-  `browser_press`, `browser_scroll`, `browser_wait`), chooses files for a
+  `browser_press`, `browser_scroll`, `browser_wait`; a field is typed into
+  as a user types: emptied by selecting all of it and a real Backspace,
+  which an editor that keeps its own state, as X's Draft.js, handles
+  itself, then the caret put at its end; a field that shows none of what
+  was typed is said to have failed, #161), chooses files for a
   file field (`browser_upload`: files of its project only, so that nothing
   else of the Mac is sent to a site), looks at it
   (`browser_screenshot`), reads its console and its requests
