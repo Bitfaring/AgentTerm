@@ -237,6 +237,39 @@ final class HandoffTests: XCTestCase {
         XCTAssertEqual(exclude.components(separatedBy: ".agentterm/").count - 1, 1)
     }
 
+    /// HAND-7 (#150): a conversation continued in a new worktree of its
+    /// folder: the worktree is made on a branch of its own, the handoff file
+    /// is written in it and says to work there only, not at the folder's
+    /// paths the conversation names.
+    func testAConversationIsContinuedInANewWorktree() throws {
+        git("init", "-q", "-b", "main", in: root)
+        git("config", "user.name", "Test", in: root)
+        git("config", "user.email", "test@example.com", in: root)
+        git("config", "commit.gpgsign", "false", in: root)
+        _ = try write("app.txt", ["one"])
+        git("add", ".", in: root)
+        git("commit", "-q", "-m", "init", in: root)
+        let source = try write(
+            "../\(root.lastPathComponent)-claude.jsonl", [#"{"type":"user","message":{"role":"user","content":"add a second line"}}"#])
+        defer { try? FileManager.default.removeItem(atPath: source) }
+
+        let made = try Handoff.prepareInNewWorktree(
+            conversation("claude", source: source), to: "claude", worktree: NewWorktree(branch: "continue-parser", from: nil),
+            now: Date(timeIntervalSince1970: 1_800_000_000))
+        let worktree = root.appendingPathComponent(".agentterm/worktrees/continue-parser").standardizedFileURL.path
+        XCTAssertEqual(made.prepared.directory, worktree)
+        XCTAssertEqual(made.branch, "continue-parser")
+        XCTAssertTrue(made.prepared.file.hasPrefix(worktree + "/.agentterm/handoffs/"), made.prepared.file)
+        XCTAssertEqual(git("rev-parse", "--abbrev-ref", "HEAD", in: URL(fileURLWithPath: worktree)).trimmingCharacters(in: .whitespacesAndNewlines), "continue-parser")
+        let text = try String(contentsOfFile: made.prepared.file, encoding: .utf8)
+        XCTAssertTrue(text.contains("- Continue in: \(worktree)"), text)
+        XCTAssertTrue(text.contains("a git worktree of the folder"), "the agent is not told it is in a worktree")
+        XCTAssertTrue(text.contains("not at the folder's paths"), "the agent is not told to leave the folder alone")
+        XCTAssertThrowsError(
+            try Handoff.prepareInNewWorktree(conversation("claude", source: source), to: "claude", worktree: NewWorktree(branch: "continue-parser", from: nil)),
+            "a branch that is there already was taken")
+    }
+
     func testThePlanIsWhatPrepareUsesUnlessThePromptIsReplaced() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let source = conversation("codex")

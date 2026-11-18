@@ -66,6 +66,13 @@ says names the device it runs on.
   brings only what was written since. A session started on the iPhone
   comes whole. The Mac gets all of it.
 - The iPhone's terminal is drawn on the GPU.
+- **Files into a terminal** (Mac, #160): a file dropped on a terminal, or
+  copied in the Finder and pasted, has its path typed into the session,
+  quoted for the shell as Terminal.app does, as a paste, not submitted. A
+  picture on the clipboard with no text, a screenshot say, is sent as
+  Control V when ⌘V is pressed: an agent such as Claude Code then takes the
+  clipboard's picture itself; nothing is saved. A session of another Mac
+  takes neither, and says why: its agent would look on that Mac.
 
 ### Session names
 
@@ -133,7 +140,12 @@ says names the device it runs on.
   branch it starts from (the folder's own unless another, local or of a
   remote, is picked; the new branch follows none), and what is started
   there, an agent or a shell. The sheet says when the folder has changes
-  that the worktree will not have.
+  that the worktree will not have. An agent can begin fresh or **continue
+  a conversation** (#150), one of the folder's offered first, the newest
+  picked: it is handed off into the new worktree (see Handoff), and the
+  handoff file says to work there only, not at the folder's paths the
+  conversation names. Its own conversation is not resumed there: it holds
+  the folder's paths, and the agent would go on changing the folder.
 - **⋯** is for the worktree on show: merge its branch into the folder's
   and remove it (with its branch, for one AgentTerm made), open a pull
   request with `gh`, or throw it away, which asks first and says what is
@@ -225,9 +237,6 @@ says names the device it runs on.
   time, with its submodules checked out; the worktree is kept afterwards,
   in the folder's worktree bar, to
   be looked at, merged or thrown away.
-- **The prompt** opens in a larger editor, with the files of the
-  schedule's folder beside it, found by name: one that is picked is named
-  in the prompt.
 - **Changes to a schedule** are kept with it, the last twenty: when, and
   what was changed, in words.
 
@@ -399,9 +408,13 @@ nothing (decided by the owner on 2026-11-17).
   Codex's own command (`codex features disable daemon_auto_start`), which
   the row names before Install is pressed and shows among its commands; Remove turns it on again, unless
   it was off before. While such a server still runs, Codex goes on using
-  it: the row says "Shared server on" and what to do (quit Codex's sessions,
-  then `codex app-server daemon stop`), Codex counts as not set up, and
-  AgentTerm stops nothing itself, which would leave those sessions waiting.
+  it: the row says "Shared server on" and that Install stops it, Codex
+  counts as not set up, and Install stops it with Codex's own command
+  (`codex app-server daemon stop`, #153), shown among its commands. Tried
+  with Codex 0.169.1: sessions started with it off do not use it and go
+  on; one started through it before may stop, which the row says before
+  Install is pressed. **Install for All** is at the top of the agents'
+  list, in Settings and in the onboarding.
   A session that runs through the shared server all the same has no shells
   or pages of AgentTerm's and its state is not shown: its mark says its
   hooks and its server were not heard. It never speaks as another session.
@@ -513,7 +526,7 @@ nothing (decided by the owner on 2026-11-17).
   running keep what they were told. It is given where each agent reads it:
   Claude Code's system prompt, Copilot CLI's and Antigravity's
   instructions files, and the MCP server's instructions, which Codex
-  reads. It is edited on the Mac only.
+  reads. It is edited on the Mac, and in the iPhone's Settings (#155).
 
 ### The browser (Mac)
 
@@ -521,18 +534,19 @@ The Mac app has a browser (#76): Chromium itself, embedded with CEF, used
 by the user and by the agents alike. An agent drives the very tab the
 user sees.
 
-- **For the user.** The user's pages of a project are one tab of its
-  strip, Browser, as a window of Chrome holds its tabs: the row under the
+- **For the user.** The user's pages belong to no folder (#148): they are
+  one Browser, a tab in the strip of every folder, the same pages whichever
+  is on show, as a window of Chrome holds its tabs: the row under the
   strip holds the pages, each shown when picked and closed by its ×, and
   New Page for one more (see Panes). The tab says how many pages it holds;
   a page closed shows the one beside it, the last one closed closes the
   tab, and closing the tab while it holds several is asked first. The list on the left holds them the
-  same way (#122): one Browser row in the project, its pages set in under
+  same way (#122): one Browser row above the folders, its pages set in under
   it; the row shows the page the tab shows, and closes them all from its
   menu. A page is started as a shell is: the
   Browser button next to Shell in the header, on the launch screen, the +
   of the row, or Browser > New Browser Tab (⌥⌘T). It opens in
-  the project on show,
+  the one Browser, whatever folder is on show,
   in the profile picked (see Profiles). A right click in a page opens a
   menu as Chrome's (#131): in a text field Cut, Copy, Paste and Select
   All; on selected text Copy; on a link Open Link in New Tab and Copy Link
@@ -568,7 +582,9 @@ user sees.
   sharp, and show it in its own shape, never squeezed into another), opens Chromium's own Developer Tools
   (⌥⌘I) with the console, sends an element to an agent, and closes it. Text is selected, copied
   and pasted as anywhere. A page that opens a window opens a tab instead,
-  in the same project and for the same agent. A download goes to the
+  in the same project and for the same agent, which keeps its opener: a
+  sign-in in a popup, as "Sign in with Google", hands its answer back to
+  the page, and a page that closes itself closes its tab (#162). A download goes to the
   Downloads folder and is shown under the page. A page asking for the
   camera, the microphone, the location, notifications and the like asks
   the user in a bar over the page; an agent never answers it. A page that
@@ -606,7 +622,11 @@ user sees.
   its tab (see Panes), reads a page as text with a ref for what can be
   acted on (`browser_snapshot`), clicks, types, picks, presses keys,
   scrolls and waits (`browser_click`, `browser_type`, `browser_select`,
-  `browser_press`, `browser_scroll`, `browser_wait`), chooses files for a
+  `browser_press`, `browser_scroll`, `browser_wait`; a field is typed into
+  as a user types: emptied by selecting all of it and a real Backspace,
+  which an editor that keeps its own state, as X's Draft.js, handles
+  itself, then the caret put at its end; a field that shows none of what
+  was typed is said to have failed, #161), chooses files for a
   file field (`browser_upload`: files of its project only, so that nothing
   else of the Mac is sent to a site), looks at it
   (`browser_screenshot`), reads its console and its requests
@@ -634,9 +654,11 @@ user sees.
   an Element for an Agent: browsing it, and picking its elements. While
   picking, the button says so ("Picking"), and an element clicked is not
   clicked but sent: its picture, the address, a selector, its HTML and its
-  main styles are shown with a note to write and the agent to send it to,
-  one of the project's, the first picked already. Sent, the picture is
-  saved in the project's `.agentterm/shots/` and the rest is typed into the
+  main styles are shown with a note to write and the agent to send it to
+  (#149): in an agent's page, that agent, named and not to be changed; in
+  a page of the user's, any running agent, those of the folder on show
+  first and the first picked already. Sent, the picture is
+  saved in the agent's folder's `.agentterm/shots/` and the rest is typed into the
   agent's session, with the picture's path, and submitted. Picking stays
   on, sent or not, for the next element, until the button turns it off.
 - **What fails is said.** With the app closed, or showing another Mac, an
@@ -644,11 +666,19 @@ user sees.
   is not open there. The agents always have the browser, as they have
   their shells: Settings has no switch for it (the owner's decision,
   2026-11-16, as for the shells' three).
+- **A Mac showing another Mac** (#147) has that Mac's browser as the iPhone
+  has it: its pages in the Browser tab and beside its agents, each drawn
+  from the pictures that Mac sends while it is shown, and used from here:
+  a click, scrolling, the keys and typing, ⌘V pasting what this Mac
+  copied, the address, back, forward, reload, stop, close, taking a page
+  from its agent and giving it back, and a new page of the user's (in that
+  Mac's default profile). What is done in a Mac's own Chromium (picking an
+  element, Show As, finding, zooming, the developer tools, a page beside an
+  agent) is on that Mac, and the page's menu says so.
 - **On the iPhone**, as on the Mac: an agent's own shells and pages are
   listed right under it, set in, under the headings Shells and Browser;
-  the user's pages are in their project's folder under a Browser heading
-  that says how many there are, and those of no folder under "Browser on
-  the Mac". An agent's screen has Agent, Shells and
+  the user's pages, which belong to no folder, under "Browser on the Mac". Ending an agent there ends its shells and closes its pages
+  too, asked first in the Mac's words (#145). An agent's screen has Agent, Shells and
   Browser, each with its tabs when it has several: a shell is its
   terminal, a page is shown live, about ten pictures a second, which come
   while the Mac does not show it too. On an iPad on its side, the app on
@@ -765,6 +795,11 @@ under 20% that is not charging turns amber.
   (#120): "In use on MacBook Pro · 180×48", the Mac by its name, a device by
   the name it gives itself ("In use on Manh's iPad · 90×50"), so that a
   phone watching a session an iPad uses does not say it is used on the Mac.
+  Beside it, and on the session's tab and row on the Mac, is that device's
+  own icon (#157): an iPhone's, an iPad's, and none for a Mac. Each device
+  says what it is when it pairs and when it connects; the paired devices'
+  list shows each by its icon the same way, a Mac's and one that has not
+  said yet with none.
 - Handing a session back and forth redraws the program for the new size each
   time.
 - What a terminal sends by itself (answers to the program's questions, focus
@@ -882,11 +917,17 @@ panel.
   ⌥⌘← (View > Next and Previous Item in Group) the next and previous
   item it holds, with the keyboard in it; in an agent's tab the same keys
   move about its area (Panes). ⌘W closes what is shown, a session is ended.
-  An item's × closes it; the × of the Shells, Diffs or Files tab closes
-  the one it shows, and the Browser tab's all its pages, asked first when
-  there are several. A tab's menu (right click) closes it, the other tabs
-  of its pane, every file of its pane (terminals stay), or every tab of
-  its pane; closing an agent's tab ends the agent and its shells. The Tab
+  An item's × closes it. **A tab's × closes all it holds** (#145): the
+  Shells tab ends its shells ("End 2 shells?", asked first even for one),
+  the Browser, Diffs and Files tabs close their pages, diffs and files
+  (asked first when there are several), and an agent's tab ends the
+  agent with the shells and pages it opened ("Its 2 shells and 1 page are
+  closed with it."), always asked. The tab's menu does the same (End
+  Shells, Close Browser, Close Diffs, Close Files, End Session); one item
+  alone is closed by its own ×. An agent that ends by itself leaves its
+  shells and pages to the user. A tab's menu (right click) also closes
+  the other tabs of its pane, every file of its pane (terminals stay), or
+  every tab of its pane. The Tab
   menu's do the same for the pane the keyboard is in. Whatever would end
   a session asks first. Files with unsaved changes are never closed
   without asking.
@@ -898,7 +939,11 @@ panel.
   session.
   **Each project has its own**: the middle shows the
   project on show, with its tabs only. Picking a folder in the list shows
-  its tabs as they were left; picking a session there, or a notice, shows
+  its tabs as they were left, and the folder's row is the one marked, not
+  the item in front (#152); so is a Shells, Browser, Diffs or Files row
+  picked, which shows what its tab shows and has a menu that closes them
+  all (#145), and a file or a diff has one with Close, Open File (a diff),
+  Show in Finder and Copy Path. Picking a session there, or a notice, shows
   that session's project, with the session in front. Sessions started in
   no listed folder have their own too. What is in front is kept by the app
   on the Mac, for each Mac it shows and each project, and comes back when
@@ -1088,8 +1133,11 @@ panel.
     its own under the folder's, headed by its path and the branch checked
     out in it, or "detached HEAD". Its files are listed as the folder's
     are, staged and not, each with its diff, and are staged, unstaged and
-    discarded in the submodule; **Commit…** commits what is staged there,
-    warning first when no branch is checked out in it. They are not
+    discarded in the submodule. Under them is a commit box of its own, as
+    the folder's (#151): its message, **Commit**, which commits what is
+    staged there, and **Write**, which asks the agent of Settings > Git for
+    the message of what is staged there; the box says so when no branch is
+    checked out in it. Amending and undoing are the folder's only. They are not
     changes of the folder. A submodule whose commit is another than the
     folder records is: a row of the folder's own that says from which
     commit to which, staged and committed in the folder as a file is.
@@ -1211,6 +1259,16 @@ and Settings, and quits. Quit is there and ⌘Q.
 
 Settings > General also links to the project's page on manhdev.click and to
 the source on GitHub; the iPhone has the same two links in its Settings tab.
+
+The iPhone's Settings tab has, for the Mac it shows (#155), what the Mac's
+Settings has of the Mac's own: **Hooks & MCP** (each agent's parts, Install,
+Remove and Install for All at the top, run by the host there), **Shell**
+(the program of new shells, what is run first in the user's and in the
+agents'; the terminal's looks are each device's), **Browser** (the
+profiles: the default one, a new one, Clear Data and Delete, both asked
+first in the Mac's words) and **Agents** (the words each agent is told,
+saved, or back to AgentTerm's). A Mac showing another Mac sets its agents
+up the same way. Permissions stay on the Mac itself.
 
 The setting "Keep AgentTerm in the menu bar when its window is closed", in
 Settings (⌘,), is on by default. With it off there is no icon, and closing

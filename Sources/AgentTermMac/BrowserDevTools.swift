@@ -342,12 +342,31 @@ final class DevToolsSession {
     func type(_ text: String, into node: Int, append: Bool, submit: Bool) async throws -> String? {
         _ = try? await call("DOM.focus", ["backendNodeId": node])
         if !append {
-            _ = try await run(
-                "function(){ this.focus(); if (this.isContentEditable) { document.execCommand('selectAll'); document.execCommand('delete'); } else if ('value' in this) { this.select && this.select(); if (this.value) { this.value=''; this.dispatchEvent(new Event('input',{bubbles:true})); } } }",
-                on: node)
+            // An editable element is emptied as a user empties it: all of it
+            // selected, then a real Backspace, which an editor that keeps
+            // its own state (Draft.js, as X's) handles itself. Emptied by
+            // `execCommand`, its state kept its text and the node it draws
+            // in was taken out of the page (#161).
+            let hasText =
+                try await run(
+                    "function(){ this.focus(); if (this.isContentEditable) { const range = document.createRange(); range.selectNodeContents(this); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); return this.innerText.trim().length > 0; } if ('value' in this) { this.select && this.select(); if (this.value) { this.value=''; this.dispatchEvent(new Event('input',{bubbles:true})); } } return false; }",
+                    on: node) as? Bool ?? false
+            if hasText { try await press("Backspace") }
         }
+        // The caret in it, at the end of its last line, where a click would
+        // put it: in its last text, its last empty block, or before its last
+        // <br>. An editor that drew itself again keeps none of its own, and
+        // after its last block nothing can be typed (#161).
+        _ = try await run(
+            "function(){ if (!this.isContentEditable) return; this.focus(); let at = this; while (at.lastChild && at.lastChild.nodeType === 1 && at.lastChild.nodeName !== 'BR') at = at.lastChild; const range = document.createRange(); const last = at.lastChild; if (last && last.nodeType === 3) range.setStart(last, last.length); else if (last && last.nodeName === 'BR') range.setStartBefore(last); else { range.selectNodeContents(at); range.collapse(false); } range.collapse(true); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); }",
+            on: node)
         try await call("Input.insertText", ["text": text])
         let value = try await run("function(){ return 'value' in this ? String(this.value) : this.innerText }", on: node) as? String
+        // What shows nothing of what was typed did not take it: said, not
+        // answered as holding "" (principle 3).
+        if !text.isEmpty, (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw Failure(text: BrowserWords.typedButNotShown)
+        }
         if submit { try await press("Enter") }
         return value
     }

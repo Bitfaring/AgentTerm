@@ -1173,7 +1173,9 @@ final class PhoneModel: ObservableObject {
 
     private func open(host: String, port: UInt16, credential: AgentTermConnection.Credential) {
         status = .connecting
-        let connection = AgentTermConnection(host: host, port: port, credential: credential, clientName: UIDevice.current.name)
+        let connection = AgentTermConnection(
+            host: host, port: port, credential: credential, clientName: UIDevice.current.name,
+            kind: UIDevice.current.userInterfaceIdiom == .pad ? .ipad : .iphone)
         self.connection = connection
         connection.onState = { [weak self, weak connection] state in
             MainActor.assumeIsolated {
@@ -1318,8 +1320,12 @@ final class PhoneModel: ObservableObject {
             if let mac = pairing?.id, sessions.first(where: { $0.id == session })?.state == state { notifications.remove(mac: mac, session: session) }
         case .browserFrame(let tab, let jpeg, let width, let height):
             if let image = UIImage(data: jpeg) { browserFrames[tab] = BrowserFrame(image: image, width: width, height: height) }
-        case .agentShellResult, .agentBrowserResult, .browserCall, .agentPrompts, .shellSettings:
-            // What the agents are told is written on the Mac only (principle 1).
+        case .agentPrompts(let custom, let defaults):
+            // Edited here too (#155), as in the Mac's Settings > Agents.
+            agentPrompts = AgentPrompts(custom: custom, defaults: defaults)
+        case .shellSettings(let settings, let loginShell, let shells):
+            shellSettings = MacShellSettings(settings: settings, loginShell: loginShell, shells: shells)
+        case .agentShellResult, .agentBrowserResult, .browserCall:
             // For `agenttermd mcp`, and for the Mac app that shows the browser.
             break
         case .browserTabs(let tabs):
@@ -1393,9 +1399,9 @@ final class PhoneModel: ObservableObject {
             writingCommitMessage.remove(folder)
             // A draft: it goes in the field, to be read before committing.
             if let text { commitDrafts[folder] = text }
-        case .agentSetup:
-            // Set up on the Mac only (#129).
-            break
+        case .agentSetup(let report):
+            // Set up from here too (#155), as in the Mac's Settings > Hooks & MCP.
+            agentSetup = report
         case .sshHosts(let list):
             sshHosts = list
         case .systemStats(let stats):
@@ -2012,6 +2018,73 @@ final class PhoneModel: ObservableObject {
             ))
         handoffPlan = nil
     }
+
+    /// Continues a conversation in a new worktree of `folder` (#150), as the
+    /// Mac does: the host makes it, hands the conversation off into it and
+    /// starts `target` there.
+    func handoffInNewWorktree(_ conversation: Conversation, to target: AgentInfo, in folder: String, branch: String?, from: String?) {
+        guard status == .connected else { return }
+        openCreatedSession = true
+        Telemetry.shared.record(.handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: true))
+        connection?.send(
+            .handoff(
+                agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd, target: target.id, plan: nil, prompt: nil,
+                note: "", size: startingSize, folder: folder, worktree: NewWorktree(branch: branch, from: from)))
+    }
+
+    // MARK: The Mac's settings, from here (#155)
+
+    /// What each agent has of AgentTerm's in its configuration on the Mac.
+    @Published private(set) var agentSetup: AgentSetupReport?
+
+    struct AgentPrompts: Equatable {
+        var custom: [String: String]
+        var defaults: [String: String]
+    }
+    /// What each agent's new sessions are told: the user's own words, and
+    /// AgentTerm's default.
+    @Published private(set) var agentPrompts: AgentPrompts?
+
+    struct MacShellSettings: Equatable {
+        var settings: ShellSettings
+        var loginShell: String
+        var shells: [String]
+    }
+    /// How the Mac's shells are started.
+    @Published private(set) var shellSettings: MacShellSettings?
+
+    func askAgentSetup() { connection?.send(.agentSetupStatus) }
+
+    /// Installs or removes AgentTerm's part in an agent's configuration on
+    /// the Mac, or in every installed one's (nil): the host runs it there.
+    func runAgentSetup(agent: String?, remove: Bool = false) {
+        guard status == .connected else { return }
+        connection?.send(.runAgentSetup(agent: agent, remove: remove))
+    }
+
+    /// The words an agent is told; nil goes back to AgentTerm's.
+    func setAgentPrompt(_ agent: String, _ text: String?) {
+        guard status == .connected else { return }
+        connection?.send(.setAgentPrompt(agent: agent, text: text))
+    }
+
+    func setShellSettings(_ settings: ShellSettings) {
+        guard status == .connected else { return }
+        connection?.send(.setShellSettings(settings))
+    }
+
+    /// Changes the browser's profiles, in the Mac's app (#155); what it
+    /// refuses is said.
+    func changeProfiles(_ change: ProfileChange) {
+        askBrowser(.profile(change)) { [weak self] result in
+            switch result {
+            case .profiles(let list): self?.browserProfiles = list
+            case .refused(let why): self?.profileProblem = why
+            default: break
+            }
+        }
+    }
+    @Published var profileProblem: String?
 
     /// Forgets the folder last looked at, so the next browse starts at home.
     func forgetListing() { listing = nil }

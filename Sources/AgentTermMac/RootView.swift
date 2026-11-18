@@ -138,9 +138,13 @@ private struct WindowQuestions: ViewModifier {
         return "Save changes to \"\(name)\"?"
     }
 
-    private var endQuestion: String {
-        let name = model.pendingEnd?.displayName ?? "this session"
-        return "End \(name)?"
+    private var endQuestion: String { CloseWords.endQuestion(model.pendingEnd?.displayName ?? "this session") }
+
+    /// An agent's shells and pages end with it (#145).
+    private var endMessage: String {
+        let tab = model.pendingEnd.map(TabID.session) ?? ""
+        let own = model.companions
+        return CloseWords.endMessage(shells: own.shells[tab]?.count ?? 0, pages: own.browsers[tab]?.count ?? 0)
     }
 
     private var pushQuestion: String {
@@ -164,10 +168,10 @@ private struct WindowQuestions: ViewModifier {
                 isPresented: Binding(get: { model.pendingEnd != nil }, set: { if !$0 { model.pendingEnd = nil } }),
                 titleVisibility: .visible, presenting: model.pendingEnd
             ) { session in
-                Button("End Session", role: .destructive) { model.close(session.id) }
+                Button(CloseWords.endButton, role: .destructive) { model.close(session.id) }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in
-                Text("The program running in it is stopped.")
+                Text(endMessage)
             }
             .confirmationDialog(
                 closeQuestion,
@@ -190,26 +194,29 @@ private struct WindowQuestions: ViewModifier {
                 Text("The branch does not follow a branch on a remote yet. It is pushed as \(push.remote)/\(push.branch), which it follows from then on.")
             }
             .modifier(DeleteConversationQuestions(store: model.historyStore))
-            .modifier(CloseBrowserQuestion())
+            .modifier(CloseGroupQuestion())
     }
 }
 
-/// Closing a Browser tab of several pages is asked first.
-private struct CloseBrowserQuestion: ViewModifier {
+/// Closing a tab of the user's own and all it holds is asked first (#145),
+/// in the words both apps use.
+private struct CloseGroupQuestion: ViewModifier {
     @EnvironmentObject private var model: AppModel
 
+    private var kind: HolderKind { model.pendingGroupClose.flatMap(TabID.holder(of:))?.kind ?? .shells }
+    private var count: Int { model.pendingGroupClose.map { model.members(of: $0).count } ?? 0 }
+
     func body(content: Content) -> some View {
-        let count = model.pendingBrowserClose.map { model.userPages(in: $0).count } ?? 0
         content
             .confirmationDialog(
-                "Close \(count) pages?",
-                isPresented: Binding(get: { model.pendingBrowserClose != nil }, set: { if !$0 { model.pendingBrowserClose = nil } }),
-                titleVisibility: .visible, presenting: model.pendingBrowserClose
-            ) { project in
-                Button("Close \(count) Pages", role: .destructive) { model.closeBrowser(in: project) }
+                CloseWords.groupQuestion(kind, count: count),
+                isPresented: Binding(get: { model.pendingGroupClose != nil }, set: { if !$0 { model.pendingGroupClose = nil } }),
+                titleVisibility: .visible, presenting: model.pendingGroupClose
+            ) { group in
+                Button(CloseWords.groupButton(kind, count: count), role: .destructive) { model.closeGroup(group) }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in
-                Text("Every page of the Browser tab is closed.")
+                Text(CloseWords.groupMessage(kind))
             }
     }
 }
@@ -278,10 +285,8 @@ struct LaunchBar: View {
             LaunchButton(title: "Shell", id: "shell") { model.launch(nil) }
                 .help("Start a shell in \(model.workingDirectory)")
                 .contextMenu { WorktreeLaunchItem(agent: nil) }
-            // A page, as a shell is started (#76): this Mac's browser only.
-            if !model.isRemote {
-                BrowserLaunch()
-            }
+            // A page, as a shell is started (#76); another Mac's opens there (#147).
+            BrowserLaunch()
             SSHMenu()
         }
         .disabled(model.status != .connected)
@@ -298,7 +303,8 @@ struct BrowserLaunch: View {
     var large = false
 
     var body: some View {
-        if profiles.list.count > 1 {
+        // This Mac's profiles: another Mac's page opens in that Mac's default.
+        if !model.isRemote, profiles.list.count > 1 {
             Menu {
                 ForEach(profiles.infos) { profile in
                     Button(profile.isDefault ? "\(profile.name) (default)" : profile.name) { model.openBrowserTab(profile: profile.id) }
@@ -860,7 +866,8 @@ struct ForeignSizeBanner: View {
     var body: some View {
         HStack(spacing: 8) {
             let driver = model.sizeDrivers[session]
-            Image(systemName: SizeDriver.symbol(for: driver)).foregroundStyle(.secondary)
+            // The device's own icon; none for a Mac (#157).
+            if let symbol = SizeDriver.symbol(for: driver) { Image(systemName: symbol).foregroundStyle(.secondary) }
             Text(SizeDriver.inUse(by: driver, size: size))
                 .font(.system(size: 12))
                 .lineLimit(1)
@@ -906,9 +913,7 @@ struct WelcomeView: View {
                 }
                 LaunchButton(title: "Shell", id: "shell", large: true) { model.launch(nil) }
                     .contextMenu { WorktreeLaunchItem(agent: nil) }
-                if !model.isRemote {
-                    BrowserLaunch(large: true)
-                }
+                BrowserLaunch(large: true)
                 SSHMenu(large: true)
             }
             if model.agentsLoaded && model.installedAgents.isEmpty {

@@ -391,6 +391,7 @@ class MacUITestCase: XCTestCase {
                       "features disable") [ -e '\(plugins)/shared-server' ] || exit 1; echo false > '\(plugins)/shared-server' ;;
                       "features enable") [ -e '\(plugins)/shared-server' ] || exit 1; echo true > '\(plugins)/shared-server' ;;
                       "app-server daemon")
+                        if [ "$3" = stop ] && [ -e '\(plugins)/server-running' ]; then rm '\(plugins)/server-running'; echo '{"status":"stopped","backend":"pid"}'; exit 0; fi
                         if [ -e '\(plugins)/server-running' ]; then echo '{"status":"running","backend":"pid"}'; else echo "Error: failed to connect"; exit 1; fi ;;
                     esac
                     exit 0 ;;

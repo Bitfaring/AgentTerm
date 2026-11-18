@@ -61,7 +61,8 @@ final class ProtocolTests: XCTestCase {
 
     func testClientMessagesRoundTrip() {
         let messages: [ClientMessage] = [
-            .hello(token: "secret", client: "iPhone"),
+            .hello(token: "secret", client: "iPhone", kind: .iphone),
+            .hello(token: "secret", client: "Studio"),
             .list,
             .agents(refresh: true),
             .create(CreateRequest(command: "claude", cwd: "/tmp", title: "Claude", size: TermSize(cols: 48, rows: 30))),
@@ -70,7 +71,7 @@ final class ProtocolTests: XCTestCase {
             .resize(session: 7, size: TermSize(cols: 50, rows: 20)),
             .takeControl(session: 7, size: TermSize(cols: 50, rows: 20)),
             .kill(session: 7),
-            .pair(code: "c0de", device: "iPhone của Mạnh"),
+            .pair(code: "c0de", device: "iPhone của Mạnh", kind: .ipad),
             .createPairingCode,
             .cancelPairingCode,
             .listDevices,
@@ -147,7 +148,7 @@ final class ProtocolTests: XCTestCase {
             .folders(["/Users/me/app"]),
             .attached(info),
             .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: true),
-            .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: false, by: SizeDriver(name: "Manh's iPad", isMac: false)),
+            .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: false, by: SizeDriver(name: "Manh's iPad", kind: .ipad)),
             .exited(session: 3, status: 130),
             .turnResult(
                 session: 3,
@@ -429,6 +430,28 @@ final class ProtocolTests: XCTestCase {
         XCTAssertTrue(codex.isSetUp)
         codex.sharedServerOff = false
         XCTAssertTrue(codex.needsSetup)
+    }
+
+    /// TABS-2 (#145): what is asked before a tab and all it holds is
+    /// closed, and before an agent is ended with its shells and pages.
+    func testWhatIsAskedBeforeATabAndAllItHoldsIsClosed() {
+        XCTAssertEqual(CloseWords.endQuestion("Fix login"), "End Fix login?")
+        XCTAssertEqual(CloseWords.endMessage(shells: 0, pages: 0), "The program running in it is stopped.")
+        XCTAssertEqual(CloseWords.endMessage(shells: 1, pages: 0), "The program running in it is stopped. Its 1 shell is closed with it.")
+        XCTAssertEqual(
+            CloseWords.endMessage(shells: 2, pages: 1), "The program running in it is stopped. Its 2 shells and 1 page are closed with it.")
+        XCTAssertEqual(CloseWords.groupQuestion(.shells, count: 3), "End 3 shells?")
+        XCTAssertEqual(CloseWords.groupQuestion(.files, count: 1), "Close 1 file?")
+        XCTAssertEqual(CloseWords.groupButton(.browser, count: 2), "Close 2 Pages")
+        XCTAssertEqual(CloseWords.groupButton(.diffs, count: 1), "Close Diff")
+        // A shell is a running program: ending even one is asked, as ending
+        // any session is. One page, diff or file is closed at once.
+        XCTAssertTrue(CloseWords.asks(.shells, count: 1))
+        for kind in [HolderKind.browser, .diffs, .files] {
+            XCTAssertFalse(CloseWords.asks(kind, count: 1), kind.title)
+            XCTAssertTrue(CloseWords.asks(kind, count: 2), kind.title)
+        }
+        XCTAssertNotEqual(CloseWords.groupAction(.files), "Close All Files", "the pane's own item")
     }
 
     /// MCP-19: what is wrong with the agents' server, in words, and a cause

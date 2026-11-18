@@ -36,6 +36,67 @@ final class RemoteMacTests: MacUITestCase {
         wait("\(name) to be on screen", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == name }
     }
 
+    /// REMOTE-22 (#147): the other Mac's browser is used from here, as the
+    /// iPhone uses it: its pages listed, one shown from the pictures that
+    /// Mac sends while it is watched, a click sent there, a new page opened
+    /// there and shown here. A stand-in for its app answers as the app does.
+    func testTheOtherMacsBrowserIsUsedFromHere() throws {
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        XCTAssertFalse(app.exists(.id("browser-pick")), "picking is offered for a page of the other Mac")
+
+        func calls() -> [(id: Int, request: BrowserRequest)] {
+            browser.messages.compactMap { if case .browserCall(let id, _, let request) = $0 { return (id, request) } else { return nil } }
+        }
+        wait("the page watched", timeout: 15) { calls().contains { if case .watch("7", true, _) = $0.request { return true } else { return false } } }
+        for call in calls() { browser.send(.browserReply(id: call.id, result: .text("Watching tab 7."))) }
+        // A red page, as the other Mac's would send a picture of it.
+        let image = NSImage(size: NSSize(width: 400, height: 200))
+        image.lockFocus()
+        NSColor.red.setFill()
+        NSRect(x: 0, y: 0, width: 400, height: 200).fill()
+        image.unlockFocus()
+        let jpeg = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation))?.representation(using: .jpeg, properties: [:]))
+        browser.send(.browserFrame(tab: "7", jpeg: jpeg, width: 400, height: 200))
+        let page = try XCTUnwrap(app.frame(of: .id("remote-page")))
+        var seen = "nothing"
+        var drawn = false
+        let deadline = Date().addingTimeInterval(15)
+        while !drawn, Date() < deadline {
+            if let color = app.color(at: CGPoint(x: page.minX + 20, y: page.minY + 20))?.usingColorSpace(.sRGB) {
+                seen = "\(color)"
+                // Red through a JPEG and the display's colours (about 0.82,
+                // 0.29, 0.13), against the dark the view shows before a picture.
+                drawn = color.redComponent > 0.6 && color.redComponent - color.greenComponent > 0.3
+            }
+            if !drawn { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
+        }
+        XCTAssertTrue(drawn, "the picture is not drawn: at \(page) the window has \(seen)")
+        shot("remote-page")
+
+        // A click there, at the page's point.
+        app.press(.id("remote-page"))
+        wait("the click sent", timeout: 15) { calls().contains { if case .tap("7", _, _) = $0.request { return true } else { return false } } }
+
+        // A new page: opened on the other Mac, shown here once it is listed.
+        app.menu(["Browser", "New Browser Tab"])
+        wait("a new page asked for", timeout: 15) { calls().contains { if case .newTab = $0.request { return true } else { return false } } }
+        let asked = try XCTUnwrap(calls().last { if case .newTab = $0.request { return true } else { return false } })
+        browser.send(
+            .browserTabs([
+                BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default"),
+                BrowserTabInfo(id: "8", title: "", url: "", project: "", profile: "Default"),
+            ]))
+        browser.send(.browserReply(id: asked.id, result: .opened(tab: "8")))
+        app.wait(for: .id("browser-8"), timeout: 15)
+    }
+
     func testPairingShowsTheOtherMacAndWorkingOnItChangesItsDisk() throws {
         try startOtherMac()
         // REMOTE-1.

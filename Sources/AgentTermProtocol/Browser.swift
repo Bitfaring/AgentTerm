@@ -10,8 +10,8 @@ public struct BrowserTabInfo: Codable, Equatable, Hashable, Identifiable, Sendab
     public var id: String
     public var title: String
     public var url: String
-    /// The project whose profile it uses: its sign-ins and cookies. "" for
-    /// none.
+    /// The folder of the agent that opened it; "" for the user's, which
+    /// belong to no folder (#148).
     public var project: String
     /// The agent's session that opened it, the only one that sees and
     /// drives it; nil for the user's, which no agent reaches.
@@ -386,11 +386,15 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     case newTab(project: String, url: String?, profile: String?, private: Bool)
     /// Stops loading the page.
     case stop(tab: String)
+    /// A device changes the browser's profiles, as Settings > Browser does
+    /// on the Mac (#155): answered with `profiles`. The user's, never an
+    /// agent's.
+    case profile(ProfileChange)
 
     /// The tab it is about, when it is about one.
     public var tab: String? {
         switch self {
-        case .open, .tabs, .newTab, .profiles: return nil
+        case .open, .tabs, .newTab, .profiles, .profile: return nil
         case .navigate(let tab, _), .history(let tab, _), .snapshot(let tab, _), .screenshot(let tab, _, _), .click(let tab, _, _), .hover(let tab, _),
             .type(let tab, _, _, _, _), .select(let tab, _, _), .upload(let tab, _, _), .press(let tab, _), .scroll(let tab, _, _, _), .wait(let tab, _, _, _),
             .evaluate(let tab, _), .console(let tab, _), .network(let tab, _), .emulate(let tab, _), .close(let tab), .picture(let tab),
@@ -413,11 +417,22 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     /// acting on its page; showing it as a device, or closing it, does not.
     public var isTheDevices: Bool {
         switch self {
-        case .picture, .takeOver, .giveBack, .watch, .tap, .text, .press, .scroll, .history, .navigate, .stop, .newTab, .emulate, .close, .profiles:
+        case .picture, .takeOver, .giveBack, .watch, .tap, .text, .press, .scroll, .history, .navigate, .stop, .newTab, .emulate, .close, .profiles, .profile:
             return true
         default: return false
         }
     }
+}
+
+/// A change to the browser's profiles, by their ids (#155).
+public enum ProfileChange: Codable, Equatable, Sendable {
+    case add(name: String)
+    case rename(id: String, name: String)
+    case makeDefault(id: String)
+    /// Takes it away with its data; the last one stays.
+    case delete(id: String)
+    /// Throws its sign-ins and cookies away.
+    case clearData(id: String)
 }
 
 public enum BrowserResult: Codable, Equatable, Sendable {
@@ -469,6 +484,32 @@ public enum BrowserWords {
     public static func noProfile(_ name: String, _ names: [String]) -> String {
         "There is no browser profile called “\(name)”. The profiles: \(names.joined(separator: ", "))."
     }
+    /// Typed into an element that shows nothing of it afterwards (#161).
+    public static let typedButNotShown =
+        "The text was typed, but the element shows none of it: the page's editor did not take it. Take a browser_screenshot to see, click into the field and try again, or tell the user."
+
+    /// What a page of another Mac's lacks here (#147): what is done in its
+    /// Mac's own Chromium.
+    public static let onTheOtherMac =
+        "Picking an element, Show As, finding, zooming and the developer tools are on the Mac whose page it is."
+
+    /// + Page beside an agent of another Mac's (#147): a device opens the
+    /// user's pages only.
+    public static let besideAgentOnTheOtherMac =
+        "A page beside an agent of another Mac is opened on that Mac. From here, New Page opens one of yours there."
+
+    /// What is asked before a profile's data is cleared, or it is deleted:
+    /// on the Mac and on the iPhone (#155).
+    public static func clearQuestion(_ name: String) -> String { "Clear the data of “\(name)”?" }
+    public static let clearButton = "Clear Data"
+    public static let clearMessage = "Its sign-ins, cookies, storage and cache are thrown away. The tabs that use it stay open."
+    public static func deleteQuestion(_ name: String) -> String { "Delete the profile “\(name)”?" }
+    public static let deleteButton = "Delete Profile"
+    public static let deleteMessage = "Its tabs are closed, and its sign-ins, cookies, storage and cache are thrown away."
+
+    /// Over an element picked in an agent's page: no choice, it goes to the
+    /// agent that opened the page (#149).
+    public static func sendsTo(_ agent: String) -> String { "It goes to \(agent), the agent that opened this page." }
     public static func notYours(_ tab: String) -> String {
         "There is no tab \(tab) of yours: you see and use only the tabs you opened. Open one with browser_open, or list yours with browser_tabs."
     }

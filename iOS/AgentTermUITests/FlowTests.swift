@@ -553,6 +553,30 @@ final class FlowTests: XCTestCase {
             let commitMessages = app.staticTexts["Commit Messages"].firstMatch
             for _ in 0..<4 where !commitMessages.isHittable { app.swipeUp() }
             XCTAssertTrue(commitMessages.exists, "Settings has no Commit Messages")
+            // SET-6 (#155): the Mac's Hooks & MCP, Shell, Browser and Agents,
+            // as its own Settings has them; Install runs on the Mac.
+            let hooks = app.buttons["settings-hooks"].firstMatch
+            for _ in 0..<4 where !hooks.isHittable { app.swipeUp() }
+            XCTAssertTrue(hooks.waitForExistence(timeout: 5), "Settings has no Hooks & MCP")
+            hooks.tap()
+            let install = app.buttons["setup-install-claude"].firstMatch
+            XCTAssertTrue(install.waitForExistence(timeout: 20), "Claude Code's Install is not offered")
+            capture("7-settings-hooks")
+            install.tap()
+            // Run on the Mac, whose stand-in agent has no such command: what
+            // came of it reaches the phone, said.
+            let outcome = app.descendants(matching: .any)["setup-problem-claude"].firstMatch
+            XCTAssertTrue(outcome.waitForExistence(timeout: 30) || app.buttons["setup-remove-claude"].exists, "what Install came to did not reach the phone")
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            app.buttons["settings-shell"].firstMatch.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["shell-program"].firstMatch.waitForExistence(timeout: 10), "the Shell screen has no program")
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            app.buttons["settings-agents"].firstMatch.tap()
+            XCTAssertTrue(app.textViews["prompt-text"].firstMatch.waitForExistence(timeout: 10), "the Agents screen has no words")
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            app.buttons["settings-browser"].firstMatch.tap()
+            XCTAssertTrue(app.buttons["profile-new"].firstMatch.waitForExistence(timeout: 10), "the Browser screen cannot add a profile")
+            app.navigationBars.buttons.element(boundBy: 0).tap()
             // SCHED-14: Schedules, a tab of its own as on the Mac's bar of
             // places, in three groups, as the Mac shows them; no longer a
             // row of Settings.

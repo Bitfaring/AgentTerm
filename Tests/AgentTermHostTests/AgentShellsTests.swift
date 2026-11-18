@@ -193,6 +193,11 @@ final class AgentShellsMCPTests: XCTestCase {
         XCTAssertEqual((initialized?["serverInfo"] as? [String: Any])?["name"] as? String, "agentterm-dev")
         XCTAssertTrue((initialized?["instructions"] as? String ?? "").contains("the agentterm-dev MCP server"))
         XCTAssertTrue(AgentShellsInstructions.useShells(server: "agentterm").contains("the agentterm MCP server"))
+        // MCP-33 (#156): an agent whose tools are loaded when asked for (Claude
+        // Code's deferred tools) is told to load the shells' before its first
+        // command, as it is told for the browser's.
+        XCTAssertTrue(AgentShellsInstructions.useShells(server: "agentterm").contains("If the shell_ tools are not loaded yet, load them by name"))
+        XCTAssertTrue(AgentShellsInstructions.browser(server: "agentterm").contains("If the browser_ tools are not loaded yet, load them by name"))
         XCTAssertEqual(AppChannel.release.mcpServerName, "agentterm")
         XCTAssertEqual(AppChannel.dev.mcpServerName, "agentterm-dev")
     }
@@ -373,6 +378,7 @@ final class AgentShellsHostTests: XCTestCase {
         mkfifo '\(pipe.path)'
         exec 3<>'\(pipe.path)'
         '\(tool.path)' mcp <&3 > '\(output.path)' 2> '\(output.path).err' &
+        echo $$ > '\(folder.path)/pid'
         exec sleep 600
         """.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
@@ -684,8 +690,10 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertTrue(agent.failed)
         XCTAssertTrue(agent.text.contains("Starting an agent is not allowed"), agent.text)
 
-        // MCP-8: when the agent's session ends, its shells stay, the user's.
-        mac.connection.send(.kill(session: firstID))
+        // MCP-8: when the agent ends by itself, its shells stay, the user's.
+        // (Ended by the user, they end with it: MCP-32, #145.)
+        let agentProcess = try XCTUnwrap(Int32(try String(contentsOf: root.appendingPathComponent("first/pid"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        kill(agentProcess, SIGTERM)
         waitUntil("the agent's session to end") { !mac.sessions.contains { $0.id == firstID } }
         XCTAssertTrue(mac.sessions.contains { $0.id == shell.id }, "its shell stays")
         // Its MCP server ended with it, as an agent's does.
@@ -1037,6 +1045,9 @@ extension AgentShellsMCPTests {
         XCTAssertEqual(info.displayTitle, "http://localhost:3000/")
         XCTAssertTrue(BrowserRequest.click(tab: "4", ref: "e1", double: false).acts)
         XCTAssertFalse(BrowserRequest.snapshot(tab: "4", within: nil).acts, "looking at a tab is not acting on it")
+        // BROWSER-43 (#155): the profiles are changed by a device, as on the Mac; it is about no tab.
+        XCTAssertTrue(BrowserRequest.profile(.clearData(id: "work")).isTheDevices)
+        XCTAssertNil(BrowserRequest.profile(.add(name: "Work")).tab)
     }
 }
 
@@ -1133,5 +1144,41 @@ extension AgentShellsHostTests {
         waitUntil("the device told there are no tabs") {
             device.messages.contains { if case .browserTabs(let list) = $0 { return list.isEmpty } else { return false } }
         }
+    }
+
+    /// MCP-32 (#145): ending an agent's session ends the shells it opened
+    /// and has the app close the pages it opened; another agent's shell and
+    /// page, and the user's own, go on.
+    func testEndingAnAgentEndsItsShellsAndClosesItsPages() throws {
+        let mac = Client(port: port, token: token)
+        waitUntil("connected") { !mac.messages.isEmpty }
+        var closed: [String] = []
+        mac.connection.onMessage = { [weak mac] message in
+            mac?.messages.append(message)
+            guard case .browserCall(let id, _, .close(let tab)) = message else { return }
+            closed.append(tab)
+            mac?.connection.send(.browserReply(id: id, result: .text("Closed tab \(tab).")))
+        }
+        mac.connection.send(.browserProvider(true))
+        let (first, firstID) = try startAgent("claude", title: "first", client: mac)
+        let (second, secondID) = try startAgent("codex", title: "second", client: mac)
+        mac.connection.send(.create(CreateRequest(command: "exec sleep 600", cwd: root.path, title: "mine")))
+        XCTAssertFalse(first.tool("shell_open", ["command": "sleep 600", "title": "its"], in: self).failed)
+        XCTAssertFalse(second.tool("shell_open", ["command": "sleep 600", "title": "other"], in: self).failed)
+        waitUntil("the shells") { ["mine", "its", "other"].allSatisfy { title in mac.sessions.contains { $0.title == title } } }
+        mac.connection.send(
+            .browserTabs([
+                BrowserTabInfo(id: "1", title: "", url: "", project: "", openedBy: firstID),
+                BrowserTabInfo(id: "2", title: "", url: "", project: "", openedBy: secondID),
+                BrowserTabInfo(id: "3", title: "", url: "", project: ""),
+            ]))
+
+        mac.connection.send(.kill(session: firstID))
+        waitUntil("the agent and its shell ended") { !mac.sessions.contains { $0.id == firstID || $0.title == "its" } }
+        waitUntil("its page closed") { closed == ["1"] }
+        XCTAssertTrue(mac.sessions.contains { $0.id == secondID }, "the other agent ended")
+        XCTAssertTrue(mac.sessions.contains { $0.title == "other" }, "the other agent's shell ended")
+        XCTAssertTrue(mac.sessions.contains { $0.title == "mine" }, "the user's shell ended")
+        XCTAssertEqual(closed, ["1"], "another page was closed")
     }
 }

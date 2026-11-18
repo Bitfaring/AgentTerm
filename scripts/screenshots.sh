@@ -220,6 +220,10 @@ part() {
 }
 
 if [ -n "$DO_MAC" ]; then
+    # The pictures are of the window at work, not of the onboarding, which
+    # opens when the stand-in agents say they are not set up (#155): asked
+    # not to show, in this copy's own preferences.
+    defaults write "$IDENTIFIER" onboarding.hidden -bool true
     HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" "$APP/AgentTerm" > "$STATE/mac.log" 2>&1 &
     MAC=$!
     AGENTTERM_SHOTS_PID="$MAC" part "the Mac app's pictures" swift test --skip-build --filter "AgentTermMacUITests.ScreenshotTests/testPart1"

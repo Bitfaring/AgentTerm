@@ -209,6 +209,12 @@ static atc_observer *g_observer;
 @end
 
 static NSMutableDictionary<NSNumber *, ATCBrowser *> *g_browsers;
+/// The app's answer to a page that opens a window, and the views of the
+/// tabs Chromium makes them in, with their tokens (#162).
+static atc_popup_fn g_popup_provider;
+static NSMutableDictionary<NSValue *, NSNumber *> *g_popup_tokens;
+static void atc_created(int token, int browser);
+void atc_set_popup_provider(atc_popup_fn provider) { g_popup_provider = provider; }
 /// Request contexts, one for each profile's folder.
 static NSMutableDictionary<NSString *, NSValue *> *g_contexts;
 /// What a prompt for a permission waits on, by the number Swift answers with.
@@ -394,12 +400,61 @@ static int CEF_CALLBACK on_before_popup(cef_life_span_handler_t *self, cef_brows
                                         cef_window_info_t *window_info, cef_client_t **client, cef_browser_settings_t *settings,
                                         cef_dictionary_value_t **extra_info, int *no_javascript_access) {
     (void)self, (void)popup_id, (void)target_frame_name, (void)disposition, (void)user_gesture, (void)features;
-    (void)window_info, (void)client, (void)settings, (void)extra_info, (void)no_javascript_access;
-    // A page that opens a window gets a tab of the app instead.
-    atc_emit_text(ATC_EVENT_POPUP, browser, atc_text(target_url), nil, 0, 0, 0);
+    (void)client, (void)extra_info, (void)no_javascript_access;
+    // Made by Chromium in a tab of the app, keeping its opener (#162): a
+    // sign-in in a popup hands its answer back to the page that opened it.
+    NSString *address = atc_text(target_url) ?: @"";
+    if (g_popup_provider) {
+        int token = 0;
+        void *parent = g_popup_provider(atc_id(browser), address.UTF8String, &token);
+        if (parent) {
+            NSView *view = (__bridge NSView *)parent;
+            window_info->parent_view = parent;
+            window_info->bounds.x = 0;
+            window_info->bounds.y = 0;
+            window_info->bounds.width = (int)view.bounds.size.width;
+            window_info->bounds.height = (int)view.bounds.size.height;
+            window_info->runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+            settings->background_color = 0xFFFFFFFF;
+            if (!g_popup_tokens) g_popup_tokens = [NSMutableDictionary new];
+            g_popup_tokens[[NSValue valueWithPointer:parent]] = @(token);
+            ATC_RELEASE(frame);
+            ATC_RELEASE(browser);
+            return 0;
+        }
+    }
+    // Otherwise a tab of the app opens its address, without its opener.
+    atc_emit_text(ATC_EVENT_POPUP, browser, address, nil, 0, 0, 0);
     ATC_RELEASE(frame);
     ATC_RELEASE(browser);
     return 1;
+}
+
+/// A popup Chromium made in a tab's view (#162): known as any browser the
+/// app made, and its tab told, by the token it was given.
+static BOOL atc_adopt_popup(cef_browser_t *browser) {
+    if (!g_popup_tokens.count) return NO;
+    cef_browser_host_t *host = browser->get_host(browser);
+    if (!host) return NO;
+    NSView *page = (__bridge NSView *)host->get_window_handle(host);
+    NSValue *key = page.superview ? [NSValue valueWithPointer:(__bridge void *)page.superview] : nil;
+    NSNumber *token = key ? g_popup_tokens[key] : nil;
+    if (!token) {
+        ATC_RELEASE(host);
+        return NO;
+    }
+    [g_popup_tokens removeObjectForKey:key];
+    browser->base.add_ref(&browser->base);
+    ATCBrowser *open = [ATCBrowser new];
+    open.browser = browser;
+    open.devtools = host->add_dev_tools_message_observer(host, ATC_GIVE(g_observer));
+    page.frame = page.superview.bounds;
+    page.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    ATC_RELEASE(host);
+    int identifier = atc_id(browser);
+    g_browsers[@(identifier)] = open;
+    atc_created(token.intValue, identifier);
+    return YES;
 }
 
 static void CEF_CALLBACK on_after_created(cef_life_span_handler_t *self, cef_browser_t *browser) {
@@ -414,6 +469,7 @@ static void CEF_CALLBACK on_after_created(cef_life_span_handler_t *self, cef_bro
             ATC_RELEASE(host);
         }
     }
+    atc_adopt_popup(browser);
     atc_emit_text(ATC_EVENT_CREATED, browser, nil, nil, 0, 0, 0);
     ATC_RELEASE(browser);
 }
@@ -1264,6 +1320,7 @@ void atc_create(void *parent, const char *url, const char *key, const char *cach
     // Never asked for: Chromium does not start in such a build.
     (void)parent, (void)url, (void)key, (void)cache_path, (void)token;
 }
+void atc_set_popup_provider(atc_popup_fn provider) { (void)provider; }
 void atc_forget_profile(const char *key) { (void)key; }
 void *atc_view(int browser) { (void)browser; return NULL; }
 void atc_close(int browser) { (void)browser; }

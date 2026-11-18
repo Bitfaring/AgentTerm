@@ -65,10 +65,10 @@ final class HooksAndMCPUITests: MacUITestCase {
         XCTAssertTrue(asked("claude").contains("plugin uninstall agentterm-dev@agentterm-dev --scope user"))
     }
 
-    /// HOOKS-2 (#140): Codex's row says whether the background server its
-    /// sessions share is in the way. Install turns it off with Codex's own
-    /// command, which the row names before it is pressed; one that still
-    /// runs is said, with what to do, and nothing is stopped for the user;
+    /// HOOKS-2 (#140, #153): Codex's row says whether the background server
+    /// its sessions share is in the way. Install turns it off with Codex's
+    /// own command and stops the one that runs with another, both named in
+    /// the row before it is pressed, Install All at the top of the list;
     /// Remove turns it on again.
     func testCodexsSharedServerIsTurnedOffFromSettings() throws {
         let codex = root.appendingPathComponent("agents/plugins-codex")
@@ -84,22 +84,20 @@ final class HooksAndMCPUITests: MacUITestCase {
         // Its own commands first, the one for its shared server among them.
         XCTAssertTrue(label("setup-command-install-1-codex").hasPrefix("codex mcp add agentterm-dev -- "), label("setup-command-install-1-codex"))
         XCTAssertEqual(label("setup-command-install-2-codex"), "codex features disable daemon_auto_start")
-        XCTAssertTrue(label("setup-command-install-3-codex").hasSuffix(" setup codex"), label("setup-command-install-3-codex"))
+        XCTAssertEqual(label("setup-command-install-3-codex"), "codex app-server daemon stop")
+        XCTAssertTrue(label("setup-command-install-4-codex").hasSuffix(" setup codex"), label("setup-command-install-4-codex"))
         XCTAssertEqual(label("setup-command-remove-2-codex"), "codex features enable daemon_auto_start")
+        // Install All above the agents, in sight (#153).
+        let all = try XCTUnwrap(app.frame(of: .id("setup-all")))
+        let first = try XCTUnwrap(app.frame(of: .id("setup-codex")))
+        XCTAssertLessThan(all.minY, first.minY, "Install All is under the agents")
+        shot("hooks-codex-shared-server")
 
-        // Turned off, and one from before still runs.
+        // Turned off, and the one that runs stopped, with Codex's own command.
         app.press(.id("setup-install-codex"))
         app.wait("Codex set up", timeout: 30) { self.label("setup-codex-Hooks") == "Hooks, added" }
         XCTAssertTrue(asked("codex").contains("features disable daemon_auto_start"), asked("codex").joined(separator: "\n"))
-        app.wait("the one that runs said") { self.label("setup-problem-codex") == AgentSetupWords.sharedServerRunning }
-        XCTAssertEqual(label("setup-codex-shared-server"), AgentSetupWords.sharedServer(off: false))
-        XCTAssertFalse(asked("codex").contains { $0.hasPrefix("app-server daemon stop") }, "Codex's sessions were ended for the user")
-        shot("hooks-codex-shared-server")
-
-        // Stopped by the user: asked again, it is out of the way.
-        try FileManager.default.removeItem(at: codex.appendingPathComponent("server-running"))
-        app.press(.id("settings-shell"))
-        app.press(.id("settings-hooks"))
+        XCTAssertTrue(asked("codex").contains("app-server daemon stop"), asked("codex").joined(separator: "\n"))
         app.wait("Codex's shared server said off", timeout: 20) { self.label("setup-codex-shared-server") == AgentSetupWords.sharedServer(off: true) }
         XCTAssertFalse(app.exists(.id("setup-problem-codex")))
 

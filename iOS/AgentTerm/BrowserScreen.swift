@@ -4,7 +4,8 @@ import SwiftUI
 import UIKit
 
 /// The pages of the browser in AgentTerm on the Mac (#76) that no folder
-/// shows: an agent's are under it, the user's in their project's folder.
+/// shows: an agent's are under it; the user's are of no folder (#148).
+/// No identifier of its own: one here would hide its rows' (`browser-tab-`).
 struct BrowserSection: View {
     @EnvironmentObject private var model: PhoneModel
     @State private var shown: PageSheetID?
@@ -33,7 +34,6 @@ struct BrowserSection: View {
             .sheet(item: $shown) { page in
                 BrowserTabSheet(tabID: page.id)
             }
-            .accessibilityIdentifier("browser-tabs")
         }
     }
 }

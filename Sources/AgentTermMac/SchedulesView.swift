@@ -288,7 +288,6 @@ private struct ScheduleEditor: View {
     @State private var dates: [Date] = []
     @State private var limited = false
     @State private var longest = 30
-    @State private var editingPrompt = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -324,16 +323,10 @@ private struct ScheduleEditor: View {
                 }
                 GridRow(alignment: .top) {
                     Text("Prompt")
-                    VStack(alignment: .leading, spacing: 5) {
-                        TextEditor(text: $schedule.prompt)
-                            .font(.system(size: 12.5))
-                            .frame(height: 64)
-                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.secondary.opacity(0.3)))
-                        Button("Open in a Larger Editor…") { editingPrompt = true }
-                            .buttonStyle(.link)
-                            .font(.system(size: 11.5))
-                            .accessibilityIdentifier("schedule-prompt-editor")
-                    }
+                    TextEditor(text: $schedule.prompt)
+                        .font(.system(size: 12.5))
+                        .frame(height: 64)
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.secondary.opacity(0.3)))
                 }
                 GridRow {
                     Text("When")
@@ -497,9 +490,6 @@ private struct ScheduleEditor: View {
         .onAppear(perform: read)
         .sheet(isPresented: $browsing) {
             BrowseFoldersSheet(onPick: { schedule.folder = $0 }, start: schedule.folder.isEmpty ? nil : schedule.folder, pickTitle: "Run Here")
-        }
-        .sheet(isPresented: $editingPrompt) {
-            PromptEditorSheet(prompt: $schedule.prompt, folder: schedule.folder, search: model.promptSearch)
         }
         .sheet(item: $model.shownRun) { run in RunOutputSheet(run: run) }
         // Said plainly before a schedule may run without asking (#11).
@@ -700,66 +690,5 @@ private struct RunOutputSheet: View {
         .padding(18)
         .frame(width: 760, height: 520)
         .onAppear { model.loadOutput(of: run) }
-    }
-}
-
-/// The prompt in a larger editor (#47), with the files of the schedule's
-/// folder at hand: one that is picked is named in the prompt.
-private struct PromptEditorSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Binding var prompt: String
-    let folder: String
-    @ObservedObject var search: SearchModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Prompt").font(.headline)
-            HStack(alignment: .top, spacing: 12) {
-                TextEditor(text: $prompt)
-                    .font(.system(size: 13))
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.secondary.opacity(0.3)))
-                    .accessibilityIdentifier("prompt-editor")
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Files of \((folder as NSString).lastPathComponent)").font(.system(size: 12, weight: .semibold))
-                    TextField("Find a file by name", text: $search.query)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("prompt-files")
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 1) {
-                            ForEach(search.files, id: \.self) { file in
-                                Button {
-                                    // Named as the agent will find it from its folder.
-                                    prompt += (prompt.isEmpty || prompt.hasSuffix(" ") || prompt.hasSuffix("\n") ? "" : " ") + file
-                                } label: {
-                                    HStack(spacing: 5) {
-                                        Image(systemName: "plus.circle").font(.system(size: 10.5)).foregroundStyle(.secondary)
-                                        Text(file).font(.system(size: 11.5)).lineLimit(1).truncationMode(.head)
-                                        Spacer(minLength: 0)
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .help("Add \(file) to the prompt")
-                                .accessibilityIdentifier("prompt-file-" + file)
-                            }
-                        }
-                    }
-                    Text(TextMatch.summary(ofFiles: search.files.count, among: search.among, query: search.query))
-                        .font(.system(size: 10.5)).foregroundStyle(.secondary)
-                }
-                .frame(width: 250)
-            }
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(18)
-        .frame(width: 820, height: 520)
-        .onAppear {
-            search.setRoot(folder)
-            search.show(.names)
-        }
-        .onDisappear { search.hide() }
     }
 }

@@ -96,6 +96,14 @@ void atc_shutdown(void);
 /// `cache_path` it is kept in memory only, a private one, until
 /// `atc_forget_profile`.
 void atc_create(void *parent, const char *url, const char *key, const char *cache_path, int token);
+
+/// The app's answer to a page that opens a window (#162): the view of a tab
+/// of its own to make it in, and the token its ATC_EVENT_CREATED will carry;
+/// NULL to have the window's address opened in a tab instead, as before.
+/// Made by Chromium itself, the window keeps its opener, which a sign-in in
+/// a popup hands its answer back to.
+typedef void *(*atc_popup_fn)(int opener, const char *url, int *token);
+void atc_set_popup_provider(atc_popup_fn provider);
 /// Lets a profile in memory go: once its browsers are closed, what it kept
 /// is gone. A profile with a folder is kept for as long as the app runs.
 void atc_forget_profile(const char *key);

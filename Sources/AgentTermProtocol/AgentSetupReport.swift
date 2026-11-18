@@ -112,6 +112,10 @@ public enum AgentSetupWords {
         on ? "Its shared server on again, with \(name)'s own command:" : "Its shared server off, with \(name)'s own command:"
     }
 
+    /// Over Codex's own command that stops its shared server while it runs
+    /// (#153).
+    public static func sharedServerStopStep(_ name: String) -> String { "Its shared server stopped, with \(name)'s own command:" }
+
     /// Over AgentTerm's command, which is for what the agent has no
     /// command for: what that is, for each agent.
     public static func ownStep(agent: String, name: String) -> String {
@@ -144,9 +148,9 @@ public enum AgentSetupWords {
     /// What Install does about it, with which of Codex's own commands, and
     /// for what: the setting is Codex's, outside AgentTerm too.
     public static let sharedServerNote =
-        "Codex runs its sessions through one background server they share, where AgentTerm cannot tell one session from another. Install turns that off for all of Codex, with `codex features disable daemon_auto_start`; Remove turns it on again."
+        "Codex runs its sessions through one background server they share, where AgentTerm cannot tell one session from another. Install turns that off for all of Codex, with `codex features disable daemon_auto_start`, and stops the server when it runs, with `codex app-server daemon stop`: Codex sessions started through it before then may stop. Remove turns it on again."
 
-    /// Turned off, and still running: what to do.
+    /// Turned off, and still running: Install stops it (#153).
     public static let sharedServerRunning =
-        "Codex's shared background server is still running, and Codex goes on using it. Quit Codex's sessions, then stop it: `codex app-server daemon stop`."
+        "Codex's shared background server is still running, and Codex goes on using it. Install stops it, with `codex app-server daemon stop`."
 }

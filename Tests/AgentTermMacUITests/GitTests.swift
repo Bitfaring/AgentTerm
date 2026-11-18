@@ -425,9 +425,16 @@ final class GitTests: MacUITestCase {
         app.press(.button("Stage libs/library/l.txt"))
         app.wait(for: .id("staged-libs/library/l.txt"))
         shot("submodule")
+        // GIT-78 (#151): a commit box of its own under its list, with Write,
+        // as the folder's and the iPhone's: the agent writes, nothing is
+        // committed until Commit.
+        app.press(.id("submodule-write-libs/library"))
+        wait("the message the stand-in wrote", timeout: 30) {
+            self.app.value(of: .id("submodule-message-libs/library")) == "feat: written by the stand-in claude"
+        }
+        XCTAssertEqual(git("log", "--oneline", in: inside).split(separator: "\n").count, 1, "writing the message committed")
+        app.write("library: two", into: .id("submodule-message-libs/library"), confirm: true)
         app.press(.id("submodule-commit-libs/library"))
-        app.write("library: two", into: .id("submodule-message"))
-        app.press(.id("submodule-commit"))
         wait("the commit in the submodule", timeout: 20) { self.git("log", "-1", "--format=%s", in: inside) == "library: two" }
         // Nothing is changed inside it any more; its commit is the folder's change.
         app.waitGone(.id("submodule-libs/library"), timeout: 15)

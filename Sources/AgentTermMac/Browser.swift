@@ -23,15 +23,16 @@ final class BrowserModel: ObservableObject {
 
     /// A new tab in `project`'s profile, opened by an agent's session or by
     /// the user. Chromium starts it at once, for an agent waits on it.
+    /// `starts` false: Chromium makes its page itself, a window a page opened (#162).
     @discardableResult
-    func open(url: String?, project: String, owner: SessionInfo?, profile: String? = nil) -> BrowserTab {
+    func open(url: String?, project: String, owner: SessionInfo?, profile: String? = nil, starts: Bool = true) -> BrowserTab {
         counter += 1
         UserDefaults.standard.set(counter, forKey: "browserTabCounter")
         let profile = profile ?? profiles?.defaultID ?? BrowserProfiles.firstID
         let tab = BrowserTab(id: String(counter), project: project, profile: profile, owner: owner?.id, ownerTab: owner.map(TabID.session), model: self)
         if let url, !url.isEmpty { tab.url = BrowserTab.address(from: url) }
         tabs.append(tab)
-        tab.start()
+        if starts { tab.start() }
         return tab
     }
 
@@ -44,6 +45,43 @@ final class BrowserModel: ObservableObject {
         }
     }
 
+    // MARK: Another Mac's pages (#147)
+
+    /// What is asked of the other Mac's browser, through its host, for a
+    /// page of its shown here: set by the app.
+    var remote: ((BrowserRequest) -> Void)?
+
+    /// The other Mac's pages, as its host lists them: a tab here for each,
+    /// which draws the pictures its Mac sends and asks that Mac for the
+    /// rest. No Chromium of this Mac's is started for one.
+    func mirror(_ list: [BrowserTabInfo], sessions: [SessionInfo]) {
+        let ids = Set(list.map(\.id))
+        tabs.removeAll { $0.isRemote && !ids.contains($0.id) }
+        for info in list {
+            let owner = info.openedBy.flatMap { id in sessions.first { $0.id == id } }
+            let tab: BrowserTab
+            if let found = tabs.first(where: { $0.isRemote && $0.id == info.id }) {
+                tab = found
+            } else {
+                tab = BrowserTab(id: info.id, project: info.project, profile: info.profile, owner: info.openedBy, ownerTab: owner.map(TabID.session), model: self)
+                tab.isRemote = true
+                tabs.append(tab)
+            }
+            tab.project = info.project
+            if tab.owner != info.openedBy { tab.owner = info.openedBy }
+            tab.ownerTab = owner.map(TabID.session)
+            tab.remoteProfile = info.profile
+            if tab.title != info.title { tab.title = info.title }
+            if tab.url != info.url { tab.url = info.url }
+            if tab.loading != info.loading { tab.loading = info.loading }
+            if tab.userHasIt != info.userHasIt { tab.userHasIt = info.userHasIt }
+            // Not told: the other Mac's page knows whether it can go back.
+            tab.canGoBack = true
+            tab.canGoForward = true
+        }
+        changed?()
+    }
+
     /// Closes every tab: another Mac is on show.
     func closeAll() {
         let closing = tabs
@@ -54,6 +92,8 @@ final class BrowserModel: ObservableObject {
     var changed: (() -> Void)?
     /// A page opened a window: a tab of the app instead, as its tab's.
     var popup: ((BrowserTab, String) -> Void)?
+    /// A tab's page closed itself (#162).
+    var closedByItsPage: ((BrowserTab) -> Void)?
     /// A tab's page took the keyboard.
     var focused: ((BrowserTab) -> Void)?
 
@@ -148,14 +188,16 @@ final class BrowserModel: ObservableObject {
     }
 
     /// An agent's tabs whose agent ended are the user's from then on, as
-    /// its shells are.
+    /// its shells are: in the one Browser, of no folder (#148).
     func sessionsChanged(_ sessions: [SessionInfo]) {
         let running = Set(sessions.map(\.id))
-        for tab in tabs {
+        // Another Mac's are as its host lists them (#147).
+        for tab in tabs where !tab.isRemote {
             if let owner = tab.owner, !running.contains(owner) {
                 tab.owner = nil
                 tab.ownerTab = nil
                 tab.userHasIt = false
+                tab.project = ""
             }
         }
     }
@@ -178,8 +220,10 @@ struct BrowserDownload: Identifiable, Equatable {
 @MainActor
 final class BrowserTab: ObservableObject, Identifiable {
     let id: String
-    /// The project it belongs to, whose panes show it; "" for none.
-    let project: String
+    /// The folder of the agent that opened it, whose panes show it beside
+    /// the agent; "" for the user's, which belong to no folder: the one
+    /// Browser, in every project's strip (#148).
+    var project: String
     /// The profile it uses: its sign-ins, cookies, storage and cache.
     let profile: String
     /// The agent's session that opened it, while it runs; nil for the user's.
@@ -211,6 +255,13 @@ final class BrowserTab: ObservableObject, Identifiable {
     @Published var zoom = 0.0
     /// Why Chromium could not show it.
     @Published var problem: String?
+    /// A page of another Mac's (#147): shown by the pictures it sends,
+    /// used through its host. Chromium is never started for it here.
+    var isRemote = false
+    /// The last picture of it, and the page's size in CSS pixels.
+    @Published var remoteFrame: (image: NSImage, width: Double, height: Double)?
+    /// The name of the profile it uses there.
+    var remoteProfile = ""
     @Published private(set) var browserID: Int32 = 0
     /// The view Chromium draws the page in, moved to whichever pane shows it.
     let container = BrowserContainerView()
@@ -306,7 +357,7 @@ final class BrowserTab: ObservableObject, Identifiable {
         // Closed, it has no page again: the pane that showed it is drawn
         // once more with it before it goes, and asked for one, which
         // nothing closed afterwards; its process ran on (BROWSER-34).
-        if isClosed { done?(false); return }
+        if isClosed || isRemote { done?(false); return }
         if browserID != 0 { done?(true); return }
         if let done { whenCreated.append(done) }
         guard !starting else { return }
@@ -323,25 +374,38 @@ final class BrowserTab: ObservableObject, Identifiable {
         BrowserParking.park(container)
         Chromium.shared.create(
             in: container, url: url.isEmpty ? "about:blank" : url, key: profile, folder: isPrivate ? nil : BrowserProfiles.folder(for: profile)
-        ) { [weak self] browser in
-            // Closed while its page was being made: the page goes at once.
-            guard let self, !self.isClosed else {
-                if browser != 0 { atc_close(browser) }
-                self?.starting = false
-                self?.flush(false)
-                return
-            }
-            self.starting = false
-            guard browser != 0 else {
-                self.problem = "Chromium could not open the page."
-                self.flush(false)
-                return
-            }
-            self.browserID = browser
-            Chromium.shared.listen(to: browser) { [weak self] event in self?.handle(event) }
-            self.devtools.start()
-            self.flush(true)
+        ) { [weak self] browser in self?.made(browser) ?? { if browser != 0 { atc_close(browser) } }() }
+    }
+
+    /// A window a page opened, which Chromium makes itself in this tab's
+    /// view, keeping its opener (#162): the view, and what is done with the
+    /// browser made there.
+    func madeByChromium() -> (view: NSView, made: (Int32) -> Void) {
+        starting = true
+        if !BrowserProfiles.isPrivate(profile) { model?.profiles?.markInUse(profile) }
+        BrowserParking.park(container)
+        return (container, { [weak self] browser in self?.made(browser) ?? { if browser != 0 { atc_close(browser) } }() })
+    }
+
+    /// Its browser made, or not (0).
+    private func made(_ browser: Int32) {
+        // Closed while its page was being made: the page goes at once.
+        guard !isClosed else {
+            if browser != 0 { atc_close(browser) }
+            starting = false
+            flush(false)
+            return
         }
+        starting = false
+        guard browser != 0 else {
+            problem = "Chromium could not open the page."
+            flush(false)
+            return
+        }
+        browserID = browser
+        Chromium.shared.listen(to: browser) { [weak self] event in self?.handle(event) }
+        devtools.start()
+        flush(true)
     }
 
     private func flush(_ created: Bool) {
@@ -387,8 +451,12 @@ final class BrowserTab: ObservableObject, Identifiable {
         case ATC_EVENT_POPUP:
             if let address = event.text { model?.popup?(self, address) }
         case ATC_EVENT_CLOSED:
+            // Not closed by the app: its page closed itself (`window.close()`,
+            // a sign-in's popup once it answered, #162). Its tab goes too.
+            let byItsPage = !isClosed
             Chromium.shared.forget(browserID)
             browserID = 0
+            if byItsPage { model?.closedByItsPage?(self) }
         case ATC_EVENT_DEVTOOLS_RESULT:
             devtools.received(result: event.a, success: event.b != 0, data: event.data)
         case ATC_EVENT_DEVTOOLS_EVENT:
@@ -465,6 +533,7 @@ final class BrowserTab: ObservableObject, Identifiable {
     // MARK: What the user and the agents do
 
     func load(_ typed: String) {
+        if isRemote { return ask(.navigate(tab: id, url: typed)) }
         let address = Self.address(from: typed)
         url = address
         loadError = nil
@@ -474,12 +543,16 @@ final class BrowserTab: ObservableObject, Identifiable {
         }
     }
 
-    func back() { atc_back(browserID) }
-    func forward() { atc_forward(browserID) }
+    func back() { isRemote ? ask(.history(tab: id, step: -1)) : atc_back(browserID) }
+    func forward() { isRemote ? ask(.history(tab: id, step: 1)) : atc_forward(browserID) }
     func reload() {
+        if isRemote { return ask(.history(tab: id, step: 0)) }
         if browserID == 0 { start() } else { atc_reload(browserID, 0) }
     }
-    func stop() { atc_stop(browserID) }
+    func stop() { isRemote ? ask(.stop(tab: id)) : atc_stop(browserID) }
+
+    /// What is done to a page of another Mac's is asked of that Mac (#147).
+    func ask(_ request: BrowserRequest) { model?.remote?(request) }
 
     func setZoom(_ level: Double) {
         zoom = min(max(level, -5), 6)

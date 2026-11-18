@@ -155,7 +155,11 @@ private struct GroupItemChip: View {
         let id = item
         if let session = model.session(forTab: item) {
             if let agent = session.agent {
-                return ItemLook(symbol: Theme.symbol(for: agent), tint: Theme.accent(for: agent), title: session.displayName, session: session, identifier: "item-\(session.id)")
+                // "Agent", not its name, which its tab above says: the two
+                // would read as one tab twice (#146).
+                return ItemLook(
+                    symbol: Theme.symbol(for: agent), tint: Theme.accent(for: agent), title: AgentPartWords.agent, session: session,
+                    identifier: "item-\(session.id)")
             }
             return ItemLook(symbol: "terminal", title: session.displayName, session: session, closing: "End Session", identifier: "item-\(session.id)") {
                 model.requestEnd(session.id)

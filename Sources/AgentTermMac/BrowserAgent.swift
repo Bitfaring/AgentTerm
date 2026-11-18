@@ -18,12 +18,40 @@ extension AppModel {
 
     // MARK: Wiring
 
+    // MARK: Another Mac's browser (#147)
+
+    /// Asks the other Mac's browser, through its host, as the iPhone does;
+    /// what it refuses is said.
+    func askRemoteBrowser(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
+        guard isRemote, let connection else { return done(.refused(BrowserWords.noApp)) }
+        let id = nextRemoteBrowserAsk
+        nextRemoteBrowserAsk += 1
+        remoteBrowserAsks[id] = { [weak self] result in
+            if case .refused(let why) = result { self?.notice = why }
+            done(result)
+        }
+        connection.send(.browserAsk(id: id, request: request))
+    }
+
     /// Called once: what the browser's tabs do reaches the rest of the app.
     func wireBrowser() {
         BrowserModel.forgetKeptTabs()
         browsers.profiles = profiles
+        browsers.remote = { [weak self] request in self?.askRemoteBrowser(request) }
         browsers.changed = { [weak self] in self?.browserTabsChanged() }
         browsers.watchChromeWindows()
+        // A page's window, made by Chromium in a tab of the app's, keeping
+        // its opener (#162): a sign-in in a popup hands its answer back.
+        Chromium.shared.popupProvider = { [weak self] openerID, address in
+            guard let self, let opener = self.browsers.tabs.first(where: { $0.browserID == openerID && !$0.isRemote }) else { return nil }
+            let owner = opener.owner.flatMap { id in self.sessions.first { $0.id == id } }
+            let tab = self.browsers.open(url: address, project: opener.project, owner: owner, profile: opener.profile, starts: false)
+            opener.devtools.happened.append("The page opened \(address) in a new tab, \(tab.id).")
+            // The user's in front, as a browser's; an agent's beside it.
+            if owner == nil { DispatchQueue.main.async { [weak self] in self?.selectTab(id: tab.tabID) } }
+            return tab.madeByChromium()
+        }
+        browsers.closedByItsPage = { [weak self] tab in self?.closeBrowserTab(tab) }
         browsers.popup = { [weak self] opener, address in
             guard let self else { return }
             let owner = opener.owner.flatMap { id in self.sessions.first { $0.id == id } }
@@ -77,12 +105,18 @@ extension AppModel {
     /// A new tab of the user's, in the project on show, in front: in the
     /// default profile, the one picked, or private.
     func openBrowserTab(url: String? = nil, profile: String? = nil, isPrivate: Bool = false) {
+        // Another Mac's: opened there, shown here once its host lists it (#147).
         guard !isRemote else {
-            notice = "The browser is the Mac's own: open it in AgentTerm on \(remote?.name ?? "that Mac")."
+            show(.sessions, toggling: false)
+            askRemoteBrowser(.newTab(project: "", url: url, profile: profile, private: isPrivate)) { [weak self] result in
+                guard let self, case .opened(let tab) = result else { return }
+                if let shown = self.browsers.tab(id: tab) { self.selectTab(id: shown.tabID) } else { self.pendingRemotePage = tab }
+            }
             return
         }
         show(.sessions, toggling: false)
-        let tab = browsers.open(url: url, project: shownProject, owner: nil, profile: isPrivate ? BrowserProfiles.privateID(for: nil) : profile)
+        // The user's: of no folder, in the one Browser (#148).
+        let tab = browsers.open(url: url, project: "", owner: nil, profile: isPrivate ? BrowserProfiles.privateID(for: nil) : profile)
         selectTab(id: tab.tabID)
         if url == nil { browserAddressRequest += 1 }
     }
@@ -92,7 +126,10 @@ extension AppModel {
     /// and the user's to use until given back, so that the agent types
     /// nothing in it meanwhile.
     func openBrowserTab(besideAgent agentTab: String) {
-        guard !isRemote, let agent = session(forTab: agentTab) else { return }
+        // On another Mac a device opens the user's pages, not an agent's:
+        // said, not done silently (principle 3).
+        if isRemote { return notice = BrowserWords.besideAgentOnTheOtherMac }
+        guard let agent = session(forTab: agentTab) else { return }
         let beside = (companions.browsers[agentTab] ?? []).compactMap { browsers.tab(forTab: $0) }
         let project = beside.first?.project ?? project(ofTab: agentTab)
         let tab = browsers.open(url: nil, project: project, owner: agent, profile: beside.last?.profile)
@@ -102,6 +139,8 @@ extension AppModel {
     }
 
     func closeBrowserTab(_ tab: BrowserTab) {
+        // Closed on its Mac; it goes from here when its host says so (#147).
+        if tab.isRemote { return askRemoteBrowser(.close(tab: tab.id)) }
         // A page of the Browser tab: the one beside it is shown instead,
         // and the tab closes with its last page, as Chrome's window does.
         let pages = userPages(in: tab.project)
@@ -117,12 +156,14 @@ extension AppModel {
         }
     }
 
-    /// The running agents of a tab's project, which what the user picks in
-    /// it can be sent to.
-    func agentsInProject(of tab: BrowserTab) -> [SessionInfo] {
-        sessions.filter { session in
-            session.agent != nil && session.openedBy == nil && (tab.project.isEmpty || WorktreePath.belongs(session.cwd, to: tab.project))
-        }
+    /// The agents what the user picks in a page can be sent to (#149): an
+    /// agent's page, that agent alone; a page of the user's, every running
+    /// agent, those of the folder on show first.
+    func pickRecipients(of tab: BrowserTab) -> [SessionInfo] {
+        if let owner = tab.owner { return sessions.filter { $0.id == owner } }
+        let agents = sessions.filter { $0.agent != nil && $0.openedBy == nil }
+        let here = agents.filter { !shownProject.isEmpty && WorktreePath.belongs($0.cwd, to: shownProject) }
+        return here + agents.filter { agent in !here.contains { $0.id == agent.id } }
     }
 
     /// The agent that drives a tab, by name: the one that opened it; ""
@@ -170,6 +211,8 @@ extension AppModel {
 
     /// The user takes a tab from its agents, or gives it back.
     func setUserHas(_ tab: BrowserTab, _ has: Bool) {
+        // Another Mac's: taken or given back there, as a device does (#147).
+        if tab.isRemote { return askRemoteBrowser(has ? .takeOver(tab: tab.id) : .giveBack(tab: tab.id)) }
         tab.userHasIt = has
         if has { tab.agentAction = nil }
     }
@@ -502,7 +545,7 @@ extension AppModel {
             try await tab.emulate(device)
             done(device.map { "Shows the page as \($0.name)" } ?? "Shows the page as itself")
             return .text(device.map { "Tab \(tab.id) is shown as \($0.name)" + ($0.width > 0 ? ", \($0.width) × \($0.height)" : "") + "." } ?? "Tab \(tab.id) is shown as itself again.")
-        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles:
+        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles, .profile:
             return .refused("That is not for this tab.")
         }
     }
@@ -523,11 +566,29 @@ extension AppModel {
             return await turn.value
         }
         if case .profiles = request { return .profiles(profiles.infos) }
+        // The profiles changed from a device, as from Settings > Browser (#155).
+        if case .profile(let change) = request {
+            switch change {
+            case .add(let name): _ = profiles.add(named: name)
+            case .rename(let id, let name): profiles.rename(id, to: name)
+            case .makeDefault(let id):
+                guard profiles.profile(id) != nil else { return .refused(BrowserWords.noProfile(id, profiles.infos.map(\.name))) }
+                profiles.defaultID = id
+            case .delete(let id):
+                guard profiles.profile(id) != nil else { return .refused(BrowserWords.noProfile(id, profiles.infos.map(\.name))) }
+                profiles.delete(id)
+            case .clearData(let id):
+                guard profiles.profile(id) != nil else { return .refused(BrowserWords.noProfile(id, profiles.infos.map(\.name))) }
+                _ = profiles.clearData(id)
+            }
+            return .profiles(profiles.infos)
+        }
         if case .newTab(let project, let url, let named, let isPrivate) = request {
             // The user's, as one opened on the Mac, but not brought to the
             // front there: they are on the device.
             let profile = isPrivate ? BrowserProfiles.privateID(for: nil) : named.flatMap { profiles.profile($0)?.id } ?? profiles.defaultID
-            let tab = browsers.open(url: url, project: project, owner: nil, profile: profile)
+            // The user's, of no folder whatever the device names (#148).
+            let tab = browsers.open(url: url, project: "", owner: nil, profile: profile)
             guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
             return .opened(tab: tab.id)
         }

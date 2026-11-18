@@ -33,6 +33,45 @@ final class PaneUITests: MacUITestCase {
         return found
     }
 
+    /// TABS-6 (#152): the list on the left marks the row the user picked:
+    /// a folder itself, not the shell its panes show in front; the Shells
+    /// row itself, with a menu that ends its shells; a shell, alone.
+    func testTheListMarksTheRowPicked() throws {
+        let phone = try device()
+        let shell = try newShell(phone, count: 1)
+        let folder = "folder-\(project.path)"
+        app.wait("the shell picked") { self.app.isSelected(.id("session-\(shell.id)")) }
+        app.press(.id(folder))
+        app.wait("the folder picked") { self.app.isSelected(.id(folder)) }
+        XCTAssertFalse(app.isSelected(.id("session-\(shell.id)")), "the shell is marked, not the folder")
+        XCTAssertTrue(app.exists(.id("terminal-\(shell.id)")), "the folder's panes are not shown as they were left")
+        app.press(.id("sidebar-shells"))
+        app.wait("the Shells row picked") { self.app.isSelected(.id("sidebar-shells")) }
+        XCTAssertFalse(app.isSelected(.id(folder)))
+        XCTAssertFalse(app.isSelected(.id("session-\(shell.id)")), "the shell is marked, not the Shells row")
+        XCTAssertTrue(app.offers(CloseWords.groupAction(.shells), on: .id("sidebar-shells")), "the Shells row has no way to end its shells")
+        app.press(.id("session-\(shell.id)"))
+        app.wait("the shell picked again") { self.app.isSelected(.id("session-\(shell.id)")) }
+        XCTAssertFalse(app.isSelected(.id("sidebar-shells")))
+        XCTAssertFalse(app.isSelected(.id(folder)))
+    }
+
+    /// TABS-3 (#145): the Shells tab's × ends every shell it holds, asked
+    /// first; cancelled, they all run on.
+    func testClosingTheShellsTabEndsAllItsShells() throws {
+        let phone = try device()
+        try newShell(phone, count: 1)
+        try newShell(phone, count: 2)
+        app.perform(CloseWords.groupAction(.shells), on: .id("strip-shells"))
+        app.wait(for: .text(CloseWords.groupQuestion(.shells, count: 2)))
+        app.press(.button("Cancel"))
+        XCTAssertEqual(phone.sessions.count, 2, "a shell ended though the question was cancelled")
+        app.perform(CloseWords.groupAction(.shells), on: .id("strip-shells"))
+        app.press(.button(CloseWords.groupButton(.shells, count: 2)))
+        wait("both shells ended") { phone.sessions.isEmpty }
+        app.wait("the Shells tab gone") { !self.app.exists(.id("strip-shells")) }
+    }
+
     /// PANE-9: the user does not split the window: no button in the strip,
     /// no action of the pane or of a tab, no item of the Tab menu does; the
     /// tabs are in its one pane, the user's shells in its Shells tab.
@@ -125,8 +164,10 @@ final class PaneUITests: MacUITestCase {
         XCTAssertTrue(app.exists(.id("item-\(shell.id)")), "a hidden shell left the agent's row")
         XCTAssertTrue(app.exists(.id("terminal-\(agent.id)")))
         XCTAssertTrue(phone.sessions.contains { $0.id == shell.id }, "hiding the shells ended one")
+        shot("agent-shell-hidden")
         app.press(.id("agent-part-shells"))
         app.wait(for: .id("agent-shells"))
+        shot("agent-shell-shown-again")
         // Hidden again, the shell picked in the row is shown.
         app.press(.id("agent-part-shells"))
         app.waitGone(.id("agent-shells"))

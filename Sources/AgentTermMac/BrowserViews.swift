@@ -29,10 +29,17 @@ struct BrowserPaneView: View {
                 // screen, no white beside it. The same views either way, so
                 // that the page's is not made again.
                 let device = tab.emulating.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil }
-                BrowserHost(tab: tab, focused: focused)
-                    .background(PaneFrameReader(place: .page(tab.tabID)))
-                    .frame(maxWidth: device.map { CGFloat($0.width) } ?? .infinity, maxHeight: device.map { CGFloat($0.height) } ?? .infinity)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                if tab.isRemote {
+                    // Another Mac's page, from the pictures it sends (#147).
+                    RemotePageView(tab: tab, model: model)
+                        .background(PaneFrameReader(place: .page(tab.tabID)))
+                        .accessibilityIdentifier("remote-page")
+                } else {
+                    BrowserHost(tab: tab, focused: focused)
+                        .background(PaneFrameReader(place: .page(tab.tabID)))
+                        .frame(maxWidth: device.map { CGFloat($0.width) } ?? .infinity, maxHeight: device.map { CGFloat($0.height) } ?? .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
                 if let problem = tab.problem {
                     message("globe", "The browser cannot show this page", problem, retry: false)
                 } else if tab.crashed {
@@ -78,25 +85,28 @@ struct BrowserPaneView: View {
             .help(tab.loading ? "Stop" : "Reload (⌘R)")
             .accessibilityLabel(tab.loading ? "Stop" : "Reload")
             // The page's two modes, in sight: browsing, or picking its
-            // elements to send to an agent with a note.
-            Button {
-                model.setPicking(tab, !tab.picking)
-            } label: {
-                Label(tab.picking ? "Picking" : "Pick", systemImage: "cursorarrow.rays")
-                    .labelStyle(.titleAndIcon)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(tab.picking ? Color.white : Color.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(tab.picking ? Color.accentColor : Color.white.opacity(0.08)))
+            // elements to send to an agent with a note. This Mac's pages
+            // only: picking is done in the Mac's own Chromium (#147).
+            if !tab.isRemote {
+                Button {
+                    model.setPicking(tab, !tab.picking)
+                } label: {
+                    Label(tab.picking ? "Picking" : "Pick", systemImage: "cursorarrow.rays")
+                        .labelStyle(.titleAndIcon)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(tab.picking ? Color.white : Color.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(tab.picking ? Color.accentColor : Color.white.opacity(0.08)))
+                }
+                .help(
+                    tab.picking
+                        ? "Picking: click an element of the page to send it to an agent with a note. Press to browse again."
+                        : "Pick an element of the page, a button or a view, to send to an agent with what to do with it"
+                )
+                .accessibilityLabel(tab.picking ? "Stop Picking" : "Pick an Element for an Agent")
+                .accessibilityIdentifier("browser-pick")
             }
-            .help(
-                tab.picking
-                    ? "Picking: click an element of the page to send it to an agent with a note. Press to browse again."
-                    : "Pick an element of the page, a button or a view, to send to an agent with what to do with it"
-            )
-            .accessibilityLabel(tab.picking ? "Stop Picking" : "Pick an Element for an Agent")
-            .accessibilityIdentifier("browser-pick")
             TextField("Address or search", text: $address, onEditingChanged: { editing = $0 })
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12))
@@ -109,7 +119,7 @@ struct BrowserPaneView: View {
                 .accessibilityIdentifier("browser-address")
             // Which profile's sign-ins it uses, or none: a private tab.
             let isPrivate = BrowserProfiles.isPrivate(tab.profile)
-            let profileName = isPrivate ? BrowserWords.privateProfile : model.profiles.profile(tab.profile)?.name ?? ""
+            let profileName = tab.isRemote ? tab.remoteProfile : isPrivate ? BrowserWords.privateProfile : model.profiles.profile(tab.profile)?.name ?? ""
             Label(profileName, systemImage: isPrivate ? "eye.slash" : "person.crop.circle")
                 .labelStyle(.titleAndIcon)
                 .font(.system(size: 10.5, weight: .medium))
@@ -125,16 +135,22 @@ struct BrowserPaneView: View {
                 .accessibilityLabel(profileName)
                 .accessibilityValue(profileName)
                 .accessibilityIdentifier("browser-profile")
-            ShowAsButton(tab: tab)
+            if !tab.isRemote { ShowAsButton(tab: tab) }
             Menu {
-                Button("Find in Page…") { finding = true }
-                Divider()
-                Button("Zoom In") { tab.setZoom(tab.zoom + 0.5) }
-                Button("Zoom Out") { tab.setZoom(tab.zoom - 0.5) }
-                Button("Actual Size") { tab.setZoom(0) }
-                Divider()
-                Button("Developer Tools") { tab.showDevTools() }
-                Button("Open in Chrome Window") { tab.openInChromeWindow() }
+                // Another Mac's page has what a device can do to it (#147):
+                // the rest is done on that Mac, which runs its Chromium.
+                if tab.isRemote {
+                    Text(BrowserWords.onTheOtherMac)
+                } else {
+                    Button("Find in Page…") { finding = true }
+                    Divider()
+                    Button("Zoom In") { tab.setZoom(tab.zoom + 0.5) }
+                    Button("Zoom Out") { tab.setZoom(tab.zoom - 0.5) }
+                    Button("Actual Size") { tab.setZoom(0) }
+                    Divider()
+                    Button("Developer Tools") { tab.showDevTools() }
+                    Button("Open in Chrome Window") { tab.openInChromeWindow() }
+                }
                 Divider()
                 Button("Close Tab") { model.closeBrowserTab(tab) }
             } label: {
@@ -514,10 +530,17 @@ struct SendToAgentSheet: View {
                 .lineLimit(2...5)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("pick-note")
-            Picker("Agent", selection: $agent) {
-                ForEach(model.agentsInProject(of: pick.tab)) { session in
-                    Text(session.displayName).tag(Optional(session.id))
+            if pick.tab.owner != nil, let owner = model.pickRecipients(of: pick.tab).first {
+                Text(BrowserWords.sendsTo(owner.displayName))
+                    .font(.system(size: 12))
+                    .accessibilityIdentifier("pick-owner")
+            } else {
+                Picker("Agent", selection: $agent) {
+                    ForEach(model.pickRecipients(of: pick.tab)) { session in
+                        Text(session.displayName).tag(Optional(session.id))
+                    }
                 }
+                .accessibilityIdentifier("pick-agent")
             }
             Text("The picture is saved in the project's .agentterm folder, and the agent is told where, with the rest.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -541,6 +564,6 @@ struct SendToAgentSheet: View {
         }
         .padding(20)
         .frame(width: 560)
-        .onAppear { agent = model.agentsInProject(of: pick.tab).first?.id }
+        .onAppear { agent = model.pickRecipients(of: pick.tab).first?.id }
     }
 }
