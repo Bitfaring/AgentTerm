@@ -114,13 +114,14 @@ final class AgentStateTests: XCTestCase {
     /// its own configuration, has its hooks, the one of its start among
     /// them, each running `agenttermd hook <agent> <event>`: the same
     /// command for every session, so that an agent that trusts a hook by
-    /// its command asks once; and AgentTerm's MCP server.
+    /// its command asks once. AgentTerm's MCP server is in none of them:
+    /// each agent has a command of its own for that (AGENT-15).
     func testEachAgentsPluginHasItsHooksTheSameForEverySession() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-hooks-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let setup = setup(root)
 
-        // Claude Code: a marketplace of one plugin, its hooks and its server.
+        // Claude Code: a marketplace of one plugin, with its hooks.
         let claude = try setup.writeClaudeMarketplace()
         let market = try json(claude.appendingPathComponent(".claude-plugin/marketplace.json"))
         XCTAssertEqual(market["name"] as? String, "agentterm-dev")
@@ -129,16 +130,9 @@ final class AgentStateTests: XCTestCase {
         XCTAssertEqual(Set(hooks.keys), Set(["SessionStart"] + AgentHooks.claudeEvents))
         let stop = try XCTUnwrap((hooks["Stop"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])
         XCTAssertEqual(stop.first?["command"] as? String, "'/Apps/My App'\\''s/agenttermd' hook claude Stop")
-        let servers = try XCTUnwrap(try json(claude.appendingPathComponent("plugin/.mcp.json"))["mcpServers"] as? [String: [String: Any]])
-        XCTAssertEqual(servers["agentterm-dev"]?["command"] as? String, "/Apps/My App's/agenttermd")
-        XCTAssertEqual(servers["agentterm-dev"]?["args"] as? [String], ["mcp"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: claude.appendingPathComponent("plugin/.mcp.json").path), "the server is in the plugin")
 
-        // Codex: the server only, which names the session's variable, as
-        // Codex passes no other (its hooks are in config.toml).
-        let codex = try setup.writeCodexMarketplace()
-        let codexServer = try XCTUnwrap((try json(codex.appendingPathComponent("plugin/.mcp.json"))["mcpServers"] as? [String: [String: Any]])?["agentterm-dev"])
-        XCTAssertEqual(codexServer["env_vars"] as? [String], [HostServer.agentShellsVariable])
-        XCTAssertFalse(FileManager.default.fileExists(atPath: codex.appendingPathComponent("plugin/hooks/hooks.json").path))
+        // Codex has no plugin: its hooks are in config.toml (AGENT-14).
 
         // Copilot CLI: its own layout, with the hooks of its own names.
         let copilot = try setup.writeCopilotMarketplace()
@@ -148,7 +142,7 @@ final class AgentStateTests: XCTestCase {
         XCTAssertEqual(Set(copilotHooks.keys), Set(["sessionStart"] + AgentHooks.copilotEvents))
         XCTAssertEqual(copilotHooks["agentStop"]?.first?["bash"] as? String, "'/Apps/My App'\\''s/agenttermd' hook copilot agentStop")
         XCTAssertNotNil(FileManager.default.contents(atPath: copilot.appendingPathComponent("plugin/plugin.json").path))
-        XCTAssertNotNil(FileManager.default.contents(atPath: copilot.appendingPathComponent("plugin/.mcp.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copilot.appendingPathComponent("plugin/.mcp.json").path), "the server is in the plugin")
 
         // Antigravity: its own layout: a tool's hooks for every tool.
         let agy = try setup.writeAntigravityPlugin()
@@ -156,16 +150,67 @@ final class AgentStateTests: XCTestCase {
         XCTAssertEqual(Set(agyHooks.keys), Set(["SessionStart"] + AgentHooks.antigravityEvents))
         XCTAssertEqual(agyHooks["PreToolUse"]?.first?["matcher"] as? String, "*")
         XCTAssertEqual(agyHooks["Stop"]?.first?["command"] as? String, "'/Apps/My App'\\''s/agenttermd' hook agy Stop")
-        XCTAssertNotNil(FileManager.default.contents(atPath: agy.appendingPathComponent("mcp_config.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: agy.appendingPathComponent("mcp_config.json").path), "the server is in the plugin")
 
         // Nothing of a session is in any of it.
-        for folder in [claude, codex, copilot, agy] {
+        for folder in [claude, copilot, agy] {
             let files = FileManager.default.enumerator(atPath: folder.path)?.compactMap { $0 as? String } ?? []
             for file in files {
                 let text = (try? String(contentsOf: folder.appendingPathComponent(file), encoding: .utf8)) ?? ""
                 XCTAssertFalse(text.contains("session-"), file)
             }
         }
+    }
+
+    /// AGENT-15 (#129): AgentTerm's MCP server is added with each agent's
+    /// own command, and taken out with it, as each agent's `mcp add --help`
+    /// says and as each was tried (2026-11-18); shown to the user as typed
+    /// in a terminal, by the agent's name, a word quoted only when it has
+    /// to be. What an agent has no command for is AgentTerm's own command,
+    /// last. For Codex, the session's variable is named in the table its
+    /// command wrote, which has no option for it.
+    func testTheServerIsAddedWithEachAgentsOwnCommand() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-server-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let setup = setup(root)
+        let tool = "/Apps/My App's/agenttermd"
+        XCTAssertEqual(setup.serverCommand("claude", program: "claude"), ["claude", "mcp", "add", "--scope", "user", "agentterm-dev", "--", tool, "mcp"])
+        XCTAssertEqual(setup.serverCommand("claude", program: "claude", remove: true), ["claude", "mcp", "remove", "--scope", "user", "agentterm-dev"])
+        XCTAssertEqual(setup.serverCommand("codex", program: "/bin/codex"), ["/bin/codex", "mcp", "add", "agentterm-dev", "--", tool, "mcp"])
+        XCTAssertEqual(setup.serverCommand("copilot", program: "copilot"), ["copilot", "mcp", "add", "agentterm-dev", "--", tool, "mcp"])
+        // Antigravity takes the program and its arguments after the name.
+        XCTAssertEqual(setup.serverCommand("agy", program: "agy"), ["agy", "mcp", "add", "agentterm-dev", tool, "mcp"])
+        for agent in ["codex", "copilot", "agy"] {
+            XCTAssertEqual(setup.serverCommand(agent, program: agent, remove: true), [agent, "mcp", "remove", "agentterm-dev"])
+        }
+        XCTAssertNil(setup.serverCommand("vim", program: "vim"))
+
+        // As typed.
+        XCTAssertEqual(AgentSetup.typed(["claude", "mcp", "add", "--scope", "user", "agentterm", "--", "/Applications/AgentTerm.app/Contents/MacOS/agenttermd", "mcp"]),
+            "claude mcp add --scope user agentterm -- /Applications/AgentTerm.app/Contents/MacOS/agenttermd mcp")
+        let steps = setup.steps(for: "claude", name: "Claude Code")
+        XCTAssertEqual(steps.map(\.command), ["claude mcp add --scope user agentterm-dev -- '/Apps/My App'\\''s/agenttermd' mcp", "'/Apps/My App'\\''s/agenttermd' setup claude"])
+        XCTAssertEqual(steps.map(\.title), [AgentSetupWords.serverStep("Claude Code"), AgentSetupWords.ownStep(agent: "claude", name: "Claude Code")])
+        XCTAssertEqual(
+            setup.steps(for: "agy", name: "Antigravity", remove: true).map(\.command), ["agy mcp remove agentterm-dev", "'/Apps/My App'\\''s/agenttermd' setup agy --remove"])
+
+        // Codex's table, as `codex mcp add` writes it: the variable goes
+        // under its own lines, once, and the rest is left as it was.
+        let table = "model = \"o3\"\n\n[mcp_servers.agentterm-dev]\ncommand = \"/x/agenttermd\"\nargs = [\"mcp\"]\n\n[features]\ndaemon_auto_start = false\n"
+        let named = try XCTUnwrap(setup.withCodexServerVariable(table))
+        XCTAssertEqual(
+            named, "model = \"o3\"\n\n[mcp_servers.agentterm-dev]\ncommand = \"/x/agenttermd\"\nargs = [\"mcp\"]\nenv_vars = [\"AGENTTERM_MCP\"]\n\n[features]\ndaemon_auto_start = false\n")
+        XCTAssertEqual(setup.withCodexServerVariable(named), named)
+        XCTAssertNil(setup.withCodexServerVariable("model = \"o3\"\n\n[mcp_servers.agentterm]\ncommand = \"/x\"\n"), "another build's server taken for this one's")
+        // The last table of the file.
+        XCTAssertEqual(
+            setup.withCodexServerVariable("[mcp_servers.agentterm-dev]\ncommand = \"/x\"\nargs = [\"mcp\"]\n"),
+            "[mcp_servers.agentterm-dev]\ncommand = \"/x\"\nargs = [\"mcp\"]\nenv_vars = [\"AGENTTERM_MCP\"]\n")
+        // Not under the comment over the table that comes next: that one
+        // says whose a hook is, and stays right over it.
+        XCTAssertEqual(
+            setup.withCodexServerVariable("[mcp_servers.agentterm-dev]\ncommand = \"/x\"\nargs = [\"mcp\"]\n\n# AgentTerm's hook (agentterm-dev), added\n[[hooks.Stop]]\n"),
+            "[mcp_servers.agentterm-dev]\ncommand = \"/x\"\nargs = [\"mcp\"]\nenv_vars = [\"AGENTTERM_MCP\"]\n\n# AgentTerm's hook (agentterm-dev), added\n[[hooks.Stop]]\n")
     }
 
     /// SCHED-23 (#11, #129): a schedule's run of Antigravity trusts the

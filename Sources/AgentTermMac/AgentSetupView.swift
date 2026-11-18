@@ -136,8 +136,10 @@ private struct AgentSetupRow: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if !model.isRemote {
-                        command(AgentSetupWords.commandHeading, state.command, id: "install")
-                        command("To take them out:", state.removeCommand, id: "remove")
+                        // Each part with its own command: the agent's own
+                        // where it has one, AgentTerm's for the rest.
+                        commands(AgentSetupWords.commandHeading, state.steps, id: "install")
+                        commands(AgentSetupWords.removeHeading, state.removeSteps, id: "remove")
                     }
                 } else {
                     Text(AgentSetupWords.notInstalled).font(.system(size: 11.5)).foregroundStyle(.secondary)
@@ -163,25 +165,34 @@ private struct AgentSetupRow: View {
             .accessibilityIdentifier("setup-\(state.agent)-\(title)")
     }
 
-    private func command(_ heading: String, _ line: String, id: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(heading).font(.system(size: 11)).foregroundStyle(.secondary)
-            HStack(alignment: .top, spacing: 8) {
-                Text(line)
-                    .font(.system(size: 11, design: .monospaced))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button(copied == id ? "Copied" : "Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(line, forType: .string)
-                    copied = id
+    /// The commands of one heading, in the order they are run, each with
+    /// what it is for and whose it is.
+    private func commands(_ heading: String, _ steps: [AgentSetupStep], id: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(heading).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                let key = "\(id)-\(index + 1)"
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(step.title).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(step.command)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("setup-command-\(key)-\(state.agent)")
+                        Button(copied == key ? "Copied" : "Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(step.command, forType: .string)
+                            copied = key
+                        }
+                        .controlSize(.small)
+                        .accessibilityIdentifier("setup-copy-\(key)-\(state.agent)")
+                    }
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.black.opacity(0.25)))
                 }
-                .controlSize(.small)
-                .accessibilityIdentifier("setup-copy-\(id)-\(state.agent)")
             }
-            .padding(8)
-            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.black.opacity(0.25)))
         }
     }
 }

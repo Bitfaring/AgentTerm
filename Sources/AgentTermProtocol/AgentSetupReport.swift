@@ -1,9 +1,25 @@
 import Foundation
 
-/// What `agenttermd setup` added of AgentTerm's to an agent's own
-/// configuration (#129), as the agent itself says it: its hooks, AgentTerm's
-/// MCP server, and for Claude Code the status line AgentTerm reads its usage
-/// from. Each build has its own (`AppChannel.mcpServerName`).
+/// One command that adds a part of what AgentTerm needs of an agent, or
+/// takes it out, as typed in a terminal, with what it is for. The agent's
+/// own command when the agent has one for that part (`claude mcp add …`),
+/// AgentTerm's (`agenttermd setup claude`) for what it has none for.
+public struct AgentSetupStep: Codable, Equatable, Sendable {
+    /// What it adds or takes out, and whose command it is, in a line.
+    public var title: String
+    public var command: String
+
+    public init(title: String, command: String) {
+        self.title = title
+        self.command = command
+    }
+}
+
+/// What an agent has of AgentTerm's in its own configuration (#129), as the
+/// agent itself says it: AgentTerm's MCP server, its hooks, and for Claude
+/// Code the status line AgentTerm reads its usage from; with the commands
+/// that add them and take them out. Each build has its own
+/// (`AppChannel.mcpServerName`).
 public struct AgentSetupState: Codable, Equatable, Identifiable, Sendable {
     /// "claude", "codex", "copilot" or "agy".
     public var agent: String
@@ -22,10 +38,12 @@ public struct AgentSetupState: Codable, Equatable, Identifiable, Sendable {
     /// a session's hooks and server are that server's and no session's;
     /// nil for an agent that has none.
     public var sharedServerOff: Bool?
-    /// The commands to add them and to take them out, as typed in a
-    /// terminal: the host's program, by its full path.
-    public var command: String
-    public var removeCommand: String
+    /// The commands that add what AgentTerm needs of it, in the order they
+    /// are run, and those that take it out: what Install and Remove run.
+    /// The agent's own first, AgentTerm's for what the agent has no command
+    /// for (decided by the owner on 2026-11-18).
+    public var steps: [AgentSetupStep]
+    public var removeSteps: [AgentSetupStep]
     /// What else the user should know of it, when there is something.
     public var note: String?
     /// What is in the way of its setup now, or why the last setup or
@@ -36,7 +54,7 @@ public struct AgentSetupState: Codable, Equatable, Identifiable, Sendable {
 
     public init(
         agent: String, name: String, installed: Bool, hooks: Bool? = nil, mcp: Bool? = nil, statusLine: Bool? = nil, sharedServerOff: Bool? = nil,
-        command: String, removeCommand: String, note: String? = nil, problem: String? = nil
+        steps: [AgentSetupStep] = [], removeSteps: [AgentSetupStep] = [], note: String? = nil, problem: String? = nil
     ) {
         self.agent = agent
         self.name = name
@@ -45,8 +63,8 @@ public struct AgentSetupState: Codable, Equatable, Identifiable, Sendable {
         self.mcp = mcp
         self.statusLine = statusLine
         self.sharedServerOff = sharedServerOff
-        self.command = command
-        self.removeCommand = removeCommand
+        self.steps = steps
+        self.removeSteps = removeSteps
         self.note = note
         self.problem = problem
     }
@@ -76,13 +94,39 @@ public struct AgentSetupReport: Codable, Equatable, Sendable {
 /// (principle 9).
 public enum AgentSetupWords {
     public static let explanation =
-        "AgentTerm starts an agent as you would, with nothing added. What it needs of each agent is in the agent's own configuration: its hooks, which tell AgentTerm what the agent is doing (its state, the Inbox, notifications), and AgentTerm's MCP server, which gives it shells and pages you see. Install adds them for all your folders, with the agent's own commands; Remove takes them out. Outside AgentTerm they do nothing."
+        "AgentTerm starts an agent as you would, with nothing added. What it needs of each agent is in the agent's own configuration: AgentTerm's MCP server, which gives it shells and pages you see, and its hooks, which tell AgentTerm what the agent is doing (its state, the Inbox, notifications). Install adds them for all your folders: the server with the agent's own command, the hooks with AgentTerm's, as no agent has a command for them. Remove takes them out. Outside AgentTerm they do nothing."
     public static let install = "Install"
     public static let remove = "Remove"
     public static let installAll = "Install for All"
     public static let notInstalled = "Not installed on this Mac."
     public static let working = "Working…"
     public static let commandHeading = "Or run in a terminal:"
+    public static let removeHeading = "To take them out:"
+
+    /// Over the agent's own command for the server.
+    public static func serverStep(_ name: String) -> String { "The MCP server, with \(name)'s own command:" }
+
+    /// Over Codex's own command that turns its shared server off, or on
+    /// again.
+    public static func sharedServerStep(_ name: String, on: Bool = false) -> String {
+        on ? "Its shared server on again, with \(name)'s own command:" : "Its shared server off, with \(name)'s own command:"
+    }
+
+    /// Over AgentTerm's command, which is for what the agent has no
+    /// command for: what that is, for each agent.
+    public static func ownStep(agent: String, name: String) -> String {
+        switch agent {
+        case "claude": return "Its hooks and the status line, which \(name) has no command for:"
+        case "codex": return "Its hooks, and the session's variable for the server, which \(name) has no command for:"
+        case "agy": return "Its hooks and what it is told, which \(name) has no command for:"
+        default: return "Its hooks, which \(name) has no command for:"
+        }
+    }
+
+    /// Codex has the server, added with its own command, and gives it
+    /// nothing of the session: what to do.
+    public static let codexVariableMissing =
+        "Codex has AgentTerm's MCP server and gives it nothing of its session: `codex mcp add` has no option for the variable the server knows its session by. Install, or AgentTerm's command below, names it."
     public static let statusLine = "Status line"
     public static let hooks = "Hooks"
     public static let mcp = "MCP server"

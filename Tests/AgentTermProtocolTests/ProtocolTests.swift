@@ -409,8 +409,11 @@ final class ProtocolTests: XCTestCase {
         shell.typedAgent = "codex"
         shell.link = AgentLink(hooks: true, mcp: false)
         let state = AgentSetupState(
-            agent: "claude", name: "Claude Code", installed: true, hooks: true, mcp: false, statusLine: true, command: "x setup claude", removeCommand: "x setup claude --remove", note: nil,
-            problem: "It said no.")
+            agent: "claude", name: "Claude Code", installed: true, hooks: true, mcp: false, statusLine: true,
+            steps: [
+                AgentSetupStep(title: AgentSetupWords.serverStep("Claude Code"), command: "claude mcp add --scope user agentterm -- x mcp"),
+                AgentSetupStep(title: AgentSetupWords.ownStep(agent: "claude", name: "Claude Code"), command: "x setup claude"),
+            ], removeSteps: [AgentSetupStep(title: "", command: "claude mcp remove --scope user agentterm")], note: nil, problem: "It said no.")
         let messages: [ServerMessage] = [.sessions([shell]), .agentSetup(AgentSetupReport(agents: [state], busy: ["claude"]))]
         for message in messages {
             XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
@@ -420,7 +423,12 @@ final class ProtocolTests: XCTestCase {
             XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ClientMessage.self, from: MessageCoding.encode(message))), message)
         }
         XCTAssertTrue(AgentSetupReport(agents: [state]).needsSetup)
-        XCTAssertFalse(AgentSetupReport(agents: [AgentSetupState(agent: "agy", name: "Antigravity", installed: false, command: "", removeCommand: "")]).needsSetup)
+        XCTAssertFalse(AgentSetupReport(agents: [AgentSetupState(agent: "agy", name: "Antigravity", installed: false)]).needsSetup)
+        // What is in the way counts as not set up.
+        var codex = AgentSetupState(agent: "codex", name: "Codex", installed: true, hooks: true, mcp: true, sharedServerOff: true)
+        XCTAssertTrue(codex.isSetUp)
+        codex.sharedServerOff = false
+        XCTAssertTrue(codex.needsSetup)
     }
 
     /// MCP-19: what is wrong with the agents' server, in words, and a cause

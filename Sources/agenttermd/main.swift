@@ -53,11 +53,14 @@ if arguments.first == "statusline" {
     exit(0)
 }
 
-// `agenttermd setup [claude|codex|copilot|agy|all] [--remove]` adds
-// AgentTerm's hooks, MCP server and status line to the agents' own
-// configuration, with their own commands, or takes them out; `setup status`
-// says what each has (#129). Only when the user runs it, or asks for it in
-// Settings > Hooks & MCP.
+// `agenttermd setup [claude|codex|copilot|agy|all] [--remove]` adds to the
+// agents' own configuration what they have no command of their own for:
+// their hooks, Claude Code's status line, and for Codex the session's
+// variable its server needs; or takes that out. AgentTerm's MCP server is
+// added with each agent's own command (`claude mcp add …`), which this
+// says when the server is missing; `setup status` says what each has
+// (#129). Only when the user runs it: Install in Settings > Hooks & MCP
+// runs the agents' commands and this.
 if arguments.first == "setup" {
     arguments.removeFirst()
     var agent: String?
@@ -78,7 +81,7 @@ if arguments.first == "setup" {
         let agents = agent.map { [$0] } ?? setup.report().agents.filter(\.installed).map(\.agent)
         for each in agents {
             print((remove ? "Removing from " : "Setting up ") + (AgentDetector.known.first { $0.id == each }?.name ?? each) + "…")
-            if remove { setup.remove(each) } else { setup.install(each) }
+            if remove { setup.remove(each, .own) } else { setup.install(each, .own) }
         }
     }
     var failed = false
@@ -95,6 +98,18 @@ if arguments.first == "setup" {
         if let problem = state.problem {
             print("  " + problem)
             failed = true
+        }
+        // What is still to add, with the agent's own command: every step
+        // but the last, which is this program's.
+        if !remove {
+            var missing: [AgentSetupStep] = []
+            if state.mcp == false, let server = state.steps.first { missing.append(server) }
+            // Not for one that is off and still runs: its problem says what to do.
+            if state.sharedServerOff == false, state.problem != AgentSetupWords.sharedServerRunning, state.steps.count > 2 { missing.append(state.steps[1]) }
+            for step in missing {
+                print("  " + step.title)
+                print("    " + step.command)
+            }
         }
         if let note = state.note, !remove, !statusOnly { print("  " + note) }
     }

@@ -26,9 +26,86 @@ final class AgentSetupTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
+    /// How a stand-in answers `mcp add`, `mcp get`, `mcp list` and `mcp
+    /// remove`, as the real agent was seen to on 2026-11-18 (Claude Code
+    /// 2.1.327, Codex 0.169.1, Copilot CLI 1.0.113, Antigravity 1.5.10):
+    /// what each prints, its status, and whether it takes a name it has.
+    /// Codex's writes the table into its config.toml as the real one does,
+    /// since AgentTerm adds a line to it.
+    private func servers(_ agent: String, state: String) -> String {
+        let has = "[ -e '\(state)'/server-\"$n\" ]"
+        let keep = "printf '%s\\n' \"$1\" > '\(state)'/server-\"$n\"; shift; printf '%s\\n' \"$*\" > '\(state)'/server-\"$n\".args"
+        let drop = "rm -f '\(state)'/server-\"$n\" '\(state)'/server-\"$n\".args"
+        switch agent {
+        case "claude":
+            return """
+                  "mcp add")
+                    shift 2; while [ "$1" = "--scope" ]; do shift 2; done; n=$1; shift; [ "$1" = "--" ] && shift
+                    if \(has); then echo "MCP server $n already exists in user config"; exit 1; fi
+                    echo "Added stdio MCP server $n with command: $* to user config"; \(keep); exit 0;;
+                  "mcp get")
+                    n=$3
+                    if ! \(has); then echo "No MCP server named \\"$n\\". Run \\`claude mcp add\\` to add one."; exit 1; fi
+                    printf '%s:\\n  Scope: User config (available in all your projects)\\n  Status: ✔ Connected\\n  Type: stdio\\n  Command: %s\\n  Args: %s\\n  Environment:\\n' "$n" "$(cat '\(state)'/server-"$n")" "$(cat '\(state)'/server-"$n".args)"; exit 0;;
+                  "mcp remove")
+                    shift 2; while [ "$1" = "--scope" ]; do shift 2; done; n=$1
+                    if ! \(has); then echo "No MCP server named \\"$n\\" in user scope"; exit 1; fi
+                    \(drop); echo "Removed MCP server $n from user config"; exit 0;;
+                """
+        case "copilot":
+            return """
+                  "mcp add")
+                    n=$3; shift 3; [ "$1" = "--" ] && shift
+                    if \(has); then printf 'Error: Server "%s" already exists. To update it, remove it first:\\n  copilot mcp remove %s\\n' "$n" "$n"; exit 1; fi
+                    echo "Added server \\"$n\\""; \(keep); exit 0;;
+                  "mcp get")
+                    n=$3
+                    if ! \(has); then echo "Error: Server \\"$n\\" not found."; exit 1; fi
+                    printf '{\\n  "%s": {\\n    "tools": [\\n      "*"\\n    ],\\n    "type": "local",\\n    "command": "%s",\\n    "args": [\\n      "%s"\\n    ],\\n    "source": "user",\\n    "enabled": true\\n  }\\n}\\n' "$n" "$(cat '\(state)'/server-"$n")" "$(cat '\(state)'/server-"$n".args)"; exit 0;;
+                  "mcp remove")
+                    n=$3
+                    if ! \(has); then echo "Error: Server \\"$n\\" not found."; exit 1; fi
+                    \(drop); echo "Removed server \\"$n\\""; exit 0;;
+                """
+        case "agy":
+            return """
+                  "mcp add")
+                    n=$3; shift 3; echo "Added MCP server \\"$n\\" (stdio)"; \(keep); exit 0;;
+                  "mcp list")
+                    any=
+                    for f in '\(state)'/server-*; do
+                      case "$f" in *.args) continue;; esac; [ -e "$f" ] || continue
+                      [ -n "$any" ] || echo "NAME             TYPE   STATUS   COMMAND/URL"; any=1
+                      printf '%s  stdio  enabled  %s %s\\n' "${f##*/server-}" "$(cat "$f")" "$(cat "$f".args)"
+                    done
+                    [ -n "$any" ] || echo "No MCP servers configured."; exit 0;;
+                  "mcp remove")
+                    n=$3
+                    if ! \(has); then echo "Error: MCP server \\"$n\\" not found"; exit 1; fi
+                    \(drop); echo "Removed MCP server \\"$n\\""; exit 0;;
+                """
+        default:
+            return """
+                  "mcp add")
+                    n=$3; shift 3; [ "$1" = "--" ] && shift
+                    mkdir -p "$HOME/.codex"; rest=$(without "$n")
+                    { [ -z "$rest" ] || printf '%s\\n\\n' "$rest"; printf '[mcp_servers.%s]\\ncommand = "%s"\\nargs = ["mcp"]\\n' "$n" "$1"; } > "$conf.new"; mv "$conf.new" "$conf"
+                    echo "Added global MCP server '$n'."; exit 0;;
+                  "mcp get")
+                    n=$3; body=$(table "$n")
+                    if [ -z "$body" ]; then echo "Error: No MCP server named '$n' found."; exit 1; fi
+                    printf '{\\n  "name": "%s",\\n  "enabled": true,\\n  "transport": {\\n    "type": "stdio",\\n    "command": "%s",\\n    "args": [\\n      "mcp"\\n    ],\\n    "env": null,\\n    "env_vars": [%s],\\n    "cwd": null\\n  }\\n}\\n' "$n" "$(printf '%s\\n' "$body" | sed -n 's/^command = "\\(.*\\)"$/\\1/p')" "$(printf '%s\\n' "$body" | sed -n 's/^env_vars = \\[\\(.*\\)\\]$/\\1/p')"; exit 0;;
+                  "mcp remove")
+                    n=$3
+                    if [ -z "$(table "$n")" ]; then echo "No MCP server named '$n' found."; exit 0; fi
+                    without "$n" > "$conf.new"; mv "$conf.new" "$conf"; echo "Removed global MCP server '$n'."; exit 0;;
+                """
+        }
+    }
+
     /// A stand-in agent: what it is run with goes in `<agent>.log`; the
     /// plugins it was given are files in a folder of its own, which its
-    /// `plugin list` prints as the real one does.
+    /// `plugin list` prints as the real one does; and its MCP servers.
     private func standIn(_ agent: String) throws {
         let listed: String
         switch agent {
@@ -42,7 +119,12 @@ final class AgentSetupTests: XCTestCase {
             #!/bin/sh
             mkdir -p '\(state)'
             printf '%s\\n' "$*" >> '\(root.appendingPathComponent("\(agent).log").path)'
+            conf="$HOME/.codex/config.toml"
+            # The lines of a server's table in Codex's config.toml, and the file without it.
+            table() { awk -v h="[mcp_servers.$1]" '$0==h{on=1;next} on&&/^\\[/{on=0} on' "$conf" 2>/dev/null; }
+            without() { awk -v h="[mcp_servers.$1]" '$0==h{skip=1;pend=0;next} skip&&/^\\[/{skip=0} skip{next} /^$/{pend++;next} {while(pend>0){print "";pend--} print}' "$conf" 2>/dev/null; }
             case "$1 $2" in
+            \(servers(agent, state: state))
               "plugin list")
                 for f in '\(state)'/plugin-*; do [ -e "$f" ] || continue; n=${f##*/plugin-}; \(listed); done; exit 0;;
               "plugin install"|"plugin add")

@@ -3,28 +3,36 @@ import AgentTermProtocol
 import Foundation
 
 /// Adds what AgentTerm needs of each agent to the agent's own configuration
-/// (#129), when the user asks: `agenttermd setup`, or Install in Settings >
-/// Hooks & MCP. AgentTerm starts the agents with nothing of its own; this is
-/// how they get its hooks, its MCP server, what it tells them, and for
-/// Claude Code the status line it reads the usage from.
+/// (#129), when the user asks: Install in Settings > Hooks & MCP, or the
+/// commands it shows. AgentTerm starts the agents with nothing of its own;
+/// this is how they get its MCP server, its hooks, what it tells them, and
+/// for Claude Code the status line it reads the usage from.
 ///
-/// Each agent gets them through its own commands, found by running each,
-/// at the version in use (2026-11-17, #129; `docs/AGENT-CLIS.md`):
+/// Each part is added with the agent's own command when the agent has one,
+/// and that command is what the user is shown; AgentTerm's own (`agenttermd
+/// setup <agent>`) is for what an agent has no command for (decided by the
+/// owner on 2026-11-18). As each was found by running it, at the version in
+/// use (2026-11-18; `docs/AGENT-CLIS.md`):
 ///
-/// - Claude Code: a plugin, from a marketplace in a folder of AgentTerm's
-///   (`claude plugin marketplace add`, `claude plugin install`), with the
-///   hooks and the server; the status line goes in its settings, the one
-///   the user had kept and run after AgentTerm's (`StatusLineRelay`).
-/// - Copilot CLI: a plugin the same way, in its own layout.
-/// - Codex: a plugin with the server, which names the session's variable
-///   in `env_vars`, as Codex passes no other; its hooks in `config.toml`,
-///   each under a comment that says whose it is, as Codex takes hooks
-///   nowhere else (`plugin_hooks` was removed from it), and asks the user
-///   to review them. And the server
-///   its sessions share turned off, with `codex features disable` (#140):
-///   through it no hook and no server is any one session's.
-/// - Antigravity: a plugin of its own layout (`agy plugin install`), with
-///   the hooks, the server and the words it is told as a rule.
+/// - **The MCP server**: every agent has a command for it. `claude mcp add
+///   --scope user <name> -- <agenttermd> mcp`, `codex mcp add <name> --
+///   <agenttermd> mcp`, `copilot mcp add <name> -- <agenttermd> mcp`, `agy
+///   mcp add <name> <agenttermd> mcp`; and `mcp remove <name>` takes it out.
+/// - **The hooks**: no agent has a command for them. Claude Code, Copilot
+///   CLI and Antigravity take them from a plugin, which AgentTerm writes in
+///   a folder of its own and has the agent install (`plugin install`);
+///   Codex takes them in `config.toml` only (`plugin_hooks` was removed
+///   from it), each under a comment that says whose it is, and asks the
+///   user to review them.
+/// - **What it is told**: Claude Code and Codex are given it by the server,
+///   as its instructions; Antigravity as a rule of the plugin; Copilot CLI
+///   from a folder its sessions' environment names.
+/// - **Claude Code's status line**, in its settings: the one the user had
+///   is kept, and run after AgentTerm's (`StatusLineRelay`).
+/// - **Codex's own**: the session's variable named for the server
+///   (`env_vars`), which `codex mcp add` has no option for and without
+///   which Codex gives a server nothing of its session; and the server its
+///   sessions share turned off, with `codex features disable` (#140).
 ///
 /// All of it at the user's scope, for every folder, never a project's
 /// (decided by the owner on 2026-11-17): Claude Code's with `--scope user`,
@@ -75,10 +83,48 @@ public final class AgentSetup: @unchecked Sendable {
 
     // MARK: Asked
 
-    /// The command that sets an agent up, or every installed one, as typed
-    /// in a terminal.
+    /// AgentTerm's own command, for what an agent has no command for, or
+    /// for every installed agent's, as typed in a terminal.
     public static func command(tool: String, agent: String?, remove: Bool = false) -> String {
         Handoff.shellQuote(tool) + " setup " + (agent ?? "all") + (remove ? " --remove" : "")
+    }
+
+    /// The agent's own command that adds AgentTerm's MCP server to its
+    /// configuration, at the user's scope, or takes it out: the words of
+    /// its command line, `program` being the agent's, as typed or by its
+    /// path. Each as the agent's `mcp add --help` says and as it was tried
+    /// (2026-11-18): Antigravity takes its flags before the name, and the
+    /// program and its arguments after it with no `--`.
+    func serverCommand(_ agent: String, program: String, remove: Bool = false) -> [String]? {
+        switch (agent, remove) {
+        case ("claude", false): return [program, "mcp", "add", "--scope", "user", name, "--", tool, "mcp"]
+        case ("claude", true): return [program, "mcp", "remove", "--scope", "user", name]
+        case ("codex", false), ("copilot", false): return [program, "mcp", "add", name, "--", tool, "mcp"]
+        case ("agy", false): return [program, "mcp", "add", name, tool, "mcp"]
+        case ("codex", true), ("copilot", true), ("agy", true): return [program, "mcp", "remove", name]
+        default: return nil
+        }
+    }
+
+    /// The commands that add what AgentTerm needs of an agent, or take it
+    /// out, as typed in a terminal: the agent's own for the server, by the
+    /// agent's name, which the user's shell finds; then AgentTerm's, for
+    /// what the agent has no command for.
+    func steps(for agent: String, name agentName: String, remove: Bool = false) -> [AgentSetupStep] {
+        guard let server = serverCommand(agent, program: agent, remove: remove) else { return [] }
+        return [
+            AgentSetupStep(title: AgentSetupWords.serverStep(agentName), command: Self.typed(server)),
+            AgentSetupStep(title: AgentSetupWords.ownStep(agent: agent, name: agentName), command: Self.command(tool: tool, agent: agent, remove: remove)),
+        ]
+    }
+
+    /// A command line as it is typed in a terminal: a word is quoted only
+    /// when a shell would take it apart.
+    static func typed(_ words: [String]) -> String {
+        let plain = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-")
+        return words.map { word in
+            !word.isEmpty && word.unicodeScalars.allSatisfy(plain.contains) ? word : Handoff.shellQuote(word)
+        }.joined(separator: " ")
     }
 
     /// What each known agent has of AgentTerm's, asked of the agents
@@ -93,17 +139,21 @@ public final class AgentSetup: @unchecked Sendable {
 
     func state(of agent: String, name agentName: String, path: String?) -> AgentSetupState {
         var state = AgentSetupState(
-            agent: agent, name: agentName, installed: path != nil, command: Self.command(tool: tool, agent: agent),
-            removeCommand: Self.command(tool: tool, agent: agent, remove: true), note: Self.note(for: agent), problem: problem(of: agent))
+            agent: agent, name: agentName, installed: path != nil, steps: steps(for: agent, name: agentName),
+            removeSteps: steps(for: agent, name: agentName, remove: true), note: Self.note(for: agent), problem: problem(of: agent))
         guard let path else { return state }
+        state.mcp = hasServer(agent, path: path)
         switch agent {
         case "claude":
-            let plugin = Self.listed(run([path, "plugin", "list"])?.output, id: "\(name)@\(name)")
-            state.hooks = plugin
-            state.mcp = plugin
+            state.hooks = Self.listed(run([path, "plugin", "list"])?.output, id: "\(name)@\(name)")
             state.statusLine = claudeStatusLineIsOurs()
         case "codex":
-            state.mcp = Self.listed(run([path, "plugin", "list"])?.output, id: "\(name)@\(name)")
+            // Added with Codex's own command, the server is given nothing
+            // of its session until AgentTerm named the session's variable.
+            if state.mcp == true, codexServerVariable(path: path) == false {
+                state.mcp = false
+                state.problem = state.problem ?? AgentSetupWords.codexVariableMissing
+            }
             state.hooks = codexHooksAreThere(in: (try? String(contentsOf: codexConfig, encoding: .utf8)) ?? "")
             // The server its sessions share (#140), in a Codex that has one:
             // out of the way once Codex does not start it by itself and it
@@ -116,19 +166,67 @@ public final class AgentSetup: @unchecked Sendable {
                 }
                 state.sharedServerOff = off
                 state.note = [state.note, AgentSetupWords.sharedServerNote].compactMap { $0 }.joined(separator: " ")
+                // Codex's own command for it, between the server's and
+                // AgentTerm's.
+                state.steps.insert(
+                    AgentSetupStep(title: AgentSetupWords.sharedServerStep(agentName), command: Self.typed([agent, "features", "disable", Self.codexSharedServer])), at: 1)
+                state.removeSteps.insert(
+                    AgentSetupStep(title: AgentSetupWords.sharedServerStep(agentName, on: true), command: Self.typed([agent, "features", "enable", Self.codexSharedServer])),
+                    at: 1)
             }
         case "copilot":
-            let plugin = Self.listed(run([path, "plugin", "list"])?.output, id: "\(name)@\(name)")
-            state.hooks = plugin
-            state.mcp = plugin
+            state.hooks = Self.listed(run([path, "plugin", "list"])?.output, id: "\(name)@\(name)")
         case "agy":
-            let plugin = Self.listed(run([path, "plugin", "list"])?.output, id: "- \(name) (")
-            state.hooks = plugin
-            state.mcp = plugin
+            state.hooks = Self.listed(run([path, "plugin", "list"])?.output, id: "- \(name) (")
         default:
             break
         }
         return state
+    }
+
+    /// Whether an agent has AgentTerm's MCP server, run by this build's
+    /// program: asked of the agent itself, with its own command, as each
+    /// was seen to answer (2026-11-18). Nil when it could not be asked.
+    ///
+    /// - Claude Code 2.1.327, `claude mcp get <name>`: its lines, "Command:
+    ///   <program>" and "Args: mcp" among them; "No MCP server named …"
+    ///   and status 1 when it has none.
+    /// - Codex 0.169.1, `codex mcp get <name> --json`: `transport.command`
+    ///   and `transport.args`; an error and status 1 when it has none.
+    /// - Copilot CLI 1.0.113, `copilot mcp get <name> --json`: an object
+    ///   under the name, with `command`, `args` and `enabled`.
+    /// - Antigravity 1.5.10 has no `get`: `agy mcp list` prints a row for
+    ///   each, its name, type, status and command line.
+    func hasServer(_ agent: String, path: String) -> Bool? {
+        switch agent {
+        case "claude":
+            guard let asked = run([path, "mcp", "get", name]) else { return nil }
+            let lines = asked.output.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            return asked.status == 0 && lines.contains("Command: \(tool)") && lines.contains("Args: mcp")
+        case "codex":
+            guard let asked = run([path, "mcp", "get", name, "--json"]) else { return nil }
+            let transport = Self.object(in: asked.output)?["transport"] as? [String: Any]
+            return asked.status == 0 && transport?["command"] as? String == tool && transport?["args"] as? [String] == ["mcp"]
+        case "copilot":
+            guard let asked = run([path, "mcp", "get", name, "--json"]) else { return nil }
+            let server = Self.object(in: asked.output)?[name] as? [String: Any]
+            return asked.status == 0 && server?["command"] as? String == tool && server?["args"] as? [String] == ["mcp"] && server?["enabled"] as? Bool != false
+        case "agy":
+            guard let asked = run([path, "mcp", "list"]) else { return nil }
+            return asked.output.components(separatedBy: "\n").contains { line in
+                let words = line.split(whereSeparator: \.isWhitespace)
+                return words.first.map(String.init) == name && line.contains(tool + " mcp") && words.contains("enabled")
+            }
+        default:
+            return nil
+        }
+    }
+
+    /// The JSON object in what a command printed, from its first brace to
+    /// its last: a login shell may print lines of its own around it.
+    static func object(in output: String) -> [String: Any]? {
+        guard let start = output.firstIndex(of: "{"), let end = output.lastIndex(of: "}"), start < end else { return nil }
+        return (try? JSONSerialization.jsonObject(with: Data(output[start...end].utf8))) as? [String: Any]
     }
 
     /// What else the user should know of an agent's setup.
@@ -163,13 +261,29 @@ public final class AgentSetup: @unchecked Sendable {
 
     // MARK: Done
 
-    /// Adds AgentTerm's to an agent's configuration. What did not work is
-    /// kept for the report, in the agent's own words.
-    public func install(_ agent: String) {
+    /// What is done for an agent: all of it, as Install and Remove in
+    /// Settings do; or only what the agent has no command for, as
+    /// `agenttermd setup <agent>` does, the user having run the agent's own
+    /// command for the server, or being about to.
+    public enum Part: Sendable {
+        case all
+        case own
+    }
+
+    /// Adds AgentTerm's to an agent's configuration: its MCP server with
+    /// the agent's own command, then what the agent has no command for.
+    /// What did not work is kept for the report, in the agent's own words.
+    public func install(_ agent: String, _ part: Part = .all) {
         guard let path = locate().first(where: { $0.id == agent })?.path else {
             return setProblem(agent, "It is not installed on this Mac.")
         }
         do {
+            if part == .all, let add = serverCommand(agent, program: path), let takeOut = serverCommand(agent, program: path, remove: true) {
+                // The one of before goes first: Claude Code and Copilot CLI
+                // refuse a name they have, and the program may have moved.
+                _ = run(takeOut)
+                try step(add)
+            }
             switch agent {
             case "claude":
                 let market = try writeClaudeMarketplace()
@@ -179,20 +293,22 @@ public final class AgentSetup: @unchecked Sendable {
                 _ = run([path, "plugin", "update", "\(name)@\(name)", "--scope", "user"])
                 try setClaudeStatusLine()
             case "codex":
-                let market = try writeCodexMarketplace()
-                try step([path, "plugin", "marketplace", "add", market.path], allowing: "already")
-                // Codex keeps a copy of a plugin: the one of before goes.
+                // The plugin a build before gave it the server in: its
+                // server is Codex's own to hold now.
                 _ = run([path, "plugin", "remove", "\(name)@\(name)"])
-                try step([path, "plugin", "add", "\(name)@\(name)"])
+                _ = run([path, "plugin", "marketplace", "remove", name])
+                // Codex's own command, as the server's: Install runs it,
+                // AgentTerm's own command leaves it to the user.
+                if part == .all { try turnCodexSharedServerOff(path: path) }
                 try addCodexHooks(path: path)
-                try turnCodexSharedServerOff(path: path)
+                try nameCodexServerVariable(path: path)
             case "copilot":
                 let market = try writeCopilotMarketplace()
                 try step([path, "plugin", "marketplace", "add", market.path], allowing: "already")
                 try step([path, "plugin", "install", "\(name)@\(name)"], allowing: "already")
             case "agy":
                 let plugin = try writeAntigravityPlugin()
-                // Antigravity keeps a copy too.
+                // Antigravity keeps a copy of a plugin: the one of before goes.
                 _ = run([path, "plugin", "uninstall", name])
                 try step([path, "plugin", "install", plugin.path])
             default:
@@ -208,21 +324,24 @@ public final class AgentSetup: @unchecked Sendable {
 
     /// Takes AgentTerm's out of an agent's configuration, and only this
     /// build's: the user's own is left as it was.
-    public func remove(_ agent: String) {
+    public func remove(_ agent: String, _ part: Part = .all) {
         guard let path = locate().first(where: { $0.id == agent })?.path else {
             return setProblem(agent, "It is not installed on this Mac.")
         }
         do {
+            if part == .all, let takeOut = serverCommand(agent, program: path, remove: true) { _ = run(takeOut) }
             switch agent {
             case "claude":
                 _ = run([path, "plugin", "uninstall", "\(name)@\(name)", "--scope", "user"])
                 _ = run([path, "plugin", "marketplace", "remove", name])
                 try restoreClaudeStatusLine()
             case "codex":
+                // The plugin a build before gave it the server in.
                 _ = run([path, "plugin", "remove", "\(name)@\(name)"])
                 _ = run([path, "plugin", "marketplace", "remove", name])
                 try removeCodexHooks()
-                turnCodexSharedServerOnAgain(path: path)
+                try removeCodexServerVariable()
+                if part == .all { turnCodexSharedServerOnAgain(path: path) }
             case "copilot":
                 _ = run([path, "plugin", "uninstall", "\(name)@\(name)"])
                 _ = run([path, "plugin", "marketplace", "remove", name])
@@ -267,8 +386,12 @@ public final class AgentSetup: @unchecked Sendable {
 
     // MARK: The plugins
 
+    // A plugin holds an agent's hooks, which no agent has a command for,
+    // and for Antigravity what it is told. The MCP server is not in it: the
+    // agent's own `mcp add` gives it that.
+
     private var version: String { AppVersion.current == "dev" ? "0.0.0-dev" : AppVersion.current }
-    private let summary = "Tells AgentTerm what the agent is doing, and gives it shells and pages the user sees"
+    private let summary = "Tells AgentTerm what the agent is doing"
 
     /// The hooks an agent is given: the one of its start, which says at once
     /// that they are there, and those that say what it is doing.
@@ -282,8 +405,8 @@ public final class AgentSetup: @unchecked Sendable {
         }
     }
 
-    /// A marketplace of Claude Code's layout, which Codex and Copilot CLI
-    /// read too, with one plugin in `plugin`.
+    /// A marketplace of Claude Code's layout, which Copilot CLI reads too,
+    /// with one plugin in `plugin`.
     private func writeMarketplace(for agent: String) throws -> (root: URL, plugin: URL) {
         let root = directory.appendingPathComponent(agent, isDirectory: true)
         let plugin = root.appendingPathComponent("plugin", isDirectory: true)
@@ -302,15 +425,6 @@ public final class AgentSetup: @unchecked Sendable {
             hooks[event] = [["hooks": [["type": "command", "command": AgentHooks.command(tool: tool, agent: "claude", event: event)]]]]
         }
         try Self.write(["hooks": hooks], to: plugin.appendingPathComponent("hooks/hooks.json"))
-        try Self.write(["mcpServers": [name: ["command": tool, "args": ["mcp"]]]], to: plugin.appendingPathComponent(".mcp.json"))
-        return root
-    }
-
-    func writeCodexMarketplace() throws -> URL {
-        let (root, plugin) = try writeMarketplace(for: "codex")
-        try Self.write(["name": name, "version": version, "description": summary], to: plugin.appendingPathComponent(".claude-plugin/plugin.json"))
-        let server: [String: Any] = ["command": tool, "args": ["mcp"], "env_vars": [HostServer.agentShellsVariable]]
-        try Self.write(["mcpServers": [name: server]], to: plugin.appendingPathComponent(".mcp.json"))
         return root
     }
 
@@ -322,8 +436,6 @@ public final class AgentSetup: @unchecked Sendable {
             hooks[event] = [["type": "command", "bash": AgentHooks.command(tool: tool, agent: "copilot", event: event), "timeoutSec": 10]]
         }
         try Self.write(["version": 1, "hooks": hooks], to: plugin.appendingPathComponent("hooks.json"))
-        try Self.write(
-            ["mcpServers": [name: ["type": "local", "command": tool, "args": ["mcp"], "tools": ["*"]]]], to: plugin.appendingPathComponent(".mcp.json"))
         return root
     }
 
@@ -337,7 +449,6 @@ public final class AgentSetup: @unchecked Sendable {
             events[event] = event.hasSuffix("ToolUse") ? [["matcher": "*", "hooks": [hook]]] : [hook]
         }
         try Self.write([name: events], to: plugin.appendingPathComponent("hooks.json"))
-        try Self.write(["mcpServers": [name: ["command": tool, "args": ["mcp"]]]], to: plugin.appendingPathComponent("mcp_config.json"))
         // It takes no MCP server's instructions: what it is told is a rule,
         // which it reads everywhere, so it says when it holds: in AgentTerm,
         // where the server has tools; outside, it has none.
@@ -512,6 +623,78 @@ public final class AgentSetup: @unchecked Sendable {
         try Data(rest.utf8).write(to: file, options: .atomic)
     }
 
+    // MARK: Codex's server and the session's variable
+
+    /// Whether Codex gives this build's server the session's variable: its
+    /// `env_vars` names it, as `codex mcp get --json` says. Nil when Codex
+    /// could not be asked or has no such server.
+    func codexServerVariable(path: String) -> Bool? {
+        guard let asked = run([path, "mcp", "get", name, "--json"]), asked.status == 0,
+            let transport = Self.object(in: asked.output)?["transport"] as? [String: Any]
+        else { return nil }
+        return (transport["env_vars"] as? [String] ?? []).contains(HostServer.agentShellsVariable)
+    }
+
+    /// Codex's configuration with the session's variable named for this
+    /// build's server, in the table `codex mcp add` wrote for it
+    /// (`[mcp_servers.<name>]`, its `command` and `args`; Codex 0.169.1).
+    /// Nil when there is no such table.
+    func withCodexServerVariable(_ text: String) -> String? {
+        var lines = text.components(separatedBy: "\n")
+        func trimmed(_ index: Int) -> String { lines[index].trimmingCharacters(in: .whitespaces) }
+        guard let header = lines.indices.first(where: { trimmed($0) == "[mcp_servers.\(name)]" }) else { return nil }
+        // The table, up to the next one.
+        var end = header + 1
+        while end < lines.count, !trimmed(end).hasPrefix("[") { end += 1 }
+        let line = "env_vars = [\(AgentHooks.tomlString(HostServer.agentShellsVariable))]"
+        if let there = (header + 1..<end).first(where: { trimmed($0).hasPrefix("env_vars") }) {
+            lines[there] = line
+        } else {
+            // Under the lines Codex wrote, which follow one another: not
+            // past an empty line or a comment, which may be over the table
+            // that comes next and stays with it.
+            var under = header + 1
+            while under < end, !trimmed(under).isEmpty, !trimmed(under).hasPrefix("#") { under += 1 }
+            lines.insert(line, at: under)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Takes the session's variable out of this build's server in Codex's
+    /// configuration, when the server is still there: the line AgentTerm
+    /// wrote, and no other.
+    func removeCodexServerVariable() throws {
+        let file = codexConfig
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return }
+        var lines = text.components(separatedBy: "\n")
+        guard let header = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "[mcp_servers.\(name)]" }) else { return }
+        let ours = "env_vars = [\(AgentHooks.tomlString(HostServer.agentShellsVariable))]"
+        var index = header + 1
+        while index < lines.count, !lines[index].trimmingCharacters(in: .whitespaces).hasPrefix("[") {
+            if lines[index] == ours {
+                lines.remove(at: index)
+                try Data(lines.joined(separator: "\n").utf8).write(to: file, options: .atomic)
+                return
+            }
+            index += 1
+        }
+    }
+
+    /// Names the session's variable for this build's server in Codex's
+    /// configuration: Codex gives a server none of its own environment but
+    /// what `env_vars` names, and `codex mcp add` has no option for it
+    /// (0.169.1), so this is AgentTerm's to write. Nothing to do before the
+    /// server was added. Read back by Codex, or put back as it was.
+    func nameCodexServerVariable(path: String) throws {
+        let file = codexConfig
+        guard let before = try? String(contentsOf: file, encoding: .utf8), let text = withCodexServerVariable(before), text != before else { return }
+        try Data(text.utf8).write(to: file, options: .atomic)
+        guard codexServerVariable(path: path) == true else {
+            try? Data(before.utf8).write(to: file, options: .atomic)
+            throw Failure(text: "Codex did not take the session's variable for AgentTerm's MCP server, so its configuration was left as it was.")
+        }
+    }
+
     // MARK: Codex's shared server (#140)
 
     /// The feature of Codex that has it start, by itself, the background
@@ -574,9 +757,9 @@ public final class AgentSetup: @unchecked Sendable {
     /// back.)
     func turnCodexSharedServerOnAgain(path: String) {
         guard FileManager.default.fileExists(atPath: codexSharedServerWasOn.path) else { return }
-        let plugins = run([path, "plugin", "list"])?.output
+        // Set up: its server is in Codex's configuration.
         let others = [AppChannel.release, .dev].map(\.mcpServerName).filter { $0 != name }
-        guard !others.contains(where: { Self.listed(plugins, id: "\($0)@\($0)") == true }) else { return }
+        guard !others.contains(where: { run([path, "mcp", "get", $0, "--json"])?.status == 0 }) else { return }
         if Self.feature(Self.codexSharedServer, in: run([path, "features", "list"])?.output) == false {
             _ = run([path, "features", "enable", Self.codexSharedServer])
         }
