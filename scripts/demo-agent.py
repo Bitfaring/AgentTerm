@@ -169,6 +169,12 @@ def draw(cols, rows):
 
 
 def main():
+    # Asked of its own configuration, as Settings > Hooks & MCP asks an
+    # agent (#155): a stand-in has none, and says so at once rather than
+    # start a session that waits.
+    if sys.argv[1:2] and sys.argv[1] in ("mcp", "plugin", "features", "app-server"):
+        print(f"{NAME}: this stand-in has no {sys.argv[1]} command")
+        sys.exit(1)
     # Asked for one answer, as when the app has an agent write a commit message.
     if "-p" in sys.argv or "exec" in sys.argv[1:2]:
         sys.stdin.read()

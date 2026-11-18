@@ -62,7 +62,7 @@ struct TerminalScreen: View {
         if !shells.isEmpty || withPages {
             VStack(spacing: 6) {
                 Picker("Part", selection: $part) {
-                    Text("Agent").tag(Part.agent)
+                    Text(AgentPartWords.agent).tag(Part.agent)
                     if !shells.isEmpty { Text("Shells (\(shells.count))").tag(Part.shells) }
                     if withPages { Text("Browser (\(pages.count))").tag(Part.browser) }
                 }
@@ -218,10 +218,12 @@ struct TerminalScreen: View {
                 sessionMenu
             }
         }
-        .confirmationDialog("End this session?", isPresented: $confirmingEnd, titleVisibility: .visible) {
-            Button("End Session", role: .destructive) { model.end(session) }
+        .confirmationDialog(CloseWords.endQuestion("this session"), isPresented: $confirmingEnd, titleVisibility: .visible) {
+            Button(CloseWords.endButton, role: .destructive) { model.end(session) }
         } message: {
-            Text("The program running in it is stopped.")
+            // An agent's shells and pages end with it (#145).
+            let own = model.companions(of: session)
+            Text(CloseWords.endMessage(shells: own.shells.count, pages: own.pages.count))
         }
         .onAppear {
             // Shown first as asked: one of the agent's shells, or pages.
@@ -430,7 +432,8 @@ private struct ForeignSizeBanner: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: SizeDriver.symbol(for: model.sizeDriver)).foregroundStyle(.secondary)
+            // The device's own icon; none for a Mac (#157).
+            if let symbol = SizeDriver.symbol(for: model.sizeDriver) { Image(systemName: symbol).foregroundStyle(.secondary) }
             Text(SizeDriver.inUse(by: model.sizeDriver, size: size))
                 .font(.footnote)
                 .lineLimit(1)

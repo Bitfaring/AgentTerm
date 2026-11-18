@@ -53,6 +53,8 @@ struct SystemStatsLine: View {
                 figure("powerplug", "Power", "Plugged in", .primary.opacity(0.9), labels: labels, id: "system-battery")
             }
             figure("clock", "Uptime", SystemStats.uptime(since: stats.bootedAt, now: now), .primary.opacity(0.9), labels: labels, id: "system-uptime")
+            // In gigabytes, as the iPhone shows it (#154).
+            figure("internaldrive", "Memory", stats.memoryShortText, .primary.opacity(0.9), labels: labels, id: "system-memory-used")
         }
     }
 

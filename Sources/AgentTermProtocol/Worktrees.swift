@@ -27,6 +27,19 @@ public enum WorktreePath {
     }
 }
 
+/// A worktree to make for what is started (#150): its branch, nil for the
+/// one named after the agent, cut from the branch `from` names, nil for the
+/// folder's current commit.
+public struct NewWorktree: Codable, Equatable, Sendable {
+    public var branch: String?
+    public var from: String?
+
+    public init(branch: String?, from: String?) {
+        self.branch = branch
+        self.from = from
+    }
+}
+
 /// One of a repository's git worktrees (#23, #33), whoever made it.
 public struct WorktreeInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
     public var path: String
@@ -70,6 +83,15 @@ public enum WorktreeWords {
     public static let newAdvice =
         "A new branch in a folder of its own, so that what is done there does not touch this one. It starts from the branch picked, without changes that are not committed and without what git ignores, such as .env or node_modules: what it needs, such as `npm install`, is done there."
     public static let uncommitted = "This folder has changes that are not committed: the new worktree will not have them."
+    /// How the agent in a new worktree begins (#150): with nothing before
+    /// it, or carrying on a conversation of the folder's, handed off.
+    public static let begin = "Begin"
+    public static let fresh = "Start Fresh"
+    public static let continueConversation = "Continue a Conversation"
+    public static let conversation = "Conversation"
+    public static let continueAdvice =
+        "The conversation is handed off into the new worktree: the agent picked reads it in a file there, and works there only, not in this folder."
+    public static let noConversation = "No conversation of this folder yet."
 
     public static func discardTitle(_ worktree: WorktreeInfo) -> String { "Throw away \(worktree.chipTitle)?" }
     public static func discardMessage(_ worktree: WorktreeInfo) -> String {

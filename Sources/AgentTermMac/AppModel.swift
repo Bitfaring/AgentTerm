@@ -272,8 +272,21 @@ final class AppModel: ObservableObject {
     /// Where each pane, and each part of an agent's area, is in the window,
     /// in its coordinates from the top left: a click finds its place here.
     var paneFrames: [PanePlace: CGRect] = [:]
-    /// The project whose Browser tab, of several pages, is asked to close.
-    @Published var pendingBrowserClose: String?
+    /// The tab of the user's own (Shells, Browser, Diffs, Files) whose
+    /// closing, with all it holds, waits for the user's answer (#145).
+    @Published var pendingGroupClose: String?
+    /// The row picked in the list itself (#152): a folder, by its path, or a
+    /// group of the user's own (Shells, Browser, Diffs, Files), by its id;
+    /// until something else is picked. That row is marked, not the item
+    /// the panes show in front.
+    @Published var listPicked: String?
+    /// Another Mac's pages, as its host last listed them (#147), what is
+    /// waiting for its browser's answer, and a page it opened for this app
+    /// to show once it is listed.
+    var remoteTabs: [BrowserTabInfo] = []
+    var remoteBrowserAsks: [Int: (BrowserResult) -> Void] = [:]
+    var nextRemoteBrowserAsk = 1
+    var pendingRemotePage: String?
     /// The tab the element sent last was picked in.
     weak var lastPicked: BrowserTab?
     /// What each agent is told (Settings > Agents): the user's words by
@@ -568,15 +581,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var writingCommitMessage: Set<String> = []
 
     /// Asks an agent for the message of what is staged in the selected
-    /// folder. The host runs it; the answer lands in the message field.
-    func writeCommitMessage() {
-        guard let directory = panelFolder, status == .connected, !writingCommitMessage.contains(directory) else { return }
+    /// folder, or a submodule of it (#151). The host runs it; the answer
+    /// lands in that one's message field.
+    func writeCommitMessage(in folder: String? = nil) {
+        guard let directory = folder ?? panelFolder, status == .connected, !writingCommitMessage.contains(directory) else { return }
         writingCommitMessage.insert(directory)
         connection?.send(.writeCommitMessage(path: directory))
     }
 
-    func cancelCommitMessage() {
-        guard let directory = panelFolder, writingCommitMessage.contains(directory) else { return }
+    func cancelCommitMessage(in folder: String? = nil) {
+        guard let directory = folder ?? panelFolder, writingCommitMessage.contains(directory) else { return }
         connection?.send(.cancelCommitMessage(path: directory))
     }
 
@@ -613,8 +627,9 @@ final class AppModel: ObservableObject {
     /// Adds AgentTerm's hooks and MCP server to an agent's configuration,
     /// or every installed one's (nil), or takes them out: on this Mac's host
     /// only, which does it with the agents' own commands.
+    /// On this Mac's host, or another Mac's, which runs the same (#155).
     func runAgentSetup(agent: String?, remove: Bool = false) {
-        guard !isRemote, status == .connected else { return }
+        guard status == .connected else { return }
         connection?.send(.runAgentSetup(agent: agent, remove: remove))
     }
 
@@ -900,9 +915,6 @@ final class AppModel: ObservableObject {
     let search = SearchModel()
     /// History's filters, search, transcripts and pins (#46).
     let historyStore = HistoryStore()
-    /// The files at hand while a schedule's prompt is written (#47): a
-    /// search of the schedule's own folder, whatever folder is on show.
-    let promptSearch = SearchModel(firstNumber: 1_000_000)
     /// The run whose output is on show.
     @Published var shownRun: ScheduleOverview.Run?
 
@@ -980,7 +992,6 @@ final class AppModel: ObservableObject {
             remote = mac
             files.reset(remote: { [weak self] message in self?.connection?.send(message) })
             search.reset(remote: { [weak self] message in self?.connection?.send(message) })
-            promptSearch.reset(remote: { [weak self] message in self?.connection?.send(message) })
             // The tabs saved here are this Mac's.
             tabLayout = TabLayout()
             startOwnHost()
@@ -1233,13 +1244,13 @@ final class AppModel: ObservableObject {
     private func connect() {
         let connection: AgentTermConnection
         if let remote {
-            connection = AgentTermConnection(host: remote.host, port: remote.port, token: remote.token, clientName: Self.ownName)
+            connection = AgentTermConnection(host: remote.host, port: remote.port, token: remote.token, clientName: Self.ownName, kind: .mac)
         } else {
             guard let token = try? HostEnvironment.loadOrCreateToken() else {
                 status = .failed("Could not read the pairing token.")
                 return
             }
-            connection = AgentTermConnection(host: "127.0.0.1", port: port, token: token, clientName: "Mac")
+            connection = AgentTermConnection(host: "127.0.0.1", port: port, token: token, clientName: "Mac", kind: .mac)
         }
         self.connection = connection
         files.isOnline = true
@@ -1315,6 +1326,9 @@ final class AppModel: ObservableObject {
         // The browser is this Mac's: its tabs close while another Mac is
         // on show (#76).
         browsers.closeAll()
+        remoteTabs = []
+        remoteBrowserAsks = [:]
+        pendingRemotePage = nil
         browserInFront = nil
         folders = []
         selectedFolder = nil
@@ -1338,7 +1352,6 @@ final class AppModel: ObservableObject {
         browseListing = nil
         files.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
         search.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
-        promptSearch.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
         connectAttempts = 0
         launchedDaemon = false
         status = .connecting
@@ -1356,7 +1369,7 @@ final class AppModel: ObservableObject {
         }
         pairMacError = nil
         isPairingMac = true
-        let connection = AgentTermConnection(host: info.host, port: info.port, credential: .pairingCode(info.code), clientName: Self.ownName)
+        let connection = AgentTermConnection(host: info.host, port: info.port, credential: .pairingCode(info.code), clientName: Self.ownName, kind: .mac)
         pairingConnection = connection
         connection.onMessage = { [weak self, weak connection] message in
             MainActor.assumeIsolated {
@@ -1577,6 +1590,7 @@ final class AppModel: ObservableObject {
             sessions = list
             turnResults = turnResults.filter { id, _ in list.contains { $0.id == id } }
             browsers.sessionsChanged(list)
+            if isRemote { browsers.mirror(remoteTabs, sessions: list) }
             // The session in front of someone at this window needs no notice.
             let shown = NSApp.isActive ? selectedSession : nil
             if let latest = AgentNotice.notices(in: list, told: &told).last(where: { $0.session != shown }) { agentNotice = latest }
@@ -1608,24 +1622,32 @@ final class AppModel: ObservableObject {
         case .worktrees(let folder, let list):
             worktrees[folder] = list
         case .filesFound, .textFound, .searchEnded:
-            // Each takes the answers that carry its own searches' numbers.
             search.handle(message)
-            promptSearch.handle(message)
         case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .historyMarks, .conversationDeleted, .conversationsDeleted, .conversationExported:
             historyStore.handle(message, folderPath: panelFolder)
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
         case .macInUse(let inUse):
             hostSaysMacInUse = inUse
-        case .agentShellResult, .agentBrowserResult, .browserAnswer:
-            // For `agenttermd mcp`, and for the iPhone.
+        case .browserAnswer(let id, let result):
+            // What the other Mac's browser answered (#147).
+            remoteBrowserAsks.removeValue(forKey: id)?(result)
+        case .agentShellResult, .agentBrowserResult:
+            // For `agenttermd mcp`.
             break
         case .browserCall(let id, let agent, let request):
             // An agent, or a device, asks the browser this app shows (#76).
             answerBrowser(id: id, agent: agent, request: request)
-        case .browserTabs:
-            // This app's own: it is the one that said them.
-            break
+        case .browserTabs(let list):
+            // This Mac's own are this app's, which said them; another Mac's
+            // are shown here as its host lists them (#147).
+            guard isRemote else { break }
+            remoteTabs = list
+            browsers.mirror(list, sessions: sessions)
+            if let wanted = pendingRemotePage, let tab = browsers.tab(id: wanted) {
+                pendingRemotePage = nil
+                selectTab(id: tab.tabID)
+            }
         case .agentPrompts(let custom, let defaults):
             agentPromptsCustom = custom
             agentPromptsDefaults = defaults
@@ -1633,9 +1655,11 @@ final class AppModel: ObservableObject {
             shellSettings = settings
             loginShell = login
             availableShells = shells
-        case .browserFrame:
-            // The pictures this app sends for the devices that watch a page.
-            break
+        case .browserFrame(let tab, let jpeg, let width, let height):
+            // This app sends them for this Mac's pages; another Mac's
+            // come here to be shown (#147).
+            guard isRemote, let page = browsers.tab(id: tab), let image = NSImage(data: jpeg) else { break }
+            page.remoteFrame = (image, width, height)
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):
@@ -2009,6 +2033,7 @@ final class AppModel: ObservableObject {
     }
 
     func select(session: SessionInfo) {
+        listPicked = nil
         files.active = nil
         diffInFront = false
         browserInFront = nil
@@ -2291,6 +2316,20 @@ final class AppModel: ObservableObject {
         if let folder, folders.contains(where: { $0.path == folder }) { selectedFolder = folder }
     }
 
+    /// Continues a conversation in a new worktree of the folder on show
+    /// (#150): the host makes it, writes the handoff file there and starts
+    /// `target` in it; what fails is said as any handoff's.
+    func handoffInNewWorktree(_ conversation: Conversation, to target: AgentInfo, branch: String?, from: String?) {
+        guard status == .connected, let folder = panelFolder else { return }
+        Telemetry.shared.record(.handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: true))
+        selectNextAttached = true
+        beginStarting("Handing off to \(target.name)…")
+        connection?.send(
+            .handoff(
+                agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd, target: target.id, plan: nil, prompt: nil,
+                note: "", size: startingSize, folder: folder, worktree: NewWorktree(branch: branch, from: from)))
+    }
+
     // MARK: Folders of another Mac
 
     /// A folder of the other Mac, while one is being picked to add: an
@@ -2554,22 +2593,22 @@ final class AppModel: ObservableObject {
         return String(tab.folder.dropFirst(folder.count + 1))
     }
 
-    /// The submodule a commit is being written for, and its message.
-    @Published var committingSubmodule: SubmoduleChanges?
-    @Published var submoduleMessage = ""
-
-    /// Commits what is staged inside a submodule. Its new commit is then a
-    /// change of the folder, to be committed there.
-    func commitSubmodule() {
-        guard let submodule = committingSubmodule, let directory = directory(of: submodule.path) else { return }
-        let message = submoduleMessage
-        committingSubmodule = nil
-        submoduleMessage = ""
+    /// Commits what is staged inside a submodule, with the message of its
+    /// own box (#151), kept as the folder's are, by its directory. Its new
+    /// commit is then a change of the folder, to be committed there.
+    func commitSubmodule(_ path: String) {
+        guard let directory = directory(of: path), !isCommitting else { return }
+        let message = commitMessages[directory] ?? ""
         if isRemote {
+            commitMessages[directory] = nil
             sendForDiff(.gitCommit(path: directory, message: message), in: directory)
             return
         }
-        git(in: submodule.path) { GitActions.commit(message: message, in: $0) }
+        isCommitting = true
+        git(in: path, { GitActions.commit(message: message, in: $0) }) { [weak self] succeeded in
+            self?.isCommitting = false
+            if succeeded { self?.commitMessages[directory] = nil }
+        }
     }
 
     /// Takes files out of the next commit. No files means all of them.

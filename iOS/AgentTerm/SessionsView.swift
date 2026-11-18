@@ -578,12 +578,14 @@ private struct FolderSection: View {
                     .padding(.top, 12)
                     .padding(.bottom, 10)
                     .confirmationDialog(
-                        "End \(ending?.title ?? "this session")?", isPresented: Binding(get: { ending != nil }, set: { if !$0 { ending = nil } }),
+                        CloseWords.endQuestion(ending?.title ?? "this session"), isPresented: Binding(get: { ending != nil }, set: { if !$0 { ending = nil } }),
                         titleVisibility: .visible, presenting: ending
                     ) { session in
-                        Button("End Session", role: .destructive) { model.end(session.id) }
-                    } message: { _ in
-                        Text("The program running in it is stopped.")
+                        Button(CloseWords.endButton, role: .destructive) { model.end(session.id) }
+                    } message: { session in
+                        // An agent's shells and pages end with it (#145).
+                        let own = model.companions(of: session.id)
+                        Text(CloseWords.endMessage(shells: own.shells.count, pages: own.pages.count))
                     }
             }
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))

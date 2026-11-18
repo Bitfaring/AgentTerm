@@ -162,7 +162,6 @@ struct DiffView: View {
             }
             .padding(6)
         }
-        .sheet(item: $model.committingSubmodule) { SubmoduleCommitSheet(submodule: $0) }
         // Asked first: what is discarded does not come back (#39).
         .confirmationDialog(
             question?.title ?? "", isPresented: Binding(get: { model.discarding != nil }, set: { if !$0 { model.discarding = nil } }), titleVisibility: .visible
@@ -222,6 +221,14 @@ struct DiffView: View {
                 ) { model.stage([], in: submodule.path) }
                 rows(unstaged, in: submodule.path)
             }
+            // Its own box, as the folder's and the iPhone's (#151).
+            if let warning = submodule.detachedWarning {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 10.5)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 4)
+            }
+            CommitBox(stagedCount: staged.count, submodule: submodule.path)
         }
     }
 }
@@ -241,15 +248,6 @@ private struct SubmoduleHeader: View {
                 .foregroundStyle(submodule.changes.branch == nil ? Color.orange : Color.secondary)
                 .lineLimit(1)
             Spacer(minLength: 4)
-            Button("Commit…") {
-                model.submoduleMessage = ""
-                model.committingSubmodule = submodule
-            }
-            .controlSize(.mini)
-            .disabled(submodule.changes.staged.isEmpty)
-            .help(submodule.changes.staged.isEmpty ? "Stage something in the submodule first" : "Commit what is staged in the submodule")
-            .accessibilityLabel("Commit in \(submodule.path)")
-            .accessibilityIdentifier("submodule-commit-" + submodule.path)
         }
         .padding(.leading, 8)
         .padding(.trailing, 6)
@@ -258,40 +256,6 @@ private struct SubmoduleHeader: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("submodule-" + submodule.path)
         .help("A submodule: its changes are staged, committed and discarded in it")
-    }
-}
-
-/// The message of a commit made inside a submodule.
-struct SubmoduleCommitSheet: View {
-    @EnvironmentObject private var model: AppModel
-    let submodule: SubmoduleChanges
-
-    private var count: Int { submodule.changes.staged.count }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Commit in \(submodule.path)").font(.headline)
-            Text("\(count) staged \(count == 1 ? "file" : "files"), on \(submodule.branchWords). \(SubmoduleChanges.commitAdvice)")
-                .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if let warning = submodule.detachedWarning {
-                Label(warning, systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-            }
-            TextField("Commit message", text: $model.submoduleMessage, axis: .vertical)
-                .lineLimit(2...6)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("submodule-message")
-            HStack {
-                Spacer()
-                Button("Cancel") { model.committingSubmodule = nil }.keyboardShortcut(.cancelAction)
-                Button("Commit") { model.commitSubmodule() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(model.submoduleMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityIdentifier("submodule-commit")
-            }
-        }
-        .padding(20)
-        .frame(width: 460)
     }
 }
 
@@ -586,16 +550,25 @@ private struct SyncButton: View {
 private struct CommitBox: View {
     @EnvironmentObject private var model: AppModel
     let stagedCount: Int
+    /// A submodule's own box (#151), by its path in the folder; nil for the
+    /// folder's.
+    var submodule: String?
+
+    /// Where it commits: the folder, or the submodule's directory.
+    private var directory: String? { model.directory(of: submodule) }
 
     private var message: Binding<String> {
         Binding(
-            get: { model.panelFolder.flatMap { model.commitMessages[$0] } ?? "" },
-            set: { if let folder = model.panelFolder { model.commitMessages[folder] = $0 } }
+            get: { directory.flatMap { model.commitMessages[$0] } ?? "" },
+            set: { if let directory { model.commitMessages[directory] = $0 } }
         )
     }
 
-    /// The commit being amended, when one is (#41).
-    private var amending: LastCommit? { model.panelFolder.flatMap { model.amending[$0] } }
+    /// The commit being amended, when one is (#41): the folder's only.
+    private var amending: LastCommit? { submodule == nil ? model.panelFolder.flatMap { model.amending[$0] } : nil }
+
+    /// What a submodule's parts are known by: the folder's have names of their own.
+    private func id(_ part: String) -> String { submodule.map { "submodule-\(part)-\($0)" } ?? "" }
 
     private var canCommit: Bool {
         // Amending needs nothing staged: the message alone may be what changes.
@@ -607,7 +580,7 @@ private struct CommitBox: View {
         return stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Commit"
     }
 
-    private var isWriting: Bool { model.panelFolder.map(model.writingCommitMessage.contains) ?? false }
+    private var isWriting: Bool { directory.map(model.writingCommitMessage.contains) ?? false }
 
     /// The agent that would write the message: the one chosen in Settings,
     /// or the first one installed.
@@ -640,10 +613,11 @@ private struct CommitBox: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.raised))
-                .accessibilityLabel("Commit message")
+                .accessibilityLabel(submodule.map { "Commit message for \($0)" } ?? "Commit message")
+                .accessibilityIdentifier(id("message"))
             HStack(spacing: 6) {
                 Button {
-                    model.commit()
+                    if let submodule { model.commitSubmodule(submodule) } else { model.commit() }
                 } label: {
                     HStack(spacing: 6) {
                         if model.isCommitting { ProgressView().controlSize(.mini) }
@@ -657,11 +631,13 @@ private struct CommitBox: View {
                 .help(
                     amending != nil
                         ? "Replace the last commit by one with this message and what is staged"
-                        : (stagedCount == 0 ? "Stage the changes to commit first" : "Commit what is staged"))
+                        : (stagedCount == 0 ? "Stage the changes to commit first" : "Commit what is staged")
+                )
+                .accessibilityIdentifier(id("commit"))
                 if let writer {
                     // While the agent writes, the same button stops it.
                     Button {
-                        if isWriting { model.cancelCommitMessage() } else { model.writeCommitMessage() }
+                        if isWriting { model.cancelCommitMessage(in: directory) } else { model.writeCommitMessage(in: directory) }
                     } label: {
                         HStack(spacing: 4) {
                             if isWriting {
@@ -683,8 +659,9 @@ private struct CommitBox: View {
                                 : "Have \(writer.name) write the message for what is staged. Nothing is committed until you commit.")
                     )
                     .accessibilityLabel(isWriting ? "Stop writing the commit message" : "Write the commit message with \(writer.name)")
+                    .accessibilityIdentifier(id("write"))
                 }
-                if amending == nil {
+                if amending == nil, submodule == nil {
                     // What is done to the last commit rather than made anew (#41).
                     Menu {
                         Button("Amend Last Commit…") { model.requestAmend() }

@@ -12,12 +12,12 @@ final class EndToEndTests: XCTestCase {
         var output: [SessionID: Data] = [:]
         var state: AgentTermConnection.State = .connecting
 
-        convenience init(port: UInt16, token: String, name: String) {
-            self.init(port: port, credential: .token(token), name: name)
+        convenience init(port: UInt16, token: String, name: String, kind: DeviceKind? = nil) {
+            self.init(port: port, credential: .token(token), name: name, kind: kind)
         }
 
-        init(port: UInt16, credential: AgentTermConnection.Credential, name: String) {
-            connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: credential, clientName: name)
+        init(port: UInt16, credential: AgentTermConnection.Credential, name: String, kind: DeviceKind? = nil) {
+            connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: credential, clientName: name, kind: kind)
             connection.onMessage = { [weak self] in self?.messages.append($0) }
             connection.onOutput = { [weak self] id, data in self?.output[id, default: Data()].append(data) }
             connection.onState = { [weak self] in self?.state = $0 }
@@ -84,8 +84,8 @@ final class EndToEndTests: XCTestCase {
         XCTAssertTrue(condition(), "timed out waiting for: \(what)")
     }
 
-    private func connect(_ name: String = "test") -> TestClient {
-        let client = TestClient(port: port, token: token, name: name)
+    private func connect(_ name: String = "test", kind: DeviceKind? = nil) -> TestClient {
+        let client = TestClient(port: port, token: token, name: name, kind: kind)
         waitUntil("welcome") { client.messages.contains { if case .welcome = $0 { return true } else { return false } } }
         return client
     }
@@ -218,22 +218,25 @@ final class EndToEndTests: XCTestCase {
 
     /// SIZE-10 (#120): the device whose size a session has is named to the
     /// others: the Mac's own app by the Mac's name, a device by its own; not
-    /// to the one that has it.
+    /// to the one that has it. SIZE-11 (#157): with what each is, and the
+    /// icon that goes with it: none for a Mac, an iPad's for an iPad.
     func testTheDeviceWhoseSizeASessionHasIsNamed() {
         let mac = connect("Mac")
         mac.connection.send(.create(CreateRequest(command: "exec sh", size: TermSize(cols: 120, rows: 40))))
         waitUntil("attached") { mac.attached != nil }
         let id = mac.attached!.id
-        let pad = connect("Manh's iPad")
+        let pad = connect("Manh's iPad", kind: .ipad)
         let padSize = TermSize(cols: 90, rows: 50)
         pad.connection.send(.attach(session: id, size: padSize))
         func told(_ client: TestClient) -> (driver: Bool, by: SizeDriver?)? {
             client.messages.compactMap { if case .resized(id, _, let driver, let by) = $0 { return (driver, by) } else { return nil } }.last
         }
         let macName = Host.current().localizedName ?? "Mac"
-        waitUntil("the iPad is told the Mac has it") { told(pad)?.by == SizeDriver(name: macName, isMac: true) }
+        waitUntil("the iPad is told the Mac has it") { told(pad)?.by == SizeDriver(name: macName, kind: .mac) }
         pad.connection.send(.takeControl(session: id, size: padSize))
-        waitUntil("the Mac is told the iPad has it") { told(mac)?.by == SizeDriver(name: "Manh's iPad", isMac: false) }
+        waitUntil("the Mac is told the iPad has it") { told(mac)?.by == SizeDriver(name: "Manh's iPad", kind: .ipad) }
+        XCTAssertNil(SizeDriver.symbol(for: SizeDriver(name: macName, kind: .mac)), "a Mac has an icon")
+        XCTAssertEqual(SizeDriver.symbol(for: told(mac)?.by), "ipad")
         XCTAssertEqual(told(pad)?.driver, true)
         XCTAssertNil(told(pad)?.by, "the one that has it is not named to itself")
         mac.connection.send(.kill(session: id))

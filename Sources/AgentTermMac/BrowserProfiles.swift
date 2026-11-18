@@ -171,22 +171,22 @@ struct BrowserSettingsView: View {
         .padding(24)
         .frame(maxWidth: 720, alignment: .leading)
         .task(id: profiles.list) { await measure() }
-        .confirmationDialog("Clear the data of “\(clearing?.name ?? "")”?", isPresented: Binding(get: { clearing != nil }, set: { if !$0 { clearing = nil } }), titleVisibility: .visible) {
-            Button("Clear Data", role: .destructive) {
+        .confirmationDialog(BrowserWords.clearQuestion(clearing?.name ?? ""), isPresented: Binding(get: { clearing != nil }, set: { if !$0 { clearing = nil } }), titleVisibility: .visible) {
+            Button(BrowserWords.clearButton, role: .destructive) {
                 if let clearing { said = profiles.clearData(clearing.id) ? "Cleared." : "Its data is cleared the next time \(AppChannel.current.appName) opens: Chromium has it open now." }
                 clearing = nil
                 Task { await measure() }
             }
         } message: {
-            Text("Its sign-ins, cookies, storage and cache are thrown away. The tabs that use it stay open.")
+            Text(BrowserWords.clearMessage)
         }
-        .confirmationDialog("Delete the profile “\(deleting?.name ?? "")”?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
-            Button("Delete Profile", role: .destructive) {
+        .confirmationDialog(BrowserWords.deleteQuestion(deleting?.name ?? ""), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
+            Button(BrowserWords.deleteButton, role: .destructive) {
                 if let deleting { model.deleteProfile(deleting.id) }
                 deleting = nil
             }
         } message: {
-            Text("Its tabs are closed, and its sign-ins, cookies, storage and cache are thrown away.")
+            Text(BrowserWords.deleteMessage)
         }
     }
 

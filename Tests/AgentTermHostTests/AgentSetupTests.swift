@@ -145,6 +145,7 @@ final class AgentSetupTests: XCTestCase {
                 exit 0;;
               "app-server daemon")
                 if [ "$3" = version ] && [ -e '\(state)/server-running' ]; then echo '{"status":"running","backend":"pid","cliVersion":"0.169.1","appServerVersion":"0.169.1"}'; exit 0; fi
+                if [ "$3" = stop ] && [ -e '\(state)/server-running' ]; then rm '\(state)/server-running'; echo '{"status":"stopped","backend":"pid","cliVersion":"0.169.1"}'; exit 0; fi
                 printf 'Error: failed to connect to %s/app-server-control/app-server-control.sock\\n\\nCaused by:\\n    No such file or directory (os error 2)\\n' "$HOME/.codex"; exit 1;;
             esac
             exit 0
@@ -363,8 +364,9 @@ final class AgentSetupTests: XCTestCase {
     /// SETUP-7 (#140): the background server Codex's sessions share is
     /// turned off with Codex's own command, as Codex 0.169.1 was seen to
     /// take it, and turned on again when AgentTerm's is taken out; while it
-    /// still runs, that is said, with what to do; one the user had off is
-    /// left off; a Codex that has none is asked nothing of it.
+    /// still runs, that is said, and Install stops it with Codex's own
+    /// command, listed among its steps (#153); one the user had off is left
+    /// off; a Codex that has none is asked nothing of it.
     func testCodexsSharedServerIsTurnedOffWithItsOwnCommandAndOnAgain() throws {
         try sharedServer(startsItself: true)
         let setup = setup()
@@ -388,10 +390,15 @@ final class AgentSetupTests: XCTestCase {
         XCTAssertEqual(after.sharedServerOff, false)
         XCTAssertFalse(after.isSetUp)
         XCTAssertEqual(after.problem, AgentSetupWords.sharedServerRunning)
-        XCTAssertTrue(after.problem?.contains("codex app-server daemon stop") == true)
-        XCTAssertFalse(ran("codex").contains { $0.hasPrefix("app-server daemon stop") }, "the user's sessions were ended for them")
-        try FileManager.default.removeItem(at: root.appendingPathComponent("state-codex/server-running"))
-        XCTAssertEqual(try state(setup, "codex").sharedServerOff, true)
+        XCTAssertTrue(after.steps.contains { $0.command.contains("app-server daemon stop") }, "Install does not list stopping it")
+        XCTAssertTrue(after.note?.contains("may stop") == true, "what stopping it does to Codex's sessions is not said")
+        XCTAssertFalse(ran("codex").contains { $0.hasPrefix("app-server daemon stop") }, "it was stopped before Install was pressed")
+        setup.install("codex")
+        XCTAssertTrue(ran("codex").contains("app-server daemon stop"), ran("codex").joined(separator: "\n"))
+        after = try state(setup, "codex")
+        XCTAssertEqual(after.sharedServerOff, true)
+        XCTAssertNil(after.problem)
+        XCTAssertFalse(after.steps.contains { $0.command.contains("app-server daemon stop") }, "stopping one that does not run is still listed")
 
         setup.remove("codex")
         XCTAssertTrue(ran("codex").contains("features enable daemon_auto_start"), ran("codex").joined(separator: "\n"))
@@ -557,9 +564,11 @@ final class AgentSetupTests: XCTestCase {
         defer { client.close() }
         var reports: [AgentSetupReport] = []
         var welcomed = false
+        var code: String?
         client.onMessage = {
             if case .agentSetup(let report) = $0 { reports.append(report) }
             if case .welcome = $0 { welcomed = true }
+            if case .pairingCode(let made, _) = $0 { code = made }
         }
         client.connect()
         func spin(until condition: () -> Bool) {
@@ -580,5 +589,19 @@ final class AgentSetupTests: XCTestCase {
         spin { reports.last.map { $0.busy.isEmpty && $0.agents.first { $0.agent == "claude" }?.isSetUp == true } == true }
         XCTAssertTrue(reports.contains { $0.busy == ["claude"] }, "nobody told it was being set up")
         XCTAssertTrue(reports.last?.agents.first { $0.agent == "claude" }?.isSetUp == true)
+
+        // SETUP-10 (#155): a paired device sets the Mac's agents up too.
+        client.send(.createPairingCode)
+        spin { code != nil }
+        let phone = AgentTermConnection(host: "127.0.0.1", port: port, credential: .pairingCode(try XCTUnwrap(code)), clientName: "iPhone", kind: .iphone)
+        defer { phone.close() }
+        var phoneSaid: [ServerMessage] = []
+        phone.onMessage = { phoneSaid.append($0) }
+        phone.connect()
+        spin { phoneSaid.contains { if case .welcome = $0 { return true } else { return false } } }
+        phone.send(.runAgentSetup(agent: "claude", remove: true))
+        spin { reports.last.map { $0.busy.isEmpty && $0.agents.first { $0.agent == "claude" }?.isSetUp == false } == true }
+        XCTAssertFalse(reports.last?.agents.first { $0.agent == "claude" }?.isSetUp ?? true, "the device's Remove was not run")
+        XCTAssertFalse(phoneSaid.contains { if case .error = $0 { return true } else { return false } }, "the device was refused")
     }
 }

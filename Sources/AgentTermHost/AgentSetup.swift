@@ -159,8 +159,9 @@ public final class AgentSetup: @unchecked Sendable {
             // out of the way once Codex does not start it by itself and it
             // does not run. Running, it is used whatever the setting says.
             if let startsItself = Self.feature(Self.codexSharedServer, in: run([path, "features", "list"])?.output) {
+                let runs = Self.sharedServerRuns(run([path, "app-server", "daemon", "version"])?.output)
                 var off = !startsItself
-                if off, Self.sharedServerRuns(run([path, "app-server", "daemon", "version"])?.output) {
+                if off, runs {
                     off = false
                     state.problem = state.problem ?? AgentSetupWords.sharedServerRunning
                 }
@@ -170,6 +171,14 @@ public final class AgentSetup: @unchecked Sendable {
                 // AgentTerm's.
                 state.steps.insert(
                     AgentSetupStep(title: AgentSetupWords.sharedServerStep(agentName), command: Self.typed([agent, "features", "disable", Self.codexSharedServer])), at: 1)
+                // Running, it is stopped too, with Codex's own command: tried
+                // with Codex 0.169.1 (#153), sessions started with it off do
+                // not use it and go on; one started through it may stop,
+                // which the note says.
+                if runs {
+                    state.steps.insert(
+                        AgentSetupStep(title: AgentSetupWords.sharedServerStopStep(agentName), command: Self.typed([agent, "app-server", "daemon", "stop"])), at: 2)
+                }
                 state.removeSteps.insert(
                     AgentSetupStep(title: AgentSetupWords.sharedServerStep(agentName, on: true), command: Self.typed([agent, "features", "enable", Self.codexSharedServer])),
                     at: 1)
@@ -741,12 +750,20 @@ public final class AgentSetup: @unchecked Sendable {
         return false
     }
 
-    /// Turns the feature off with Codex's own command, when it is on.
+    /// Turns the feature off with Codex's own command, when it is on, and
+    /// stops the server when it runs (#153): off, it is not started again,
+    /// but one that runs is still used.
     func turnCodexSharedServerOff(path: String) throws {
-        guard Self.feature(Self.codexSharedServer, in: run([path, "features", "list"])?.output) == true else { return }
-        try step([path, "features", "disable", Self.codexSharedServer])
-        try FileManager.default.createDirectory(at: codexSharedServerWasOn.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data().write(to: codexSharedServerWasOn)
+        // A Codex that has none is asked nothing of it.
+        guard let startsItself = Self.feature(Self.codexSharedServer, in: run([path, "features", "list"])?.output) else { return }
+        if startsItself {
+            try step([path, "features", "disable", Self.codexSharedServer])
+            try FileManager.default.createDirectory(at: codexSharedServerWasOn.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: codexSharedServerWasOn)
+        }
+        if Self.sharedServerRuns(run([path, "app-server", "daemon", "version"])?.output) {
+            try step([path, "app-server", "daemon", "stop"])
+        }
     }
 
     /// Turns it on again with Codex's own command, when this build turned

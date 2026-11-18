@@ -32,6 +32,14 @@ struct SidebarView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
+                    // The user's pages, of no folder: one Browser row above
+                    // the folders, its pages under it (#148).
+                    let userPages = model.userPages(in: "")
+                    if !userPages.isEmpty {
+                        BrowserGroupRow(project: "", pages: userPages, loose: true)
+                        ForEach(userPages) { tab in BrowserRow(tab: tab, leading: 24) }
+                        Color.clear.frame(height: 6)
+                    }
                     ForEach(model.folders) { folder in
                         FolderRow(folder: folder)
                             .overlay(alignment: .top) {
@@ -61,7 +69,8 @@ struct SidebarView: View {
                             .contentShape(Rectangle())
                             .onDrop(of: [.data, .fileURL], delegate: FolderDropDelegate(before: nil, model: model, dropTarget: $dropTarget))
                     }
-                    let looseTabs = browsers.tabs.filter { tab in !model.folders.contains { $0.path == tab.project } }
+                    // An agent's, of no listed folder: the user's are above (#148).
+                    let looseTabs = browsers.tabs.filter { tab in tab.owner != nil && !model.folders.contains { $0.path == tab.project } }
                     if !model.looseSessions.isEmpty || !looseTabs.isEmpty {
                         Text("OTHER")
                             .font(.system(size: 11, weight: .semibold))
@@ -172,6 +181,18 @@ private struct HolderListRow: View {
 
     private var id: String { TabID.holder(kind, project) }
 
+    /// Marked when it is the one picked in the list (#152).
+    private var selected: Bool { model.listPicked == id }
+
+    /// Its group in front, its row the one picked, not the item it shows.
+    private func pick() {
+        model.selectStripTab(id)
+        model.listPicked = id
+    }
+
+    /// Closing it from its menu, as from its tab of the strip (#145).
+    private var closing: String { CloseWords.groupAction(kind) + (CloseWords.asks(kind, count: count) ? "…" : "") }
+
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: kind.symbol)
@@ -186,28 +207,34 @@ private struct HolderListRow: View {
         .padding(.leading, loose ? 8 : 24)
         .padding(.trailing, 8)
         .padding(.vertical, 5)
-        .modifier(RowBackground(selected: false, hovering: hovering))
+        .modifier(RowBackground(selected: selected, hovering: hovering))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture { model.selectStripTab(id) }
+        .onTapGesture { pick() }
+        .contextMenu {
+            if kind == .shells { Button("New Shell") { model.launch(nil) } }
+            Button(closing) { model.requestCloseGroup(id) }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(kind.spoken(count))
         .accessibilityIdentifier("sidebar-\(kind.rawValue)")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { model.selectStripTab(id) }
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { pick() }
+        .accessibilityAction(named: CloseWords.groupAction(kind)) { model.requestCloseGroup(id) }
     }
 }
 
 /// A diff or a file in the list, under its group's row.
 private struct ItemListRow: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var files: FilesModel
     let item: String
     let symbol: String
     let title: String
     let leading: CGFloat
     @State private var hovering = false
 
-    private var selected: Bool { model.frontTabID == item }
+    private var selected: Bool { model.listPicked == nil && model.frontTabID == item }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -228,11 +255,48 @@ private struct ItemListRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { model.selectTab(id: item) }
+        .contextMenu { menu }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
         .accessibilityIdentifier("sidebar-\(item)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.selectTab(id: item) }
+        .accessibilityAction(named: closing) { close() }
+    }
+
+    // A right click on it (#152): closing it, and where its file is.
+
+    private var diff: AppModel.OpenDiff? { model.diffTabs.first { $0.tabID == item } }
+
+    /// The file it shows, on the Mac it is on.
+    private var path: String? {
+        if let document = model.document(forTab: item) { return document.path }
+        return diff.map { ($0.folder as NSString).appendingPathComponent($0.file.path) }
+    }
+
+    private var closing: String { diff == nil ? "Close File" : "Close Diff" }
+
+    private func close() {
+        if diff != nil {
+            model.closeDiffTab(item)
+        } else if let path {
+            files.requestClose(path)
+        }
+    }
+
+    @ViewBuilder
+    private var menu: some View {
+        Button(closing, action: close)
+        if diff != nil, let path { Button("Open File") { files.open(path) } }
+        if let path {
+            Divider()
+            // A file of another Mac is not in this Mac's Finder.
+            if !model.isRemote { Button("Show in Finder") { NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "") } }
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(path, forType: .string)
+            }
+        }
     }
 }
 
@@ -247,7 +311,9 @@ private struct BrowserGroupRow: View {
     @State private var hovering = false
 
     private func show() {
-        if !pages.isEmpty { model.selectStripTab(TabID.holder(.browser, project)) }
+        guard !pages.isEmpty else { return }
+        model.selectStripTab(TabID.holder(.browser, project))
+        model.listPicked = TabID.holder(.browser, project)
     }
 
     var body: some View {
@@ -274,7 +340,8 @@ private struct BrowserGroupRow: View {
         .padding(.leading, loose ? 8 : 24)
         .padding(.trailing, 8)
         .padding(.vertical, 5)
-        .modifier(RowBackground(selected: false, hovering: hovering))
+        // Marked when it is the one picked, not the page it shows (#152).
+        .modifier(RowBackground(selected: model.listPicked == TabID.holder(.browser, project), hovering: hovering))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { show() }
@@ -427,12 +494,15 @@ struct FolderRow: View {
 
     private func select() {
         model.selectedFolder = folder.path
-        model.shownWorktree = nil
-        // Its panes, as they were left (#69), or its launch screen.
+        // Its panes, as they were left (#69), or its launch screen; the
+        // side panel and the list's mark are the folder's own (#152).
         model.showProject(folder.path)
+        model.shownWorktree = nil
+        model.listPicked = folder.path
     }
 
-    private var isSelected: Bool { model.selectedFolder == folder.path && model.selectedSession == nil }
+    /// Picked itself (#152): not an item of it, which its panes still show.
+    private var isSelected: Bool { model.listPicked == folder.path }
 
     /// Sessions of this folder whose agent waits for the user.
     private var waiting: Int { model.sessions.filter { WorktreePath.belongs($0.cwd, to: folder.path) && $0.state?.isWaiting == true }.count }
@@ -497,7 +567,7 @@ struct BrowserRow: View {
     @State private var hovering = false
 
     private var agent: SessionInfo? { tab.owner.flatMap { id in model.sessions.first { $0.id == id } } }
-    private var selected: Bool { model.browserInFront == tab.tabID }
+    private var selected: Bool { model.listPicked == nil && model.browserInFront == tab.tabID }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -564,7 +634,7 @@ struct SessionRow: View {
     private var agentID: String { session.agent ?? session.typedAgent ?? "shell" }
     /// One row of the list is selected at a time: a page in front is its
     /// own row's, not the session's that was in front before it (PANE-17).
-    private var selected: Bool { model.selectedSession == session.id && model.browserInFront == nil }
+    private var selected: Bool { model.listPicked == nil && model.selectedSession == session.id && model.browserInFront == nil }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -616,11 +686,12 @@ struct SessionRow: View {
                             + (session.schedulePermissions == .skipAll ? ": it runs without asking for permission" : ", \(session.schedulePermissions?.label.lowercased() ?? "")"))
             }
             AgentStateMark(session: session)
-            if model.foreignSizes[session.id] != nil {
-                Image(systemName: "iphone")
+            // Sized for another device: its own icon, none for a Mac (#157).
+            if model.foreignSizes[session.id] != nil, let symbol = SizeDriver.symbol(for: model.sizeDrivers[session.id]) {
+                Image(systemName: symbol)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .help("Sized for another device")
+                    .help("Sized for \(model.sizeDrivers[session.id]?.name ?? "another device")")
             }
             if hovering, let agent = model.agentID(of: session), !model.handoffTargets(from: agent).isEmpty {
                 Button {

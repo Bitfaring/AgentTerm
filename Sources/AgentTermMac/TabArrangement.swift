@@ -66,6 +66,7 @@ extension AppModel {
     }
 
     func selectTab(id: String) {
+        listPicked = nil
         if let session = session(forTab: id) {
             select(session: session)
         } else if let document = document(forTab: id) {

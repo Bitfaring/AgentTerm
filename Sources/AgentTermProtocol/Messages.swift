@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 28
+public let agenttermProtocolVersion = 31
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -164,13 +164,16 @@ public struct DeviceInfo: Codable, Equatable, Identifiable, Sendable {
     /// When the device last connected, if it ever did after pairing.
     public var lastSeenAt: Date?
     public var isConnected: Bool
+    /// What it said it is (#157); nil until it does.
+    public var kind: DeviceKind?
 
-    public init(id: String, name: String, pairedAt: Date, lastSeenAt: Date?, isConnected: Bool) {
+    public init(id: String, name: String, pairedAt: Date, lastSeenAt: Date?, isConnected: Bool, kind: DeviceKind? = nil) {
         self.id = id
         self.name = name
         self.pairedAt = pairedAt
         self.lastSeenAt = lastSeenAt
         self.isConnected = isConnected
+        self.kind = kind
     }
 }
 
@@ -178,10 +181,11 @@ public struct DeviceInfo: Codable, Equatable, Identifiable, Sendable {
 public enum ClientMessage: Codable, Equatable, Sendable {
     /// Must be the first message on a connection, unless the client is
     /// pairing. The token is a paired device's own, or the host's local one.
-    case hello(token: String, client: String)
+    /// `kind` is what the device is (#157); nil from one that does not say.
+    case hello(token: String, client: String, kind: DeviceKind? = nil)
     /// First message of a device that is not paired yet. Trades a pairing
     /// code, which works once and for a few minutes, for a token of its own.
-    case pair(code: String, device: String)
+    case pair(code: String, device: String, kind: DeviceKind? = nil)
     /// The four below are only accepted from the host's own machine.
     /// Asks for a new pairing code. Any earlier code stops working.
     case createPairingCode
@@ -211,6 +215,8 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// The user is using the session on this client: it becomes the driver
     /// and the session takes its size.
     case takeControl(session: SessionID, size: TermSize)
+    /// Ends a session; an agent's with the shells and pages it opened
+    /// (#145, protocol 29).
     case kill(session: SessionID)
     /// Adds a project folder to the list every client shares.
     case addFolder(path: String)
@@ -423,8 +429,11 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// is attached to. `plan` is the id of a plan that was shown; `prompt`
     /// replaces that plan's prompt when the user edited it.
     /// `folder` is where the receiving agent starts. Nil means the folder
-    /// the conversation happened in.
-    case handoff(agent: String, sessionID: String, cwd: String, target: String, plan: String?, prompt: String?, note: String, size: TermSize, folder: String?)
+    /// the conversation happened in. With `worktree`, a new worktree of that
+    /// folder is made first and the agent starts there (#150).
+    case handoff(
+        agent: String, sessionID: String, cwd: String, target: String, plan: String?, prompt: String?, note: String, size: TermSize, folder: String?,
+        worktree: NewWorktree? = nil)
     /// Asks which folders are inside a folder, or inside home when `path` is nil.
     case listDirectory(path: String?)
     /// The user has seen the report of a part that stopped: it is no longer

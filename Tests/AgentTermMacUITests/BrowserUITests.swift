@@ -296,6 +296,32 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertFalse(server.text("browser_navigate", ["tab": second, "url": page.absoluteString]).failed)
     }
 
+    /// TABS-4 (#145): ending an agent from its tab says what goes with it,
+    /// then ends the shell and closes the page it has beside it: neither is
+    /// left to the user.
+    func testEndingAnAgentEndsItsShellAndClosesItsPage() throws {
+        let page = try makeSite()
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let phone = try device()
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        XCTAssertFalse(opened.failed, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.press(.id("agent-new-shell"))
+        wait("its shell") { phone.sessions.contains { $0.openedBy == agent.id } }
+        func lastTabs() -> [BrowserTabInfo] { phone.messages.reversed().lazy.compactMap { if case .browserTabs(let tabs) = $0 { return tabs } else { return nil } }.first ?? [] }
+        wait("its page listed") { lastTabs().contains { $0.openedBy == agent.id } }
+
+        app.perform("End Session", on: .id("tab-\(agent.id)"))
+        app.wait(for: .text(CloseWords.endMessage(shells: 1, pages: 1)))
+        app.press(.button(CloseWords.endButton))
+        wait("the agent and its shell ended") { !phone.sessions.contains { $0.id == agent.id || $0.openedBy == agent.id } }
+        wait("its page closed", timeout: 20) { lastTabs().isEmpty }
+        XCTAssertTrue(phone.sessions.isEmpty, "a session was left: \(phone.sessions.map(\.title))")
+        XCTAssertFalse(app.exists(.id("strip-browser")), "the page went to the user's Browser tab")
+        XCTAssertFalse(app.exists(.id("strip-shells")), "the shell went to the user's Shells tab")
+    }
+
     /// PANE-20 (#127): the + Shell of an agent's row starts a shell in the
     /// agent's folder, in the agent's tab, shown with the keyboard in it;
     /// not in the user's Shells tab. The agent lists it and runs a command
@@ -314,6 +340,11 @@ final class BrowserUITests: MacUITestCase {
         app.waitForKeyboard(in: "terminal-\(shell.id)", "the new shell")
         XCTAssertFalse(app.exists(.id("strip-shells")), "the shell is in the user's Shells tab")
         XCTAssertFalse(app.exists(.id("tab-\(shell.id)")), "the shell has a tab of its own")
+        // TABS-5 (#146): the agent's item in the row is "Agent", never the
+        // name its tab above says, even before its conversation has one.
+        let item = app.first(.id("item-\(agent.id)"))?.label
+        XCTAssertEqual(item, AgentPartWords.agent)
+        XCTAssertNotEqual(app.first(.id("tab-\(agent.id)"))?.label, item, "the tab and the item read the same")
         let listed = server.text("shell_list")
         XCTAssertFalse(listed.failed, listed.text)
         XCTAssertTrue(listed.text.contains("\(shell.id)"), "the agent does not list it: \(listed.text)")
@@ -1005,6 +1036,68 @@ final class BrowserUITests: MacUITestCase {
         app.wait(for: .button("Pick an Element for an Agent"))
     }
 
+    /// BROWSER-44 (#148): a page the user opens belongs to no folder: one
+    /// Browser, its row above the folders in the list, its tab in the strip
+    /// of every folder, the same page shown from each.
+    func testTheUsersPagesBelongToNoFolder() throws {
+        let other = root.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        let phone = try device()
+        phone.send(.addFolder(path: other.path))
+        app.wait(for: .id("folder-\(other.path)"), timeout: 15)
+        app.press(.id("folder-\(project.path)"))
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait(for: .id("strip-browser"), timeout: 15)
+        func lastTabs() -> [BrowserTabInfo] { phone.messages.reversed().lazy.compactMap { if case .browserTabs(let tabs) = $0 { return tabs } else { return nil } }.first ?? [] }
+        wait("the page told", timeout: 15) { lastTabs().count == 1 }
+        XCTAssertEqual(lastTabs().first?.project, "", "the page is of the folder on show")
+        let row = try XCTUnwrap(app.frame(of: .id("sidebar-browser")))
+        let folder = try XCTUnwrap(app.frame(of: .id("folder-\(project.path)")))
+        XCTAssertLessThan(row.minY, folder.minY, "the Browser row is not above the folders")
+        shot("one-browser")
+
+        // In the other folder's strip too, showing the same page.
+        app.press(.id("folder-\(other.path)"))
+        app.wait(for: .id("strip-browser"), timeout: 15)
+        XCTAssertEqual(app.all(.id("strip-browser")).count, 1)
+        app.press(.id("strip-browser"))
+        app.wait(for: .id("browser-address"), timeout: 15)
+        XCTAssertEqual(lastTabs().count, 1, "another page was opened for the other folder")
+    }
+
+    /// BROWSER-42 (#149): an element picked in an agent's page goes to that
+    /// agent, though another agent of the project was started before it:
+    /// the sheet names it and offers no other.
+    func testAnElementPickedInAnAgentsPageGoesToThatAgent() throws {
+        let page = try makeSite()
+        let (firstServer, first) = try startAgent()
+        defer { firstServer.stop() }
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
+        let middle = "(() => { const r = document.getElementById('greet').getBoundingClientRect(); return (r.x + r.width / 2) + ',' + (r.y + r.height / 2); })()"
+        let place = server.text("browser_evaluate", ["tab": tab, "script": middle])
+        let point = place.text.split(whereSeparator: { !"0123456789.,".contains($0) }).joined().split(separator: ",").compactMap { Double($0) }
+        XCTAssertEqual(point.count, 2, place.text)
+        let device = try self.device()
+        device.send(.attach(session: first.id, size: .default))
+        device.send(.attach(session: agent.id, size: .default))
+
+        app.press(.id("browser-pick"))
+        app.wait(for: .button("Stop Picking"))
+        device.send(.browserAsk(id: 4100, request: .tap(tab: tab, x: point[0], y: point[1])))
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        XCTAssertFalse(app.exists(.id("pick-agent")), "an agent's page offers a choice of agent")
+        XCTAssertTrue(app.exists(.text(BrowserWords.sendsTo(agent.displayName))), "the sheet does not say which agent it goes to")
+        app.write("Make this button blue", into: .id("pick-note"))
+        app.press(.button("Send"))
+        wait("the note typed into the page's agent", timeout: 15) { device.text(agent.id).contains("Make this button blue") }
+        XCTAssertFalse(device.text(first.id).contains("Make this button blue"), "the element went to the other agent")
+    }
+
     /// BROWSER-20: a device watches and uses an agent's page while the Mac's
     /// window is minimized, as when the user is away from it: pictures come,
     /// and a touch on a field, text typed and a touch on a button reach the
@@ -1103,12 +1196,13 @@ final class BrowserUITests: MacUITestCase {
             XCTFail("no tabs after Show As")
         }
 
-        // A tab of the user's, in the agent's project, not in front on the Mac.
+        // A tab of the user's, of no folder whatever the device names (#148),
+        // not in front on the Mac.
         let project = try XCTUnwrap(phone.messages.lazy.compactMap { if case .browserTabs(let tabs) = $0 { return tabs.first { $0.id == tab }?.project } else { return nil } }.first)
         // Empty, then the page typed into its address bar, as the iPhone does.
         guard case .opened(let own)? = ask(.newTab(project: project, url: nil, profile: nil, private: false)) else { return XCTFail("no tab opened") }
         func lastTabs() -> [BrowserTabInfo] { phone.messages.reversed().lazy.compactMap { if case .browserTabs(let tabs) = $0 { return tabs } else { return nil } }.first ?? [] }
-        wait("the device's tab listed as the user's") { lastTabs().contains { $0.id == own && $0.openedBy == nil && $0.project == project } }
+        wait("the device's tab listed as the user's") { lastTabs().contains { $0.id == own && $0.openedBy == nil && $0.project == "" } }
         if case .refused(let why)? = ask(.navigate(tab: own, url: page.absoluteString)) { XCTFail(why) }
         wait("the page loaded in the device's tab, not \(lastTabs().first { $0.id == own }?.url ?? "")") {
             lastTabs().contains { $0.id == own && $0.url == page.absoluteString && $0.title == "Test page" }

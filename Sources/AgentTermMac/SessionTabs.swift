@@ -99,6 +99,14 @@ private struct SessionTab: View {
     private var selected: Bool { paneFront == TabID.session(session) }
     private var agentID: String { session.agent ?? session.typedAgent ?? "shell" }
 
+    /// What its × does: an agent's shells and pages end with it (#145).
+    private var endHelp: String {
+        let tab = TabID.session(session)
+        let own = model.companions
+        let more = (own.shells[tab]?.count ?? 0) + (own.browsers[tab]?.count ?? 0)
+        return more == 0 ? "End this session" : "End this session, with its shells and pages"
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: Theme.symbol(for: agentID))
@@ -112,12 +120,13 @@ private struct SessionTab: View {
                 .frame(maxWidth: 190, alignment: .leading)
                 .fixedSize(horizontal: true, vertical: false)
             AgentStateMark(session: session)
-            if model.foreignSizes[session.id] != nil {
-                Image(systemName: "iphone").font(.system(size: 9.5)).foregroundStyle(.secondary)
+            // Sized for another device: its own icon, none for a Mac (#157).
+            if model.foreignSizes[session.id] != nil, let symbol = SizeDriver.symbol(for: model.sizeDrivers[session.id]) {
+                Image(systemName: symbol).font(.system(size: 9.5)).foregroundStyle(.secondary)
             }
             // The close button takes the shortcut's place under the pointer,
             // so the tab does not change width.
-            TabTrailing(id: TabID.session(session), number: number, hovering: hovering, closeHelp: "End this session") { model.requestEnd(session.id) }
+            TabTrailing(id: TabID.session(session), number: number, hovering: hovering, closeHelp: endHelp) { model.requestEnd(session.id) }
         }
         .padding(.leading, 10)
         .padding(.trailing, 6)
@@ -155,8 +164,9 @@ private struct SessionTab: View {
 
 /// The tab of one of a project's groups of the user's own (#127): its
 /// shells, its pages, its diffs or its files, with how many it holds. The
-/// row under the strip has them. Its × closes the one shown; the Browser's
-/// closes them all, asked first when there are several, as Chrome's window.
+/// row under the strip has them, each with its own ×. The tab's × closes
+/// all it holds, asked first as `CloseWords.asks` says (#145), as Chrome's
+/// window closes its tabs.
 private struct HolderTabLabel: View {
     @EnvironmentObject private var model: AppModel
     // What it holds is read through the model, but these say when it
@@ -174,19 +184,10 @@ private struct HolderTabLabel: View {
 
     private var selected: Bool { paneFront == id }
 
-    private func close() {
-        if kind == .browser {
-            model.requestCloseBrowser(in: project)
-        } else if let shown = model.shownMember(of: id) {
-            if let session = model.session(forTab: shown) {
-                model.requestEnd(session.id)
-            } else if let document = model.document(forTab: shown) {
-                files.requestClose(document.path)
-            } else {
-                model.closeDiffTab(shown)
-            }
-        }
-    }
+    private func close() { model.requestCloseGroup(id) }
+
+    /// What its × and its menu say: "End Shells", "Close Browser…".
+    private func closing(_ count: Int) -> String { CloseWords.groupAction(kind) + (CloseWords.asks(kind, count: count) ? "…" : "") }
 
     var body: some View {
         let members = model.members(of: id)
@@ -203,7 +204,7 @@ private struct HolderTabLabel: View {
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
             if dirty { Circle().fill(Color.orange).frame(width: 6, height: 6) }
-            TabTrailing(id: id, number: number, hovering: hovering, closeHelp: kind == .browser ? "Close the browser" : "Close the one shown", close: close)
+            TabTrailing(id: id, number: number, hovering: hovering, closeHelp: closing(count), close: close)
         }
         .padding(.leading, 10)
         .padding(.trailing, 6)
@@ -221,7 +222,7 @@ private struct HolderTabLabel: View {
             Divider()
             if kind == .shells { Button("New Shell") { model.launch(nil) } }
             if kind == .browser { Button("New Page") { model.openBrowserTab() } }
-            Button(kind == .browser ? "Close Browser" : "Close the One Shown", action: close)
+            Button(closing(model.members(of: id).count), action: close)
             CloseOthersButton(request: .init(keepGroup: id, pane: paneID))
             TabStripMenu()
         }
@@ -230,7 +231,7 @@ private struct HolderTabLabel: View {
         .accessibilityIdentifier("strip-\(kind.rawValue)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.selectStripTab(id) }
-        .accessibilityAction(named: kind == .browser ? "Close Browser" : "Close the One Shown", close)
+        .accessibilityAction(named: CloseWords.groupAction(kind), close)
         .accessibilityAction(named: "Close Other Tabs") { model.closeTabs(.init(keepGroup: id, pane: paneID)) }
         .accessibilityAction(named: "Close All Tabs") { model.closeTabs(.init(pane: paneID)) }
     }

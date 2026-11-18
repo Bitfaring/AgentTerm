@@ -30,6 +30,8 @@ public final class DeviceRegistry {
         var tokenHash: String
         var pairedAt: Date
         var lastSeenAt: Date?
+        /// What the device said it is, the last time it signed in (#157).
+        var kind: DeviceKind?
     }
 
     private let localToken: String
@@ -64,7 +66,7 @@ public final class DeviceRegistry {
 
     /// Trades a valid code for a new device and its token. The code is used
     /// up whether or not another device tries it afterwards.
-    public func redeem(code attempt: String, deviceName: String) -> (device: DeviceInfo, token: String)? {
+    public func redeem(code attempt: String, deviceName: String, kind: DeviceKind? = nil) -> (device: DeviceInfo, token: String)? {
         guard let code, now() < code.expiresAt, Self.constantTimeEquals(attempt, code.value) else { return nil }
         self.code = nil
         let token = Self.randomToken()
@@ -74,7 +76,8 @@ public final class DeviceRegistry {
             name: trimmed.isEmpty ? "iPhone" : String(trimmed.prefix(60)),
             tokenHash: Self.hash(token),
             pairedAt: now(),
-            lastSeenAt: nil
+            lastSeenAt: nil,
+            kind: kind
         )
         records.append(record)
         save()
@@ -84,11 +87,13 @@ public final class DeviceRegistry {
     // MARK: Authentication
 
     /// - Parameter isLocal: whether the connection arrived on the loopback interface.
-    public func authenticate(token: String, isLocal: Bool) -> Identity? {
+    /// - Parameter kind: what the device says it is (#157), kept when it says.
+    public func authenticate(token: String, isLocal: Bool, kind: DeviceKind? = nil) -> Identity? {
         if isLocal, Self.constantTimeEquals(token, localToken) { return .local }
         let hash = Self.hash(token)
         guard let index = records.firstIndex(where: { Self.constantTimeEquals($0.tokenHash, hash) }) else { return nil }
         records[index].lastSeenAt = now()
+        if let kind { records[index].kind = kind }
         save()
         return .device(id: records[index].id)
     }
@@ -109,7 +114,7 @@ public final class DeviceRegistry {
     }
 
     private func info(_ record: Record, connected: Bool) -> DeviceInfo {
-        DeviceInfo(id: record.id, name: record.name, pairedAt: record.pairedAt, lastSeenAt: record.lastSeenAt, isConnected: connected)
+        DeviceInfo(id: record.id, name: record.name, pairedAt: record.pairedAt, lastSeenAt: record.lastSeenAt, isConnected: connected, kind: record.kind)
     }
 
     private func save() {

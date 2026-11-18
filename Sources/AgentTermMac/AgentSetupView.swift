@@ -39,14 +39,14 @@ struct AgentSetupList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let report = model.agentSetup {
-                ForEach(report.agents) { state in
-                    AgentSetupRow(state: state, busy: report.busy.contains(state.agent))
-                }
+                // Above the agents, in sight however many there are (#153).
+                // Another Mac's are set up from here too (#155).
                 if model.isRemote {
-                    Label("These are \(model.remote?.name ?? "the other Mac")'s agents: set them up in AgentTerm on that Mac.", systemImage: "info.circle")
+                    Label("These are \(model.remote?.name ?? "the other Mac")'s agents: Install changes their configuration there.", systemImage: "info.circle")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
-                } else if report.needsSetup {
+                }
+                if report.needsSetup {
                     HStack {
                         Spacer()
                         Button(AgentSetupWords.installAll) { model.runAgentSetup(agent: nil) }
@@ -54,6 +54,9 @@ struct AgentSetupList: View {
                             .disabled(!report.busy.isEmpty)
                             .accessibilityIdentifier("setup-all")
                     }
+                }
+                ForEach(report.agents) { state in
+                    AgentSetupRow(state: state, busy: report.busy.contains(state.agent))
                 }
             } else {
                 HStack(spacing: 8) {
@@ -91,7 +94,7 @@ private struct AgentSetupRow: View {
                     if busy {
                         ProgressView().controlSize(.small)
                         Text(AgentSetupWords.working).font(.system(size: 11.5)).foregroundStyle(.secondary)
-                    } else if state.installed && !model.isRemote {
+                    } else if state.installed {
                         if state.hooks == true || state.mcp == true || state.statusLine == true {
                             Button(AgentSetupWords.remove) { model.runAgentSetup(agent: state.agent, remove: true) }
                                 .accessibilityIdentifier("setup-remove-\(state.agent)")

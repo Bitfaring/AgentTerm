@@ -41,3 +41,10 @@ public enum HolderKind: String, CaseIterable, Sendable {
     /// Its name with how many it holds, as its tab shows it: "Shells (2)".
     public func label(_ count: Int) -> String { count > 1 ? "\(title) (\(count))" : title }
 }
+
+/// What an agent itself is called beside its own shells and pages: the
+/// first item of its row on the Mac, a part of its screen on the iPhone.
+/// Never its name, which its tab says already (#146).
+public enum AgentPartWords {
+    public static let agent = "Agent"
+}

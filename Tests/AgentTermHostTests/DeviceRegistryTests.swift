@@ -71,7 +71,7 @@ final class DeviceRegistryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: file) }
         let first = registry(file: file)
         let code = first.createCode()
-        let paired = try XCTUnwrap(first.redeem(code: code.code, deviceName: "iPhone"))
+        let paired = try XCTUnwrap(first.redeem(code: code.code, deviceName: "iPhone", kind: .iphone))
 
         let saved = try String(contentsOf: file, encoding: .utf8)
         XCTAssertFalse(saved.contains(paired.token), "only a hash of the token is stored")
@@ -83,5 +83,9 @@ final class DeviceRegistryTests: XCTestCase {
         XCTAssertEqual(second.devices().map(\.id), [paired.device.id])
         XCTAssertEqual(second.authenticate(token: paired.token, isLocal: false), .device(id: paired.device.id))
         XCTAssertNil(second.redeem(code: code.code, deviceName: "x"), "pairing codes do not survive a restart")
+        // PAIR-7 (#157): what it said it is is kept, and said again when it signs in.
+        XCTAssertEqual(second.devices().first?.kind, .iphone)
+        XCTAssertEqual(second.authenticate(token: paired.token, isLocal: false, kind: .ipad), .device(id: paired.device.id))
+        XCTAssertEqual(registry(file: file).devices().first?.kind, .ipad)
     }
 }

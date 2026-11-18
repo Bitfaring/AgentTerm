@@ -152,6 +152,8 @@ public final class HostServer {
         /// What it called itself when it said hello: "Mac" for the Mac's own
         /// app, a device's name for a device.
         var name = ""
+        /// What the device said it is (#157); nil when it did not.
+        var kind: DeviceKind?
         var identity: DeviceRegistry.Identity?
         var attached: Set<SessionID> = []
         /// Sessions whose screen is being written out for this client, with
@@ -171,6 +173,8 @@ public final class HostServer {
         var authenticated: Bool { identity != nil }
         /// The Mac's own apps may pair and revoke devices.
         var isAdmin: Bool { identity == .local }
+        /// A paired device: the user's, from afar.
+        var isDevice: Bool { if case .device = identity { return true } else { return false } }
 
         init(id: ClientID, connection: NWConnection, isLocal: Bool) {
             self.id = id
@@ -1821,9 +1825,10 @@ public final class HostServer {
     // MARK: Messages
 
     private func handle(_ message: ClientMessage, from client: Client) {
-        if case .hello(let token, let name) = message {
+        if case .hello(let token, let name, let kind) = message {
             client.name = name
-            guard let identity = registry.authenticate(token: token, isLocal: client.isLocal) else {
+            client.kind = kind
+            guard let identity = registry.authenticate(token: token, isLocal: client.isLocal, kind: kind) else {
                 // An agent's server that is refused leaves its agent without
                 // shells, and nothing else would say so (#58).
                 if name == Self.agentShellsClient, client.isLocal { setAgentShellsRefused(true) }
@@ -1834,8 +1839,9 @@ public final class HostServer {
             admit(client, as: identity)
             return
         }
-        if case .pair(let code, let device) = message {
-            guard !client.authenticated, let paired = registry.redeem(code: code, deviceName: device) else {
+        if case .pair(let code, let device, let kind) = message {
+            client.kind = kind
+            guard !client.authenticated, let paired = registry.redeem(code: code, deviceName: device, kind: kind) else {
                 refuse(client, "invalid pairing code")
                 return
             }
@@ -1856,8 +1862,11 @@ public final class HostServer {
             if let report = lastAgentSetup { send(.agentSetup(report), to: client) }
             reportAgentSetup(to: client)
         case .runAgentSetup(let agent, let remove):
-            // Into this Mac's agents' configuration: from its own app only.
-            guard client.isAdmin else { return send(.error("Only AgentTerm on this Mac sets its agents up."), to: client) }
+            // Into this Mac's agents' configuration, with AgentTerm's own
+            // commands only: from its own app, or a paired device (the
+            // owner's decision, #155, 2026-11-18). An agent's server is not
+            // the user.
+            guard client.isAdmin || client.isDevice else { return send(.error("Only the user's devices set this Mac's agents up."), to: client) }
             runAgentSetup(agent: agent, remove: remove)
         case .createPairingCode:
             guard client.isAdmin else { return send(.error("not allowed"), to: client) }
@@ -1999,7 +2008,7 @@ public final class HostServer {
             used(by: client)
         case .kill(let id):
             guard let session = sessions[id] else { return }
-            end(session)
+            endWithWhatItOpened(session)
         case .setStartAtLogin(let wanted):
             guard let item = configuration.loginItem else { return }
             startAtLoginChosen = true
@@ -2326,14 +2335,14 @@ public final class HostServer {
             let id = UUID().uuidString
             handoffPlans[id] = (plan, Date())
             send(.handoffPlan(id: id, prompt: plan.prompt), to: client)
-        case .handoff(let agent, let sessionID, let cwd, let target, let planID, let prompt, let note, let size, let folder):
+        case .handoff(let agent, let sessionID, let cwd, let target, let planID, let prompt, let note, let size, let folder, let worktree):
             let home = configuration.home
             // Only a plan this host made is honored, so a client names a
             // plan and never a path to write to.
             let plan = planID.flatMap { handoffPlans.removeValue(forKey: $0) }?.plan
             work(
                 for: client,
-                { () -> Result<(Handoff.Prepared, String), Error> in
+                { () -> Result<(prepared: Handoff.Prepared, branch: String?, problem: String?), Error> in
                     // Looked up again here: the conversation's files are on this
                     // machine, and what the client holds is only a description.
                     let found =
@@ -2341,14 +2350,29 @@ public final class HostServer {
                         ?? AgentHistory.allConversations(home: home).first { $0.agent == agent && $0.sessionID == sessionID }
                     guard let found else { return .failure(HandoffRequestError.notFound) }
                     return Result {
-                        let prepared = try Handoff.prepare(found, to: target, plan: plan, prompt: prompt, note: note, in: folder)
-                        return (prepared, prepared.directory)
+                        // In a new worktree (#150): made first, and said when it cannot be.
+                        if let worktree {
+                            let made = try Handoff.prepareInNewWorktree(
+                                found, to: target, worktree: worktree, plan: plan, prompt: prompt, note: note, of: folder)
+                            return (made.prepared, made.branch, made.problem)
+                        }
+                        return (try Handoff.prepare(found, to: target, plan: plan, prompt: prompt, note: note, in: folder), nil, nil)
                     }
                 }
             ) { server, client, result in
                 switch result {
-                case .success(let (prepared, directory)):
-                    server.create(CreateRequest(command: prepared.command, cwd: directory, title: Handoff.name(of: target), size: size), for: client)
+                case .success(let made):
+                    if let problem = made.problem { server.send(.error(problem), to: client) }
+                    let request = CreateRequest(command: made.prepared.command, cwd: made.prepared.directory, title: Handoff.name(of: target), size: size)
+                    if let created = server.create(request, for: client), let branch = made.branch {
+                        server.sessions[created]?.info.branch = branch
+                        server.broadcastSessions()
+                    }
+                    if made.branch != nil, let project = WorktreePath.project(of: made.prepared.directory) {
+                        server.sendWorktrees(of: project, to: server.clients.values.filter(\.authenticated).map(\.id))
+                    }
+                case .failure(let error as GitWorktrees.Failure):
+                    server.send(.error("The worktree could not be made: \(error.localizedDescription)"), to: client)
                 case .failure(let error):
                     server.send(.error("\(error)"), to: client)
                 }
@@ -3454,7 +3478,7 @@ public final class HostServer {
             return answerBrowser(waiting, .refused("This is not the session of an agent AgentTerm started, or that session has ended."))
         }
         switch request {
-        case .picture, .takeOver, .giveBack:
+        case .picture, .takeOver, .giveBack, .profile:
             // The user's, from a device.
             return answerBrowser(waiting, .refused("That is for the user, not for an agent."))
         default:
@@ -3634,10 +3658,29 @@ public final class HostServer {
     }
 
     /// Who a client is, for the others' banners (#120): the Mac's own app
-    /// by the Mac's name, a device by the name it gave.
+    /// by the Mac's name, a device by the name it gave and what it said it
+    /// is (#157).
     private func sizeDriver(_ client: Client) -> SizeDriver {
-        if client.identity == .local, client.name == "Mac" { return SizeDriver(name: Host.current().localizedName ?? "Mac", isMac: true) }
-        return SizeDriver(name: client.name.isEmpty ? "another device" : client.name, isMac: false)
+        if client.identity == .local, client.name == "Mac" { return SizeDriver(name: Host.current().localizedName ?? "Mac", kind: .mac) }
+        return SizeDriver(name: client.name.isEmpty ? "another device" : client.name, kind: client.kind)
+    }
+
+    /// Ends a session the user asked to end, and with an agent's the shells
+    /// and pages it opened (#145): its tab holds them, and closing it closes
+    /// all it holds, on the Mac and on the iPhone alike. An agent that ends
+    /// by itself still leaves them to the user.
+    private func endWithWhatItOpened(_ session: Session) {
+        let id = session.info.id
+        if let providerID = browserProvider, let provider = clients[providerID] {
+            for page in browserTabsList where page.openedBy == id {
+                // As a device's close: whatever the app answers, nobody waits for it.
+                let call = nextBrowserCall
+                nextBrowserCall += 1
+                send(.browserCall(id: call, agent: nil, request: .close(tab: page.id)), to: provider)
+            }
+        }
+        for shell in sessions.values where shell.info.openedBy == id { end(shell) }
+        end(session)
     }
 
     /// Ends a session as closing its window does, and kills what is left of

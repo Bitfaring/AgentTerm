@@ -820,12 +820,13 @@ private struct BrowserCommands: View {
     private var tab: BrowserTab? { model.browserInFront.flatMap { model.browsers.tab(forTab: $0) } }
 
     var body: some View {
+        // On another Mac too, opened there (#147).
         Button("New Browser Tab") { model.openBrowserTab() }
             .keyboardShortcut("t", modifiers: [.command, .option])
-            .disabled(model.isRemote || model.status != .connected)
+            .disabled(model.status != .connected)
         Button("New Private Tab") { model.openBrowserTab(isPrivate: true) }
             .keyboardShortcut("t", modifiers: [.command, .option, .shift])
-            .disabled(model.isRemote || model.status != .connected)
+            .disabled(model.status != .connected)
         Divider()
         Button("Open Location") { model.browserAddressRequest += 1 }
             .keyboardShortcut("l")

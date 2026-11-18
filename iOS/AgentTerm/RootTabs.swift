@@ -189,6 +189,9 @@ private struct SettingsTab: View {
                     )
                 }
 
+                // As the Mac's Settings has them (#155).
+                MacSettingsSection(macName: macName)
+
                 Section {
                     Toggle(TelemetryPreferences.Wording.crashTitle, isOn: $privacy.crashReports)
                     Toggle(TelemetryPreferences.Wording.usageTitle, isOn: $privacy.usageStatistics)
@@ -540,7 +543,6 @@ private struct ScheduleForm: View {
     @State private var dates: [Date] = []
     @State private var limited = false
     @State private var longest = 30
-    @State private var editingPrompt = false
 
     private var edits: [ScheduleEdit] { (model.schedules.first { $0.id == schedule.id }?.edits ?? []).reversed() }
 
@@ -564,8 +566,6 @@ private struct ScheduleForm: View {
                 Button("Choose Another Folder…") { choosingFolder = true }
                     .accessibilityIdentifier("schedule-choose-folder")
                 TextField("Prompt", text: $schedule.prompt, axis: .vertical).lineLimit(3...8)
-                Button("Open the Prompt in a Larger Editor…") { editingPrompt = true }
-                    .accessibilityIdentifier("schedule-prompt-editor")
             }
             Section {
                 Picker("When", selection: $kind) {
@@ -662,11 +662,6 @@ private struct ScheduleForm: View {
             }
         }
         .navigationTitle(isNew ? "New Schedule" : schedule.name)
-        .sheet(isPresented: $editingPrompt) {
-            PromptEditorSheet(prompt: $schedule.prompt, folder: schedule.folder)
-                .environmentObject(model)
-                .preferredColorScheme(.dark)
-        }
         .toolbar {
             Button("Save") { save() }
                 .disabled(
@@ -736,57 +731,5 @@ private struct ScheduleForm: View {
         }
         model.save(schedule)
         dismiss()
-    }
-}
-
-/// The prompt in a larger editor (#47), with the files of the schedule's
-/// folder at hand: one that is picked is named in the prompt.
-private struct PromptEditorSheet: View {
-    @EnvironmentObject private var model: PhoneModel
-    @Environment(\.dismiss) private var dismiss
-    @Binding var prompt: String
-    let folder: String
-    @State private var query = ""
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                TextEditor(text: $prompt)
-                    .font(.body)
-                    .padding(8)
-                    .accessibilityIdentifier("prompt-editor")
-                Divider()
-                VStack(alignment: .leading, spacing: 6) {
-                    TextField("Find a file of \((folder as NSString).lastPathComponent) to name", text: $query)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("prompt-files")
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(model.foundFiles.prefix(30), id: \.self) { file in
-                                Button {
-                                    // Named as the agent will find it from its folder.
-                                    prompt += (prompt.isEmpty || prompt.hasSuffix(" ") || prompt.hasSuffix("\n") ? "" : " ") + file
-                                } label: {
-                                    Label(file, systemImage: "plus.circle").font(.footnote).lineLimit(1).truncationMode(.head)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.vertical, 6)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier("prompt-file-" + file)
-                            }
-                        }
-                    }
-                    .frame(height: 150)
-                }
-                .padding(12)
-            }
-            .navigationTitle("Prompt")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }
-        .task(id: query) { model.findFiles(query, in: folder) }
-        .onDisappear { model.clearSearch() }
     }
 }

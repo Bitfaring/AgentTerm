@@ -77,15 +77,22 @@ extension AppModel {
     /// The project of a group or an item. A session is its folder's as the
     /// list at the left has it: started in the folder or in a worktree of it.
     func project(ofTab id: String) -> String {
+        // The one Browser and the user's pages are every project's (#148):
+        // the one on show.
+        if id == Self.theBrowser { return shownProject }
         if let holder = TabID.holder(of: id) { return holder.project }
         if let session = session(forTab: id) {
             return folders.first { WorktreePath.belongs(session.cwd, to: $0.path) }?.path ?? ""
         }
         if let document = document(forTab: id) { return project(ofPath: document.path) }
         if let diff = diffTabs.first(where: { $0.tabID == id }) { return project(ofPath: diff.folder) }
-        if let tab = browsers.tab(forTab: id) { return tab.project }
+        if let tab = browsers.tab(forTab: id) { return tab.owner == nil ? shownProject : tab.project }
         return ""
     }
+
+    /// The user's pages, all in one group of no folder (#148), as a window
+    /// of Chrome holds its tabs.
+    static let theBrowser = TabID.holder(.browser, "")
 
     /// The layout of the project on show.
     var paneLayout: PaneLayout {
@@ -226,6 +233,7 @@ extension AppModel {
     /// showed; an agent's tab has the keyboard in the agent, whatever part
     /// of its area had it (#69).
     func selectStripTab(_ id: String) {
+        listPicked = nil
         if TabID.holder(of: id) == nil {
             if session(forTab: id) != nil { selectTab(id: id) }
             return
@@ -245,12 +253,43 @@ extension AppModel {
 
     /// Closes a project's Browser group, all of its pages: asked first when
     /// there are several.
-    func requestCloseBrowser(in project: String) {
-        let pages = userPages(in: project)
-        if pages.count > 1 { pendingBrowserClose = project } else { pages.forEach(closeBrowserTab) }
+    func requestCloseBrowser(in project: String) { requestCloseGroup(TabID.holder(.browser, project)) }
+
+    // MARK: Closing a tab of the strip, all it holds (#145)
+
+    /// Closes a tab of the strip and everything in it. One of the user's
+    /// own is asked first as `CloseWords.asks` says; an agent's is ending
+    /// the agent, which is always asked, and the host ends its shells and
+    /// closes its pages with it.
+    func requestCloseGroup(_ group: String) {
+        if let holder = TabID.holder(of: group) {
+            if CloseWords.asks(holder.kind, count: members(of: group).count) { pendingGroupClose = group } else { closeGroup(group) }
+        } else if let agent = session(forTab: group) {
+            requestEnd(agent.id)
+        }
+    }
+
+    /// Closes a tab of the user's own, once asked. A file with unsaved
+    /// changes is asked about, and stays open until it is answered.
+    func closeGroup(_ group: String) {
+        guard let holder = TabID.holder(of: group) else { return }
+        let project = holder.project
+        switch holder.kind {
+        case .shells:
+            for shell in userShells(in: project) { close(shell.id) }
+        case .browser:
+            closeBrowser(in: project)
+        case .diffs:
+            for diff in userDiffs(in: project) { closeDiffTab(diff.tabID) }
+        case .files:
+            let theirs = Set(userFiles(in: project).map(\.path))
+            files.closeAll(except: nil, keeping: Set(files.documents.map(\.path)).subtracting(theirs))
+        }
     }
 
     func closeBrowser(in project: String) {
+        // Another Mac's are closed there (#147).
+        if isRemote { return userPages(in: project).forEach { askRemoteBrowser(.close(tab: $0.id)) } }
         for page in userPages(in: project) { browsers.close(page) }
         groupShown[TabID.holder(.browser, project)] = nil
         if let front = browserInFront, browsers.tab(forTab: front) == nil { browserInFront = nil }
@@ -266,9 +305,18 @@ extension AppModel {
         guard sessionsKnown, tabLayoutKnown else { return }
         let live = Set(liveTabIDs)
         var byProject: [String: [String]] = [:]
-        for id in tabLayout.order where live.contains(id) { byProject[project(ofTab: id), default: []].append(id) }
         var all = workspaces
-        for key in Set(all.keys).union(byProject.keys) {
+        // The one Browser is in every project's strip (#148), where the
+        // arrangement has it.
+        let keys = Set(all.keys).union([shownProject]).union(tabLayout.order.filter { live.contains($0) && $0 != Self.theBrowser }.map { project(ofTab: $0) })
+        for id in tabLayout.order where live.contains(id) {
+            if id == Self.theBrowser {
+                for key in keys { byProject[key, default: []].append(id) }
+            } else {
+                byProject[project(ofTab: id), default: []].append(id)
+            }
+        }
+        for key in keys.union(byProject.keys) {
             var layout = all[key] ?? PaneLayout()
             // One pane each: the user does not split it, and one split by
             // an earlier build is put back together, its tab in front kept.

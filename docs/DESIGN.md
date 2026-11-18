@@ -80,7 +80,9 @@ implements "the client being used wins":
   typed. The PTY takes the driver's size. `resized` tells every other client
   who the driver is (`SizeDriver`, #120): the name the client gave in its
   `hello`, or the Mac's name for the Mac's own app (a local client that
-  called itself "Mac").
+  called itself "Mac"), and what it is (`DeviceKind`: mac, iphone, ipad,
+  #157), from its `hello` or `pair`; the apps show an iPhone's or an iPad's
+  icon by it, and none for a Mac.
 - Attaching and resizing never make a client the driver, unless it is the only
   one attached. The Mac app attaches to every session to show it; if that took
   the size, a session opened on a phone would jump to the Mac's size a moment
@@ -208,14 +210,14 @@ Client to host:
 
 | Message | Meaning |
 |---|---|
-| `hello(token, client)` | Must come first. Wrong token closes the connection. |
+| `hello(token, client, kind)` | Must come first. Wrong token closes the connection. `kind` is what the device is (#157, protocol 30); the host keeps it with the paired device. |
 | `list` | Ask for the session list. |
 | `agents(refresh)` | Ask which agent CLIs are installed. |
 | `create(command, cwd, title, size, typed)` | Start a session and attach to it. `typed`, when there is one, is typed into it once its shell has written something (its prompt), without Return: the Mac's guide to installing an agent puts its maker's command there for the user to read and run (#50). |
 | `attach(session, size, have)` / `detach(session)` | Start or stop receiving a session. `have` is how far into the session's output the client's terminal already is; nil for a terminal that starts empty. |
 | `resize(session, size)` | Report that this client's grid changed. Applied only if it drives the session. |
 | `takeControl(session, size)` | The user is using the session here: become the driver at this size. |
-| `kill(session)` | Hang up the session (SIGHUP, then SIGKILL after 3 s). |
+| `kill(session)` | Hang up the session (SIGHUP, then SIGKILL after 3 s). An agent's session is ended with the shells it opened, and the app that shows the browser is asked to close the pages it opened (`browserCall` `close`, as a device's: nobody waits for the answer) (#145, protocol 29). An agent that ends by itself leaves them to the user. |
 | `addFolder(path)` / `removeFolder(path)` | Change the shared folder list. |
 | `diff(path)` / `diffFile(path, file, staged)` | A folder's uncommitted changes without the diffs, then one file's diff: its staged part, or what is only in the working tree. |
 | `gitStage(path, files)` / `gitUnstage(path, files)` / `gitCommit(path, message)` | Change what the next commit contains (no files means all), and commit it. Answered with `diff`, after an `error` carrying git's words if it failed. |
@@ -243,7 +245,7 @@ Client to host:
 | `historyOlder(path, before)` / `readConversation(agent, sessionID, cwd)` / `searchHistory(search, path, query, titlesOnly)` / `markConversation(id, pinned, hidden)` / `deleteConversation(…)` / `deleteConversations(ids)` / `exportConversation(…)` | What History does with the conversations (#46), answered with `historyOlder(path, conversations, more)`, `conversationRead(id, details)`, `historyFound(search, hits)` and `historySearchEnded(search)`, `historyMarks(pinned, hidden)` to every device (and to one that connects), `conversationDeleted(id)` to every device, `conversationExported(id, path)`. With `titlesOnly` a search reads no file (#50). `deleteConversations` deletes those named, or every one on the host when `ids` is nil, leaving the pinned ones and those a session is having, Antigravity's being refused by `AgentHistory.delete`; each deleted is told to every device with `conversationDeleted`, and the sender gets `conversationsDeleted(deleted, kept)` (#50). The host does all of it, for the Mac it runs on too, so that every device shows the same. A conversation is named by its agent, its id and its folder and looked up among the agents' own files (`AgentHistory.conversation`), never taken as a path from a client. `AgentHistory.details` reads a file line by line into `ConversationDetails`: entries (user, agent, tool), first and last time, model, tokens, branch, files written; how each agent writes these was read from the files of the versions in use on 2026-11-14 (Claude Code 2.1, Codex CLI 0.169, Copilot CLI 1.0.112, Antigravity CLI). `AgentHistory.search` looks first at the file's bytes and reads a file as a conversation only when they hold the words. A client has one search of the history going for each of the two lists the Mac shows side by side, everywhere's and a folder's, and its searches for text apart: each kind is numbered by the client by itself (#50). Pins and hidden ones are kept in `history.json`; a transcript is written to `transcripts/` in the host's own folder. Filtering and grouping are `HistoryFilter` in `AgentTermProtocol`, which both apps apply to what was listed. |
 | `resume(agent, sessionID, cwd, size)` | Reopen a conversation in its agent, in a new session. |
 | `handoffPlan(agent)` | What the receiving agent would be told, to show it before handing off. |
-| `handoff(agent, sessionID, cwd, target, plan, prompt, note, size)` | Hand a conversation to another agent, in a new session. |
+| `handoff(agent, sessionID, cwd, target, plan, prompt, note, size, folder, worktree)` | Hand a conversation to another agent, in a new session; in `folder`, or with `worktree` in a new worktree of it, made first (#150, protocol 31). |
 | `files(path)` / `readFile(path)` / `writeFile(path, text)` | A folder's files, what a file holds, and saving it. |
 | `findFiles(search, path, query)` / `findText(search, path, query, caseSensitive)` / `stopSearch(search)` | Searching a folder's files (#45), answered with `filesFound(search, files, among)`, and with any number of `textFound(search, matches)` and one `searchEnded(search, truncated, problem)`. `search` is a number the client picks, so an answer to what was typed before is told from the answer to what is typed now. `FileSearch` (host) does it: the files are `git ls-files --stage` and `--others --exclude-standard`, each submodule's own the same way, or a walk of a folder that is no repository; names are ranked in Swift; text is `git grep --untracked -I -n --column -F -z` in the repository and in each submodule, read as it is printed (`Subprocess.stream`) and ended once 2,000 lines were had or the search was stopped, which is looked at every tenth of a second while git prints nothing, and a walk that reads each file elsewhere. The host keeps a folder's list of files for 30 seconds and reads it again when a search is opened (an empty query). ripgrep is not used: it is not installed on the Mac this was built on, so it could not be tried (decided by the owner on 2026-11-14). On this Mac the Mac app calls `FileSearch` itself. |
 | `createFile(directory, name, isDirectory)` / `renameFile(path, name)` / `trashFile(path)` | Change the files. Answered with the folder's listing. |
@@ -1166,7 +1168,8 @@ say so itself: that one is the agent's to tell.
 **In the agent's own configuration** (#129). What AgentTerm needs of an
 agent is in the agent's own configuration, at the user's scope, once the
 user asked: Install in Settings > Hooks & MCP, which the host runs
-(`runAgentSetup`, from this Mac's own app only), or the commands the pane
+(`runAgentSetup`, from this Mac's own app or a paired device, #155: the
+host runs AgentTerm's own commands only, never one a client names), or the commands the pane
 shows, in a terminal. Each part is added with the agent's own command when
 the agent has one, and that command is what the user is shown; AgentTerm's
 own (`agenttermd setup <agent>`) is for what an agent has no command for
@@ -1496,7 +1499,7 @@ the same folder can therefore be mixed up; the History tab is exact.
 | Pairing code | Shown as QR code or link | One use, five minutes, and until the pairing screen closes | Getting a device token |
 | Device token | One paired device (Keychain) | Until the Mac removes the device | Sessions, folders, agents. Not pairing or removing devices |
 
-- A device that is not paired sends `pair(code, device)` as its first message.
+- A device that is not paired sends `pair(code, device, kind)` as its first message.
   The host answers `paired(device, token)` once and then treats the connection
   as that device. Afterwards the device connects with `hello(token)`.
 - The host stores only the SHA-256 of device tokens (`devices.json`), so that

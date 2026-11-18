@@ -166,8 +166,12 @@ struct PairingView: View {
                 VStack(spacing: 0) {
                     ForEach(model.devices) { device in
                         HStack(spacing: 9) {
-                            Image(systemName: "iphone")
+                            // Its own icon; a Mac's, and one not known, none,
+                            // in the same room so that the names line up (#157).
+                            Image(systemName: device.kind?.symbol ?? "iphone")
                                 .foregroundStyle(device.isConnected ? Theme.added : .secondary)
+                                .opacity(device.kind?.symbol == nil ? 0 : 1)
+                                .accessibilityHidden(device.kind?.symbol == nil)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(device.name).font(.system(size: 12.5))
                                 Text(subtitle(for: device))

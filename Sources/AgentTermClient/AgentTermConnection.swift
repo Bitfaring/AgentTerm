@@ -30,6 +30,8 @@ public final class AgentTermConnection: @unchecked Sendable {
 
     private let credential: Credential
     private let clientName: String
+    /// What this device is, said to the host (#157).
+    private let kind: DeviceKind?
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "agentterm.client")
     /// Touched on the main queue only.
@@ -63,13 +65,14 @@ public final class AgentTermConnection: @unchecked Sendable {
     var quietBeforePing: TimeInterval = 4
     var pongTimeout: TimeInterval = 6
 
-    public convenience init(host: String, port: UInt16, token: String, clientName: String) {
-        self.init(host: host, port: port, credential: .token(token), clientName: clientName)
+    public convenience init(host: String, port: UInt16, token: String, clientName: String, kind: DeviceKind? = nil) {
+        self.init(host: host, port: port, credential: .token(token), clientName: clientName, kind: kind)
     }
 
-    public init(host: String, port: UInt16, credential: Credential, clientName: String) {
+    public init(host: String, port: UInt16, credential: Credential, clientName: String, kind: DeviceKind? = nil) {
         self.credential = credential
         self.clientName = clientName
+        self.kind = kind
 
         let tcp = NWProtocolTCP.Options()
         tcp.connectionTimeout = 8
@@ -99,8 +102,8 @@ public final class AgentTermConnection: @unchecked Sendable {
             case .ready:
                 let greeting: ClientMessage
                 switch self.credential {
-                case .token(let token): greeting = .hello(token: token, client: self.clientName)
-                case .pairingCode(let code): greeting = .pair(code: code, device: self.clientName)
+                case .token(let token): greeting = .hello(token: token, client: self.clientName, kind: self.kind)
+                case .pairingCode(let code): greeting = .pair(code: code, device: self.clientName, kind: self.kind)
                 }
                 // Under the lock, so nothing sent meanwhile gets in between.
                 self.waitingLock.lock()

@@ -60,4 +60,35 @@ final class WorktreeUITests: MacUITestCase {
         app.press(.id("worktree-chip-agentterm/claude-1"))
         app.wait(for: .containing("worktree-only.txt"), timeout: 15)
     }
+
+    /// HAND-8 (#150): "+" can begin by continuing a conversation of the
+    /// folder: the worktree is made, the conversation handed off into it,
+    /// and the agent started there, on its branch.
+    func testANewWorktreeContinuesAConversation() throws {
+        let history = home.appendingPathComponent(".claude/projects/" + project.path.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())
+        try FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
+        try #"{"type":"user","cwd":"\#(project.path)","message":{"role":"user","content":"finish the parser"}}"#.appending("\n").write(
+            to: history.appendingPathComponent("c-wt.jsonl"), atomically: true, encoding: .utf8)
+        let phone = try device()
+        app.wait(for: .text("project, folder"), timeout: 15)
+        app.press(.button("Git"))
+        app.wait(for: .id("worktree-chip-main"), timeout: 15)
+
+        app.press(.id("worktree-add"))
+        app.wait(for: .id("worktree-begin"))
+        app.press(.id("worktree-begin"))
+        app.press(.containing(WorktreeWords.continueConversation), menus: true)
+        app.wait(for: .id("worktree-conversation"))
+        app.wait(for: .text(WorktreeWords.continueAdvice))
+        shot("new-worktree-continue")
+        app.press(.id("worktree-create"))
+        wait("the agent in its worktree", timeout: 30) { phone.sessions.first?.branch == "agentterm/claude-1" }
+        let session = try XCTUnwrap(phone.sessions.first)
+        XCTAssertEqual(session.cwd, project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-1").path)
+        let handoffs = (try? FileManager.default.contentsOfDirectory(atPath: session.cwd + "/.agentterm/handoffs")) ?? []
+        XCTAssertEqual(handoffs.count, 1, "the handoff file was not written in the new worktree")
+        let text = try String(contentsOfFile: session.cwd + "/.agentterm/handoffs/" + (handoffs.first ?? ""), encoding: .utf8)
+        XCTAssertTrue(text.contains("finish the parser"), "the conversation is not in the handoff")
+        XCTAssertTrue(text.contains("a git worktree of the folder"), "the agent is not told it is in a worktree")
+    }
 }

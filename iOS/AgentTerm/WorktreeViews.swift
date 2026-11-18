@@ -119,8 +119,18 @@ struct NewWorktreeSheet: View {
     @State private var from = ""
     /// The agent's id, or empty for a shell.
     @State private var starting = ""
+    /// Carrying on a conversation of the folder's, handed off (#150), by its id.
+    @State private var continuing = false
+    @State private var conversationID = ""
 
     private var agent: AgentInfo? { model.installedAgents.first { $0.id == starting } }
+
+    /// The conversations it can carry on: the folder's own first, then the others.
+    private var conversations: [Conversation] {
+        let own = model.histories[project] ?? []
+        return own + (model.histories[""] ?? []).filter { other in !own.contains { $0.id == other.id } }
+    }
+    private var conversation: Conversation? { conversations.first { $0.id == conversationID } }
     private var branches: [BranchInfo] { model.branches[project] ?? [] }
     private var current: String? { main?.branch ?? branches.first { $0.isCurrent }?.name }
     private var suggested: String { WorktreePath.branchName(agent: agent?.id ?? "shell", taken: Set(branches.filter { !$0.isRemote }.map(\.name))) }
@@ -150,8 +160,27 @@ struct NewWorktreeSheet: View {
                         Text("Shell").tag("")
                     }
                     .accessibilityIdentifier("worktree-start")
+                    // An agent only: a shell carries on no conversation.
+                    if agent != nil {
+                        Picker(WorktreeWords.begin, selection: $continuing) {
+                            Text(WorktreeWords.fresh).tag(false)
+                            Text(WorktreeWords.continueConversation).tag(true)
+                        }
+                        .accessibilityIdentifier("worktree-begin")
+                        if continuing {
+                            Picker(WorktreeWords.conversation, selection: $conversationID) {
+                                if conversations.isEmpty { Text(WorktreeWords.noConversation).tag("") }
+                                ForEach(conversations, id: \.id) { conversation in
+                                    Text("\(conversation.title) · \(model.agents.first { $0.id == conversation.agent }?.name ?? conversation.agent)")
+                                        .tag(conversation.id)
+                                }
+                            }
+                            .accessibilityIdentifier("worktree-conversation")
+                        }
+                    }
                 } footer: {
                     VStack(alignment: .leading, spacing: 6) {
+                        if continuing, agent != nil { Text(WorktreeWords.continueAdvice) }
                         Text(WorktreeWords.newAdvice)
                         if model.diffs[project]?.files.isEmpty == false {
                             Label(WorktreeWords.uncommitted, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
@@ -166,10 +195,14 @@ struct NewWorktreeSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
                         let branch = (named ? name : suggested).trimmingCharacters(in: .whitespaces)
-                        model.launchInWorktree(agent, in: project, branch: branch.isEmpty ? nil : branch, from: from.isEmpty ? nil : from)
+                        if continuing, let agent, let conversation {
+                            model.handoffInNewWorktree(conversation, to: agent, in: project, branch: branch.isEmpty ? nil : branch, from: from.isEmpty ? nil : from)
+                        } else {
+                            model.launchInWorktree(agent, in: project, branch: branch.isEmpty ? nil : branch, from: from.isEmpty ? nil : from)
+                        }
                         dismiss()
                     }
-                    .disabled(model.status != .connected)
+                    .disabled(model.status != .connected || (continuing && agent != nil && conversation == nil))
                     .accessibilityIdentifier("worktree-create")
                 }
             }
@@ -178,6 +211,12 @@ struct NewWorktreeSheet: View {
         .onAppear {
             starting = shell ? "" : start?.id ?? model.installedAgents.first?.id ?? ""
             model.loadBranches(project)
+            model.loadHistory(project)
+            model.loadHistory(nil)
+        }
+        // The newest of the folder's picked already, once they are read.
+        .onChange(of: conversations.first?.id) { _, first in
+            if conversation == nil { conversationID = first ?? "" }
         }
     }
 }
