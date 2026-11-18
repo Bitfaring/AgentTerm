@@ -112,7 +112,25 @@ final class Chromium {
             return false
         }
         problem = nil
+        atc_set_popup_provider(Chromium.popupAsked)
         return true
+    }
+
+    /// The app's answer to a page that opens a window (#162): a tab's view
+    /// for Chromium to make it in, keeping its opener, and what is done with
+    /// the browser made there; nil to open its address in a tab instead.
+    var popupProvider: ((_ opener: Int32, _ url: String) -> (view: NSView, made: (Int32) -> Void)?)?
+
+    private static let popupAsked: atc_popup_fn = { opener, url, token in
+        MainActor.assumeIsolated {
+            let shared = Chromium.shared
+            guard let token, let popup = shared.popupProvider?(opener, url.map { String(cString: $0) } ?? "") else { return nil }
+            let given = shared.nextToken
+            shared.nextToken += 1
+            shared.making[given] = popup.made
+            token.pointee = given
+            return Unmanaged.passUnretained(popup.view).toOpaque()
+        }
     }
 
     /// The bridge's events, on the main thread, which is CEF's UI thread.

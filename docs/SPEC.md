@@ -582,7 +582,9 @@ user sees.
   sharp, and show it in its own shape, never squeezed into another), opens Chromium's own Developer Tools
   (⌥⌘I) with the console, sends an element to an agent, and closes it. Text is selected, copied
   and pasted as anywhere. A page that opens a window opens a tab instead,
-  in the same project and for the same agent. A download goes to the
+  in the same project and for the same agent, which keeps its opener: a
+  sign-in in a popup, as "Sign in with Google", hands its answer back to
+  the page, and a page that closes itself closes its tab (#162). A download goes to the
   Downloads folder and is shown under the page. A page asking for the
   camera, the microphone, the location, notifications and the like asks
   the user in a bar over the page; an agent never answers it. A page that

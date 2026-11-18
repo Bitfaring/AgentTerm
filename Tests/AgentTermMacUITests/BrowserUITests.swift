@@ -55,7 +55,10 @@ final class BrowserUITests: MacUITestCase {
         // From the menu: once an agent runs, its tab is a "Claude Code" button too.
         app.menu(["File", "New Claude Code"])
         wait("the agent's session") { phone.sessions.contains { $0.agent == "claude" && !before.contains($0.id) } }
-        wait("its variable") { FileManager.default.fileExists(atPath: told.path) }
+        // Written whole, not only there: `printf … > file` makes the file
+        // first and writes it after, and a variable read in between was
+        // empty, its server in no session (#158).
+        wait("its variable") { ((try? String(contentsOf: told, encoding: .utf8)) ?? "").isEmpty == false }
         let variable = try String(contentsOf: told, encoding: .utf8)
         let agent = try XCTUnwrap(phone.sessions.first { $0.agent == "claude" && !before.contains($0.id) })
         return (try Server(tool: hostExecutable, variable: variable, state: state), agent)
@@ -1034,6 +1037,46 @@ final class BrowserUITests: MacUITestCase {
         app.press(.button("Cancel"))
         app.press(.id("browser-pick"))
         app.wait(for: .button("Pick an Element for an Agent"))
+    }
+
+    /// BROWSER-46 (#162): a sign-in in a popup, as "Sign in with Google"
+    /// is: the page opens a window, which hands its answer back to the page
+    /// that opened it (`window.opener.postMessage`) and closes itself. The
+    /// window is a tab of the app's that keeps its opener: the answer comes
+    /// back, and the window's tab goes when it closes.
+    func testASignInInAPopupHandsItsAnswerBack() throws {
+        let folder = root.appendingPathComponent("site")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try """
+        <!doctype html>
+        <html><head><title>Sign in page</title></head>
+        <body>
+          <button id="signin" onclick="window.open('signin-popup.html', 'signin', 'width=420,height=560')">Sign in with Popup</button>
+          <p id="said">Not signed in</p>
+          <script>window.addEventListener('message', (event) => { document.getElementById('said').textContent = 'Signed in: ' + event.data; });</script>
+        </body></html>
+        """.write(to: folder.appendingPathComponent("signin.html"), atomically: true, encoding: .utf8)
+        try """
+        <!doctype html>
+        <html><head><title>The sign-in</title></head>
+        <body><p>Signing in…</p>
+          <script>
+            if (window.opener) { window.opener.postMessage('ana@example.com', '*'); window.close(); }
+            else { document.body.textContent = 'No opener'; }
+          </script>
+        </body></html>
+        """.write(to: folder.appendingPathComponent("signin-popup.html"), atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": folder.appendingPathComponent("signin.html").absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let snapshot = server.text("browser_snapshot", ["tab": tab])
+        let button = try XCTUnwrap(ref(in: snapshot.text, "button \"Sign in with Popup\""), snapshot.text)
+        XCTAssertFalse(server.text("browser_click", ["tab": tab, "ref": button]).failed)
+        let waited = server.text("browser_wait", ["tab": tab, "text": "Signed in: ana@example.com", "seconds": 15], timeout: 25)
+        XCTAssertTrue(waited.text.hasPrefix("“Signed in: ana@example.com” is on the page"), "the popup's answer did not come back: \(waited.text)")
+        // Closed by itself, its tab is gone: the agent has its own page only.
+        wait("the popup's tab gone", timeout: 15) { server.text("browser_tabs").text.split(separator: "\n").count == 1 }
     }
 
     /// BROWSER-45 (#161): typing into an editor that keeps its own state, as

@@ -40,6 +40,18 @@ extension AppModel {
         browsers.remote = { [weak self] request in self?.askRemoteBrowser(request) }
         browsers.changed = { [weak self] in self?.browserTabsChanged() }
         browsers.watchChromeWindows()
+        // A page's window, made by Chromium in a tab of the app's, keeping
+        // its opener (#162): a sign-in in a popup hands its answer back.
+        Chromium.shared.popupProvider = { [weak self] openerID, address in
+            guard let self, let opener = self.browsers.tabs.first(where: { $0.browserID == openerID && !$0.isRemote }) else { return nil }
+            let owner = opener.owner.flatMap { id in self.sessions.first { $0.id == id } }
+            let tab = self.browsers.open(url: address, project: opener.project, owner: owner, profile: opener.profile, starts: false)
+            opener.devtools.happened.append("The page opened \(address) in a new tab, \(tab.id).")
+            // The user's in front, as a browser's; an agent's beside it.
+            if owner == nil { DispatchQueue.main.async { [weak self] in self?.selectTab(id: tab.tabID) } }
+            return tab.madeByChromium()
+        }
+        browsers.closedByItsPage = { [weak self] tab in self?.closeBrowserTab(tab) }
         browsers.popup = { [weak self] opener, address in
             guard let self else { return }
             let owner = opener.owner.flatMap { id in self.sessions.first { $0.id == id } }

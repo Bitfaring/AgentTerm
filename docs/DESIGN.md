@@ -1360,7 +1360,15 @@ conversation. A private tab's profile is `private-user` or
 `private-agent-<session>`, a request context with no `cache_path`, which
 Chromium keeps in memory; `atc_forget_profile` lets it go when the last
 of its tabs closes, and the next private tab gets a new one. A popup is
-opened in its opener's profile.
+opened in its opener's profile, made by Chromium itself so that it keeps
+its opener (#162): `on_before_popup` asks the app (`atc_popup_fn`, on the
+UI thread) for a new tab's view and a token, puts the popup's
+`window_info` in it and lets Chromium go on; `on_after_created` knows the
+browser by its view's superview and sends `ATC_EVENT_CREATED` with the
+token, as for a browser the app made. Without a view it opens the
+address in a tab, without its opener, as before. A page that closes
+itself (`ATC_EVENT_CLOSED` with the tab not closed by the app) closes
+its tab.
 
 **Tabs.** A `BrowserTab` holds Chromium's browser for one page, the view
 it draws in (`BrowserContainerView`, moved to whichever pane shows it),

@@ -23,15 +23,16 @@ final class BrowserModel: ObservableObject {
 
     /// A new tab in `project`'s profile, opened by an agent's session or by
     /// the user. Chromium starts it at once, for an agent waits on it.
+    /// `starts` false: Chromium makes its page itself, a window a page opened (#162).
     @discardableResult
-    func open(url: String?, project: String, owner: SessionInfo?, profile: String? = nil) -> BrowserTab {
+    func open(url: String?, project: String, owner: SessionInfo?, profile: String? = nil, starts: Bool = true) -> BrowserTab {
         counter += 1
         UserDefaults.standard.set(counter, forKey: "browserTabCounter")
         let profile = profile ?? profiles?.defaultID ?? BrowserProfiles.firstID
         let tab = BrowserTab(id: String(counter), project: project, profile: profile, owner: owner?.id, ownerTab: owner.map(TabID.session), model: self)
         if let url, !url.isEmpty { tab.url = BrowserTab.address(from: url) }
         tabs.append(tab)
-        tab.start()
+        if starts { tab.start() }
         return tab
     }
 
@@ -91,6 +92,8 @@ final class BrowserModel: ObservableObject {
     var changed: (() -> Void)?
     /// A page opened a window: a tab of the app instead, as its tab's.
     var popup: ((BrowserTab, String) -> Void)?
+    /// A tab's page closed itself (#162).
+    var closedByItsPage: ((BrowserTab) -> Void)?
     /// A tab's page took the keyboard.
     var focused: ((BrowserTab) -> Void)?
 
@@ -371,25 +374,38 @@ final class BrowserTab: ObservableObject, Identifiable {
         BrowserParking.park(container)
         Chromium.shared.create(
             in: container, url: url.isEmpty ? "about:blank" : url, key: profile, folder: isPrivate ? nil : BrowserProfiles.folder(for: profile)
-        ) { [weak self] browser in
-            // Closed while its page was being made: the page goes at once.
-            guard let self, !self.isClosed else {
-                if browser != 0 { atc_close(browser) }
-                self?.starting = false
-                self?.flush(false)
-                return
-            }
-            self.starting = false
-            guard browser != 0 else {
-                self.problem = "Chromium could not open the page."
-                self.flush(false)
-                return
-            }
-            self.browserID = browser
-            Chromium.shared.listen(to: browser) { [weak self] event in self?.handle(event) }
-            self.devtools.start()
-            self.flush(true)
+        ) { [weak self] browser in self?.made(browser) ?? { if browser != 0 { atc_close(browser) } }() }
+    }
+
+    /// A window a page opened, which Chromium makes itself in this tab's
+    /// view, keeping its opener (#162): the view, and what is done with the
+    /// browser made there.
+    func madeByChromium() -> (view: NSView, made: (Int32) -> Void) {
+        starting = true
+        if !BrowserProfiles.isPrivate(profile) { model?.profiles?.markInUse(profile) }
+        BrowserParking.park(container)
+        return (container, { [weak self] browser in self?.made(browser) ?? { if browser != 0 { atc_close(browser) } }() })
+    }
+
+    /// Its browser made, or not (0).
+    private func made(_ browser: Int32) {
+        // Closed while its page was being made: the page goes at once.
+        guard !isClosed else {
+            if browser != 0 { atc_close(browser) }
+            starting = false
+            flush(false)
+            return
         }
+        starting = false
+        guard browser != 0 else {
+            problem = "Chromium could not open the page."
+            flush(false)
+            return
+        }
+        browserID = browser
+        Chromium.shared.listen(to: browser) { [weak self] event in self?.handle(event) }
+        devtools.start()
+        flush(true)
     }
 
     private func flush(_ created: Bool) {
@@ -435,8 +451,12 @@ final class BrowserTab: ObservableObject, Identifiable {
         case ATC_EVENT_POPUP:
             if let address = event.text { model?.popup?(self, address) }
         case ATC_EVENT_CLOSED:
+            // Not closed by the app: its page closed itself (`window.close()`,
+            // a sign-in's popup once it answered, #162). Its tab goes too.
+            let byItsPage = !isClosed
             Chromium.shared.forget(browserID)
             browserID = 0
+            if byItsPage { model?.closedByItsPage?(self) }
         case ATC_EVENT_DEVTOOLS_RESULT:
             devtools.received(result: event.a, success: event.b != 0, data: event.data)
         case ATC_EVENT_DEVTOOLS_EVENT:
