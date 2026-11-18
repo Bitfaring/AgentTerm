@@ -165,7 +165,7 @@ final class CrossTests: XCTestCase {
         let typed = rows.matching(NSPredicate(format: "label CONTAINS 'typed hi'")).firstMatch
         XCTAssertTrue(typed.waitForExistence(timeout: 10), "what was typed did not reach the page")
 
-        // A page of the phone's own, in the folder.
+        // A page of the phone's own, of no folder (#148).
         let open = app.buttons["Open a Page"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 10))
         open.tap()
@@ -181,6 +181,9 @@ final class CrossTests: XCTestCase {
         app.buttons["iPhone SE"].firstMatch.tap()
         app.buttons["Done"].tap()
         let asPhone = rows.matching(NSPredicate(format: "label CONTAINS 'Cross page' AND label CONTAINS 'as iPhone SE'")).firstMatch
+        // Of no folder (#148): under "Browser on the Mac", after the folders.
+        for _ in 0..<6 where !asPhone.waitForExistence(timeout: 2) { app.swipeUp() }
+        if !asPhone.exists { capture("9-own-page-not-found") }
         XCTAssertTrue(asPhone.waitForExistence(timeout: 10), "the page is not shown as iPhone SE")
         capture("9-own-page")
         // And closed.
