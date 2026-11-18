@@ -52,7 +52,17 @@ final class AgentSetupTests: XCTestCase {
               "plugin uninstall"|"plugin remove")
                 rm -f '\(state)'/plugin-"$3"; exit 0;;
               "features list")
-                if [ -e '\(state)/broken' ]; then echo "error: could not parse config.toml"; exit 1; fi; exit 0;;
+                if [ -e '\(state)/broken' ]; then echo "error: could not parse config.toml"; exit 1; fi
+                if [ -e '\(state)/shared-server' ]; then printf 'apps                                     stable             true\\ndaemon_auto_start                        stable             %s\\n' "$(cat '\(state)/shared-server')"; fi
+                exit 0;;
+              "features disable"|"features enable")
+                if [ "$3" != daemon_auto_start ] || [ ! -e '\(state)/shared-server' ]; then echo "Error: Unknown feature flag: $3"; exit 1; fi
+                if [ "$2" = disable ]; then echo false > '\(state)/shared-server'; echo 'Disabled feature `daemon_auto_start` in config.toml.'
+                else echo true > '\(state)/shared-server'; echo 'Enabled feature `daemon_auto_start` in config.toml.'; fi
+                exit 0;;
+              "app-server daemon")
+                if [ "$3" = version ] && [ -e '\(state)/server-running' ]; then echo '{"status":"running","backend":"pid","cliVersion":"0.169.1","appServerVersion":"0.169.1"}'; exit 0; fi
+                printf 'Error: failed to connect to %s/app-server-control/app-server-control.sock\\n\\nCaused by:\\n    No such file or directory (os error 2)\\n' "$HOME/.codex"; exit 1;;
             esac
             exit 0
 
@@ -167,6 +177,167 @@ final class AgentSetupTests: XCTestCase {
         setup.install("codex")
         XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), "model = \"o3\"\n", "left with what Codex cannot read")
         XCTAssertTrue(try state(setup, "codex").problem?.contains("could not parse config.toml") == true)
+    }
+
+    /// What a stand-in Codex says of the server its sessions share: whether
+    /// it starts it by itself, as `codex features list` prints it; nil for
+    /// a Codex that has none.
+    private func sharedServer(startsItself: Bool?) throws {
+        let folder = root.appendingPathComponent("state-codex")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("shared-server")
+        if let startsItself { try (startsItself ? "true\n" : "false\n").write(to: file, atomically: true, encoding: .utf8) } else { try? FileManager.default.removeItem(at: file) }
+    }
+
+    private var sharedServerStartsItself: String {
+        ((try? String(contentsOf: root.appendingPathComponent("state-codex/shared-server"), encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// SETUP-7 (#140): the background server Codex's sessions share is
+    /// turned off with Codex's own command, as Codex 0.169.1 was seen to
+    /// take it, and turned on again when AgentTerm's is taken out; while it
+    /// still runs, that is said, with what to do; one the user had off is
+    /// left off; a Codex that has none is asked nothing of it.
+    func testCodexsSharedServerIsTurnedOffWithItsOwnCommandAndOnAgain() throws {
+        try sharedServer(startsItself: true)
+        let setup = setup()
+        let before = try state(setup, "codex")
+        XCTAssertEqual(before.sharedServerOff, false)
+        XCTAssertTrue(before.note?.contains("codex features disable daemon_auto_start") == true, "what Install does to Codex is not said before it is done")
+
+        setup.install("codex")
+        XCTAssertTrue(ran("codex").contains("features disable daemon_auto_start"), ran("codex").joined(separator: "\n"))
+        XCTAssertEqual(sharedServerStartsItself, "false")
+        var after = try state(setup, "codex")
+        XCTAssertEqual([after.hooks, after.mcp, after.sharedServerOff], [true, true, true])
+        XCTAssertTrue(after.isSetUp)
+        XCTAssertNil(after.problem)
+        // Its hooks are still between their marks: the command kept them.
+        XCTAssertTrue(try String(contentsOf: home.appendingPathComponent(".codex/config.toml"), encoding: .utf8).contains("hook codex Stop"))
+
+        // Turned off, and one from before still runs: Codex uses it.
+        FileManager.default.createFile(atPath: root.appendingPathComponent("state-codex/server-running").path, contents: nil)
+        after = try state(setup, "codex")
+        XCTAssertEqual(after.sharedServerOff, false)
+        XCTAssertFalse(after.isSetUp)
+        XCTAssertEqual(after.problem, AgentSetupWords.sharedServerRunning)
+        XCTAssertTrue(after.problem?.contains("codex app-server daemon stop") == true)
+        XCTAssertFalse(ran("codex").contains { $0.hasPrefix("app-server daemon stop") }, "the user's sessions were ended for them")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("state-codex/server-running"))
+        XCTAssertEqual(try state(setup, "codex").sharedServerOff, true)
+
+        setup.remove("codex")
+        XCTAssertTrue(ran("codex").contains("features enable daemon_auto_start"), ran("codex").joined(separator: "\n"))
+        XCTAssertEqual(sharedServerStartsItself, "true")
+        XCTAssertEqual(try state(setup, "codex").sharedServerOff, false)
+    }
+
+    /// SETUP-7: a shared server the user had turned off is left off when
+    /// AgentTerm's is taken out, and a Codex with no such server is asked
+    /// nothing of it.
+    func testASharedServerTheUserHadOffIsLeftOffAndACodexWithoutOneIsNotAsked() throws {
+        try sharedServer(startsItself: false)
+        let setup = setup()
+        setup.install("codex")
+        XCTAssertFalse(ran("codex").contains { $0.hasPrefix("features disable") })
+        XCTAssertEqual(try state(setup, "codex").sharedServerOff, true)
+        setup.remove("codex")
+        XCTAssertFalse(ran("codex").contains { $0.hasPrefix("features enable") }, "turned on what the user had turned off")
+        XCTAssertEqual(sharedServerStartsItself, "false")
+
+        try sharedServer(startsItself: nil)
+        let ranBefore = ran("codex").count
+        setup.install("codex")
+        let without = try state(setup, "codex")
+        XCTAssertNil(without.sharedServerOff)
+        XCTAssertTrue(without.isSetUp)
+        XCTAssertFalse(without.note?.contains("daemon_auto_start") == true)
+        let since = ran("codex").dropFirst(ranBefore)
+        XCTAssertFalse(since.contains { $0.hasPrefix("features disable") || $0.hasPrefix("app-server") }, since.joined(separator: "\n"))
+    }
+
+    /// SETUP-7 (principle 7): with both builds set up in Codex, the one
+    /// taken out first leaves the shared server off, which the other needs
+    /// as much.
+    func testTheSharedServerStaysOffWhileTheOtherBuildIsSetUp() throws {
+        try sharedServer(startsItself: true)
+        let released = setup(name: "agentterm", tool: "/Applications/AgentTerm.app/agenttermd")
+        let development = setup()
+        released.install("codex")
+        development.install("codex")
+        XCTAssertEqual(ran("codex").filter { $0 == "features disable daemon_auto_start" }.count, 1, "turned off twice")
+        released.remove("codex")
+        XCTAssertEqual(sharedServerStartsItself, "false", "turned on under the other build")
+        XCTAssertEqual(try state(development, "codex").sharedServerOff, true)
+        // Set up again and taken out, with no other left: on again.
+        development.remove("codex")
+        released.install("codex")
+        released.remove("codex")
+        XCTAssertEqual(sharedServerStartsItself, "true")
+    }
+
+    /// A table Codex adds to its config.toml, written where Codex 0.169.1
+    /// was seen to write one (2026-11-18, `[features]`): after its last
+    /// table, above the comments the file ends with.
+    private func codexAdds(_ table: String) throws {
+        let file = home.appendingPathComponent(".codex/config.toml")
+        var lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+        while lines.last == "" { lines.removeLast() }
+        var end = lines.count
+        while end > 0, lines[end - 1].hasPrefix("#") { end -= 1 }
+        lines.insert(contentsOf: [""] + table.components(separatedBy: "\n"), at: end)
+        try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    /// SETUP-8 (#142): what Codex itself adds to its config.toml after
+    /// AgentTerm's hooks is the user's: the hooks installed again, then
+    /// taken out, leave it there, and leave nothing of their own.
+    func testWhatCodexAddsAfterTheHooksIsNotTakenOutWithThem() throws {
+        let config = home.appendingPathComponent(".codex/config.toml")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "model = \"o3\"\n".write(to: config, atomically: true, encoding: .utf8)
+        let setup = setup()
+        setup.install("codex")
+        try codexAdds("[projects.\"/work\"]\ntrust_level = \"trusted\"")
+
+        setup.install("codex")
+        var text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(text.contains("[projects.\"/work\"]\ntrust_level = \"trusted\""), "installing again took out what Codex added:\n" + text)
+        XCTAssertEqual(text.components(separatedBy: "[[hooks.Stop]]").count - 1, 1, "its hooks are there twice:\n" + text)
+        XCTAssertEqual(try state(setup, "codex").hooks, true)
+
+        try codexAdds("[mcp_servers.mine]\ncommand = \"mine\"")
+        setup.remove("codex")
+        text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertEqual(
+            text, "model = \"o3\"\n\n[projects.\"/work\"]\ntrust_level = \"trusted\"\n\n[mcp_servers.mine]\ncommand = \"mine\"\n",
+            "taking the hooks out changed what is not AgentTerm's")
+        XCTAssertEqual(try state(setup, "codex").hooks, false)
+    }
+
+    /// SETUP-8: the hooks of a build before this one, which were written
+    /// between two marks, are taken out by their own lines too, and their
+    /// marks with them; what Codex put between the marks stays.
+    func testHooksWrittenBetweenMarksAreTakenOutByTheirOwnLines() throws {
+        let config = home.appendingPathComponent(".codex/config.toml")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let tool = "/Apps/AgentTerm Dev.app/agenttermd"
+        let hook = { (event: String) in "[[hooks.\(event)]]\nhooks = [{ type = \"command\", command = \"'\(tool)' hook codex \(event)\" }]" }
+        try """
+        model = "o3"
+
+        # >>> AgentTerm's hooks (agentterm-dev), added by `'\(tool)' setup codex`; `--remove` takes them out.
+        \(hook("SessionStart"))
+        \(hook("Stop"))
+
+        [features]
+        daemon_auto_start = false
+        # <<< AgentTerm's hooks (agentterm-dev)
+
+        """.write(to: config, atomically: true, encoding: .utf8)
+        let setup = setup()
+        setup.remove("codex")
+        XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), "model = \"o3\"\n\n[features]\ndaemon_auto_start = false\n")
     }
 
     /// SETUP-4 (MCP-15, principle 7): a released build and a development

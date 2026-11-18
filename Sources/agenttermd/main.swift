@@ -22,13 +22,31 @@ var arguments = CommandLine.arguments.dropFirst()
 /// Where `agenttermd setup` keeps the plugins it gives the agents (#129).
 var setupDirectory: URL { HostEnvironment.supportDirectory.appendingPathComponent("agent-setup", isDirectory: true) }
 
+enum StartedBy {
+    /// Whether the agent that started this program runs in no terminal
+    /// (#140), as Codex's shared app server does. Looked at once, when it
+    /// is first asked.
+    static let anAgentInNoTerminal = ProcessNames.agentInNoTerminal(startedBy: getppid(), known: { SessionSummaries.agent(forCommand: $0) }) != nil
+}
+
+/// What the environment says of the session this was started in, by the
+/// name of a variable: nothing when the agent that started it runs in no
+/// terminal (#140). Codex's shared app server has the environment of the
+/// session that started it, not of the session it works for. A hook, the
+/// MCP server and the status line then do as they do outside AgentTerm.
+/// See `ProcessNames.agentInNoTerminal`.
+func sessionEnvironment(_ name: String) -> String? {
+    guard !StartedBy.anAgentInNoTerminal else { return nil }
+    return ProcessInfo.processInfo.environment[name].flatMap { $0.isEmpty ? nil : $0 }
+}
+
 // `agenttermd statusline` is Claude Code's status line, once
 // `agenttermd setup claude` put it in its settings (#129): it saves what it
 // is given in the file its session names, then runs the status line the
 // user had before. See StatusLineRelay.
 if arguments.first == "statusline" {
     arguments.removeFirst()
-    let file = arguments.popFirst() ?? ProcessInfo.processInfo.environment[AppChannel.current.usageVariable].flatMap { $0.isEmpty ? nil : $0 }
+    let file = arguments.popFirst() ?? sessionEnvironment(AppChannel.current.usageVariable)
     let output = StatusLineRelay.run(
         input: FileHandle.standardInput.readDataToEndOfFile(), file: file, previous: AgentSetup.previousStatusLine(in: setupDirectory))
     FileHandle.standardOutput.write(output)
@@ -72,6 +90,7 @@ if arguments.first == "setup" {
         func mark(_ value: Bool?) -> String { value.map { $0 ? "yes" : "no" } ?? "not known" }
         var line = "\(state.name): hooks \(mark(state.hooks)), MCP server \(mark(state.mcp))"
         if let statusLine = state.statusLine { line += ", status line " + (statusLine ? "yes" : "no") }
+        if let off = state.sharedServerOff { line += ", " + AgentSetupWords.sharedServer(off: off).lowercased() }
         print(line)
         if let problem = state.problem {
             print("  " + problem)
@@ -90,7 +109,7 @@ if arguments.first == "hook" {
     let agent = arguments.popFirst() ?? ""
     let event = arguments.popFirst() ?? ""
     let input = FileHandle.standardInput.readDataToEndOfFile()
-    if let file = ProcessInfo.processInfo.environment[AppChannel.current.eventsVariable], !file.isEmpty {
+    if let file = sessionEnvironment(AppChannel.current.eventsVariable) {
         AgentHooks.save(input, agent: agent, event: event, to: file)
     }
     if let reply = AgentHooks.reply(agent: agent, event: event) { print(reply) }
@@ -102,11 +121,12 @@ if arguments.first == "hook" {
 // of AgentTerm, an agent's or a shell's an agent was typed in, it asks the
 // host on this Mac, as that session, for what the agent's tools do, and says
 // it started; elsewhere, a session of the other build included (#57), it
-// offers no tools.
+// offers no tools. Nor does it when the agent that started it runs in no
+// terminal (#140): it cannot be any one session's.
 if arguments.first == "mcp" {
     var ask: AgentShellsMCP.Ask?
     var askBrowser: AgentShellsMCP.AskBrowser?
-    let session = AgentShellsMCP.Session(variable: ProcessInfo.processInfo.environment[HostServer.agentShellsVariable])
+    let session = AgentShellsMCP.Session(variable: sessionEnvironment(HostServer.agentShellsVariable))
     // The agent it serves: the session's, or the one that started it, for
     // one typed in a shell.
     let agent = session?.agent ?? ProcessNames.agent(above: getppid(), known: { SessionSummaries.agent(forCommand: $0) })

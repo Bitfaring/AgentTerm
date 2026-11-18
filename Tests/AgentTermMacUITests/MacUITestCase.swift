@@ -337,16 +337,25 @@ class MacUITestCase: XCTestCase {
             // folder of its own, what it was given and how it was asked.
             let plugins = directory.appendingPathComponent("plugins-\(name)").path
             let listed = name == "claude" ? #"printf '  ❯ %s\n    Status: ✔ enabled\n' "$n""# : #"printf '%s  installed, enabled  1.0\n' "$n""#
+            // Codex's is asked of the server its sessions share too (#140),
+            // once a test gave it one (`shared-server`: whether it starts
+            // it by itself; `server-running`: one runs), and answers as
+            // Codex 0.169.1 does.
             let script = """
                 #!/bin/sh
                 case "$1 $2" in
-                  "plugin "*|"features list")
+                  "plugin "*|"features "*|"app-server daemon")
                     mkdir -p '\(plugins)'
                     printf '%s\\n' "$*" >> '\(plugins).log'
                     case "$1 $2" in
                       "plugin list") for f in '\(plugins)'/plugin-*; do [ -e "$f" ] || continue; n=${f##*/plugin-}; \(listed); done ;;
                       "plugin install"|"plugin add") touch '\(plugins)'/plugin-"$3" ;;
                       "plugin uninstall"|"plugin remove") rm -f '\(plugins)'/plugin-"$3" ;;
+                      "features list") [ -e '\(plugins)/shared-server' ] && printf 'daemon_auto_start                        stable             %s\\n' "$(cat '\(plugins)/shared-server')" ;;
+                      "features disable") [ -e '\(plugins)/shared-server' ] || exit 1; echo false > '\(plugins)/shared-server' ;;
+                      "features enable") [ -e '\(plugins)/shared-server' ] || exit 1; echo true > '\(plugins)/shared-server' ;;
+                      "app-server daemon")
+                        if [ -e '\(plugins)/server-running' ]; then echo '{"status":"running","backend":"pid"}'; else echo "Error: failed to connect"; exit 1; fi ;;
                     esac
                     exit 0 ;;
                 esac

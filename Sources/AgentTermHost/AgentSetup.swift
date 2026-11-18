@@ -18,8 +18,11 @@ import Foundation
 /// - Copilot CLI: a plugin the same way, in its own layout.
 /// - Codex: a plugin with the server, which names the session's variable
 ///   in `env_vars`, as Codex passes no other; its hooks in `config.toml`,
-///   between marks, as Codex takes hooks nowhere else (`plugin_hooks` was
-///   removed from it), and asks the user to review them.
+///   each under a comment that says whose it is, as Codex takes hooks
+///   nowhere else (`plugin_hooks` was removed from it), and asks the user
+///   to review them. And the server
+///   its sessions share turned off, with `codex features disable` (#140):
+///   through it no hook and no server is any one session's.
 /// - Antigravity: a plugin of its own layout (`agy plugin install`), with
 ///   the hooks, the server and the words it is told as a rule.
 ///
@@ -101,7 +104,19 @@ public final class AgentSetup: @unchecked Sendable {
             state.statusLine = claudeStatusLineIsOurs()
         case "codex":
             state.mcp = Self.listed(run([path, "plugin", "list"])?.output, id: "\(name)@\(name)")
-            state.hooks = Self.block(in: (try? String(contentsOf: codexConfig, encoding: .utf8)) ?? "", marks: codexMarks) != nil
+            state.hooks = codexHooksAreThere(in: (try? String(contentsOf: codexConfig, encoding: .utf8)) ?? "")
+            // The server its sessions share (#140), in a Codex that has one:
+            // out of the way once Codex does not start it by itself and it
+            // does not run. Running, it is used whatever the setting says.
+            if let startsItself = Self.feature(Self.codexSharedServer, in: run([path, "features", "list"])?.output) {
+                var off = !startsItself
+                if off, Self.sharedServerRuns(run([path, "app-server", "daemon", "version"])?.output) {
+                    off = false
+                    state.problem = state.problem ?? AgentSetupWords.sharedServerRunning
+                }
+                state.sharedServerOff = off
+                state.note = [state.note, AgentSetupWords.sharedServerNote].compactMap { $0 }.joined(separator: " ")
+            }
         case "copilot":
             let plugin = Self.listed(run([path, "plugin", "list"])?.output, id: "\(name)@\(name)")
             state.hooks = plugin
@@ -120,7 +135,7 @@ public final class AgentSetup: @unchecked Sendable {
     static func note(for agent: String) -> String? {
         switch agent {
         case "codex":
-            return "Codex keeps hooks only in its config.toml, where they are added between marks, and asks to review them the next time it starts: trust them there."
+            return "Codex keeps hooks only in its config.toml, where each is added under a comment that says it is AgentTerm's, and asks to review them the next time it starts: trust them there."
         case "agy":
             return "Antigravity keeps a copy of what it is told: install again after changing the words in Settings > Agents."
         default:
@@ -170,6 +185,7 @@ public final class AgentSetup: @unchecked Sendable {
                 _ = run([path, "plugin", "remove", "\(name)@\(name)"])
                 try step([path, "plugin", "add", "\(name)@\(name)"])
                 try addCodexHooks(path: path)
+                try turnCodexSharedServerOff(path: path)
             case "copilot":
                 let market = try writeCopilotMarketplace()
                 try step([path, "plugin", "marketplace", "add", market.path], allowing: "already")
@@ -206,6 +222,7 @@ public final class AgentSetup: @unchecked Sendable {
                 _ = run([path, "plugin", "remove", "\(name)@\(name)"])
                 _ = run([path, "plugin", "marketplace", "remove", name])
                 try removeCodexHooks()
+                turnCodexSharedServerOnAgain(path: path)
             case "copilot":
                 _ = run([path, "plugin", "uninstall", "\(name)@\(name)"])
                 _ = run([path, "plugin", "marketplace", "remove", name])
@@ -387,19 +404,86 @@ public final class AgentSetup: @unchecked Sendable {
         return codexHome.appendingPathComponent("config.toml")
     }
 
+    /// How the comment over each hook of this build's begins: it names the
+    /// build, and by it a hook is this build's, wherever the host's
+    /// program is now. Over each hook, not around them all: Codex keeps
+    /// the comments a file ends with at its end, and writes a table it
+    /// adds above them, so a closing mark took in what Codex added after,
+    /// the user's own, and Remove took that out with the hooks (#142; seen
+    /// with Codex 0.169.1, `[features]`). A comment over a table stays
+    /// with it.
+    var codexHookMark: String { "# AgentTerm's hook (\(name))" }
+
+    /// The marks builds before #142 wrote around the hooks.
     var codexMarks: (start: String, end: String) { ("# >>> AgentTerm's hooks (\(name))", "# <<< AgentTerm's hooks (\(name))") }
 
-    /// The lines between the marks, the marks included, if they are there.
-    static func block(in text: String, marks: (start: String, end: String)) -> Range<String.Index>? {
-        guard let start = text.range(of: marks.start), let end = text.range(of: marks.end, range: start.upperBound..<text.endIndex) else { return nil }
-        let lineEnd = text[end.upperBound...].firstIndex(of: "\n").map { text.index(after: $0) } ?? text.endIndex
-        return start.lowerBound..<lineEnd
+    /// The three lines of a hook of this build's: the comment that says
+    /// so, its table, and its command.
+    func codexHook(_ event: String) -> [String] {
+        [
+            codexHookMark + ", added by `\(Self.command(tool: tool, agent: "codex"))`; `--remove` takes it out.",
+            "[[hooks.\(event)]]",
+            "hooks = [{ type = \"command\", command = \(AgentHooks.tomlString(AgentHooks.command(tool: tool, agent: "codex", event: event))) }]",
+        ]
     }
 
-    static func without(_ marks: (start: String, end: String), in text: String) -> String {
-        guard let range = block(in: text, marks: marks) else { return text }
-        var rest = text
-        rest.removeSubrange(range)
+    /// The event of a hook AgentTerm wrote, of which `table` and `command`
+    /// are the two lines, whichever build's program the command runs; nil
+    /// for any other two lines.
+    static func codexHookEvent(table: String, command: String) -> String? {
+        guard table.hasPrefix("[[hooks."), table.hasSuffix("]]") else { return nil }
+        let event = String(table.dropFirst(8).dropLast(2))
+        guard !event.isEmpty, event.allSatisfy(\.isLetter), command.hasPrefix("hooks = [{ type = \"command\", command = \""),
+            command.hasSuffix(" hook codex \(event)\" }]")
+        else { return nil }
+        return event
+    }
+
+    /// Whether every hook this build gives Codex is in its configuration,
+    /// with the command it has now.
+    func codexHooksAreThere(in text: String) -> Bool {
+        let lines = text.components(separatedBy: "\n")
+        return Self.events(of: "codex").allSatisfy { event in
+            let hook = codexHook(event)
+            return lines.indices.dropFirst().contains { lines[$0] == hook[2] && lines[$0 - 1] == hook[1] }
+        }
+    }
+
+    /// Codex's configuration without this build's hooks. Each is taken out
+    /// by its own lines: the comment that names the build, with the table
+    /// and the command under it, wherever Codex has them now. Between the
+    /// marks of a build before #142, the hooks and the marks go, and what
+    /// Codex put between them stays. Nothing else is taken out.
+    func withoutCodexHooks(_ text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        var gone = IndexSet()
+        // Under the opening mark of a build before #142, as far as the
+        // hooks follow one another.
+        var between = false
+        for index in lines.indices where !gone.contains(index) {
+            let line = lines[index]
+            if line.hasPrefix(codexMarks.start) {
+                between = true
+                gone.insert(index)
+            } else if line == codexMarks.end {
+                between = false
+                gone.insert(index)
+            } else if index + 1 < lines.count, Self.codexHookEvent(table: line, command: lines[index + 1]) != nil,
+                between || (index > 0 && lines[index - 1].hasPrefix(codexHookMark + ","))
+            {
+                gone.formUnion(IndexSet(integersIn: index...(index + 1)))
+                if !between { gone.insert(index - 1) }
+            } else {
+                between = false
+            }
+        }
+        // The empty line that set them apart goes with them.
+        for index in lines.indices where lines[index].isEmpty && !gone.contains(index) {
+            guard let next = lines.indices.first(where: { $0 > index && !gone.contains($0) }) else { continue }
+            if next > index + 1, lines[next].isEmpty { gone.insert(index) }
+        }
+        lines = lines.indices.filter { !gone.contains($0) }.map { lines[$0] }
+        var rest = lines.joined(separator: "\n")
         while rest.hasSuffix("\n\n") { rest.removeLast() }
         return rest
     }
@@ -407,13 +491,8 @@ public final class AgentSetup: @unchecked Sendable {
     func addCodexHooks(path: String) throws {
         let file = codexConfig
         let before = try? String(contentsOf: file, encoding: .utf8)
-        var text = Self.without(codexMarks, in: before ?? "")
-        var block = [codexMarks.start + ", added by `\(Self.command(tool: tool, agent: "codex"))`; `--remove` takes them out."]
-        for event in Self.events(of: "codex") {
-            block.append("[[hooks.\(event)]]")
-            block.append("hooks = [{ type = \"command\", command = \(AgentHooks.tomlString(AgentHooks.command(tool: tool, agent: "codex", event: event))) }]")
-        }
-        block.append(codexMarks.end)
+        var text = withoutCodexHooks(before ?? "")
+        let block = Self.events(of: "codex").flatMap(codexHook)
         if !text.isEmpty { text += text.hasSuffix("\n") ? "\n" : "\n\n" }
         text += block.joined(separator: "\n") + "\n"
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -427,8 +506,81 @@ public final class AgentSetup: @unchecked Sendable {
 
     func removeCodexHooks() throws {
         let file = codexConfig
-        guard let text = try? String(contentsOf: file, encoding: .utf8), Self.block(in: text, marks: codexMarks) != nil else { return }
-        try Data(Self.without(codexMarks, in: text).utf8).write(to: file, options: .atomic)
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return }
+        let rest = withoutCodexHooks(text)
+        guard rest != text else { return }
+        try Data(rest.utf8).write(to: file, options: .atomic)
+    }
+
+    // MARK: Codex's shared server (#140)
+
+    /// The feature of Codex that has it start, by itself, the background
+    /// server its sessions share (`codex app-server`). Tried with Codex
+    /// 0.169.1 on 2026-11-18, in a home of the trial's own
+    /// (`docs/AGENT-CLIS.md`): that server starts each session's hooks and
+    /// MCP server in the environment of the session that started it, so
+    /// AgentTerm cannot tell which session they are of. With the feature
+    /// off and no such server running, each session runs by itself, and its
+    /// hooks and server are its own. A server that runs is used whatever
+    /// the feature says, and stopping it leaves the sessions that use it
+    /// waiting ("Reconnecting to server…"): that is left to the user, and
+    /// said.
+    static let codexSharedServer = "daemon_auto_start"
+
+    /// Kept while this build turned the feature off, for Remove to turn it
+    /// on again: one the user had off is left off.
+    var codexSharedServerWasOn: URL { directory.appendingPathComponent("codex/shared-server-was-on") }
+
+    /// Whether a feature is on, in what `codex features list` printed: its
+    /// name, its stage, and `true` or `false` last. Nil when it is not
+    /// listed, as in a Codex that has no such feature, or when Codex could
+    /// not be asked.
+    static func feature(_ name: String, in output: String?) -> Bool? {
+        for line in (output ?? "").components(separatedBy: "\n") {
+            let words = line.split(whereSeparator: \.isWhitespace)
+            guard words.first.map(String.init) == name, let last = words.last else { continue }
+            if last == "true" { return true }
+            if last == "false" { return false }
+        }
+        return nil
+    }
+
+    /// Whether the shared server runs, in what
+    /// `codex app-server daemon version` printed: a line of JSON whose
+    /// status is "running"; an error when there is none.
+    static func sharedServerRuns(_ output: String?) -> Bool {
+        for line in (output ?? "").components(separatedBy: "\n") {
+            guard let start = line.firstIndex(of: "{"),
+                let said = (try? JSONSerialization.jsonObject(with: Data(line[start...].utf8))) as? [String: Any], let status = said["status"] as? String
+            else { continue }
+            return status == "running"
+        }
+        return false
+    }
+
+    /// Turns the feature off with Codex's own command, when it is on.
+    func turnCodexSharedServerOff(path: String) throws {
+        guard Self.feature(Self.codexSharedServer, in: run([path, "features", "list"])?.output) == true else { return }
+        try step([path, "features", "disable", Self.codexSharedServer])
+        try FileManager.default.createDirectory(at: codexSharedServerWasOn.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: codexSharedServerWasOn)
+    }
+
+    /// Turns it on again with Codex's own command, when this build turned
+    /// it off, and no other build of AgentTerm is still set up in Codex:
+    /// that one needs it off as much. (Then it stays off when that other
+    /// build is taken out later, which did not turn it off: with both
+    /// builds on one Mac, `codex features enable daemon_auto_start` puts it
+    /// back.)
+    func turnCodexSharedServerOnAgain(path: String) {
+        guard FileManager.default.fileExists(atPath: codexSharedServerWasOn.path) else { return }
+        let plugins = run([path, "plugin", "list"])?.output
+        let others = [AppChannel.release, .dev].map(\.mcpServerName).filter { $0 != name }
+        guard !others.contains(where: { Self.listed(plugins, id: "\($0)@\($0)") == true }) else { return }
+        if Self.feature(Self.codexSharedServer, in: run([path, "features", "list"])?.output) == false {
+            _ = run([path, "features", "enable", Self.codexSharedServer])
+        }
+        try? FileManager.default.removeItem(at: codexSharedServerWasOn)
     }
 
     // MARK: Files

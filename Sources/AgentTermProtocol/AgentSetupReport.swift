@@ -17,20 +17,26 @@ public struct AgentSetupState: Codable, Equatable, Identifiable, Sendable {
     public var mcp: Bool?
     /// Claude Code's status line; nil for an agent that has none.
     public var statusLine: Bool?
+    /// The background server Codex's sessions share is out of the way
+    /// (#140): not started by Codex itself, and not running. While it runs,
+    /// a session's hooks and server are that server's and no session's;
+    /// nil for an agent that has none.
+    public var sharedServerOff: Bool?
     /// The commands to add them and to take them out, as typed in a
     /// terminal: the host's program, by its full path.
     public var command: String
     public var removeCommand: String
     /// What else the user should know of it, when there is something.
     public var note: String?
-    /// Why the last setup or removal did not work, with the agent's own words.
+    /// What is in the way of its setup now, or why the last setup or
+    /// removal did not work, with the agent's own words.
     public var problem: String?
 
     public var id: String { agent }
 
     public init(
-        agent: String, name: String, installed: Bool, hooks: Bool? = nil, mcp: Bool? = nil, statusLine: Bool? = nil, command: String,
-        removeCommand: String, note: String? = nil, problem: String? = nil
+        agent: String, name: String, installed: Bool, hooks: Bool? = nil, mcp: Bool? = nil, statusLine: Bool? = nil, sharedServerOff: Bool? = nil,
+        command: String, removeCommand: String, note: String? = nil, problem: String? = nil
     ) {
         self.agent = agent
         self.name = name
@@ -38,14 +44,15 @@ public struct AgentSetupState: Codable, Equatable, Identifiable, Sendable {
         self.hooks = hooks
         self.mcp = mcp
         self.statusLine = statusLine
+        self.sharedServerOff = sharedServerOff
         self.command = command
         self.removeCommand = removeCommand
         self.note = note
         self.problem = problem
     }
 
-    /// Everything of AgentTerm's is there.
-    public var isSetUp: Bool { hooks == true && mcp == true && statusLine != false }
+    /// Everything of AgentTerm's is there, and nothing is in its way.
+    public var isSetUp: Bool { hooks == true && mcp == true && statusLine != false && sharedServerOff != false }
     /// Installed, and missing something of AgentTerm's.
     public var needsSetup: Bool { installed && !isSetUp }
 }
@@ -79,4 +86,23 @@ public enum AgentSetupWords {
     public static let statusLine = "Status line"
     public static let hooks = "Hooks"
     public static let mcp = "MCP server"
+
+    /// The background server Codex's sessions share, as a part of its
+    /// setup: out of the way, in it, or not known.
+    public static func sharedServer(off: Bool?) -> String {
+        switch off {
+        case true?: return "Shared server off"
+        case false?: return "Shared server on"
+        case nil: return "Shared server"
+        }
+    }
+
+    /// What Install does about it, with which of Codex's own commands, and
+    /// for what: the setting is Codex's, outside AgentTerm too.
+    public static let sharedServerNote =
+        "Codex runs its sessions through one background server they share, where AgentTerm cannot tell one session from another. Install turns that off for all of Codex, with `codex features disable daemon_auto_start`; Remove turns it on again."
+
+    /// Turned off, and still running: what to do.
+    public static let sharedServerRunning =
+        "Codex's shared background server is still running, and Codex goes on using it. Quit Codex's sessions, then stop it: `codex app-server daemon stop`."
 }

@@ -678,7 +678,7 @@ and what was found by running it, with its version, is in
 | Agent | Where its hooks are | Events |
 |---|---|---|
 | Claude Code | a plugin (`hooks/hooks.json`) | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Notification`, `Stop` |
-| Codex | its `config.toml`, between marks: Codex 0.169 removed plugins' hooks (`plugin_hooks`) | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` |
+| Codex | its `config.toml`, each under a comment that says it is AgentTerm's (below): Codex 0.169 removed plugins' hooks (`plugin_hooks`) | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` |
 | Copilot CLI | a plugin, in its own layout (`hooks.json`) | `sessionStart`, `userPromptSubmitted`, `preToolUse`, `permissionRequest`, `postToolUse`, `postToolUseFailure`, `agentStop` |
 | Antigravity | a plugin, in its own layout (`hooks.json`) | `SessionStart`, `PreInvocation`, `PreToolUse`, `PostToolUse`, `Stop` |
 
@@ -693,6 +693,25 @@ trusts a hook by its command and asks again when it changes. For
 Antigravity's `PreToolUse` the hook answers `{"decision":"allow"}`, which
 leaves the decision to its own rules. The start's event changes no state:
 it says the hooks are there.
+
+**An agent in no terminal is no session's** (#140). A session's variables
+are in the environment of everything started from it, and stay in a program
+that goes on in the background and works for other terminals after: Codex
+0.169 runs its sessions through one app server they share, started by the
+first of them, which starts every session's hooks and MCP server in that
+first one's environment. So `agenttermd hook`, `agenttermd mcp` and
+`agenttermd statusline` go by their environment only when the agent that
+started them runs in a terminal (`ProcessNames.agentInNoTerminal`): the
+process that started them is looked at, past the shells that only ran their
+command line (`sh -c`, which some agents keep and some do not), and when it
+is an agent's own program with no controlling terminal, they do as outside
+AgentTerm: nothing saved, no tools. What a real agent in a session starts
+is started by that agent, in the session's terminal, as all four were seen
+to on 2026-11-18, whether the hook itself has the terminal or not
+(`docs/AGENT-CLIS.md`). A process that is no agent's, a test that starts
+the server itself, is believed as before. An agent another agent runs
+through its command tool has no terminal either, and is no session's: its
+hooks no longer change the state of the session it was run in.
 
 The host watches that `events` folder, which holds nothing else (Claude
 Code's status line writes its usage next to it several times a second),
@@ -1065,8 +1084,10 @@ any app on the Mac does, with the Mac's own token from the state folder,
 and sends each request as `agentShell(id:key:request:)`. The host looks up
 the session whose key it is and answers `agentShellResult(id:result:)` to
 that connection only. A key names a running agent's session or nothing.
-Without the variable, the server offers no tools. Nor does it in a session
-of the other build: a released build and a development build each install
+Without the variable, the server offers no tools. Nor does it when the
+agent that started it runs in no terminal, whose environment is not the
+session's it works for (#140, "An agent in no terminal is no session's").
+Nor does it in a session of the other build: a released build and a development build each install
 a server of their own (below), so an agent has both, and the one whose
 build the variable does not name stays out rather than sign in to a host
 with another host's token. A variable that names no build is from a host
@@ -1143,14 +1164,45 @@ one session only, a stand-in hook and server writing down that they ran:
 | Agent | How it takes the server and its hooks |
 |---|---|
 | Claude Code 2.1.326 | `claude plugin marketplace add <folder> --scope user`, `claude plugin install <name>@<name> --scope user`; the plugin has `hooks/hooks.json` and `.mcp.json`. Its server's instructions reach the model |
-| Codex 0.169.0 | `codex plugin marketplace add <folder>`, `codex plugin add <name>@<name>`; it reads Claude Code's layout. Its `.mcp.json` names the session's variable in `env_vars`, as Codex passes no other. Its hooks go in `config.toml` (above), read back with `codex features list` and put back as they were when it cannot |
+| Codex 0.169.1 | `codex plugin marketplace add <folder>`, `codex plugin add <name>@<name>`; it reads Claude Code's layout. Its `.mcp.json` names the session's variable in `env_vars`, as Codex passes no other. Its hooks go in `config.toml` (above), read back with `codex features list` and put back as they were when it cannot. The server its sessions share is turned off, `codex features disable daemon_auto_start` (below) |
 | Copilot CLI 1.0.112 | `copilot plugin marketplace add <folder>`, `copilot plugin install <name>@<name>`; it reads the plugin from the folder at each session. It does not give a server's instructions: what it is told is in a folder of instructions its environment names (`COPILOT_CUSTOM_INSTRUCTIONS_DIRS`), in every session |
 | Antigravity 1.5.9 | `agy plugin install <folder>`, a copy; `hooks.json`, `mcp_config.json` and a rule with what it is told. Not tried in a session: its sign-in is in its home |
 
 `--remove` takes out this build's only, with the same commands. What each
-has is asked of the agent (`plugin list`, Codex's marks, Claude Code's
+has is asked of the agent (`plugin list`, Codex's hooks, Claude Code's
 `statusLine`), off the host's queue; a command that fails is kept as the
-agent's `problem`, in its own words. The server finds what to say in the
+agent's `problem`, in its own words.
+
+**Codex's hooks, by their own lines** (#142). Each hook is three lines in
+`config.toml`: a comment that names the build (`# AgentTerm's hook
+(agentterm), added by …`), its table (`[[hooks.Stop]]`) and its command. A
+build's hooks are taken out by those lines, wherever Codex has them by
+then, and nothing else is. They were between two marks before: Codex keeps
+the comments a file ends with at its end and writes a table it adds above
+them, so the closing mark took in what Codex added after, a folder the user
+trusted or a server they added, and Install Again and Remove took that out
+with the hooks. Hooks a build before wrote between marks are taken out by
+their lines too, and what Codex put between the marks stays.
+
+**Codex's shared server** (#140). What a principle asks of an agent is
+arranged with the agent's own command when it has one, and by AgentTerm's
+own writing only when it has none (decided by the owner on 2026-11-18): the
+user sees a setting of the agent's, made the agent's way. Install turns off
+the feature that has Codex start the app server its sessions share (`codex
+features disable daemon_auto_start`), keeps that it did
+(`agent-setup/codex/shared-server-was-on`), and Remove turns it on again
+(`codex features enable`), unless the user had it off, or another build of
+AgentTerm is still set up in Codex and needs it off as much. The row says
+so before Install is pressed (`AgentSetupWords.sharedServerNote`): the
+setting is all of Codex's, outside AgentTerm too. A server that runs is
+used whatever the feature says, and stopping it leaves the sessions that
+use it waiting, so it is not stopped: `AgentSetupState.sharedServerOff`
+(protocol 27) is false while Codex starts one by itself or one runs (`codex
+app-server daemon version`), the agent then counts as not set up, and its
+`problem` says what to do (`AgentSetupWords.sharedServerRunning`). A Codex
+that has no such feature is asked nothing of it. AgentTerm still puts
+nothing on the command line it starts Codex with (`--no-daemon` would do
+the same for the sessions it starts, and not for one typed by hand). The server finds what to say in the
 prompt files the host writes for every agent (`HostServer.promptFile`).
 Every session has its key in its environment (`AGENTTERM_MCP`, which names
 the build), a shell's too; outside a session of this build the server

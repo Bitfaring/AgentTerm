@@ -593,7 +593,7 @@ A second host stands in for the other Mac, with a project of its own.
 | AGENT-9 | A stand-in agent that waits for permission | The Mac app shows it | A mark next to its name in the folder list and on its tab, read as "waiting for permission"; its folder's row says a session waits | M |
 | AGENT-10 | The same | The iPhone shows it | A mark in the sessions list, and the state in the terminal's title | hand, until the iPhone tests cover it |
 | AGENT-11 | A host that does not refresh during the test, a stand-in Claude Code | It saves that it works, then that it is done | Each state is told within two seconds, through the watch of the hooks' folder | H |
-| AGENT-14 (#124, #129) | Codex's config.toml with the user's own; the hooks of a released build and of a development build | Added, added again; one build's taken out, then the other's | Each build's hooks a block of their own between marks, after the user's, once each; taking one out leaves the other's and the user's as they were | U |
+| AGENT-14 (#124, #129, #142) | Codex's config.toml with the user's own; the hooks of a released build and of a development build | Added, added again; one build's taken out, then the other's | Each build's hooks its own, each under a comment that names the build, after the user's, once each; taking one out leaves the other's and the user's as they were | U |
 
 ### Worktrees
 
@@ -727,6 +727,8 @@ A second host stands in for the other Mac, with a project of its own.
 | SETUP-4 (#129) | See MCP-15 | | | H |
 | SETUP-5 (#129) | An agent not installed | Asked; Install | Said not installed, nothing known of it, nothing run | H |
 | SETUP-6 (#129) | A host with stand-in agents; the Mac's app | The host starts; the app asks; Install | Nothing run in the agents until asked; asking runs no install; the app told it is being set up, then that it is | H |
+| SETUP-7 (#140) | A stand-in Codex that answers of the server its sessions share as Codex 0.169.1 does: it starts it by itself; the user had that off; it has no such server; both builds set up | Install; one from before still runs, then not; Remove | Turned off with `codex features disable daemon_auto_start`, said before Install is pressed, its hooks kept; while one runs: not set up, with what to do (`codex app-server daemon stop`), and nothing stopped for the user; Remove turns it on again, not one the user had off, and not while the other build is set up; a Codex without one is asked nothing of it | H |
+| SETUP-8 (#142) | Codex's config.toml with the user's own and AgentTerm's hooks; a table written where Codex 0.169.1 writes one it adds (above the comments the file ends with); hooks a build before wrote between marks, a table of Codex's between them | Install again; Remove | What Codex added is there after both, each hook once; taken out, the file is the user's and Codex's to the letter; the marks of before go with their hooks, and what was between them stays | H |
 | LINK-2 (#129) | A stand-in Claude Code whose hook writes its start, and whose server says it started | Its session starts | Its link: not known, then hooks heard, then both | H |
 | LINK-3 (#129) | A stand-in that says nothing | Its session starts | Both said missing once the grace is over | H |
 | LINK-4 (#129) | A shell; a program named `claude` typed in it, its hook said first | Typed; Control C | The shell is the agent's while it runs, its hooks heard (its state shown), its server said missing; then a shell again, with nothing of the agent's | H |
@@ -735,7 +737,10 @@ A second host stands in for the other Mac, with a project of its own.
 | LINK-7 (#129) | A stand-in Claude Code that runs its hook and AgentTerm's MCP server as one `agenttermd setup` set up does, started from the iPhone | Its terminal | Its usage band ends with the mark, which says "Hooks and MCP connected" | P |
 | LINK-8 (#129) | A shell of the user's on the Mac; a shell of an agent's, the iPhone beside it | A shell opened with its key, as an agent typed in it does | The new shell is the user's: in the list, and in the row of the Shells tab; listed by the iPhone with the folder's shells | M, X |
 | LINK-9 (#129) | A shell of the user's on the Mac | A program named `claude` typed in it; Control C | While it runs, the shell shows the usage band and the mark of its hooks and server; then a shell again, without them | M |
+| LINK-10 (#140) | The processes of a hook and of a server as each real agent starts them (2026-11-18): Claude Code and Codex with `--no-daemon`, whose hooks have no terminal; Copilot CLI and Antigravity; Codex's shared app server; a shell between; a test that starts the server itself; an agent that ended | Asked which agent in no terminal started it | The agent that started it is looked for past the shells; only Codex's app server, in no terminal, is found; a program that is no shell is not looked past; one that cannot be asked is not said to have no terminal | U |
+| LINK-11 (#140) | A host and an agent's session; the real `agenttermd`; a program named `codex`, in no terminal, with that session's environment, as Codex's shared app server has the one of the session that started it; the same program in a session's terminal | It runs its hook of a prompt and AgentTerm's MCP server | In no terminal: the server offers no tools, the hook writes nothing, the session's link and state stay as they were. In a terminal: all of the tools, the hooks and the server heard, the state shown | H |
 | HOOKS-1 (#129) | Stand-in Claude Code and Codex; Copilot CLI and Antigravity not installed | Settings > Hooks & MCP; Install Claude Code; Remove | Each agent and what it has; not installed said, with no button; installed with its own commands, at the user's scope; all of it there; then none | M |
+| HOOKS-2 (#140) | A stand-in Codex that starts its shared server by itself, one running | Settings > Hooks & MCP; Install Codex; the server stopped, the pane opened again; Remove | "Shared server on", and what Install does to Codex with which command, before it is pressed; Install runs it; while one runs, still on, with what to do, and nothing stopped; then "Shared server off"; Remove turns it on again | M |
 | ONBOARD-1 (#129) | Stand-in agents not set up | The app opens; Next through the steps; Skip; opens again; Install for All; opens again; Settings' Show the Onboarding Again; Don't Show This Again | Shown, step after step; shown again after Skip; not shown with every agent set up; shown from Settings | M |
 | USAGE-13 (#129) | Claude Code's settings with the user's own status line | AgentTerm's put in; run in a session and outside one; taken out | The command runs as the shell unquotes it; in a session the input is saved, outside nothing; the user's line shows either way; then the user's again | U |
 | SCHED-23 (#11, #129) | Antigravity's settings with trusted folders | A schedule's run is started | Its folder trusted for that run, next to the user's, whose settings are left as they are | U |
@@ -911,6 +916,18 @@ out in less than 2 seconds, which held here and failed on a slower runner
 out a short one, and was seen to fail when each line was made to cost more
 the more lines there are.
 
+Found by running the real agents before 0.10.0 (INBOX-5 by hand, #140):
+the test's Codex opened its shell in the development build that was
+running on the Mac, in another Codex session's folder. Codex 0.169 runs
+its sessions through one app server, which starts their hooks and MCP
+servers in the environment of the session that started it. No stand-in
+had shown it: each started its hook and its server itself. LINK-10 holds
+how each real agent was then seen to start them, and LINK-11 runs the
+real `agenttermd` under a program named `codex` that has no terminal.
+Setting Codex up for the fix, in a home of the trial's own, showed that
+Codex writes a table it adds above the comments its `config.toml` ends
+with, inside the marks AgentTerm's hooks were between (#142, SETUP-8).
+
 ## What stays by hand
 
 Some of this cannot be automated here, and is checked before a release:
@@ -926,3 +943,15 @@ Some of this cannot be automated here, and is checked before a release:
   was looked at once by capturing the simulator from outside.
 - What the Mac's terminal draws: accessibility does not give its text.
   What a session holds is checked through the host instead.
+- The real agents (INBOX-5, `AGENTTERM_REAL_AGENTS=1 scripts/test-mac.sh
+  RealAgentsTests`): they are signed in in the user's home, and run the
+  hooks and the server of the development build in `dist/`. It is not
+  run while Codex's shared app server runs (the test says so and is
+  skipped): through it the test's Codex speaks to the AgentTerm the user
+  has open, not to the test's (#140).
+- Codex's shared app server itself (#140): tried with the real Codex in
+  a `CODEX_HOME` of the trial's own, with a key that is nobody's, so
+  that nothing of the user's Codex is read or changed. `agenttermd setup
+  codex` of the build is run there, then `/mcp` in a `codex` started
+  plainly says how many tools AgentTerm's server offers: all of them once
+  set up, none through the shared server (`docs/AGENT-CLIS.md`).

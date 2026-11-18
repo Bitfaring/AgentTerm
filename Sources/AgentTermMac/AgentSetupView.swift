@@ -107,6 +107,13 @@ private struct AgentSetupRow: View {
                         part(AgentSetupWords.hooks, state.hooks)
                         part(AgentSetupWords.mcp, state.mcp)
                         if let statusLine = state.statusLine { part(AgentSetupWords.statusLine, statusLine) }
+                        // Not something added: its words say how it is.
+                        if let off = state.sharedServerOff {
+                            Label(AgentSetupWords.sharedServer(off: off), systemImage: off ? "checkmark.circle.fill" : "xmark.circle")
+                                .font(.system(size: 12))
+                                .foregroundStyle(off ? Color.green : Color.orange)
+                                .accessibilityIdentifier("setup-\(state.agent)-shared-server")
+                        }
                     }
                     if let session = running, let link = session.link {
                         Text("In use now, \(session.displayName): \(AgentLinkWords.summary(link)).")

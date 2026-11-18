@@ -51,8 +51,11 @@ the source yourself sends nothing at all.
 - **The agents' own configuration.** AgentTerm writes into an agent's configuration only when you ask,
   in Settings > Hooks & MCP or with `agenttermd setup`: its hooks, AgentTerm's MCP server and, for
   Claude Code, its status line, for your user and every folder, with the agent's own commands; Remove
-  takes them out. To show what each has, the Mac asks each agent for its plugins and reads Claude
-  Code's settings and Codex's `config.toml`, on your Mac only.
+  takes them out. For Codex it also turns off the background server Codex's sessions share
+  (`codex features disable daemon_auto_start`), a setting of Codex's that holds outside AgentTerm too,
+  and Remove turns it on again. To show what each has, the Mac asks each agent for its plugins, asks
+  Codex for its features and whether its shared server runs, and reads Claude Code's settings and
+  Codex's `config.toml`, on your Mac only.
 - **Your terminal sessions' environment.** Every session AgentTerm starts, a shell's too, names a file
   for the hooks to write what the agent is doing in, and holds a key with which an agent's MCP server
   in it reaches the AgentTerm host on your Mac, to open shells and pages you see as that session. Any

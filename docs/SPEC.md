@@ -356,9 +356,9 @@ commands, and takes them out the same way; outside AgentTerm they do
 nothing (decided by the owner on 2026-11-17).
 
 - **Settings > Hooks & MCP** (Mac) lists each agent: whether it is installed
-  on the Mac, what it has (Hooks, MCP server, and Status line for Claude
-  Code), asked of the agent itself, and whether its session running now
-  was heard from; Install, Install for All, Remove; and the same as a
+  on the Mac, what it has (Hooks, MCP server, Status line for Claude Code,
+  and for Codex whether the server its sessions share is off), asked of the
+  agent itself, and whether its session running now was heard from; Install, Install for All, Remove; and the same as a
   command to run in a terminal, with Copy: `'<AgentTerm>/agenttermd' setup
   claude` (or `codex`, `copilot`, `agy`, `all`; `--remove` takes them out;
   `setup status` says what each has). What does not work is said, in the
@@ -369,11 +369,28 @@ nothing (decided by the owner on 2026-11-17).
   add`, `claude plugin install`, `--scope user`), and the status line in its
   settings, the one the user had kept and run after AgentTerm's; Copilot
   CLI, a plugin the same way; Codex, a plugin with the server, and the hooks
-  between marks in its `config.toml`, which it then asks to review (it takes
-  hooks nowhere else); Antigravity, a plugin installed from AgentTerm's
-  folder, with what it is told as a rule (installed again after changing
-  those words). Claude Code has one status line: of the two builds, the one
-  set up last has it, and runs the other's after its own.
+  in its `config.toml`, each under a comment that says it is AgentTerm's,
+  which it then asks to review (it takes hooks nowhere else); Antigravity, a
+  plugin installed from AgentTerm's folder, with what it is told as a rule
+  (installed again after changing those words). Claude Code has one status
+  line: of the two builds, the one set up last has it, and runs the other's
+  after its own. Taking AgentTerm's out of Codex's `config.toml` takes out
+  its own lines and nothing else, whatever Codex wrote there since.
+- **Codex's shared server.** Codex (0.169) runs its sessions through one
+  background server they share, which starts each session's hooks and MCP
+  server as the session that started it: AgentTerm cannot tell one session
+  from another through it. Install turns that off for all of Codex, with
+  Codex's own command (`codex features disable daemon_auto_start`), which
+  the row names before Install is pressed; Remove turns it on again, unless
+  it was off before. While such a server still runs, Codex goes on using
+  it: the row says "Shared server on" and what to do (quit Codex's sessions,
+  then `codex app-server daemon stop`), Codex counts as not set up, and
+  AgentTerm stops nothing itself, which would leave those sessions waiting.
+  A session that runs through the shared server all the same has no shells
+  or pages of AgentTerm's and its state is not shown: its mark says its
+  hooks and its server were not heard. It never speaks as another session.
+- What AgentTerm arranges in an agent is done with the agent's own command
+  when it has one, and in AgentTerm's own way only when it has none.
 - **The onboarding** (Mac) shows over the window each time the app opens
   while an agent installed on the Mac misses its hooks or the MCP server:
   Welcome, Folders (add the projects' folders), Permissions, Hooks & MCP

@@ -23,7 +23,32 @@ final class RealAgentsTests: MacUITestCase {
     override func setUpWithError() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["AGENTTERM_REAL_AGENTS"] != nil, "spends the user's accounts: run by hand")
         try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: Self.developmentHost.path), "no development build in dist/")
+        // Through the app server Codex's sessions share, the test's Codex
+        // speaks as the session that started that server: it opened a shell
+        // in the AgentTerm the user had open (#140). Not run until Codex is
+        // set up as AgentTerm sets it up, and no such server runs.
+        try XCTSkipIf(
+            Self.said("codex features list").contains { $0.hasPrefix("daemon_auto_start") && $0.hasSuffix("true") },
+            "Codex starts its shared app server by itself: set Codex up in Settings > Hooks & MCP first")
+        try XCTSkipIf(
+            Self.said("codex app-server daemon version").contains { $0.contains("\"status\":\"running\"") },
+            "Codex's shared app server runs: quit Codex's sessions and stop it (`codex app-server daemon stop`) first")
         try super.setUpWithError()
+    }
+
+    /// What a command of an agent's prints, a line each, run as the user's
+    /// shell runs it.
+    static func said(_ command: String) -> [String] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", command]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        let printed = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        return printed.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     override var hostExecutable: URL { Self.developmentHost }
@@ -42,16 +67,7 @@ final class RealAgentsTests: MacUITestCase {
     }
 
     static func which(_ program: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", "command -v \(program)"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        let found = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        process.waitUntilExit()
-        return found.hasPrefix("/") ? found : nil
+        said("command -v \(program)").first { $0.hasPrefix("/") }
     }
 
     /// INBOX-5 (#67), by hand: each of the four, asked to run a command and

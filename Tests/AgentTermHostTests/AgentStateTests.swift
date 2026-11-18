@@ -185,11 +185,12 @@ final class AgentStateTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: settingsFile, encoding: .utf8), #"{"trustedWorkspaces":["/Users/someone/work"],"model":"x"}"#)
     }
 
-    /// AGENT-14 (#129, principle 7): Codex keeps hooks only in its
-    /// config.toml, where each build's are a block of their own between
-    /// marks, after the user's own; taking one build's out leaves the
-    /// other's and the user's as they were.
-    func testEachBuildsCodexHooksAreABlockOfTheirOwn() throws {
+    /// AGENT-14 (#129, #142, principle 7): Codex keeps hooks only in its
+    /// config.toml, where each build's are its own, each under a comment
+    /// that names the build, after the user's own; set up again they are
+    /// there once, and taking one build's out leaves the other's and the
+    /// user's as they were.
+    func testEachBuildsCodexHooksAreItsOwn() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-codex-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let config = root.appendingPathComponent("home/.codex/config.toml")
@@ -202,15 +203,19 @@ final class AgentStateTests: XCTestCase {
         try release.addCodexHooks(path: "/no/codex")
         let text = try String(contentsOf: config, encoding: .utf8)
         XCTAssertTrue(text.hasPrefix(own), text)
-        XCTAssertEqual(text.components(separatedBy: "# >>> AgentTerm's hooks (agentterm)").count, 2, "the release's block twice: \(text)")
-        XCTAssertEqual(text.components(separatedBy: "# >>> AgentTerm's hooks (agentterm-dev)").count, 2)
+        // Each of a build's hooks once, under its comment.
+        let hooks = AgentSetup.events(of: "codex").count
+        XCTAssertEqual(text.components(separatedBy: "# AgentTerm's hook (agentterm),").count - 1, hooks, "the release's hooks twice: \(text)")
+        XCTAssertEqual(text.components(separatedBy: "# AgentTerm's hook (agentterm-dev),").count - 1, hooks)
         XCTAssertEqual(text.components(separatedBy: "[[hooks.Stop]]").count, 3)
         XCTAssertTrue(text.contains(#"hooks = [{ type = "command", command = "'/Apps/My App'\\''s/agenttermd' hook codex SessionStart" }]"#), text)
+        XCTAssertTrue(release.codexHooksAreThere(in: text))
         try release.removeCodexHooks()
         let left = try String(contentsOf: config, encoding: .utf8)
         XCTAssertTrue(left.hasPrefix(own), left)
-        XCTAssertFalse(left.contains("(agentterm)\n") || left.contains("hooks (agentterm),"), left)
-        XCTAssertTrue(left.contains("# >>> AgentTerm's hooks (agentterm-dev)"), left)
+        XCTAssertFalse(left.contains("hook (agentterm),"), left)
+        XCTAssertEqual(left.components(separatedBy: "# AgentTerm's hook (agentterm-dev),").count - 1, hooks, left)
+        XCTAssertEqual(left.components(separatedBy: "[[hooks.Stop]]").count, 2, left)
         try development.removeCodexHooks()
         XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), own)
     }
