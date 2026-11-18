@@ -76,6 +76,12 @@ choose_simulator() {
 # keyboard attached. Once a Mac's keyboard has been typed on in an iPad's
 # simulator, iPadOS remembers it and shrinks its own keyboard to a small
 # bar: a test's steps with the keyboard up then have none to look at.
+#
+# Nor is that enough on an iPad (#144): iPadOS also shrinks it by itself
+# while the Simulator has the Mac's keyboard connected, whatever it last
+# saw (AutomaticMinimizationEnabled, on by default). With that off the
+# keyboard is up: 1 run of 1, against none of 4 without it (2026-11-18).
 software_keyboard() {
     xcrun simctl spawn "$1" defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool false
+    xcrun simctl spawn "$1" defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool false
 }

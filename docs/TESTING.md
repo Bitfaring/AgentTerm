@@ -149,6 +149,15 @@ agent says in `demo-agent.py`, where each picture is taken in the two
 they show, and looked at before they are committed. The iPhone's are
 taken on the iPhone Air, whose screen is the size the App Store asks for.
 
+The Simulator copies the Mac's pasteboard to the simulator's, and the
+keyboard of iOS offers to paste what is there: a picture with the keyboard
+up showed the text last copied on the Mac (#143). The script empties the
+simulator's own pasteboard before the pictures are taken, and touches
+neither the Mac's nor the Simulator's setting. What is copied on the Mac
+while they are taken may still show: one more reason to look at each. They
+are taken after the version was set (`make bump`), as the list of sessions
+says the version and the protocol at its foot.
+
 ### Where a new test goes
 
 | What is tested | Where | Start from |
