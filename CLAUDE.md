@@ -2,7 +2,7 @@
 
 Guidance for Claude Code, and any other coding agent, working in this repository.
 
-Read first: `README.md`, `docs/SPEC.md` (what the app does), `docs/DESIGN.md` (how it is built), `docs/TESTING.md` (how it is tested). What is planned is in the GitHub issues and milestones; issue #28 says how the releases fit together and what was decided.
+Read first: `README.md`, `docs/SPEC.md` (what the app does), `docs/DESIGN.md` (how it is built), `docs/TESTING.md` (how it is tested). What is planned is in the GitHub issues and milestones, and what was decided is written in the issue it was decided for.
 
 ## Design principles
 
@@ -59,6 +59,7 @@ Nothing is reported as done before it has been tested, and the report says what 
 
   Before a release, all of them.
 - **When they are run.** While working, only the tests of what is being changed are run: `swift test --filter <suite or test>`, `scripts/test-mac.sh <test>`, a mode of `scripts/test-ios.sh`. Several fixes or changes are made first, and the layers of the table are run once for all of them, before they are committed, not after each one: the UI layers alone take about a quarter of an hour. A report given before that run says plainly that the full tests have not been run yet, and asks whether to run them.
+- **Work goes by groups, as the owner decided (2026-11-19).** The open issues of a milestone are split into groups by what they need: code to change, tries of a bug that comes and goes (principle 8), trials with a real agent, a real iPhone with a TestFlight build. The groups are said before the work starts. All of one group's work is done, with its focused tests, and then the layers are run once for that group; that run counts as one of the tries of the bugs that come and go.
 - **A change to what is seen is looked at.** Take a picture of the window (`SHOTS=... ALL_SHOTS=1 scripts/test-mac.sh <test>`) and look at it; a build that compiles has not been seen.
 - **A new behaviour gets a case** in `docs/TESTING.md` and a test that names it.
 - **The report is true.** Which commands ran, which passed and which failed, with the failing output. What was not run is said, with why: "not tested on the iPhone" is an acceptable sentence, silence about it is not. A check that is skipped ("Executed 0 tests", tests listed as skipped) checked nothing and is not reported as passing.
@@ -76,6 +77,7 @@ Nothing is reported as done before it has been tested, and the report says what 
 
 - **A bug found during a session** gets an issue at once, labelled `bug`, in the milestone being worked on, saying what was seen, what was tried and what is not known yet, written as rule 5 says.
 - **Work that is done and tested** (rule 2) is committed on the milestone's branch and pushed, without asking. Then CI is run on the branch, which it does by itself only for pull requests and `main` (`gh workflow run ci.yml --ref <branch>`, then `gh run watch`), and what fails is fixed, shown and committed the same way, until it is green. A check that cannot be made green without a decision (rule 1) is reported and asked about.
+- **A real agent is used when a trial needs one** (principle 5), as the owner decided (2026-11-19): Claude Code, Codex, Antigravity or Copilot CLI is started without asking, with its cheapest model and its lowest level of thinking (for Claude Code, Haiku with thinking off; for the others, their own smallest), and the issue says which agent, version, model and level were used. What rule 1 says of the user's tools still holds: a question the agent asks about itself (an update, a sign-in, whether to trust a folder) is declined or the trial is stopped, and the trial runs in a folder of its own, not in the user's projects.
 - What stays asked: opening and merging a pull request, releasing, deploying, deleting, closing an issue that is not a fixed bug, and planning (rule 1).
 
 ### 5. How an issue is written, as the owner decided (2026-11-19)
