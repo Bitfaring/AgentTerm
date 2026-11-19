@@ -1403,9 +1403,10 @@ and touch up what an agent wrote without leaving the app.
 - Text opens in an editor with syntax coloring for the common languages. It
   saves with ⌘S, and a dot on the tab marks unsaved changes. Closing a tab
   with unsaved changes asks first.
-- Markdown opens as a rendered preview, with a switch to the source. Code
-  blocks in it are colored, and blocks marked `mermaid` are drawn as
-  diagrams. A `.mmd` or `.mermaid` file is previewed as a diagram too.
+- Markdown opens as a rendered preview, with a switch to the source, laid
+  out as GitHub shows it, tables included, on the Mac and the iPhone
+  (#126). Code blocks in it are colored, and blocks marked `mermaid` are
+  drawn as diagrams. HTML written in the file is not run. A `.mmd` or `.mermaid` file is previewed as a diagram too.
 - Images are shown. Files that are not text are not opened. A text file
   larger than 2 MB says so and offers **Open Anyway**, which opens it, up to
   20 MB.

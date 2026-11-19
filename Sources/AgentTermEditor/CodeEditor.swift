@@ -685,17 +685,9 @@ struct PreviewCodeHighlighter: CodeSyntaxHighlighter {
     }
 }
 
-/// A rendered Markdown document.
-public struct MarkdownPreview: View {
-    let text: String
-    /// Folder of the document, so links and images relative to it resolve.
-    let baseURL: URL?
-
-    public init(text: String, baseURL: URL?) {
-        self.text = text
-        self.baseURL = baseURL
-    }
-
+/// MarkdownUI's look for Markdown shown in place (`MarkdownText`): the
+/// preview of a file is a web page since #126 (`MarkdownPreview`).
+enum MarkdownLook {
     /// GitHub's look, with code blocks marked "mermaid" drawn as diagrams.
     static let theme = MarkdownUI.Theme.gitHub
         .text { BackgroundColor(nil) }
@@ -720,19 +712,6 @@ public struct MarkdownPreview: View {
             }
         }
 
-    public var body: some View {
-        ScrollView {
-            // HTML mixed into the Markdown is turned into Markdown first.
-            Markdown(MarkdownHTML.flatten(text), baseURL: baseURL)
-                .markdownTheme(Self.theme)
-                .markdownImageProvider(PreviewImageProvider())
-                .markdownCodeSyntaxHighlighter(PreviewCodeHighlighter())
-                .textSelection(.enabled)
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(Color(EditorStyle.background))
-    }
 }
 
 /// Markdown shown in place among other things, as the preview of a file
@@ -749,7 +728,7 @@ public struct MarkdownText: View {
 
     public var body: some View {
         Markdown(MarkdownHTML.flatten(text))
-            .markdownTheme(MarkdownPreview.theme)
+            .markdownTheme(MarkdownLook.theme)
             .markdownTextStyle {
                 FontSize(size)
                 BackgroundColor(nil)

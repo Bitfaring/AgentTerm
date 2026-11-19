@@ -532,8 +532,18 @@ documents, and the tab shortcuts count across both.
 
 The editor is an `NSTextView` whose text storage is Highlightr's
 `CodeAttributedString`, which recolors text as it is edited using
-highlight.js. Markdown is rendered by MarkdownUI, with its code blocks
-colored by the same highlighter. The editor and the previews live in the
+highlight.js. A Markdown file's preview is a web page (#126): MarkdownUI
+turns the Markdown into HTML with cmark, which leaves out the raw HTML of
+the file, and a `WKWebView` shows it with GitHub's look in the dark. The
+page's only scripts are highlight.js (Highlightr's own copy), Mermaid when
+the document has a diagram, and a few lines that start them, each allowed
+by a nonce in the page's Content-Security-Policy; nothing of the file runs.
+The page is made off the main thread and laid out and scrolled in WebKit's
+process, so a long document holds nothing up. On the Mac, for a document on
+it, the page is written to a temporary file, so that it may
+read the pictures the document names; a link opens where the app opens it.
+What an agent said in a transcript is still drawn by MarkdownUI in place
+(`MarkdownText`). The editor and the previews live in the
 `AgentTermEditor` target, which both apps use: on the iPhone the editor is a
 `UITextView` on the same text storage.
 

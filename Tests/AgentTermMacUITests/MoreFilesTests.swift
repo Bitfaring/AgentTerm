@@ -65,10 +65,15 @@ final class MoreFilesTests: MacUITestCase {
         app.press(.button("big.txt"))
         app.wait(for: .containing("too large to open by itself"))
         // FILE-4: Markdown opens as a preview, with its source one switch away.
+        // With what GitHub draws (#126): a table, coloured code, a diagram.
+        try write(
+            "# Guide\n\nSome words.\n\n| Step | Done |\n|---|---|\n| lex | yes |\n\n```swift\nlet x = parse(\"a\")\n```\n\n```mermaid\ngraph LR; A-->B\n```\n",
+            to: "docs/guide.md", in: project)
         app.press(.button("docs, folder, collapsed"))
         app.press(.button("guide.md"))
         app.wait(for: .text("Some words."), timeout: 15)
         XCTAssertFalse(app.exists(.role(kAXTextAreaRole as String)), "a Markdown file opened as its source")
+        shot("markdown")
         app.press(.button("Edit"))
         wait("the source") { self.app.value(of: .role(kAXTextAreaRole as String))?.hasPrefix("# Guide") ?? false }
     }
