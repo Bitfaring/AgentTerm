@@ -176,6 +176,8 @@ private struct NotificationAsk: View {
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.canvas)
+        // Contained, so that the buttons keep identifiers of their own.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("notifications-ask")
     }
 }
