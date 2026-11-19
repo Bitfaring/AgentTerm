@@ -1,3 +1,4 @@
+import AgentTermEditor
 import AgentTermHost
 import AgentTermProtocol
 import AgentTermTerminal
@@ -1055,10 +1056,12 @@ private struct PatchView: NSViewRepresentable {
             forName: NSView.frameDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak coordinator = context.coordinator] _ in coordinator?.fit() }
         show(in: context.coordinator)
+        KeyboardTargets.register(text, as: KeyboardTargets.diff(file.id))
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
+        if let text = context.coordinator.text { KeyboardTargets.register(text, as: KeyboardTargets.diff(file.id)) }
         show(in: context.coordinator)
     }
 

@@ -417,6 +417,11 @@ final class RemoteMacTests: MacUITestCase {
         }
         wait("the other Mac after reopening", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == "Other Mac" }
         wait("this Mac's host to be started", timeout: 15) { self.listens(on: self.port) }
+        // REMOTE-18, #179: a host the app starts in a test listens on
+        // 127.0.0.1 only, as the tests' own hosts do; one left behind by a
+        // run stopped in the middle was found on the Tailscale address.
+        let addresses = listeningAddresses(on: port)
+        XCTAssertTrue(addresses.allSatisfy { $0.hasPrefix("127.0.0.1:") || $0.hasPrefix("[::1]:") }, "the host the app started listens on \(addresses)")
     }
 
     /// REMOTE-19: the other Mac's host dies and is started again there.

@@ -33,7 +33,9 @@ Mac is left alone while they run: the app under test is in front, and when
 another app comes to the front a menu it has open closes (#135), and what
 it does only while in front stops. What was on screen when a test failed
 names the app in front first, and says so when it is not the one under
-test. All
+test. A run of `scripts/test-mac.sh` stopped in the middle, by Control-C or by
+`kill`, ends every app, host and helper its tests started (#179): left
+behind, they kept a test's port, and a later run of that test met them. All
 layers use state folders, ports, a home folder and preferences of their own,
 and stand-in agents (small scripts) instead of the installed ones: the
 installed app, its sessions, its paired devices and the user's accounts are
@@ -350,6 +352,8 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | PANE-21 (#69, #127) | An agent's area: a shell and a page picked, then gone | Which shell and which page it shows | The one picked while it is there, the last of them otherwise; none when there are none | U |
 | PANE-22 (#171) | Three shells in the Shells tab | View > Item 1, 3, 2 in Group (⌥⌘1, ⌥⌘3, ⌥⌘2) | That shell shown each time, with the keyboard | M |
 | PANE-23 (#171) | A tab whose row holds several items | ⌥ and ⌘ held, then either let go | A number on each of the first nine; gone when a key is let go or the app is left | hand: the tests do not press keys |
+| PANE-24 (#171) | The user's Browser tab with two pages; an agent's tab with its page and its shell | ⌥⌘1, ⌥⌘2, then View > Previous Item in Group; in the agent's tab ⌥⌘2, ⌥⌘3, ⌥⌘1, then Keyboard to Its Page | That page or part shown, with the keyboard; the shortcuts that move by one as before | M |
+| PANE-25 (#171) | Two files open in the Files tab; two diffs in the Diffs tab | ⌥⌘1, ⌥⌘2, then the shortcut that moves by one | That file or diff shown, its text with the keyboard. Before the fix the keyboard stayed with the window: only a terminal or a page was given it | M |
 | PANE-18 | Tabs, the browser beside an agent | Click a tab, its close button, a session in the list, the agent's terminal while the page has the keyboard | Each click does what it says at once, and the keyboard goes where it was clicked | hand: the mouse's own events cannot be given to the app without moving the user's pointer |
 
 ### Git
@@ -584,7 +588,7 @@ A second host stands in for the other Mac, with a project of its own.
 | REMOTE-15 | A file of the other Mac open, in a folder nothing can be written in | Change it, save, press Refresh in the Files tab | It is said that the file could not be saved; the changes are still in the editor, still count as not saved, and the other Mac's disk is as it was | M |
 | REMOTE-16 | A session on this Mac, so its host has a tab to arrange | Pair with the other Mac, start a session there, come back | The other Mac's host was never told of this Mac's tab, and this Mac's arrangement is as it was | M |
 | REMOTE-17 | A file of the other Mac open with unsaved changes | Choose Forget for the Mac on screen, confirm | Refused, with a message to save or discard first; the other Mac stays on screen and in the menu | M |
-| REMOTE-18 | The app last on the other Mac, and this Mac's host not running, as after a restart | Open the app | It comes back to the other Mac, and this Mac's host is started all the same | M |
+| REMOTE-18 | The app last on the other Mac, and this Mac's host not running, as after a restart | Open the app | It comes back to the other Mac, and this Mac's host is started all the same; in a test, that host listens on 127.0.0.1 only (`AGENTTERM_LOCAL_ONLY`, #179): before the fix it listened on the Tailscale address too | M |
 | REMOTE-19 | The other Mac on screen, a session `deploy` running there | The other Mac's host is killed and started again there | A banner says that the host on the other Mac stopped unexpectedly and was started again, and that `deploy` ended with it, rather than an empty list | M |
 | REMOTE-22 (#147) | This Mac showing another, a stand-in for that Mac's app showing a page | Pick the Browser row; a picture of the page sent; press the page; New Browser Tab | The page shown, without Pick; watched, its picture drawn; the click sent as a tap; a new page asked of that Mac, and shown once listed | M |
 
@@ -800,6 +804,8 @@ A second host stands in for the other Mac, with a project of its own.
 | LINK-12 (#172) | Claude Code and Codex with their MCP server heard, not heard, not yet; Copilot CLI; Antigravity; no instructions saved | What the instructions came to | Given, not given, checking; given; unverified; disabled, whatever the agent | U |
 | LINK-13 (#172) | Instructions saved for Claude Code; the stand-in, which has neither hooks nor an MCP server | Its session's mark is opened | Three rows, Hooks, MCP and System Prompt, each with its mark and state: not heard, not connected, not given, red | M |
 | LINK-14 (#172) | A host that gives Claude Code AgentTerm's MCP server and its instructions; a stand-in | Its session started; its server heard, or not within the grace | Checking until the server is heard, then given; not given when it is not heard. A host with no instructions (a test's) says disabled from the start, whatever is heard | H |
+| LINK-15 (#172) | Instructions saved for Claude Code; a stand-in heard when the test says, its hooks first, then its MCP server; the mark's popover open from the start | The session goes on with the popover open | Checking for all three; the hooks heard (green), the MCP server still checking; then all green, the instructions given; the popover's rows follow the mark's (pictures looked at) | M |
+| LINK-16 (#172) | A stand-in Claude Code whose hooks are heard and which starts no MCP server; then no instructions for it; a stand-in Antigravity with instructions | Its session started; the instructions taken out in Settings; a new session; Antigravity's | Hooks green, MCP red, the instructions not given; the running session still says so after the edit; the new one, disabled; Antigravity's, unverified, in the popover (pictures looked at) | M |
 | HOOKS-1 (#129) | Stand-in Claude Code and Codex; Copilot CLI and Antigravity not installed | Settings > Hooks & MCP; Install Claude Code; Remove | Each agent and what it has; not installed said, with no button; the commands shown, each with what it is for: Claude Code's own for the server, AgentTerm's for its hooks and status line, and those that take them out; Install runs them, at the user's scope; all of it there; then none | M |
 | HOOKS-2 (#140) | A stand-in Codex that starts its shared server by itself, one running | Settings > Hooks & MCP; Install Codex; the server stopped, the pane opened again; Remove | "Shared server on", what Install does to Codex with which command, before it is pressed, and that command among those shown, between the server's and AgentTerm's, then `codex app-server daemon stop` (#153); Install for All above the agents; Install runs both; then "Shared server off"; Remove turns it on again | M |
 | ONBOARD-1 (#129) | Stand-in agents not set up | The app opens; Next through the steps; Skip; opens again; Install for All; opens again; Settings' Show the Onboarding Again; Don't Show This Again | Shown, step after step; shown again after Skip; not shown with every agent set up; shown from Settings | M |
@@ -825,6 +831,7 @@ A second host stands in for the other Mac, with a project of its own.
 | MCP-31 | A host, an agent with the real server, a zsh it opened; another agent | `shell_stop` with nothing running; of a command that outlasted its `shell_run`; a command after it; of one that ignores Control C; by the other agent | "Nothing runs"; "Stopped. Exit code 130." with its output, in under 5 seconds, and `shell_run` had named `shell_stop`; the next command runs; said to still run, with what to do, as a failure; refused, the shell still open | H |
 | MCP-32 (#145) | A host with an app showing the browser; two agents with a shell and a page each; a shell of the user's | `kill` of the first agent | It and its shell end; the app is asked to close its page only; the other agent, its shell and page, and the user's shell go on | H |
 | MCP-33 (#156) | The words an agent is told of the shells and of the browser | Read them | Both say to load the server's tools by name when they are not loaded yet, before the first command | U |
+| MCP-34 (#156) | The four real agents at the versions installed, each with its cheapest model and least thinking, in a folder of the trial's own inside this repository (`.build/agent-trial`) | Asked to run three commands (`AGENTTERM_REAL_AGENTS=1 scripts/test-mac.sh RealAgentsTests/testTheRealAgentsRunTheirCommandsInAgentTermsOwnShells`) | Which each ran them with is written out: the shells it opened, its link, its state; pictures looked at. By hand: it spends the user's accounts | hand |
 
 ### The browser (#76)
 

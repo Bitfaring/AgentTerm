@@ -1441,6 +1441,57 @@ final class BrowserUITests: MacUITestCase {
         app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page, picked in the row")
     }
 
+    /// PANE-24 (#171): ⌥⌘ and a number in the user's Browser tab, then in
+    /// an agent's tab with its page and its shell: that item shown and
+    /// given the keyboard; the shortcuts that move by one work as before
+    /// after it.
+    func testOptionCommandANumberPicksAPageOrAPartOfAnAgent() throws {
+        func load(_ name: String) throws {
+            let file = root.appendingPathComponent("\(name).html")
+            try "<!doctype html><title>\(name)</title><body>\(name)</body>".write(to: file, atomically: true, encoding: .utf8)
+            app.wait(for: .id("browser-address"), timeout: 20)
+            app.write(file.absoluteString, into: .id("browser-address"), confirm: true)
+            app.wait("\(name) shown") { self.app.value(of: .id("browser-page")) == name }
+        }
+        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("item-b") } }
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait("the first page") { pages().count == 1 }
+        try load("One")
+        app.press(.id("browser-new-page"))
+        app.wait("a second page") { pages().count == 2 }
+        try load("Two")
+        app.menu(["View", "Item 1 in Group"])
+        app.wait("the first page by its number") { self.app.value(of: .id("browser-page")) == "One" }
+        app.menu(["View", "Item 2 in Group"])
+        app.wait("the second page by its number") { self.app.value(of: .id("browser-page")) == "Two" }
+        app.menu(["View", "Previous Item in Group"])
+        app.wait("the one before it, as before") { self.app.value(of: .id("browser-page")) == "One" }
+
+        // An agent's tab: the agent, its page, its shell.
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let page = root.appendingPathComponent("page.html")
+        try "<!doctype html><title>Its page</title><p>A page</p>".write(to: page, atomically: true, encoding: .utf8)
+        let tab = try tabID(server.text("browser_open", ["url": page.absoluteString]))
+        let shellOpened = server.text("shell_open")
+        XCTAssertFalse(shellOpened.failed, shellOpened.text)
+        let phone = try device()
+        wait("the agent's shell") { phone.sessions.contains { $0.openedBy == agent.id } }
+        let shell = try XCTUnwrap(phone.sessions.first { $0.openedBy == agent.id })
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait(for: .id("agent-shells"), timeout: 20)
+        app.press(.id("session-\(agent.id)"))
+        app.waitForKeyboard(in: "terminal-\(agent.id)", "the agent")
+        app.menu(["View", "Item 2 in Group"])
+        app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page by its number")
+        app.menu(["View", "Item 3 in Group"])
+        app.waitForKeyboard(in: "terminal-\(shell.id)", "its shell by its number")
+        app.menu(["View", "Item 1 in Group"])
+        app.waitForKeyboard(in: "terminal-\(agent.id)", "the agent by its number")
+        app.menu(["View", "Keyboard to Its Page"])
+        app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page, by the shortcut that moves by one")
+    }
+
     /// The id `browser_open` said it opened.
     private func tabID(_ opened: (text: String, failed: Bool)) throws -> String {
         XCTAssertFalse(opened.failed, opened.text)

@@ -62,9 +62,26 @@ final class RealAgentsTests: MacUITestCase {
             try? FileManager.default.removeItem(at: link)
             let found = Self.which(agent)
             try XCTSkipIf(found == nil, "\(agent) is not installed")
-            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: found!))
+            if let flags = Self.cheapest[agent], name.contains("OwnShells") {
+                // Its cheapest model and its least thinking (rule 4 of
+                // CLAUDE.md): the agent itself, given those first.
+                try "#!/bin/sh\nexec '\(found!)' \(flags) \"$@\"\n".write(to: link, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: link.path)
+            } else {
+                try FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: found!))
+            }
         }
     }
+
+    /// How each agent is started for a trial of #156: its cheapest model
+    /// and its least thinking, as far as it can be told so. Antigravity
+    /// has no such option: it runs as it is set up.
+    static let cheapest: [String: String] = [
+        "claude": "--model haiku",
+        "codex": "-m gpt-5.6-luna -c model_reasoning_effort=low",
+        "copilot": "--model auto --reasoning-effort low",
+        "agy": "",
+    ]
 
     static func which(_ program: String) -> String? {
         said("command -v \(program)").first { $0.hasPrefix("/") }
@@ -137,5 +154,65 @@ final class RealAgentsTests: MacUITestCase {
             shot("inbox-\(agent)")
         }
         XCTAssertTrue(missing.isEmpty, "not in the Inbox: \(missing)")
+    }
+
+    /// MCP-34 (#156), by hand: each of the four, told by AgentTerm's MCP server to
+    /// run its commands in AgentTerm's shells, is asked to run three
+    /// commands; which it ran them with is written out: the shells it
+    /// opened (sessions of its own), and what each of them shows.
+    func testTheRealAgentsRunTheirCommandsInAgentTermsOwnShells() throws {
+        let phone = try device()
+        // A folder of the trial's own, inside this repository, which the
+        // four trust (so that none asks about itself), and outside what git
+        // keeps (`.build`): nothing of the user's project is worked in.
+        let trial = Self.repository.appendingPathComponent(".build/agent-trial")
+        try? FileManager.default.removeItem(at: trial)
+        try FileManager.default.createDirectory(at: trial.appendingPathComponent("docs"), withIntermediateDirectories: true)
+        try "a file of the trial's\n".write(to: trial.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        for name in ["one.md", "two.md", "three.md"] {
+            try "# \(name)\n".write(to: trial.appendingPathComponent("docs/\(name)"), atomically: true, encoding: .utf8)
+        }
+        let folder = trial.path
+        for agent in Self.agents {
+            phone.send(.create(CreateRequest(command: root.appendingPathComponent("agents/\(agent)").path, cwd: folder, title: "real-\(agent)")))
+        }
+        wait("the four sessions", timeout: 20) { phone.sessions.count == 4 }
+        var ids: [String: SessionID] = [:]
+        for agent in Self.agents { ids[agent] = phone.sessions.first { $0.title == "real-\(agent)" }?.id }
+        Thread.sleep(forTimeInterval: 12)
+        shot("own-shells-started")
+        let prompt = "Run `ls`, then `ls docs`, then `cat a.txt`, one after the other, and tell me in one sentence how many files docs has."
+        for agent in Self.agents {
+            guard let id = ids[agent] else { continue }
+            phone.connection.sendInput(Data(prompt.utf8), to: id)
+        }
+        Thread.sleep(forTimeInterval: 1)
+        for agent in Self.agents {
+            guard let id = ids[agent] else { continue }
+            phone.connection.sendInput(Data("\r".utf8), to: id)
+        }
+        let deadline = Date().addingTimeInterval(300)
+        var seenWorking: Set<String> = []
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            for agent in Self.agents where phone.sessions.first(where: { $0.id == ids[agent] })?.state?.isWorking == true { seenWorking.insert(agent) }
+            let settled = Self.agents.filter { agent in
+                guard let state = phone.sessions.first(where: { $0.id == ids[agent] })?.state else { return false }
+                return !state.isWorking && seenWorking.contains(agent)
+            }
+            if settled.count == Self.agents.count { break }
+        }
+        Thread.sleep(forTimeInterval: 3)
+        for agent in Self.agents {
+            guard let id = ids[agent] else { continue }
+            let own = phone.sessions.filter { $0.openedBy == id }
+            let info = phone.sessions.first { $0.id == id }
+            print(
+                "MEASURE real \(agent) (\(Self.cheapest[agent] ?? "")): worked=\(seenWorking.contains(agent)) state=\(info?.state.map { "\($0)" } ?? "none") link=\(info?.link.map { "\($0)" } ?? "none") shells opened=\(own.count) \(own.map(\.title))"
+            )
+            app.press(.id("session-\(id)"))
+            Thread.sleep(forTimeInterval: 1.5)
+            shot("own-shells-\(agent)")
+        }
     }
 }

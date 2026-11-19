@@ -299,6 +299,10 @@ while let argument = arguments.popFirst() {
         exit(2)
     }
 }
+// The host that an app started for a test starts listens on 127.0.0.1
+// only, as the tests' own hosts do (`--local-only`): the app is given
+// this, and its host has the app's environment (#179).
+if ProcessInfo.processInfo.environment["AGENTTERM_LOCAL_ONLY"] == "1" { listenOnTailscale = false }
 
 let server: HostServer
 do {

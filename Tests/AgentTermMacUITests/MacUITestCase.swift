@@ -262,6 +262,21 @@ class MacUITestCase: XCTestCase {
         wait("the app in front") { appIsInFront }
     }
 
+    /// The addresses something listens on at a port, as `lsof` gives them:
+    /// "127.0.0.1:7842", "100.64.0.1:7842".
+    func listeningAddresses(on port: UInt16) -> [String] {
+        let lsof = Process()
+        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        lsof.arguments = ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fn"]
+        let pipe = Pipe()
+        lsof.standardOutput = pipe
+        lsof.standardError = FileHandle.nullDevice
+        try? lsof.run()
+        let said = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        lsof.waitUntilExit()
+        return said.split(separator: "\n").filter { $0.hasPrefix("n") }.map { String($0.dropFirst()) }
+    }
+
     /// The file a remote made slow by `makeSlowRepository` writes when it is
     /// asked for what is new: the second it was asked at.
     func fetchAsked(of repository: URL) -> URL {
@@ -429,8 +444,8 @@ class MacUITestCase: XCTestCase {
         var environment = Self.ownHome(home)
         environment["AGENTTERM_STATE_DIR"] = state.path
         // An agent's hooks and MCP server are said missing after 3 seconds,
-        // not 20 (#129).
-        environment["AGENTTERM_LINK_GRACE"] = "3"
+        // not 20 (#129), unless the test asks for longer.
+        environment["AGENTTERM_LINK_GRACE"] = linkGrace
         // What it throws away stays in the test's folder, also when its
         // home is the user's.
         if home != self.home { environment["AGENTTERM_TRASH_DIR"] = root.appendingPathComponent("trash").path }
@@ -471,7 +486,12 @@ class MacUITestCase: XCTestCase {
     /// stand-in agents are not set up, and it would cover the window.
     /// Nothing is posted into the user's Notification Center either, nor
     /// its question asked, which takes the app out of the front (#66).
-    var appEnvironment: [String: String] = ["AGENTTERM_NO_ONBOARDING": "1", "AGENTTERM_NO_SYSTEM_NOTIFICATIONS": "1"]
+    /// How long the host waits for an agent's hooks and MCP server before
+    /// it says them missing, in seconds: set before `setUpWithError`.
+    var linkGrace = "3"
+
+    /// A host the app starts listens on 127.0.0.1 only, as the tests' own do (#179).
+    var appEnvironment: [String: String] = ["AGENTTERM_NO_ONBOARDING": "1", "AGENTTERM_NO_SYSTEM_NOTIFICATIONS": "1", "AGENTTERM_LOCAL_ONLY": "1"]
 
     /// Starts the app on the test's host. Its preferences are its own too:
     /// with a home of its own it reads and writes none of the real app's.

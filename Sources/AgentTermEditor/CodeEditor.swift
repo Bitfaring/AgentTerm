@@ -416,6 +416,41 @@ extension EditorTextView: NSTextStorageDelegate {
     }
 }
 
+/// The text views on show that the keyboard can be given to: a file's
+/// editor, a diff. Picked by number or by the shortcuts that move by one
+/// (#171), the one in front gets the keyboard, as a terminal does.
+@MainActor public enum KeyboardTargets {
+    private static let views = NSMapTable<NSString, NSView>.strongToWeakObjects()
+
+    public static func file(_ path: String) -> String { "file:" + path }
+    public static func diff(_ id: String) -> String { "diff:" + id }
+
+    /// The key asked for whose view was not in a window yet: a file's
+    /// editor is made again when its file is picked, after it is asked for.
+    private static var pending: String?
+
+    /// A view made for a key. One asked for before it was made gets the
+    /// keyboard once SwiftUI has put it in the window, right after.
+    public static func register(_ view: NSView, as key: String) {
+        views.setObject(view, forKey: key as NSString)
+        guard pending == key else { return }
+        DispatchQueue.main.async { if pending == key { focus(key) } }
+    }
+
+    /// Gives the keyboard to the view of that key, now or once it is made.
+    @discardableResult public static func focus(_ key: String) -> Bool {
+        guard let view = views.object(forKey: key as NSString), let window = view.window else {
+            pending = key
+            return false
+        }
+        pending = nil
+        return window.firstResponder === view || window.makeFirstResponder(view)
+    }
+
+    /// The keyboard went elsewhere: nothing waits for it any more.
+    public static func cancel() { pending = nil }
+}
+
 /// A plain text editor with syntax coloring.
 public struct CodeEditor: NSViewRepresentable {
     @Binding var text: String
@@ -483,6 +518,7 @@ public struct CodeEditor: NSViewRepresentable {
         context.coordinator.path = path
         context.coordinator.held = text
         context.coordinator.go(to: target)
+        KeyboardTargets.register(textView, as: KeyboardTargets.file(path))
         return scroll
     }
 

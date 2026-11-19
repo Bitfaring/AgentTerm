@@ -1,3 +1,4 @@
+import AgentTermEditor
 import AgentTermProtocol
 import AppKit
 import SwiftUI
@@ -559,10 +560,17 @@ extension AppModel {
     func focusKeyboard() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            KeyboardTargets.cancel()
             // A page in front first: the session picked before it is still
             // `selectedSession`, and took the keyboard from it (PANE-17).
             if let tab = self.frontTabID, let browser = self.browsers.tab(forTab: tab) {
                 browser.focus()
+            } else if self.diffInFront, let file = self.diffTabFile {
+                // A diff or a file picked: its text has the keyboard, as a
+                // terminal does (#171).
+                KeyboardTargets.focus(KeyboardTargets.diff(file.id))
+            } else if let path = self.files.active {
+                KeyboardTargets.focus(KeyboardTargets.file(path))
             } else if let id = self.selectedSession, self.files.active == nil, !self.diffInFront, let controller = self.controller(for: id) {
                 controller.view.window?.makeFirstResponder(controller.view)
             }
