@@ -43,8 +43,10 @@ struct RootTabs: View {
                     AgentShellsFaultBanner(fault: fault)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                if let notice = model.agentNotice, notice.session != model.openSessionID {
-                    AgentNoticeBanner(notice: notice)
+                // What stopped, until it is dismissed on some device: over
+                // every tab, as the Mac shows it over every place (#66).
+                ForEach(model.failures) { failure in
+                    FailureBanner(failure: failure)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
@@ -140,13 +142,22 @@ private struct SettingsTab: View {
                 Section {
                     Toggle("Tell me when an agent is done or needs me", isOn: $model.notifyAgents)
                         .accessibilityIdentifier("notify-agents")
-                    Toggle("Live Activity while no one is at the Mac", isOn: $model.showsLiveActivity)
+                    // Through Apple while the app is closed (#66).
+                    Toggle(PushWords.toggle, isOn: $model.pushAlso)
+                        .disabled(!model.notifyAgents)
+                        .accessibilityIdentifier("push-also")
+                    Toggle(AgentsStatus.toggle, isOn: $model.showsLiveActivity)
                         .accessibilityIdentifier("live-activity")
                 } header: {
                     Text("Agents")
                 } footer: {
                     Text(
-                        "While you work from this \(ThisDevice.name): a banner in the app, and a notification just after you leave it. Once iOS puts the app to sleep, after a short while, nothing arrives until you open it again. Nothing is told while someone is at \(macName). What an agent said shows on the lock screen only if iOS shows previews there."
+                        "While you work from this \(ThisDevice.name): a banner in the app, and a notification just after you leave it. "
+                            + (model.pushState == .on
+                                ? PushWords.on + " "
+                                : "Once iOS puts the app to sleep, after a short while, nothing arrives until you open it again. "
+                                    + (model.pushState?.footnote.map { $0 + " " } ?? ""))
+                            + "Nothing is told while someone is at \(macName). What an agent said shows on the lock screen only if iOS shows previews there."
                     )
                 }
 
@@ -286,39 +297,33 @@ private struct AgentShellsFaultBanner: View {
     }
 }
 
-/// An agent of a session that is not on screen finished or waits (#22):
-/// which session, and why. Touching it opens the session.
-private struct AgentNoticeBanner: View {
+/// A part of AgentTerm on the Mac that stopped (#66: a top banner on both
+/// apps, principle 3): what and why, in the words the Mac uses, until it
+/// is dismissed on some device.
+private struct FailureBanner: View {
     @EnvironmentObject private var model: PhoneModel
-    let notice: AgentNotice
+    let failure: PartFailure
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(notice.name) \(notice.why)")
+                Text(failure.headline(on: model.pairing?.name ?? "the Mac"))
                     .font(.subheadline.weight(.semibold))
-                if let detail = notice.detail {
-                    Text(detail)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
+                Text(failure.details)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("failure-card")
             Spacer(minLength: 0)
-            Button {
-                model.dismissAgentNotice()
-            } label: {
-                Image(systemName: "xmark").font(.footnote.weight(.semibold))
-            }
-            .accessibilityLabel("Dismiss")
+            Button(Inbox.dismiss) { model.dismiss(failure) }
+                .font(.footnote.weight(.semibold))
+                .accessibilityIdentifier("failure-dismiss")
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.thinMaterial))
-        .contentShape(Rectangle())
-        .onTapGesture { model.open(notice) }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("agent-notice")
-        .accessibilityAddTraits(.isButton)
     }
 }
 

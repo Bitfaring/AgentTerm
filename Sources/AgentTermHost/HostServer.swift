@@ -78,6 +78,18 @@ public final class HostServer {
         /// How long an agent's hooks and MCP server have to be heard from
         /// before its session says they are missing (#129). Tests shorten it.
         public var linkGrace: TimeInterval = 20
+        /// The relay that passes notices on to Apple for devices that are
+        /// away (#66). Nil sends none: a development build, a test.
+        public var pushRelay: URL?
+        /// Where the devices that are told through Apple are kept, with
+        /// their keys. Nil keeps them in memory only.
+        public var pushesFile: URL?
+        /// How the relay is asked; tests stand one in. Nil asks it over
+        /// the network.
+        public var pushTransport: PushCenter.Transport?
+        /// Where the notices of the last 30 days are kept (#66). Nil keeps
+        /// them in memory only.
+        public var noticesFile: URL?
         /// How long a call of one of AgentTerm's own tools, which its agent
         /// said it is about to make, has to reach the agent's MCP server
         /// before the agent is taken to wait for leave to make it (#141).
@@ -229,6 +241,9 @@ public final class HostServer {
         /// in it was found (#129). Its hooks and MCP server have until a
         /// grace after it to be heard from.
         var agentSince: Date?
+        /// Whether AgentTerm had instructions for its agent when it started
+        /// (#172): what the session was given, whatever is saved later.
+        var promptGiven = true
         /// A call of one of AgentTerm's own tools that its agent said it is
         /// about to make, and when: until the call comes to its server, or
         /// the agent says anything else (#141).
@@ -347,6 +362,10 @@ public final class HostServer {
     /// What a session's agent said or asks that the user has seen on one
     /// device (#60), for the devices that connect later.
     private var noticesSeen: [SessionID: AgentState] = [:]
+    /// The devices told through Apple while they are away (#66).
+    private let push: PushCenter
+    /// What agents asked and finished, and what stopped work (#66).
+    private let notices: NoticeCenter
     /// What this host notes about itself in the state folder while it runs.
     private var marker: HostMarker?
     private var markerFile: URL?
@@ -354,6 +373,8 @@ public final class HostServer {
     public init(configuration: Configuration) {
         self.configuration = configuration
         registry = DeviceRegistry(localToken: configuration.token, file: configuration.devicesFile)
+        push = PushCenter(relay: configuration.pushRelay, file: configuration.pushesFile, transport: configuration.pushTransport)
+        notices = NoticeCenter(file: configuration.noticesFile)
         if let file = configuration.foldersFile, let data = try? Data(contentsOf: file),
             let saved = try? JSONDecoder().decode([String].self, from: data)
         {
@@ -1601,6 +1622,7 @@ public final class HostServer {
 
     private func broadcastFailures() {
         for client in clients.values where client.authenticated { send(.failures(failures), to: client) }
+        updateActivity()
     }
 
     /// A part stopped without being asked to: kept until someone has seen
@@ -1610,6 +1632,8 @@ public final class HostServer {
         failures = Array(failures.suffix(FailureLog.limit))
         saveFailures()
         broadcastFailures()
+        // Into every Inbox, and a notification when it stopped work (#66).
+        if let notice = notices.report(failure, now: configuration.now()) { tellEveryone(notice) }
     }
 
     private func saveFailures() {
@@ -1788,7 +1812,9 @@ public final class HostServer {
             if session.arbiter.remove(client.id) { applySize(of: session) }
         }
         client.attached.removeAll()
-        if case .device = client.identity { broadcastDevices() }
+        if case .device(let id) = client.identity {
+            broadcastDevices()
+        }
         if browserProvider == client.id { setBrowserProvider(client, false) }
         // A device that goes no longer watches a page.
         for (tab, watchers) in browserWatchers where watchers.contains(client.id) { setWatching(tab, client.id, false, width: 0) }
@@ -1820,6 +1846,119 @@ public final class HostServer {
         for client in clients.values where client.authenticated {
             send(.sessions(list), to: client)
         }
+        updateNotices(list)
+        updateActivity()
+    }
+
+    // MARK: The Live Activity through Apple (#168)
+
+    /// What the devices' Live Activities were last sent.
+    private var activityStatus: AgentsStatus?
+    private var activityPending = false
+    private var activitySentAt = Date.distantPast
+    /// iOS shows an activity as out of date when no update came for this
+    /// long; while agents work, it is sent again before.
+    static let activityRefresh: TimeInterval = 15 * 60
+
+    /// The host's state changed, or may have: sent to the devices that are
+    /// away, a burst of changes gathered into one update.
+    private func updateActivity(force: Bool = false) {
+        let status = AgentsStatus.of(sessions: sessions.values.map(\.info), failures: failures)
+        guard force || status != activityStatus, !activityPending else { return }
+        activityPending = true
+        queue.asyncAfter(deadline: .now() + (force ? 0 : 3)) { [weak self] in self?.sendActivity() }
+    }
+
+    private func sendActivity() {
+        activityPending = false
+        let status = AgentsStatus.of(sessions: sessions.values.map(\.info).sorted { $0.id < $1.id }, failures: failures)
+        activityStatus = status
+        activitySentAt = configuration.now()
+        let mac = Host.current().localizedName ?? "Mac"
+        for device in push.activityDevices where !connectedDevices.contains(device) {
+            if let item = push.activity(status, mac: mac, to: device) { sendPush(item) }
+        }
+    }
+
+    // MARK: Notices, on every device (#66)
+
+    /// Who a client is told for: the Mac's own app, or a paired device. A
+    /// client that does not say what it is (`agenttermd mcp`) is told none.
+    private func noticeKey(of client: Client) -> String? {
+        guard client.kind != nil, let identity = client.identity else { return nil }
+        switch identity {
+        case .local: return "local"
+        case .device(let id): return id
+        }
+    }
+
+    private var connectedDevices: Set<String> {
+        Set(
+            clients.values.compactMap { client -> String? in
+                if case .device(let id) = client.identity { return id }
+                return nil
+            })
+    }
+
+    private func updateNotices(_ list: [SessionInfo]) {
+        let (new, handled) = notices.update(sessions: list, now: configuration.now())
+        for notice in new { tellEveryone(notice) }
+        for notice in handled { tellHandled(notice) }
+    }
+
+    /// A new notice: to every client that is told, once, and through Apple
+    /// to each registered device that is away.
+    private func tellEveryone(_ notice: Notice) {
+        var reached: Set<String> = []
+        for client in clients.values where client.authenticated {
+            guard let key = noticeKey(of: client) else { continue }
+            send(.notice(notice), to: client)
+            reached.insert(key)
+        }
+        for key in reached { notices.told(notice.id, to: key, throughApple: false) }
+        // Through Apple only what is a notification; the rest reaches the
+        // device's Inbox when it connects.
+        guard notice.alerts else { return }
+        for device in Set(push.targets.keys).subtracting(connectedDevices) {
+            guard let item = push.push(notice, to: device) else { continue }
+            notices.told(notice.id, to: device, throughApple: true)
+            sendPush(item)
+        }
+    }
+
+    /// Handled: taken away on every client, and from the devices that had
+    /// it through Apple and are away.
+    private func tellHandled(_ notice: Notice) {
+        guard let handled = notice.handled else { return }
+        for client in clients.values where client.authenticated && noticeKey(of: client) != nil {
+            send(.noticeHandled(id: notice.id, handled: handled), to: client)
+        }
+        for device in notices.pushedTo(notice.id) where !connectedDevices.contains(device) {
+            if let item = push.takeBack(notice.id, from: device) { sendPush(item) }
+        }
+    }
+
+    private func handleNotices(_ handled: [Notice]) {
+        for notice in handled { tellHandled(notice) }
+    }
+
+    private func sendPush(_ item: PushCenter.Push) {
+        push.send(item) { [weak self] reason, forgotten in
+            self?.queue.async { self?.pushFailed(device: item.device, reason: reason, forgotten: forgotten) }
+        }
+    }
+
+    /// Said in the banner of both apps (principle 3), once for each device:
+    /// a newer failure takes the place of an earlier one not seen yet.
+    private func pushFailed(device: String, reason: String, forgotten: Bool) {
+        let name = registry.devices().first { $0.id == device }?.name ?? "a device"
+        failures.removeAll { $0.part == .push && $0.name == name }
+        let then = forgotten ? " It is no longer told through Apple until its app connects again." : ""
+        report(PartFailure(part: .push, name: name, at: configuration.now(), restarted: false, reason: "The relay said: \(reason).\(then)"))
+    }
+
+    private func sendPushState(_ state: PushState, toDevice device: String) {
+        for client in clients.values where client.identity == .device(id: device) { send(.pushState(state), to: client) }
     }
 
     // MARK: Messages
@@ -1881,6 +2020,8 @@ public final class HostServer {
         case .revokeDevice(let id):
             guard client.isAdmin else { return send(.error("not allowed"), to: client) }
             guard registry.revoke(id) else { return }
+            push.unregister(device: id)
+            notices.forget(device: id)
             for other in clients.values where other.identity == .device(id: id) { close(other) }
             broadcastDevices()
         case .list:
@@ -1939,13 +2080,16 @@ public final class HostServer {
                 broadcastSessions()
             }
             for other in clients.values where other.authenticated && other !== client { send(.noticeSeen(session: id, state: state), to: other) }
+            // Its notice is handled, on every device (#66).
+            handleNotices(notices.handle(session: id, state: state, how: .opened, now: configuration.now()))
         case .answer(let id, let state, let text):
             // Only while the agent still asks what the reply answers: one
             // that comes later is not typed into what it asks next.
             guard let session = sessions[id], session.info.state == state else {
-                send(.error("The agent has moved on since: the reply was not sent."), to: client)
+                send(.error(PushWords.movedOn), to: client)
                 return
             }
+            handleNotices(notices.handle(session: id, state: state, how: .answered, now: configuration.now()))
             // As a person types it, a step at a time: text and Return for a
             // prompt, the keys that pick a choice for a list of them (#55).
             // Whether the program takes a paste is known where its screen
@@ -1966,6 +2110,15 @@ public final class HostServer {
             updateMacInUse()
         case .used:
             used(by: client)
+        case .pushRegister(let registration):
+            guard case .device(let id) = client.identity else { return send(.error("not allowed"), to: client) }
+            push.register(registration, device: id) { [weak self] state in
+                self?.queue.async { self?.sendPushState(state, toDevice: id) }
+            }
+        case .pushUnregister:
+            guard case .device(let id) = client.identity else { return send(.error("not allowed"), to: client) }
+            push.unregister(device: id)
+            sendPushState(.off, toDevice: id)
         case .saveSchedule(let schedule):
             if let problem = save(schedule) { send(.error(problem), to: client) }
         case .runSchedule(let id):
@@ -2392,6 +2545,12 @@ public final class HostServer {
             failures.remove(at: index)
             saveFailures()
             broadcastFailures()
+            handleNotices(notices.handle(failure: id, now: configuration.now()))
+        case .liveActivity(let token, let start):
+            guard case .device(let id) = client.identity else { return send(.error("not allowed"), to: client) }
+            push.setActivity(device: id, token: token, start: start)
+        case .handleNotice(let id, let how):
+            if let notice = notices.handle(id, how: how, now: configuration.now()) { tellHandled(notice) }
         }
     }
 
@@ -2727,6 +2886,9 @@ public final class HostServer {
     }
 
     private func refreshSummaries() {
+        // Kept fresh while agents work: iOS shows an activity that is not
+        // updated as out of date (#168).
+        if activityStatus?.isActive == true, configuration.now().timeIntervalSince(activitySentAt) > Self.activityRefresh { updateActivity(force: true) }
         refreshAccountUsage(olderThan: Self.accountInterval)
         guard !summarizing else { return }
         let running = sessions.values.compactMap { session -> SessionSummaries.Running? in
@@ -2824,7 +2986,19 @@ public final class HostServer {
             .welcome(
                 version: configuration.protocolVersion, host: Host.current().localizedName ?? "Mac", release: configuration.release,
                 revision: configuration.revision), to: client)
+        if case .device(let id) = identity {
+            send(.pushState(push.state(of: id)), to: client)
+        }
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
+        // The last 30 days, for its Inbox; then what it was not told of yet,
+        // here or through Apple (#66).
+        if let key = noticeKey(of: client) {
+            send(.noticeLog(notices.log), to: client)
+            for notice in notices.untold(to: key) {
+                send(.notice(notice), to: client)
+                notices.told(notice.id, to: key, throughApple: false)
+            }
+        }
         // What stopped before this client came, until someone has seen it.
         send(.failures(failures), to: client)
         if !accountUsage.isEmpty { send(.accountUsage(accountUsageList()), to: client) }
@@ -3043,9 +3217,11 @@ public final class HostServer {
         )
         let session = Session(info: info, process: process, screenLines: configuration.screenLines)
         session.agentKey = agentKey
-        if agent != nil {
+        if let agentID = info.agent {
             session.info.link = AgentLink()
             session.agentSince = configuration.now()
+            session.promptGiven = agentPrompt(for: agentID) != nil
+            refreshPrompt(session)
         }
         session.marksPrepared = marksPrepared
         session.info.openedBy = openedBy
@@ -3225,6 +3401,7 @@ public final class HostServer {
         case .hooks: session.info.link?.hooks = true
         case .mcp: session.info.link?.mcp = true
         }
+        refreshPrompt(session)
         return session.info != before
     }
 
@@ -3235,6 +3412,16 @@ public final class HostServer {
         session.agentSince = configuration.now()
         let early = heardEarly.removeValue(forKey: session.info.id) ?? []
         session.info.link = AgentLink(hooks: early.contains(.hooks) ? true : nil, mcp: early.contains(.mcp) ? true : nil)
+        session.promptGiven = agentPrompt(for: agent) != nil
+        refreshPrompt(session)
+    }
+
+    /// What AgentTerm's instructions came to in a session (#172), from how
+    /// they reach its agent and what its MCP server did.
+    private func refreshPrompt(_ session: Session) {
+        guard let agent = session.info.agent ?? session.info.typedAgent, var link = session.info.link else { return }
+        link.prompt = AgentLink.prompt(agent: agent, given: session.promptGiven, mcp: link.mcp)
+        session.info.link = link
     }
 
     /// Looks at each session's agent: one typed in a shell is found from
@@ -3265,6 +3452,9 @@ public final class HostServer {
             guard var link = session.info.link, let since = session.agentSince, now.timeIntervalSince(since) >= configuration.linkGrace else { continue }
             if link.hooks == nil { link.hooks = false }
             if link.mcp == nil { link.mcp = false }
+            if let agent = session.info.agent ?? session.info.typedAgent {
+                link.prompt = AgentLink.prompt(agent: agent, given: session.promptGiven, mcp: link.mcp)
+            }
             if link != session.info.link {
                 session.info.link = link
                 changed = true

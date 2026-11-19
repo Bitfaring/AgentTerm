@@ -33,7 +33,36 @@ FILTER="AgentTermMacUITests"
 if [ -n "${1:-}" ]; then FILTER="AgentTermMacUITests\..*$1"; fi
 # The half of the test with the iPhone app is run by test-both.sh.
 LOG="$(mktemp)"
-if swift test --skip-build --filter "$FILTER" --skip "CrossTests" > "$LOG" 2>&1; then
+# Stopped in the middle, by Control-C or by `kill`, the run ends what its
+# tests started, apps and hosts included: left behind, the app bundled for
+# the tests and its host kept a test's port, which a later run then met
+# (#179). Run in the background and waited for, so that the signal is
+# taken at once, not when the tests are over.
+source scripts/lib-cleanup.sh
+TESTS=""
+stop_the_tests() {
+    trap - INT TERM
+    if [ -n "$TESTS" ]; then
+        # Every one of them: an app does not end with the test that
+        # started it, nor a host with its app.
+        local all alive="" pid
+        all="$TESTS $(descendants_of "$TESTS" | tr '\n' ' ')"
+        kill $all 2>/dev/null || true
+        for _ in $(seq 1 50); do
+            alive=""
+            for pid in $all; do kill -0 "$pid" 2>/dev/null && alive="$alive $pid"; done
+            [ -z "$alive" ] && break
+            sleep 0.1
+        done
+        [ -n "$alive" ] && kill -9 $alive 2>/dev/null
+    fi
+    echo "test-mac.sh: stopped; what the tests started was ended. Log in $LOG" >&2
+    exit 130
+}
+trap stop_the_tests INT TERM
+swift test --skip-build --filter "$FILTER" --skip "CrossTests" > "$LOG" 2>&1 &
+TESTS=$!
+if wait "$TESTS"; then
     # A name that matches no test runs none, which `swift test` takes for a
     # pass: it is not one, and is said (#137).
     if ! grep -qE "Executed [1-9][0-9]* test" "$LOG"; then

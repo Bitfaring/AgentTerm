@@ -14,12 +14,25 @@ struct InboxList: View {
                 Text(Inbox.title.uppercased())
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
-                if !items.isEmpty {
-                    Text("\(items.count)")
+                if model.inbox.unread > 0 {
+                    Text("\(model.inbox.unread)")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.tertiary)
+                        .accessibilityIdentifier("inbox-unread")
                 }
                 Spacer()
+                // Deleted here only, kept on the other devices (#66).
+                Menu {
+                    Button(InboxWords.deleteRead) { model.deleteReadInbox() }
+                    Button(InboxWords.deleteAll, role: .destructive) { askingAll = true }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .disabled(items.isEmpty)
+                .accessibilityIdentifier("inbox-menu")
             }
             .padding(.horizontal, 14)
             .padding(.top, 12)
@@ -35,7 +48,13 @@ struct InboxList: View {
             }
         }
         .background(Theme.panel)
+        .confirmationDialog(InboxWords.deleteAllQuestion, isPresented: $askingAll) {
+            Button(InboxWords.deleteAll, role: .destructive) { model.deleteAllInbox() }
+                .accessibilityIdentifier("inbox-delete-all")
+        }
     }
+
+    @State private var askingAll = false
 }
 
 /// An item of the Inbox: whose it is, why it is there, and what was said.
@@ -46,7 +65,7 @@ private struct InboxRow: View {
     @State private var hovering = false
 
     var body: some View {
-        let words = InboxWords(item: item, model: model)
+        let words = ItemWords(item: item, model: model)
         HStack(alignment: .top, spacing: 8) {
             InboxIcon(item: item)
                 .font(.system(size: 10.5, weight: .semibold))
@@ -54,7 +73,7 @@ private struct InboxRow: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 Text(words.title)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: 12.5, weight: item.read ? .regular : .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(words.why)
@@ -77,7 +96,7 @@ private struct InboxRow: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help(Inbox.dismiss)
+                .help(InboxWords.deleteOne)
             }
         }
         .padding(.horizontal, 8)
@@ -91,7 +110,7 @@ private struct InboxRow: View {
         .onTapGesture { model.pick(item) }
         .contextMenu {
             if case .session = item.kind { Button(Inbox.open) { model.openInSessions(item) } }
-            if item.canBeDismissed { Button(Inbox.dismiss) { model.dismiss(item) } }
+            if item.canBeDismissed { Button(InboxWords.deleteOne) { model.dismiss(item) } }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([words.title, words.why, words.detail].compactMap { $0 }.joined(separator: ", "))
@@ -109,7 +128,7 @@ struct InboxDetail: View {
 
     var body: some View {
         if let item = model.inboxShown {
-            let words = InboxWords(item: item, model: model)
+            let words = ItemWords(item: item, model: model)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     HStack(alignment: .top, spacing: 12) {
@@ -156,7 +175,7 @@ struct InboxDetail: View {
 
     private func actions(_ item: InboxItem) -> some View {
         HStack(spacing: 8) {
-            if case .session = item.kind {
+            if item.notice.map({ notice in model.sessions.contains { $0.id == notice.session } }) == true {
                 Button(Inbox.open) { model.openInSessions(item) }
                     .buttonStyle(.borderedProminent)
                     .accessibilityIdentifier("inbox-open")
@@ -170,7 +189,7 @@ struct InboxDetail: View {
                     .accessibilityIdentifier("inbox-hand-off")
             }
             if item.canBeDismissed {
-                Button(Inbox.dismiss) { model.dismiss(item) }
+                Button(InboxWords.deleteOne) { model.dismiss(item) }
                     .accessibilityIdentifier("inbox-dismiss")
             }
             if model.inboxItems.count > 1 {
@@ -219,6 +238,10 @@ struct InboxDetail: View {
             }
         case .failure(let failure):
             section(nil, text: failure.details.isEmpty ? nil : failure.details, or: "")
+        case .notice(let notice):
+            // Over: as it was told, and how it was handled.
+            section(notice.state.map { $0.isWaiting ? Inbox.asks : Inbox.said }, text: notice.body.isEmpty ? nil : notice.body, or: "")
+            if let handled = notice.handledWords { note(handled) }
         }
     }
 
@@ -407,13 +430,19 @@ private struct InboxIcon: View {
             Image(systemName: Theme.symbol(for: agent)).foregroundStyle(Theme.accent(for: agent))
         case .failure:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+        case .notice(let notice):
+            if case .failure = notice.kind {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.secondary)
+            } else {
+                Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
+            }
         }
     }
 }
 
 /// What an item says, in the list and in the middle alike.
 @MainActor
-private struct InboxWords {
+private struct ItemWords {
     let title: String
     let why: String
     let detail: String?
@@ -430,6 +459,11 @@ private struct InboxWords {
             title = failure.headline()
             why = Inbox.stopped
             detail = failure.details.isEmpty ? nil : failure.details
+            waits = false
+        case .notice(let notice):
+            title = notice.folder.isEmpty ? notice.title() : (notice.folder as NSString).lastPathComponent + " · " + notice.name
+            why = [notice.agentNotice?.why, notice.handledWords].compactMap { $0 }.joined(separator: " · ")
+            detail = notice.body.isEmpty ? nil : notice.body
             waits = false
         }
     }

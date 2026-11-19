@@ -412,25 +412,123 @@ final class AppModel: ObservableObject {
 
     /// An agent of a session that is not the one in front finished, or
     /// waits for the user (#22): shown until it is opened or dismissed.
+    /// Told by the host since #66, which makes each notice for every device.
     @Published private(set) var agentNotice: AgentNotice?
-    /// What was told of each session, so that each is told once.
-    private var told: [SessionID: AgentState] = [:]
+
+    /// Whether ⌥ and ⌘ are held, and nothing else: the items of the row
+    /// in front show their numbers then (#171).
+    @Published private(set) var itemNumbersShown = false
+    private var modifierWatch: Any?
+
+    func watchModifiers() {
+        guard modifierWatch == nil else { return }
+        modifierWatch = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            let held = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
+            let shown = held == [.option, .command]
+            if self?.itemNumbersShown != shown { self?.itemNumbersShown = shown }
+            return event
+        }
+        // Keys let go in another app are never seen here.
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.itemNumbersShown = false }
+        }
+    }
+    /// The host's number for it, to take it away when it is handled.
+    private var agentNoticeID: UInt64?
+
+    /// This Mac's own Inbox of the Mac on show (#66): what it was told of,
+    /// kept after it is read, for 30 days.
+    @Published private(set) var inbox = InboxBook()
+    let macNotifications = MacNotifications()
+
+    private var inboxKey: String { "inbox-" + (remote?.id ?? "local") }
+
+    func loadInbox() {
+        if let data = UserDefaults.standard.data(forKey: inboxKey), let saved = MessageCoding.decode(InboxBook.self, from: data) {
+            inbox = saved
+            inbox.prune()
+        } else {
+            inbox = InboxBook()
+        }
+    }
+
+    private func saveInbox() { UserDefaults.standard.set(MessageCoding.encode(inbox), forKey: inboxKey) }
+
+    /// What the host told: into the Inbox; a banner while the app is in
+    /// front, a macOS notification while it is not; nothing for the session
+    /// in front of someone, which is then seen.
+    private func told(_ notice: Notice) {
+        inbox.take([notice])
+        saveInbox()
+        if NSApp.isActive, place == .sessions, let session = notice.session, session == selectedSession {
+            hideNoticeOfTheSessionInFront()
+            return
+        }
+        guard notice.alerts else { return }
+        // The banner, there when the window is looked at; a macOS
+        // notification too while the app is not in front.
+        if let agent = notice.agentNotice {
+            agentNotice = agent
+            agentNoticeID = notice.id
+        }
+        if !NSApp.isActive, notifyOnMac { macNotifications.post(notice, host: remote?.name ?? "this Mac") }
+    }
+
+    private func noticeHandled(_ id: UInt64, _ handled: Notice.Handled) {
+        inbox.handled(id, handled)
+        saveInbox()
+        if agentNoticeID == id {
+            agentNotice = nil
+            agentNoticeID = nil
+        }
+        macNotifications.remove([id])
+    }
+
+    /// A macOS notification while the app is not in front (#66): a switch
+    /// in Settings, on by default.
+    @Published var notifyOnMac: Bool = UserDefaults.standard.object(forKey: "notifyOnMac") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(notifyOnMac, forKey: "notifyOnMac")
+            if notifyOnMac { macNotifications.askOnce() }
+        }
+    }
+
+    /// A reply from a macOS notification, typed by the host only while the
+    /// agent still asks what it answers.
+    func answerNotice(session: SessionID, state: AgentState, text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        connection?.send(.answer(session: session, to: state, text: text))
+    }
+
+    /// Dismissed from a macOS notification: handled on every device.
+    func dismissNotice(_ id: UInt64) {
+        inbox.markRead(id)
+        saveInbox()
+        connection?.send(.handleNotice(id: id, how: .dismissed))
+    }
 
     /// Opens the session a notice is about.
     func open(_ notice: AgentNotice) {
         agentNotice = nil
+        agentNoticeID = nil
         guard let session = sessions.first(where: { $0.id == notice.session }) else { return }
         // The session is in Sessions, wherever the window was.
         show(.sessions, toggling: false)
         select(session: session)
     }
 
-    func dismissAgentNotice() { agentNotice = nil }
+    /// Dismissed on this Mac: handled on every device (#66).
+    func dismissAgentNotice() {
+        if let id = agentNoticeID { dismissNotice(id) }
+        agentNotice = nil
+        agentNoticeID = nil
+    }
 
     // MARK: The Inbox (#67)
 
     /// What needs the user on the Mac on show, the most pressing first.
-    var inboxItems: [InboxItem] { Inbox.items(sessions: sessions, failures: failures) }
+    var inboxItems: [InboxItem] { Inbox.items(book: inbox, sessions: sessions, failures: failures) }
     /// The item picked in the Inbox's list.
     @Published private(set) var inboxPicked: String?
 
@@ -443,7 +541,24 @@ final class AppModel: ObservableObject {
 
     /// Shows an item in the middle. Its session is not seen for that: it
     /// is when it is opened.
-    func pick(_ item: InboxItem) { inboxPicked = item.id }
+    func pick(_ item: InboxItem) {
+        inboxPicked = item.id
+        // Shown in the middle: read, here.
+        if let entry = item.entry, !entry.read {
+            inbox.markRead(entry.id)
+            saveInbox()
+        }
+    }
+
+    func deleteReadInbox() {
+        inbox.deleteRead()
+        saveInbox()
+    }
+
+    func deleteAllInbox() {
+        inbox.deleteAll()
+        saveInbox()
+    }
 
     /// The item after the one shown, or the first.
     func pickNextInboxItem() {
@@ -453,7 +568,7 @@ final class AppModel: ObservableObject {
 
     /// Opens the session of an item in Sessions, where it is seen.
     func openInSessions(_ item: InboxItem) {
-        guard case .session(let info) = item.kind, let session = sessions.first(where: { $0.id == info.id }) else { return }
+        guard let id = item.notice?.session, let session = sessions.first(where: { $0.id == id }) else { return }
         show(.sessions, toggling: false)
         select(session: session)
     }
@@ -486,15 +601,11 @@ final class AppModel: ObservableObject {
     /// a done session is seen, a failure dismissed. A question stays until
     /// it is answered. The one after it is shown in its place.
     func dismiss(_ item: InboxItem) {
-        guard item.canBeDismissed else { return }
+        guard item.canBeDismissed, let entry = item.entry else { return }
         if inboxShown?.id == item.id, let next = Inbox.item(after: item.id, in: inboxItems), next.id != item.id { pick(next) }
-        switch item.kind {
-        case .session(let info):
-            guard let state = info.state, !state.isWaiting else { return }
-            connection?.send(.noticeSeen(session: info.id, state: state))
-        case .failure(let failure):
-            dismiss(failure)
-        }
+        // Deleted from this Mac's Inbox only (#66).
+        inbox.delete(entry.id)
+        saveInbox()
     }
 
     /// A notice hides by itself once its session is the one in front,
@@ -996,6 +1107,9 @@ final class AppModel: ObservableObject {
             tabLayout = TabLayout()
             startOwnHost()
         }
+        loadInbox()
+        macNotifications.model = self
+        watchModifiers()
         connect()
         folderChanged()
         // History's reading, pins and searches are the host's, for this Mac too (#46).
@@ -1282,7 +1396,10 @@ final class AppModel: ObservableObject {
     /// The Macs this one is paired with, to be used from here.
     @Published private(set) var remoteMacs: [RemoteMac] = RemoteMacStore.load()
     /// The Mac whose sessions, folders and files are on screen. Nil: this one.
-    @Published private(set) var remote: RemoteMac?
+    @Published private(set) var remote: RemoteMac? {
+        // Each Mac shown has its own Inbox here (#66).
+        didSet { if oldValue?.id != remote?.id { loadInbox() } }
+    }
     var isRemote: Bool { remote != nil }
     /// The name of the Mac on screen, for where "this Mac" would be wrong.
     var macName: String { remote?.name ?? "this Mac" }
@@ -1591,10 +1708,10 @@ final class AppModel: ObservableObject {
             turnResults = turnResults.filter { id, _ in list.contains { $0.id == id } }
             browsers.sessionsChanged(list)
             if isRemote { browsers.mirror(remoteTabs, sessions: list) }
-            // The session in front of someone at this window needs no notice.
-            let shown = NSApp.isActive ? selectedSession : nil
-            if let latest = AgentNotice.notices(in: list, told: &told).last(where: { $0.session != shown }) { agentNotice = latest }
-            if let current = agentNotice, !list.contains(where: { $0.id == current.session && $0.state == current.state }) { agentNotice = nil }
+            if let current = agentNotice, !list.contains(where: { $0.id == current.session && $0.state == current.state }) {
+                agentNotice = nil
+                agentNoticeID = nil
+            }
             // Done or asking while it is in front of someone: seen (#67).
             hideNoticeOfTheSessionInFront()
             // Pick up sessions that were already running before this window opened.
@@ -1610,9 +1727,10 @@ final class AppModel: ObservableObject {
             took(faults)
         case .turnResult(let session, let result):
             turnResults[session] = result
-        case .noticeSeen(let session, let state):
-            // Seen on another device.
-            if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
+        case .noticeSeen:
+            // Seen on another device: its notice is handled, which the host
+            // says on its own (`noticeHandled`).
+            break
         case .schedules(let list):
             schedules = list
         case .schedulesPaused(let paused):
@@ -1635,6 +1753,17 @@ final class AppModel: ObservableObject {
         case .agentShellResult, .agentBrowserResult:
             // For `agenttermd mcp`.
             break
+        case .pushState:
+            // For the iPhone (#66): a Mac is not told through Apple.
+            break
+        case .noticeLog(let list):
+            inbox.take(list, log: true)
+            saveInbox()
+            macNotifications.remove(list.filter { $0.handled != nil }.map(\.id))
+        case .notice(let notice):
+            told(notice)
+        case .noticeHandled(let id, let handled):
+            noticeHandled(id, handled)
         case .browserCall(let id, let agent, let request):
             // An agent, or a device, asks the browser this app shows (#76).
             answerBrowser(id: id, agent: agent, request: request)
@@ -1751,22 +1880,14 @@ final class AppModel: ObservableObject {
             lastError = text
             if isRemote {
                 // On another Mac git and the files answer through the host:
-                // what went wrong is said here, and whatever waited for the
-                // answer is over.
-                if isCommitting || pendingCommit != nil || !syncing.isEmpty || files.isRemote { notice = text }
+                // whatever waited for the answer is over.
                 isCommitting = false
                 pendingCommit = nil
                 files.requestFailed()
             }
-            // What stopped an agent from writing a commit message is said
-            // where the user is looking, not on the launch screen.
-            if !writingCommitMessage.isEmpty {
-                // A host from before 0.4.0 does not know the request and
-                // will never answer it.
-                let unknown = text == "malformed message"
-                notice = unknown ? "The host that is running is from an older version of AgentTerm and cannot do this. Restart the host." : text
-                if unknown { writingCommitMessage = [] }
-            }
+            if text == "malformed message" { writingCommitMessage = [] }
+            // Always said, where the user is looking (#66): never only kept.
+            notice = HostErrorWords.words(for: text)
         case .pairingCode(let code, let expiresAt):
             pairingCode = PairingCode(code: code, expiresAt: expiresAt)
         case .devices(let list):

@@ -238,6 +238,64 @@ final class RemoteMacTests: MacUITestCase {
         wait("this Mac to be on screen again", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == "This Mac" }
     }
 
+    /// REMOTE-23 (#167): on another Mac, a session a phone uses at a grid
+    /// narrower than the pane but taller is shown whole, in the middle, as
+    /// on this Mac (SIZE-12): its first row is not cut off.
+    func testANarrowButTallDevicesSessionOnTheOtherMacIsShownWhole() throws {
+        try startOtherMac()
+        let phone = try device("iPhone", state: otherState, port: otherPort)
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Shell"))
+        wait("a session on the other Mac") { phone.sessions.count == 1 }
+        let id = phone.sessions[0].id
+        let tall = TermSize(cols: 45, rows: 120)
+        phone.send(.attach(session: id, size: tall))
+        phone.send(.takeControl(session: id, size: tall))
+        wait("the phone's size") { phone.size(of: id) == tall }
+        app.wait(for: .button("Use This Size"), timeout: 15)
+        phone.connection.sendInput(Data("clear; printf FIRST-ROW; tput cup 119 0; printf LAST-ROW\n".utf8), to: id)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        shot("narrow-tall-device-other-mac")
+        XCTAssertEqual(app.first(.id("terminal-view"))?.help, "whole grid in sight")
+    }
+
+    /// REMOTE-24 (#167): the case as the owner saw it, on another Mac: an
+    /// agent's shell in the lower part of its area, used by a phone at
+    /// 45×35, is shown whole, in the middle, as on this Mac (SIZE-14).
+    func testAnAgentsShellADeviceUsesOnTheOtherMacIsShownWhole() throws {
+        try startOtherMac()
+        let phone = try device("iPhone", state: otherState, port: otherPort)
+        let call = #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"shell_open","arguments":{"title":"server"}}}"#
+        let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#
+        try """
+        #!/bin/sh
+        echo "stand-in claude started"
+        ( printf '%s\\n' '\(initialize)' '\(call)'; sleep 3 ) | '\(hostExecutable.path)' mcp > /dev/null 2>&1 &
+        exec cat
+        """.write(to: root.appendingPathComponent("agents/claude"), atomically: true, encoding: .utf8)
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Claude Code"))
+        wait("the agent and its shell on the other Mac") { phone.sessions.count == 2 }
+        let agent = try XCTUnwrap(phone.sessions.first { $0.agent == "claude" })
+        let shell = try XCTUnwrap(phone.sessions.first { $0.openedBy == agent.id })
+        app.wait(for: .id("agent-shells"), timeout: 15)
+        let grid = TermSize(cols: 45, rows: 35)
+        phone.send(.attach(session: shell.id, size: grid))
+        phone.send(.takeControl(session: shell.id, size: grid))
+        wait("the phone's size") { phone.size(of: shell.id) == grid }
+        app.wait(for: .containing("In use on iPhone · 45×35"), timeout: 15)
+        phone.connection.sendInput(Data("clear; printf FIRST-ROW; tput cup 34 0; printf LAST-ROW\n".utf8), to: shell.id)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        shot("agent-shell-device-other-mac")
+        let nodes = app.nodes()
+        let part = try XCTUnwrap(nodes.firstIndex { $0.identifier == "terminal-\(shell.id)" }, "the shell is not shown")
+        let terminal = try XCTUnwrap(
+            nodes[(part + 1)...].prefix { $0.depth > nodes[part].depth }.first { $0.identifier == "terminal-view" }, "the shell's terminal")
+        XCTAssertEqual(terminal.help, "whole grid in sight")
+    }
+
     private var editor: MacDriver.Query { .role(kAXTextAreaRole as String) }
 
     private func listens(on port: UInt16) -> Bool {
@@ -359,6 +417,11 @@ final class RemoteMacTests: MacUITestCase {
         }
         wait("the other Mac after reopening", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == "Other Mac" }
         wait("this Mac's host to be started", timeout: 15) { self.listens(on: self.port) }
+        // REMOTE-18, #179: a host the app starts in a test listens on
+        // 127.0.0.1 only, as the tests' own hosts do; one left behind by a
+        // run stopped in the middle was found on the Tailscale address.
+        let addresses = listeningAddresses(on: port)
+        XCTAssertTrue(addresses.allSatisfy { $0.hasPrefix("127.0.0.1:") || $0.hasPrefix("[::1]:") }, "the host the app started listens on \(addresses)")
     }
 
     /// REMOTE-19: the other Mac's host dies and is started again there.

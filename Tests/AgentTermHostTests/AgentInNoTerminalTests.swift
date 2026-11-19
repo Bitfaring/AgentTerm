@@ -197,7 +197,7 @@ final class AgentInNoTerminalTests: XCTestCase {
         // Long enough for the host to hear what was said, had it been.
         RunLoop.main.run(until: Date().addingTimeInterval(3))
         XCTAssertFalse(FileManager.default.fileExists(atPath: its[1]), "its hook wrote into the session's file")
-        XCTAssertEqual(sessions.first?.link, AgentLink(), "the session heard an agent that is not its own")
+        XCTAssertEqual(sessions.first?.link, AgentLink(prompt: .disabled), "the session heard an agent that is not its own")
         XCTAssertNil(sessions.first?.state, "the session shows the state of an agent that is not its own")
     }
 
@@ -215,7 +215,7 @@ final class AgentInNoTerminalTests: XCTestCase {
         wait("its server's answer") { offered(tools) != nil }
         XCTAssertEqual(offered(tools), AgentShellsMCP.tools.count + AgentShellsMCP.browserTools.count)
         wait("the agent typed in it") { sessions.first?.typedAgent == "codex" }
-        wait("its hooks and its server heard") { sessions.first?.link == AgentLink(hooks: true, mcp: true) }
+        wait("its hooks and its server heard") { sessions.first?.link == AgentLink(hooks: true, mcp: true, prompt: .disabled) }
         XCTAssertEqual(sessions.first?.state?.isWorking, true)
     }
 }

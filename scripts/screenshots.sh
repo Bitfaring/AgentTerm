@@ -224,7 +224,7 @@ if [ -n "$DO_MAC" ]; then
     # opens when the stand-in agents say they are not set up (#155): asked
     # not to show, in this copy's own preferences.
     defaults write "$IDENTIFIER" onboarding.hidden -bool true
-    HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" "$APP/AgentTerm" > "$STATE/mac.log" 2>&1 &
+    HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_NO_SYSTEM_NOTIFICATIONS=1 "$APP/AgentTerm" > "$STATE/mac.log" 2>&1 &
     MAC=$!
     AGENTTERM_SHOTS_PID="$MAC" part "the Mac app's pictures" swift test --skip-build --filter "AgentTermMacUITests.ScreenshotTests/testPart1"
     kill "$MAC" 2>/dev/null || true
@@ -284,7 +284,7 @@ if [ -n "$DO_IPHONE$DO_IPAD" ]; then
     [ -z "$DO_IPAD" ] || pictures_on "$IPAD_DEVICE" "iPad" "$SHOTS/ipad"
     # Started again once the terminals' pictures are taken, so that no
     # session was at the Mac's size for them; the agent opens its page.
-    HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" "$APP/AgentTerm" > "$STATE/mac.log" 2>&1 &
+    HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_NO_SYSTEM_NOTIFICATIONS=1 "$APP/AgentTerm" > "$STATE/mac.log" 2>&1 &
     MAC=$!
     part "the agent's page" swift test --skip-build --filter "AgentTermMacUITests.ScreenshotTests/testPart3"
     [ -z "$DO_IPHONE" ] || page_on "$DEVICE" "iPhone" "$SHOTS/ios" "iPhone 16 Pro Max"

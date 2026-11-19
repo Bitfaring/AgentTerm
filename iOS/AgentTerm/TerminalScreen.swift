@@ -439,7 +439,7 @@ private struct ForeignSizeBanner: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
             Spacer()
-            Button("Fit This Screen") { model.takeControl() }
+            Button(StateWords.useThisSize) { model.takeControl() }
                 .font(.footnote.weight(.semibold))
         }
         .padding(.horizontal, 14)

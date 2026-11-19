@@ -1039,6 +1039,49 @@ final class BrowserUITests: MacUITestCase {
         app.wait(for: .button("Pick an Element for an Agent"))
     }
 
+    /// BROWSER-48 (#164): an element the page replaces right after it is
+    /// picked, as a page that renders again does, reaches the agent with
+    /// its styles, or said to be gone from the page: never with empty ones.
+    func testAnElementThePageReplacesIsNotSentWithEmptyStyles() throws {
+        let folder = root.appendingPathComponent("live")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try """
+        <!doctype html>
+        <html><head><title>Live page</title></head>
+        <body>
+          <div id="feed"><div class="row"><span class="post" style="display:inline-block;width:80px;height:30px">Post</span></div></div>
+          <script>
+            // Rendered again and again: the node picked is soon out of the page.
+            setInterval(() => {
+              const row = document.querySelector('.row');
+              row.replaceWith(row.cloneNode(true));
+            }, 15);
+          </script>
+        </body></html>
+        """.write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": folder.appendingPathComponent("index.html").absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Live page" }
+        let middle = "(() => { const r = document.querySelector('.post').getBoundingClientRect(); return (r.x + r.width / 2) + ',' + (r.y + r.height / 2); })()"
+        let place = server.text("browser_evaluate", ["tab": tab, "script": middle])
+        let point = place.text.split(whereSeparator: { !"0123456789.,".contains($0) }).joined().split(separator: ",").compactMap { Double($0) }
+        XCTAssertEqual(point.count, 2, place.text)
+        let device = try self.device()
+        app.press(.id("browser-pick"))
+        app.wait(for: .button("Stop Picking"))
+        device.send(.browserAsk(id: Int.random(in: 3000..<9000), request: .tap(tab: tab, x: point[0], y: point[1])))
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        XCTAssertNil(app.first(.containing("display: ;")), "the element was sent with empty styles")
+        XCTAssertTrue(
+            app.exists(.containing("display: inline-block")) || app.exists(.containing(BrowserWords.pickedGone)),
+            "neither its styles nor that it is gone from the page")
+        shot("picked-replaced")
+        app.press(.button("Cancel"))
+    }
+
     /// BROWSER-46 (#162): a sign-in in a popup, as "Sign in with Google"
     /// is: the page opens a window, which hands its answer back to the page
     /// that opened it (`window.opener.postMessage`) and closes itself. The
@@ -1162,6 +1205,25 @@ final class BrowserUITests: MacUITestCase {
         app.press(.id("strip-browser"))
         app.wait(for: .id("browser-address"), timeout: 15)
         XCTAssertEqual(lastTabs().count, 1, "another page was opened for the other folder")
+    }
+
+    /// BROWSER-47 (#170): a folder added while a page is open shows its own
+    /// empty workspace when it is first opened, not the Browser: the
+    /// Browser's tab is in its strip, behind.
+    func testANewFolderOpensOnItsOwnWorkspaceNotTheBrowser() throws {
+        let phone = try device()
+        app.press(.id("folder-\(project.path)"))
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait(for: .id("browser-address"), timeout: 15)
+        let other = root.appendingPathComponent("never-opened")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        phone.send(.addFolder(path: other.path))
+        app.wait(for: .id("folder-\(other.path)"), timeout: 15)
+        app.press(.id("folder-\(other.path)"))
+        app.wait(for: .containing("Start an agent in this folder."), timeout: 15)
+        XCTAssertNil(app.first(.id("browser-address")), "the new folder opened on the Browser")
+        app.wait(for: .id("strip-browser"), timeout: 15)
+        shot("new-folder")
     }
 
     /// BROWSER-42 (#149): an element picked in an agent's page goes to that
@@ -1377,6 +1439,57 @@ final class BrowserUITests: MacUITestCase {
         app.press(.id("item-b\(tab)"))
         app.wait(for: .id("agent-browser"))
         app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page, picked in the row")
+    }
+
+    /// PANE-24 (#171): ⌥⌘ and a number in the user's Browser tab, then in
+    /// an agent's tab with its page and its shell: that item shown and
+    /// given the keyboard; the shortcuts that move by one work as before
+    /// after it.
+    func testOptionCommandANumberPicksAPageOrAPartOfAnAgent() throws {
+        func load(_ name: String) throws {
+            let file = root.appendingPathComponent("\(name).html")
+            try "<!doctype html><title>\(name)</title><body>\(name)</body>".write(to: file, atomically: true, encoding: .utf8)
+            app.wait(for: .id("browser-address"), timeout: 20)
+            app.write(file.absoluteString, into: .id("browser-address"), confirm: true)
+            app.wait("\(name) shown") { self.app.value(of: .id("browser-page")) == name }
+        }
+        func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("item-b") } }
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait("the first page") { pages().count == 1 }
+        try load("One")
+        app.press(.id("browser-new-page"))
+        app.wait("a second page") { pages().count == 2 }
+        try load("Two")
+        app.menu(["View", "Item 1 in Group"])
+        app.wait("the first page by its number") { self.app.value(of: .id("browser-page")) == "One" }
+        app.menu(["View", "Item 2 in Group"])
+        app.wait("the second page by its number") { self.app.value(of: .id("browser-page")) == "Two" }
+        app.menu(["View", "Previous Item in Group"])
+        app.wait("the one before it, as before") { self.app.value(of: .id("browser-page")) == "One" }
+
+        // An agent's tab: the agent, its page, its shell.
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let page = root.appendingPathComponent("page.html")
+        try "<!doctype html><title>Its page</title><p>A page</p>".write(to: page, atomically: true, encoding: .utf8)
+        let tab = try tabID(server.text("browser_open", ["url": page.absoluteString]))
+        let shellOpened = server.text("shell_open")
+        XCTAssertFalse(shellOpened.failed, shellOpened.text)
+        let phone = try device()
+        wait("the agent's shell") { phone.sessions.contains { $0.openedBy == agent.id } }
+        let shell = try XCTUnwrap(phone.sessions.first { $0.openedBy == agent.id })
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait(for: .id("agent-shells"), timeout: 20)
+        app.press(.id("session-\(agent.id)"))
+        app.waitForKeyboard(in: "terminal-\(agent.id)", "the agent")
+        app.menu(["View", "Item 2 in Group"])
+        app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page by its number")
+        app.menu(["View", "Item 3 in Group"])
+        app.waitForKeyboard(in: "terminal-\(shell.id)", "its shell by its number")
+        app.menu(["View", "Item 1 in Group"])
+        app.waitForKeyboard(in: "terminal-\(agent.id)", "the agent by its number")
+        app.menu(["View", "Keyboard to Its Page"])
+        app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page, by the shortcut that moves by one")
     }
 
     /// The id `browser_open` said it opened.

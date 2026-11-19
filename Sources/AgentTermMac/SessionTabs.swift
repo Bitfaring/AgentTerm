@@ -308,13 +308,8 @@ private struct TabTrailing: View {
                         .foregroundStyle(.tertiary)
                         .opacity(hovering ? 0 : 1)
                 }
-                Button(action: close) {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .opacity(hovering ? 1 : 0)
-                .help(closeHelp)
+                CloseButton(help: closeHelp, action: close)
+                    .opacity(hovering ? 1 : 0)
             }
         }
         .frame(minWidth: model.tabLayout.isPinned(id) ? 14 : 22)

@@ -330,6 +330,9 @@ final class MacDriver {
         return (focused as! AXUIElement)
     }
 
+    /// What the element that has the keyboard holds: a text view's text.
+    func keyboardValue() -> String { keyboardElement().map { Self.string($0, kAXValueAttribute) } ?? "" }
+
     /// What has the keyboard, for a failure's message.
     func keyboardSummary() -> String {
         guard let element = keyboardElement() else { return "nothing" }

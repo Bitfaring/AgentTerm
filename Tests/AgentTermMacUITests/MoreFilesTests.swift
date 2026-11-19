@@ -1,4 +1,5 @@
 import AgentTermProtocol
+import AppKit
 import XCTest
 
 /// Making, renaming and removing files, and the kinds of file that are not plain text.
@@ -65,11 +66,56 @@ final class MoreFilesTests: MacUITestCase {
         app.press(.button("big.txt"))
         app.wait(for: .containing("too large to open by itself"))
         // FILE-4: Markdown opens as a preview, with its source one switch away.
+        // With what GitHub draws (#126): a table, coloured code, a diagram,
+        // a link, and a picture next to the document.
+        try picture(width: 40, height: 30).write(to: project.appendingPathComponent("docs/chart.png"))
+        try write(
+            "# Guide\n\nSome words, and [a link](other.md).\n\n| Step | Done |\n|---|---|\n| lex | yes |\n\n- [x] parsed\n- [ ] ~~typed~~ checked\n\n"
+                + "```swift\nlet x = parse(\"a\")\n```\n\n```mermaid\ngraph LR; Lexer-->Parser\n```\n\n![the chart](chart.png)\n",
+            to: "docs/guide.md", in: project)
         app.press(.button("docs, folder, collapsed"))
         app.press(.button("guide.md"))
-        app.wait(for: .text("Some words."), timeout: 15)
+        app.wait(for: .containing("Some words"), timeout: 15)
         XCTAssertFalse(app.exists(.role(kAXTextAreaRole as String)), "a Markdown file opened as its source")
+        XCTAssertNotNil(app.wait(for: .role("AXLink"), timeout: 10), "the link")
+        // The table's cells, each on its own.
+        XCTAssertNotNil(app.wait(for: .text("Step"), timeout: 10), "the table's heading cells")
+        XCTAssertFalse(app.exists(.containing("StepDone")), "the table's cells run together")
+        // The picture is read from beside the document, at its width: one
+        // that is not found is drawn otherwise. Its line may be a point
+        // taller.
+        wait("the picture beside the document, 40 by 30", timeout: 10) {
+            self.app.all(.text("the chart")).contains {
+                let size = self.size(of: $0.element)
+                return $0.role == kAXImageRole as String && size.width == 40 && abs(size.height - 30) <= 1
+            }
+        }
+        // The diagram is drawn: its boxes' words are on their own, and its
+        // code is not shown.
+        app.wait(for: .text("Parser"), timeout: 15)
+        XCTAssertFalse(app.exists(.containing("Lexer-->Parser")), "the diagram shown as its code")
+        shot("markdown")
         app.press(.button("Edit"))
         wait("the source") { self.app.value(of: .role(kAXTextAreaRole as String))?.hasPrefix("# Guide") ?? false }
+    }
+
+    /// A PNG of one colour, of this many pixels.
+    private func picture(width: Int, height: Int) throws -> Data {
+        let context = try XCTUnwrap(
+            CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(srgbRed: 0.2, green: 0.7, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let image = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
+        return try XCTUnwrap(image.representation(using: .png, properties: [:]))
+    }
+
+    private func size(of element: AXUIElement) -> CGSize {
+        var value: AnyObject?
+        AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value)
+        var size = CGSize.zero
+        if let value, CFGetTypeID(value) == AXValueGetTypeID() { AXValueGetValue(value as! AXValue, .cgSize, &size) }
+        return size
     }
 }

@@ -1,3 +1,4 @@
+import AgentTermClient
 import AgentTermFirebase
 import AgentTermProtocol
 import AgentTermTelemetry
@@ -263,6 +264,14 @@ struct SettingsView: View {
                                 isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) }))
                         }
                     }
+                }
+                SettingsCard {
+                    // What the host tells while the app is behind (#66).
+                    SettingSwitch(
+                        NoticeWords.macToggle, id: "notify-on-mac",
+                        detail: NoticeWords.macDetail,
+                        help: NoticeWords.macHelp,
+                        isOn: $model.notifyOnMac)
                 }
                 if let keepAwake = model.keepAwake {
                     SettingsCard {
@@ -803,6 +812,12 @@ private struct GroupItemCommands: View {
         Button("Keyboard to Its Shells") { model.moveKeyboard(to: .shells) }
             .keyboardShortcut(.downArrow, modifiers: [.command, .option])
             .disabled(!model.canMoveKeyboard(to: .shells))
+        // An item of the row by its number, left to right (#171).
+        ForEach(1...9, id: \.self) { number in
+            Button("Item \(number) in Group") { model.showMember(number: number) }
+                .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: [.command, .option])
+                .disabled(model.frontMemberCount < number)
+        }
         Toggle(
             "Show This Part Alone",
             isOn: Binding(get: { model.agentAreaInFront.flatMap { model.agentAreaAlone[$0] } != nil }, set: { _ in model.toggleAlone() })

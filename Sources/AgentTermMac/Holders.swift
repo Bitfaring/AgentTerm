@@ -46,8 +46,20 @@ struct GroupRow: View {
         HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(items, id: \.self) { item in
+                    ForEach(Array(items.enumerated()), id: \.element) { index, item in
                         GroupItemChip(group: group, item: item, selected: onShow.contains(item), keyboard: area && item == keyboard)
+                            // Its number while ⌥ and ⌘ are held (#171): ⌥⌘ and it picks it.
+                            .overlay(alignment: .topTrailing) {
+                                if model.itemNumbersShown, index < 9 {
+                                    Text("\(index + 1)")
+                                        .font(.system(size: 9, weight: .bold).monospacedDigit())
+                                        .padding(.horizontal, 3)
+                                        .background(Capsule().fill(Color.accentColor))
+                                        .foregroundStyle(.white)
+                                        .offset(x: 3, y: -3)
+                                        .accessibilityHidden(true)
+                                }
+                            }
                     }
                 }
             }
@@ -232,14 +244,9 @@ private struct ItemChip: View {
             if let session = look.session { AgentStateMark(session: session) }
             if look.dirty { Circle().fill(Color.orange).frame(width: 6, height: 6) }
             if let close = look.close {
-                Button(action: close) {
-                    Image(systemName: "xmark").font(.system(size: 8.5, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .opacity(hovering || selected ? 1 : 0)
-                .help(look.closing)
-                .accessibilityLabel("\(look.closing) \(look.title)")
+                CloseButton(help: look.closing, glyph: 8.5, action: close)
+                    .opacity(hovering || selected ? 1 : 0)
+                    .accessibilityLabel("\(look.closing) \(look.title)")
             }
         }
         .padding(.horizontal, 8)

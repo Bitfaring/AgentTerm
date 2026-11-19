@@ -300,9 +300,11 @@ extension AppModel {
         tab.devtools.pickElement { [weak self] node in
             Task { @MainActor in
                 guard let self else { return }
+                // Read first, while it is most likely still in the page: one
+                // that renders again replaces it soon after (#164).
+                let details = await tab.devtools.describe(node)
                 let box = try? await tab.devtools.box(of: node)
                 let png = (try? await tab.devtools.screenshot(clip: box, fullPage: false)) ?? Data()
-                let details = await tab.devtools.describe(node)
                 self.lastPicked = tab
                 self.pendingPick = BrowserPick(tab: tab, png: png, url: tab.url, details: details)
             }

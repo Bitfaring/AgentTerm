@@ -8,6 +8,8 @@ final class HooksAndMCPUITests: MacUITestCase {
     override func setUpWithError() throws {
         // The onboarding's own test sees it; the others have it kept away.
         if name.contains("Onboarding") { appEnvironment["AGENTTERM_NO_ONBOARDING"] = nil }
+        // Long enough to see what is still being checked (LINK-15).
+        if name.contains("WhileItIsOpen") { linkGrace = "30" }
         try super.setUpWithError()
     }
 
@@ -202,11 +204,136 @@ final class HooksAndMCPUITests: MacUITestCase {
     /// and AgentTerm's MCP server are heard: missing for the stand-in, which
     /// has neither, with what to do.
     func testAnAgentsSessionShowsWhetherItsHooksAndServerAreHeard() throws {
+        // Instructions saved for Claude Code: a test's host gives none by
+        // default, having no MCP server of its own to give.
+        let phone = try device()
+        phone.send(.setAgentPrompt(agent: "claude", text: "Run your commands in AgentTerm's shells."))
+        wait("the instructions saved") {
+            phone.last { if case .agentPrompts(let custom, _) = $0 { return custom } else { return nil } }?["claude"] != nil
+        }
         app.press(.button("Claude Code"))
         app.wait(for: .id("agent-link"), timeout: 20)
         app.wait("said missing", timeout: 15) { self.label("agent-link") == AgentLinkWords.summary(AgentLink(hooks: false, mcp: false)) }
         let value = app.first(.id("agent-link"))?.value ?? ""
         XCTAssertTrue(value.contains(AgentLinkWords.fix), value)
+        // LINK-13 (#172): three rows, Hooks, MCP and System Prompt, each
+        // with its state: Claude Code's instructions come through its MCP
+        // server, which did not start, so they were not given.
+        XCTAssertTrue(value.contains("\(AgentLinkWords.hooksRow): \(AgentLinkWords.hooksStatus(false))"), value)
+        XCTAssertTrue(value.contains("\(AgentLinkWords.mcpRow): \(AgentLinkWords.mcpStatus(false))"), value)
+        XCTAssertTrue(value.contains("\(AgentLinkWords.promptRow): \(AgentLinkWords.promptStatus(.missing))"), value)
+        app.press(.id("agent-link"))
+        app.wait(for: .id("agent-link-prompt"), timeout: 10)
         shot("agent-link")
+    }
+
+    /// A stand-in Antigravity for LINK-16, there before the host looks for
+    /// the agents.
+    override func makeFixtures() throws {
+        try super.makeFixtures()
+        guard name.contains("Unverified") else { return }
+        let agy = root.appendingPathComponent("agents/agy")
+        try "#!/bin/sh\nexec cat\n".write(to: agy, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agy.path)
+    }
+
+    /// Instructions saved for an agent, as Settings > Agents saves them.
+    private func saveInstructions(_ text: String, for agent: String, _ phone: Device) {
+        phone.send(.setAgentPrompt(agent: agent, text: text))
+        wait("the instructions saved for \(agent)") {
+            phone.last { if case .agentPrompts(let custom, _) = $0 { return custom } else { return nil } }?[agent] == text
+        }
+    }
+
+    /// What the session's mark says of each of its three rows.
+    private func says(_ row: String, _ status: String) -> Bool {
+        (app.first(.id("agent-link"))?.value ?? "").contains("\(row): \(status) ") || (app.first(.id("agent-link"))?.value ?? "").hasSuffix("\(row): \(status)")
+    }
+
+    /// LINK-15 (#172): the mark's popover, open from the start, follows the
+    /// session as it goes: everything being checked; the hooks heard, the
+    /// MCP server still being checked; then the server heard and the
+    /// instructions given, all green.
+    func testTheMarksPopoverFollowsTheSessionWhileItIsOpen() throws {
+        let phone = try device()
+        saveInstructions("Run your commands in AgentTerm's shells.", for: "claude", phone)
+        let hooksNow = root.appendingPathComponent("hooks-now")
+        let mcpNow = root.appendingPathComponent("mcp-now")
+        let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#
+        let event = #"printf '{"agent":"claude","event":"SessionStart","at":%s,"input":{}}' "$(date +%s)" > "$\#(AppChannel.current.eventsVariable)""#
+        // A stand-in Claude Code that is heard when the test says so.
+        try """
+        #!/bin/sh
+        while [ ! -e '\(hooksNow.path)' ]; do sleep 0.2; done
+        \(event)
+        while [ ! -e '\(mcpNow.path)' ]; do sleep 0.2; done
+        ( printf '%s\\n' '\(initialize)'; sleep 600 ) | '\(hostExecutable.path)' mcp > /dev/null 2>&1 &
+        exec cat
+        """.write(to: root.appendingPathComponent("agents/claude"), atomically: true, encoding: .utf8)
+        app.press(.button("Claude Code"))
+        app.wait(for: .id("agent-link"), timeout: 20)
+        app.press(.id("agent-link"))
+        app.wait(for: .id("agent-link-prompt"), timeout: 10)
+        XCTAssertTrue(says(AgentLinkWords.hooksRow, AgentLinkWords.checking), app.first(.id("agent-link"))?.value ?? "")
+        XCTAssertTrue(says(AgentLinkWords.mcpRow, AgentLinkWords.checking))
+        XCTAssertTrue(says(AgentLinkWords.promptRow, AgentLinkWords.checking))
+        shot("popover-checking")
+        try Data().write(to: hooksNow)
+        app.wait("the hooks heard, the popover still open", timeout: 15) {
+            self.says(AgentLinkWords.hooksRow, AgentLinkWords.hooksStatus(true)) && self.app.exists(.id("agent-link-prompt"))
+        }
+        XCTAssertTrue(says(AgentLinkWords.mcpRow, AgentLinkWords.checking), "the MCP server said heard before it started")
+        XCTAssertTrue(app.first(.id("agent-link-hooks"))?.value.contains(AgentLinkWords.hooksStatus(true)) == true, "the popover's row is not the mark's")
+        shot("popover-hooks-heard")
+        try Data().write(to: mcpNow)
+        app.wait("the server heard and the instructions given, the popover still open", timeout: 15) {
+            self.says(AgentLinkWords.mcpRow, AgentLinkWords.mcpStatus(true)) && self.says(AgentLinkWords.promptRow, AgentLinkWords.promptStatus(.given))
+                && self.app.exists(.id("agent-link-prompt"))
+        }
+        XCTAssertTrue(app.first(.id("agent-link-prompt"))?.value.contains(AgentLinkWords.promptStatus(.given)) == true)
+        shot("popover-all-given")
+    }
+
+    /// LINK-16 (#172): a session whose hooks are heard and whose MCP server
+    /// is not: green, red, and its instructions, which come through the
+    /// server, not given. No instructions saved for the agent: disabled.
+    /// Antigravity, which is given them in a way AgentTerm cannot see for
+    /// one session: unverified.
+    func testThePopoverSaysHooksWithoutTheServerDisabledAndUnverified() throws {
+        let phone = try device()
+        saveInstructions("Run your commands in AgentTerm's shells.", for: "claude", phone)
+        let event = #"printf '{"agent":"claude","event":"SessionStart","at":%s,"input":{}}' "$(date +%s)" > "$\#(AppChannel.current.eventsVariable)""#
+        try "#!/bin/sh\n\(event)\nexec cat\n".write(to: root.appendingPathComponent("agents/claude"), atomically: true, encoding: .utf8)
+        app.press(.button("Claude Code"))
+        app.wait(for: .id("agent-link"), timeout: 20)
+        app.wait("hooks heard, the server not", timeout: 15) {
+            self.says(AgentLinkWords.hooksRow, AgentLinkWords.hooksStatus(true)) && self.says(AgentLinkWords.mcpRow, AgentLinkWords.mcpStatus(false))
+        }
+        XCTAssertTrue(says(AgentLinkWords.promptRow, AgentLinkWords.promptStatus(.missing)), app.first(.id("agent-link"))?.value ?? "")
+        app.press(.id("agent-link"))
+        app.wait(for: .id("agent-link-mcp"), timeout: 10)
+        shot("popover-hooks-without-server")
+        app.press(.id("agent-link"))
+
+        // No instructions for Claude Code: a new session says them disabled.
+        saveInstructions("", for: "claude", phone)
+        // The session that runs still says what it was given when it
+        // started, whatever is saved since.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(says(AgentLinkWords.promptRow, AgentLinkWords.promptStatus(.missing)), "a settings edit changed what a running session says")
+        let first = phone.sessions.map(\.id)
+        app.press(.button("Claude Code"))
+        wait("a second session") { phone.sessions.count == first.count + 1 }
+        app.wait("disabled", timeout: 15) { self.says(AgentLinkWords.promptRow, AgentLinkWords.promptStatus(.disabled)) }
+
+        // Antigravity, with instructions: unverified.
+        saveInstructions("Run your commands in AgentTerm's shells.", for: "agy", phone)
+        app.press(.button("Antigravity"))
+        wait("Antigravity's session") { phone.sessions.contains { $0.agent == "agy" } }
+        app.wait("unverified", timeout: 15) { self.says(AgentLinkWords.promptRow, AgentLinkWords.promptStatus(.unverified)) }
+        app.press(.id("agent-link"))
+        app.wait(for: .id("agent-link-prompt"), timeout: 10)
+        XCTAssertTrue(app.first(.id("agent-link-prompt"))?.value.contains(AgentLinkWords.promptStatus(.unverified)) == true)
+        shot("popover-unverified")
     }
 }

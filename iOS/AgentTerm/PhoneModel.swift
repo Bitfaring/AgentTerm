@@ -3,6 +3,7 @@ import AgentTermClient
 import AgentTermProtocol
 import AgentTermTelemetry
 import AgentTermTerminal
+import Combine
 import SwiftUI
 import UserNotifications
 
@@ -17,6 +18,8 @@ enum Route: Hashable {
     case session(SessionID)
     /// What an agent's last turn came to, opened from the Inbox (#71).
     case result(SessionID)
+    /// All of the Inbox (#66).
+    case inbox
     /// An agent's screen with one of its own shells ("s:<id>") or pages
     /// ("b:<id>") in front.
     case companion(agent: SessionID, item: String)
@@ -438,9 +441,8 @@ final class PhoneModel: ObservableObject {
         didSet {
             // What a done agent's turn came to is what its notice told: the
             // notice goes, and the session is seen only once it is opened.
-            if case .result(let id)? = path.last, agentNotice?.session == id { agentNotice = nil }
+            if case .result(let id)? = path.last { readInbox(session: id) }
             guard let open = openSessionID else { return }
-            if agentNotice?.session == open { agentNotice = nil }
             sawNotice(of: open)
         }
     }
@@ -449,8 +451,7 @@ final class PhoneModel: ObservableObject {
     /// notification goes from Notification Center, and the Mac is told, so
     /// that the other devices hide their notice of it (#60).
     private func sawNotice(of session: SessionID) {
-        guard let mac = pairing?.id else { return }
-        notifications.remove(mac: mac, session: session)
+        readInbox(session: session)
         // Told again while the host still has it unseen (#67): the same
         // words said twice are two turns.
         guard let info = sessions.first(where: { $0.id == session }), let state = info.state, !state.isWorking,
@@ -650,41 +651,208 @@ final class PhoneModel: ObservableObject {
     func pauseSchedules(_ paused: Bool) { connection?.send(.pauseSchedules(paused)) }
     func loadOutput(of run: ScheduleOverview.Run) { connection?.send(.scheduleRunOutput(id: run.schedule.id, at: run.run.at)) }
 
-    /// Shown as a banner while the app is in front, until it is opened or
-    /// dismissed.
-    @Published private(set) var agentNotice: AgentNotice?
-    /// Someone is at the Mac: then nothing is told here.
+    /// Someone is at the Mac: for the Live Activity.
     @Published private(set) var macInUse = false
     /// Whether to be told at all: a switch in the Settings tab.
     @Published var notifyAgents: Bool = UserDefaults.standard.object(forKey: "notifyAgents") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(notifyAgents, forKey: "notifyAgents")
             if notifyAgents { notifications.askOnce() }
+            updatePush()
         }
     }
-    /// What was told of each Mac's sessions, so that each is told once,
-    /// also across connections.
-    private var told: [String: [SessionID: AgentState]] = [:]
+
+    // MARK: Through Apple while the app is closed (#66)
+
+    /// Whether to be told through Apple too: a switch under the one above.
+    @Published var pushAlso: Bool = UserDefaults.standard.object(forKey: "pushAlso") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(pushAlso, forKey: "pushAlso")
+            updatePush()
+        }
+    }
+    /// What the Mac on screen says of it.
+    @Published private(set) var hostPushState: PushState?
+    /// What stops it on this iPhone, when something does.
+    @Published private(set) var pushProblem: String?
+    private var deviceToken: String?
+    private var pushTokenWatch: AnyCancellable?
+    private var pushFailureWatch: AnyCancellable?
+    /// Registered on this connection already: once each time, so that the
+    /// host's ticket from the relay stays fresh.
+    private var pushAsked = false
+
+    /// What the switch's footnote says (principle 3): what holds it back,
+    /// else what the Mac says.
+    var pushState: PushState? {
+        guard notifyAgents, pushAlso else { return nil }
+        if AppChannel.current != .release { return .unavailable(reason: PushWords.notInThisBuild) }
+        if let pushProblem { return .unavailable(reason: pushProblem) }
+        return hostPushState
+    }
+
+    /// Registers with the Mac on screen, or no longer, as the switches say.
+    private func updatePush() {
+        guard status == .connected, let connection, let pairing else { return }
+        guard notifyAgents, pushAlso, AppChannel.current == .release else {
+            if hostPushState == .on { connection.send(.pushUnregister) }
+            return
+        }
+        guard !pushAsked else { return }
+        guard let deviceToken else {
+            notifications.askOnce { allowed in
+                DispatchQueue.main.async {
+                    self.pushProblem = allowed ? nil : PushWords.notAllowed
+                    if allowed { UIApplication.shared.registerForRemoteNotifications() }
+                }
+            }
+            return
+        }
+        let key = PushKeys.load(mac: pairing.id)?.key ?? PushSeal.newKey()
+        guard PushKeys.save(PushKeys.Saved(key: key, macName: pairing.name), mac: pairing.id) else {
+            pushProblem = PushWords.keyNotKept
+            return
+        }
+        pushProblem = nil
+        pushAsked = true
+        connection.send(.pushRegister(PushRegistration(token: deviceToken, key: key, mac: pairing.id)))
+    }
+
+    /// Replies from a notification that came through Apple, sent once the
+    /// Mac says its agent still asks exactly what was told.
+    private var pendingPushAnswers: [(session: SessionID, digest: String, text: String)] = []
+    /// A session to open once the Mac it is on is reached.
+    private var pendingOpen: SessionID?
+
+    /// A reply from a notification that came through Apple: its state was
+    /// shortened to fit, so the Mac's own is waited for and compared.
+    func answer(session: SessionID, onMac mac: String, digest: String, text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, show(mac: mac) else { return }
+        pendingPushAnswers.append((session, digest, text))
+        if status == .connected, sessionsKnown { sendPushAnswers() } else { resume() }
+    }
+
+    private func sendPushAnswers() {
+        for answer in pendingPushAnswers {
+            if let state = sessions.first(where: { $0.id == answer.session })?.state, PushNotice.digest(state) == answer.digest {
+                connection?.send(.answer(session: answer.session, to: state, text: answer.text))
+            } else {
+                message = PushWords.movedOn
+            }
+        }
+        pendingPushAnswers.removeAll()
+    }
+
+    /// Opens the session a notification is about, on its Mac.
+    func open(session: SessionID, onMac mac: String) {
+        guard show(mac: mac) else { return }
+        if sessionsKnown {
+            openNotified(session)
+        } else {
+            pendingOpen = session
+            resume()
+        }
+    }
+
+    private func openNotified(_ session: SessionID) {
+        pendingOpen = nil
+        guard sessions.contains(where: { $0.id == session }) else {
+            message = PushWords.sessionEnded
+            return
+        }
+        tab = "sessions"
+        path = [.session(session)]
+    }
+
+    /// Goes to a paired Mac; false, said, when it is no longer paired.
+    private func show(mac: String) -> Bool {
+        guard let host = hosts.first(where: { $0.id == mac }) else {
+            message = PushWords.macForgotten
+            return false
+        }
+        if host.id != pairing?.id || !entered { enter(host) }
+        return true
+    }
     /// Replies given while the connection was gone, sent once it is back.
     private var pendingAnswers: [(session: SessionID, state: AgentState, text: String)] = []
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     let notifications = AgentNotifications()
 
-    /// Tells of what the host's sessions say now, where the user is: a
-    /// banner in the app, a notification just outside it.
-    private func tellOfAgents(_ list: [SessionInfo]) {
+    // MARK: Notices from the Mac (#66, decided 2026-11-19)
+
+    /// This iPhone's own Inbox of the Mac on screen: what it was told of,
+    /// kept after it is read, for 30 days.
+    @Published private(set) var inbox = InboxBook()
+
+    private static func inboxKey(_ mac: String) -> String { "inbox-\(mac)" }
+
+    private func loadInbox() {
+        guard let mac = pairing?.id, let data = UserDefaults.standard.data(forKey: Self.inboxKey(mac)),
+            let saved = MessageCoding.decode(InboxBook.self, from: data)
+        else { return inbox = InboxBook() }
+        inbox = saved
+        inbox.prune()
+    }
+
+    private func saveInbox() {
         guard let mac = pairing?.id else { return }
-        var known = told[mac] ?? [:]
-        let notices = AgentNotice.notices(in: list, told: &known)
-        told[mac] = known
-        if let current = agentNotice, !list.contains(where: { $0.id == current.session && $0.state == current.state }) { agentNotice = nil }
-        guard notifyAgents, !macInUse else { return }
-        for notice in notices {
-            // The session on screen is being looked at.
-            if active, notice.session == openSessionID { continue }
-            if active { agentNotice = notice } else { notifications.post(notice, mac: mac, macName: pairing?.name ?? "the Mac") }
+        UserDefaults.standard.set(MessageCoding.encode(inbox), forKey: Self.inboxKey(mac))
+    }
+
+    /// What the Mac told: into the Inbox, and a notification unless its
+    /// session is on screen, which is then seen.
+    private func told(_ notice: Notice) {
+        inbox.take([notice])
+        saveInbox()
+        guard let mac = pairing?.id else { return }
+        if active, let session = notice.session, session == openSessionID {
+            sawNotice(of: session)
+            return
+        }
+        guard notifyAgents, notice.alerts else { return }
+        notifications.post(notice, mac: mac, macName: pairing?.name ?? "the Mac")
+    }
+
+    private func readInbox(session: SessionID) {
+        inbox.markRead(session: session)
+        saveInbox()
+    }
+
+    func read(_ entry: InboxBook.Entry) {
+        inbox.markRead(entry.id)
+        saveInbox()
+    }
+
+    func delete(_ entry: InboxBook.Entry) {
+        inbox.delete(entry.id)
+        saveInbox()
+    }
+
+    func deleteReadInbox() {
+        inbox.deleteRead()
+        saveInbox()
+    }
+
+    func deleteAllInbox() {
+        inbox.deleteAll()
+        saveInbox()
+    }
+
+    /// Dismissed here, from a notification: handled on every device.
+    func dismissNotice(_ id: UInt64, onMac mac: String) {
+        guard mac == pairing?.id else { return }
+        inbox.markRead(id)
+        saveInbox()
+        if status == .connected, let connection {
+            connection.send(.handleNotice(id: id, how: .dismissed))
+        } else {
+            pendingDismissals.append(id)
         }
     }
+
+    /// Dismissals made while the connection was gone, sent once it is back.
+    private var pendingDismissals: [UInt64] = []
 
     // MARK: The Live Activity (#24)
 
@@ -695,34 +863,91 @@ final class PhoneModel: ObservableObject {
             updateLiveActivity()
         }
     }
-    private var liveActivity: Activity<AgentsActivityAttributes>?
+    private var liveActivity: Activity<AgentsActivityAttributes>? = Activity<AgentsActivityAttributes>.activities.first
+    /// Its push token, and the one that starts one, as iOS gave them: sent
+    /// to the Mac, which keeps the activity true while the app is asleep
+    /// (#168). The released build only: the development one has no push.
+    private var activityToken: String?
+    private var activityStartToken: String?
+    private var activityWatch: Task<Void, Never>?
+    private var activityStartWatch: Task<Void, Never>?
 
-    /// Shown only while all three hold: the phone is connected to the Mac,
-    /// nobody is at the Mac, and an agent works or waits. Ended as soon as
-    /// the connection ends or the Mac is used again, since it could no longer
-    /// be kept true; left showing the last state when every agent is done.
+    private static var activityPushes: Bool { AppChannel.current == .release }
+
+    /// Shown while an agent works or waits, whether someone is at the Mac
+    /// or not (#168); updated here while connected, and by the Mac through
+    /// Apple while the app is asleep. Left showing "done" when every agent
+    /// is done; ended at once when switched off.
     func updateLiveActivity() {
-        let working = sessions.filter { $0.state?.isWorking == true }
-        let waiting = sessions.filter { $0.state?.isWaiting == true }
-        let decision = LiveActivityRule.decide(
-            enabled: showsLiveActivity && ActivityAuthorizationInfo().areActivitiesEnabled, connected: status == .connected, macInUse: macInUse,
-            sessions: sessions)
-        let wanted = decision == .show
-        let state = AgentsActivityAttributes.ContentState(
-            working: working.count, waiting: waiting.map(\.displayName), firstWaiting: waiting.first?.id,
-            done: sessions.filter { if case .done = $0.state { return true } else { return false } }.map(\.displayName))
-        let content = ActivityContent(state: state, staleDate: nil)
-        if wanted {
+        let enabled = showsLiveActivity && ActivityAuthorizationInfo().areActivitiesEnabled
+        watchActivityStart(enabled)
+        // Not connected, nothing is known here: what was shown stays, and
+        // goes out of date by itself.
+        guard status == .connected || !enabled else { return }
+        let state = AgentsStatus.of(sessions: sessions, failures: failures)
+        let decision = LiveActivityRule.decide(enabled: enabled, status: state)
+        // Without push nothing keeps it true once the app sleeps.
+        let content = ActivityContent(state: state, staleDate: Self.activityPushes ? nil : Date().addingTimeInterval(10 * 60))
+        if decision == .show {
             if let liveActivity {
                 Task { await liveActivity.update(content) }
             } else {
-                liveActivity = try? Activity.request(attributes: AgentsActivityAttributes(mac: pairing?.name ?? "the Mac"), content: content)
+                liveActivity = try? Activity.request(
+                    attributes: AgentsActivityAttributes(mac: pairing?.name ?? "the Mac"), content: content, pushType: Self.activityPushes ? .token : nil)
+                watchActivityToken()
             }
         } else if let activity = liveActivity {
             liveActivity = nil
+            activityToken = nil
+            sendActivityTokens()
             // Done is true and stays true; anything else could go stale.
             Task { await activity.end(content, dismissalPolicy: decision == .endShowingDone ? .default : .immediate) }
         }
+    }
+
+    private func watchActivityToken() {
+        activityWatch?.cancel()
+        guard Self.activityPushes, let activity = liveActivity else { return }
+        activityWatch = Task { [weak self] in
+            for await data in activity.pushTokenUpdates {
+                let token = data.map { String(format: "%02x", $0) }.joined()
+                await MainActor.run {
+                    self?.activityToken = token
+                    self?.sendActivityTokens()
+                }
+            }
+        }
+    }
+
+    /// The token that lets the Mac start an activity while the app is
+    /// asleep (iOS 17.2).
+    private func watchActivityStart(_ enabled: Bool) {
+        guard Self.activityPushes else { return }
+        guard enabled else {
+            activityStartWatch?.cancel()
+            activityStartWatch = nil
+            if activityStartToken != nil {
+                activityStartToken = nil
+                sendActivityTokens()
+            }
+            return
+        }
+        guard activityStartWatch == nil, #available(iOS 17.2, *) else { return }
+        activityStartWatch = Task { [weak self] in
+            for await data in Activity<AgentsActivityAttributes>.pushToStartTokenUpdates {
+                let token = data.map { String(format: "%02x", $0) }.joined()
+                await MainActor.run {
+                    self?.activityStartToken = token
+                    self?.sendActivityTokens()
+                }
+            }
+        }
+    }
+
+    /// To the Mac, once it keeps this iPhone told through Apple.
+    private func sendActivityTokens() {
+        guard Self.activityPushes, status == .connected, hostPushState == .on else { return }
+        connection?.send(.liveActivity(token: activityToken, startToken: activityStartToken))
     }
 
     /// The Live Activity was touched: the session that waits, or the list.
@@ -736,35 +961,28 @@ final class PhoneModel: ObservableObject {
 
     /// Opens the session a notice is about, in the Sessions tab.
     func open(_ notice: AgentNotice) {
-        agentNotice = nil
         guard sessions.contains(where: { $0.id == notice.session }) else { return }
         tab = "sessions"
         path = [.session(notice.session)]
     }
 
-    func dismissAgentNotice() { agentNotice = nil }
+    /// Opens what an Inbox item is about: a done agent's result, the
+    /// session of one that asks. A failure is only read.
+    func open(_ entry: InboxBook.Entry) {
+        read(entry)
+        guard let agent = entry.notice.agentNotice else { return }
+        guard sessions.contains(where: { $0.id == agent.session }) else {
+            message = PushWords.sessionEnded
+            return
+        }
+        tab = "sessions"
+        if case .done = agent.state { path = [.result(agent.session)] } else { path = [.session(agent.session)] }
+    }
 
     // MARK: The Inbox (#67)
 
     /// An agent's name as the Mac lists it, its id when it is not listed.
     func agentName(_ id: String) -> String { agents.first { $0.id == id }?.name ?? (id == "shell" ? "Shell" : id) }
-
-    /// What needs the user on the Mac on show, the most pressing first: at
-    /// the top of the Sessions list.
-    var inboxItems: [InboxItem] { Inbox.items(sessions: sessions, failures: failures) }
-
-    /// Opens the session an item is about.
-    func open(_ item: InboxItem) {
-        guard let notice = item.notice else { return }
-        // A done agent shows what its turn came to first; its terminal is
-        // a touch away. One that asks opens where it is answered.
-        if case .done = notice.state {
-            tab = "sessions"
-            path = [.result(notice.session)]
-        } else {
-            open(notice)
-        }
-    }
 
     /// The last turn of each session's agent, as the host told it (#71).
     @Published private(set) var turnResults: [SessionID: TurnResult] = [:]
@@ -779,6 +997,9 @@ final class PhoneModel: ObservableObject {
             connection?.send(.noticeSeen(session: info.id, state: state))
         case .failure(let failure):
             dismiss(failure)
+        case .notice:
+            // Over already: nothing to tell the Mac.
+            break
         }
     }
 
@@ -816,7 +1037,24 @@ final class PhoneModel: ObservableObject {
         hosts = PairingStore.load()
         let last = UserDefaults.standard.string(forKey: Self.currentHostKey)
         pairing = hosts.first { $0.id == last } ?? hosts.first
+        loadInbox()
         notifications.model = self
+        pushTokenWatch = PushToken.shared.$token.receive(on: DispatchQueue.main).sink { [weak self] token in
+            self?.deviceToken = token
+            self?.updatePush()
+        }
+        #if DEBUG
+        // For trying the notification service extension in a simulator,
+        // where there is no relay (#66): "<mac>|<name>|<key in base64>".
+        if let test = ProcessInfo.processInfo.environment["AGENTTERM_PUSH_TEST_KEY"]?.split(separator: "|"), test.count == 3,
+            let key = Data(base64Encoded: String(test[2]))
+        {
+            PushKeys.save(PushKeys.Saved(key: key, macName: String(test[1])), mac: String(test[0]))
+        }
+        #endif
+        pushFailureWatch = PushToken.shared.$failure.receive(on: DispatchQueue.main).sink { [weak self] failure in
+            if let failure { self?.pushProblem = PushWords.tokenRefused(failure) }
+        }
         if pairing != nil { connect() }
     }
 
@@ -1090,6 +1328,10 @@ final class PhoneModel: ObservableObject {
     /// the only way back to it.
     func forget(_ host: SavedHost) {
         let wasCurrent = host.id == pairing?.id
+        // Its pushes would no longer open: the Mac is asked to stop them.
+        if wasCurrent, hostPushState == .on { connection?.send(.pushUnregister) }
+        PushKeys.delete(mac: host.id)
+        UserDefaults.standard.removeObject(forKey: Self.inboxKey(host.id))
         hosts.removeAll { $0.id == host.id }
         PairingStore.save(hosts)
         pruneComposeDrafts(of: host.id, keeping: [])
@@ -1105,6 +1347,7 @@ final class PhoneModel: ObservableObject {
 
     private func setCurrent(_ host: SavedHost?) {
         pairing = host
+        loadInbox()
         resetSessionLayout()
         UserDefaults.standard.set(host?.id, forKey: Self.currentHostKey)
     }
@@ -1262,6 +1505,10 @@ final class PhoneModel: ObservableObject {
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             status = .connected
+            for id in pendingDismissals { connection?.send(.handleNotice(id: id, how: .dismissed)) }
+            pendingDismissals.removeAll()
+            pushAsked = false
+            hostPushState = nil
             for answer in pendingAnswers { connection?.send(.answer(session: answer.session, to: answer.state, text: answer.text)) }
             pendingAnswers.removeAll()
             failedAttempts = 0
@@ -1278,8 +1525,9 @@ final class PhoneModel: ObservableObject {
             sessions = list
             sessionsKnown = true
             turnResults = turnResults.filter { id, _ in list.contains { $0.id == id } }
-            tellOfAgents(list)
             updateLiveActivity()
+            if !pendingPushAnswers.isEmpty { sendPushAnswers() }
+            if let pendingOpen { openNotified(pendingOpen) }
             if let pairing { pruneComposeDrafts(of: pairing.id, keeping: list) }
             syncSessionLayout()
             if let open = openSessionID, !list.contains(where: { $0.id == open }) {
@@ -1314,10 +1562,10 @@ final class PhoneModel: ObservableObject {
             took(faults)
         case .turnResult(let session, let result):
             turnResults[session] = result
-        case .noticeSeen(let session, let state):
-            // Seen on the Mac, or on another device.
-            if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
-            if let mac = pairing?.id, sessions.first(where: { $0.id == session })?.state == state { notifications.remove(mac: mac, session: session) }
+        case .noticeSeen:
+            // Seen on the Mac, or on another device: its notice is handled,
+            // which the Mac says on its own (`noticeHandled`).
+            break
         case .browserFrame(let tab, let jpeg, let width, let height):
             if let image = UIImage(data: jpeg) { browserFrames[tab] = BrowserFrame(image: image, width: width, height: height) }
         case .agentPrompts(let custom, let defaults):
@@ -1336,6 +1584,28 @@ final class PhoneModel: ObservableObject {
         case .macInUse(let inUse):
             macInUse = inUse
             updateLiveActivity()
+        case .pushState(let state):
+            hostPushState = state
+            // Registered: the Live Activity's tokens with it (#168).
+            if state == .on {
+                if liveActivity != nil, activityWatch == nil { watchActivityToken() }
+                sendActivityTokens()
+            }
+            // Off on a new connection, or forgotten by the Mac: asked again.
+            if state == .off { pushAsked = false }
+            updatePush()
+        case .noticeLog(let list):
+            inbox.take(list, log: true)
+            saveInbox()
+            // What was handled while this iPhone was away goes from
+            // Notification Center too.
+            if let mac = pairing?.id { notifications.remove(mac: mac, notices: list.filter { $0.handled != nil }.map(\.id)) }
+        case .notice(let notice):
+            told(notice)
+        case .noticeHandled(let id, let handled):
+            inbox.handled(id, handled)
+            saveInbox()
+            if let mac = pairing?.id { notifications.remove(mac: mac, notices: [id]) }
         case .schedules(let list):
             schedules = list
         case .schedulesPaused(let paused):
@@ -1479,6 +1749,10 @@ final class PhoneModel: ObservableObject {
             pendingPairing = nil
             isPairing = false
             showPairSheet = false
+            // Paired: iOS is asked now whether the app may notify, rather
+            // than when the first agent is told of, which is shown with the
+            // app open too (#66).
+            if notifyAgents { notifications.askOnce() }
             // A Mac that was just paired is the one to look at.
             path = []
             tab = "sessions"
@@ -1496,7 +1770,7 @@ final class PhoneModel: ObservableObject {
                 openCreatedSession = false
                 writingCommitMessage = []
                 remoteWork.forgetAll()
-                self.message = "The AgentTerm on the Mac is an older version and cannot do this. Update it, and restart its host."
+                self.message = HostErrorWords.olderHost
             } else {
                 // A request that was going to open a session failed.
                 openCreatedSession = false
@@ -1504,7 +1778,7 @@ final class PhoneModel: ObservableObject {
                 committing = nil
                 // And a save: the edits stay in the editor.
                 savingFile = nil
-                self.message = text
+                self.message = HostErrorWords.words(for: text)
             }
         case .gitBranches(let folder, let list):
             branches[folder] = list
@@ -1612,6 +1886,8 @@ final class PhoneModel: ObservableObject {
             if !isDirectory { createdFile = path }
         case .failures(let list):
             failures = list
+            // What stopped is counted in the Live Activity (#168).
+            updateLiveActivity()
         case .pairingCode, .devices:
             break
         }
@@ -2140,33 +2416,19 @@ final class PhoneModel: ObservableObject {
     }
 }
 
-/// Local notifications of agents that finished or need an instruction (#22).
-/// There is no push through Apple: the app makes them itself, from what the
-/// host says over its connection, while iOS lets the app run.
+/// Notifications of agents that finished or need an instruction (#22): the
+/// app makes them itself, from what the host says over its connection,
+/// while iOS lets the app run; after that, the Mac sends them through Apple
+/// (#66) and the notification service extension makes the same ones.
 final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
     weak var model: PhoneModel?
-    private static let replyCategory = "agent-reply"
-    private static let openCategory = "agent-open"
     private var asked = false
 
     override init() {
         super.init()
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        // A reply runs something on the Mac: the phone is unlocked first.
-        center.setNotificationCategories(Self.fixedCategories)
-    }
-
-    private static var reply: UNNotificationAction {
-        UNTextInputNotificationAction(
-            identifier: "reply", title: "Reply", options: [.authenticationRequired], textInputButtonTitle: "Send", textInputPlaceholder: "Your answer")
-    }
-
-    private static var fixedCategories: Set<UNNotificationCategory> {
-        [
-            UNNotificationCategory(identifier: replyCategory, actions: [reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
-            UNNotificationCategory(identifier: openCategory, actions: [], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
-        ]
+        center.setNotificationCategories(NoticeContent.fixedCategories)
     }
 
     /// The categories of questions with choices (#55), by the notification
@@ -2178,81 +2440,123 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
     /// The category of a notice: one of its own for a question with
     /// choices, a button for each and the text reply after them.
     private func category(of notice: AgentNotice, request: String) -> String {
-        let buttons = notice.buttons
-        if buttons.isEmpty {
-            choiceCategories[request] = nil
-        } else {
-            // A choice runs something on the Mac, as a reply does: the
-            // phone is unlocked first.
-            let actions = buttons.map { UNNotificationAction(identifier: $0.id, title: $0.title, options: [.authenticationRequired]) }
-            choiceCategories[request] = UNNotificationCategory(
-                identifier: "agent-choices-\(request)", actions: actions + [Self.reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle])
-        }
-        UNUserNotificationCenter.current().setNotificationCategories(Self.fixedCategories.union(choiceCategories.values))
+        choiceCategories[request] = NoticeContent.choiceCategory(of: notice, request: request)
+        UNUserNotificationCenter.current().setNotificationCategories(NoticeContent.fixedCategories.union(choiceCategories.values))
         if let own = choiceCategories[request] { return own.identifier }
-        return notice.takesAReply ? Self.replyCategory : Self.openCategory
+        return notice.takesAReply ? NoticeContent.replyCategory : NoticeContent.openCategory
     }
 
-    /// Asks iOS, the first time, whether the app may notify.
-    func askOnce() {
-        guard !asked else { return }
+    /// Asks iOS, the first time, whether the app may notify; `done` is told
+    /// whether it may.
+    func askOnce(_ done: ((Bool) -> Void)? = nil) {
+        guard !asked else {
+            UNUserNotificationCenter.current().getNotificationSettings { settings in done?(settings.authorizationStatus == .authorized) }
+            return
+        }
         asked = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in done?(granted) }
     }
 
-    /// Takes back what was posted for a session: its agent's words were
-    /// seen, in the app or on another device (#60).
-    func remove(mac: String, session: SessionID) {
+    /// Takes back what was posted of these notices: handled, here or on
+    /// another device (#66).
+    func remove(mac: String, notices: [UInt64]) {
+        guard !notices.isEmpty else { return }
+        let identifiers = notices.map { PushNotice.identifier(mac: mac, notice: $0) }
         let center = UNUserNotificationCenter.current()
-        center.removeDeliveredNotifications(withIdentifiers: ["\(mac)-\(session)"])
-        center.removePendingNotificationRequests(withIdentifiers: ["\(mac)-\(session)"])
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+        center.removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 
-    func post(_ notice: AgentNotice, mac: String, macName: String) {
+    func post(_ notice: Notice, mac: String, macName: String) {
         askOnce()
-        let content = UNMutableNotificationContent()
-        content.title = "\(notice.name) \(notice.why)"
-        content.subtitle = "\((notice.folder as NSString).lastPathComponent) on \(macName)"
-        // What the agent said shows only where iOS shows previews: by
-        // default not on the lock screen.
-        // A question's choices are its buttons, not its last line, which
-        // iOS cuts off after a long question (#55).
-        content.body = notice.words ?? ""
-        content.sound = .default
-        content.threadIdentifier = "\(mac)-\(notice.session)"
-        content.categoryIdentifier = category(of: notice, request: "\(mac)-\(notice.session)")
-        content.userInfo = [
-            "mac": mac, "session": Int(notice.session),
-            "state": String(decoding: MessageCoding.encode(notice.state), as: UTF8.self),
-        ]
-        let request = UNNotificationRequest(identifier: "\(mac)-\(notice.session)", content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+        let identifier = PushNotice.identifier(mac: mac, notice: notice.id)
+        let content: UNMutableNotificationContent
+        if let agent = notice.agentNotice {
+            content = NoticeContent.content(of: agent, id: notice.id, mac: mac, macName: macName)
+            content.categoryIdentifier = category(of: agent, request: identifier)
+        } else {
+            content = NoticeContent.content(of: nil, id: notice.id, mac: mac, macName: macName, title: notice.title(on: macName), body: notice.body)
+        }
+        let center = UNUserNotificationCenter.current()
+        // Not again what came through Apple while the app was asleep: the
+        // same name replaces it, and one shown already is left as it is.
+        center.getDeliveredNotifications { shown in
+            guard !shown.contains(where: { $0.request.identifier == identifier }) else { return }
+            center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+        }
+    }
+
+    /// A background push that takes a notification back (#66), until the
+    /// extension can do it itself.
+    static func takeBack(_ userInfo: [AnyHashable: Any]) -> Bool {
+        guard let gone = userInfo["g"] as? String else { return false }
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [gone])
+        return true
     }
 
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let info = response.notification.request.content.userInfo
+        let content = response.notification.request.content
+        let info = content.userInfo
         let session = (info["session"] as? Int).map { SessionID(truncatingIfNeeded: $0) }
+        // The whole state from a notification the app made; from a push
+        // (#66), what names it.
         let state = (info["state"] as? String).flatMap { MessageCoding.decode(AgentState.self, from: Data($0.utf8)) }
-        DispatchQueue.main.async { [weak self] in
-            defer { completionHandler() }
-            guard let model = self?.model, let session, let state, model.pairing?.id == info["mac"] as? String else { return }
-            if let reply = response as? UNTextInputNotificationResponse {
-                model.answer(session: session, to: state, text: reply.userText)
-            } else if let choice = AgentNotice(session: session, name: "", folder: "", state: state).choice(ofButton: response.actionIdentifier) {
-                model.answer(session: session, to: state, text: choice)
-            } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
-                model.open(AgentNotice(session: session, name: "", folder: "", state: state))
+        let digest = info["stateDigest"] as? String
+        let action = response.actionIdentifier
+        let typed = (response as? UNTextInputNotificationResponse)?.userText
+        let noticeID = (info["notice"] as? String).flatMap(UInt64.init)
+        if action == UNNotificationDismissActionIdentifier {
+            DispatchQueue.main.async { [weak self] in
+                if let noticeID, let mac = info["mac"] as? String { self?.model?.dismissNotice(noticeID, onMac: mac) }
+                completionHandler()
+            }
+            return
+        }
+        // A button's title is the choice, in the agent's words: from the
+        // state, else from the category the extension made for it.
+        center.getNotificationCategories { categories in
+            let button = categories.first { $0.identifier == content.categoryIdentifier }?.actions.first { $0.identifier == action }?.title
+            DispatchQueue.main.async { [weak self] in
+                defer { completionHandler() }
+                guard let model = self?.model, let mac = info["mac"] as? String else { return }
+                guard let session else {
+                    // A failure: read once it is opened.
+                    if let noticeID, action == UNNotificationDefaultActionIdentifier { model.dismissNotice(noticeID, onMac: mac) }
+                    return
+                }
+                var text = typed
+                if text == nil, action.hasPrefix("choice-") {
+                    text = state.flatMap { AgentNotice(session: session, name: "", folder: "", state: $0).choice(ofButton: action) } ?? button
+                }
+                if let text {
+                    if let state, model.pairing?.id == mac {
+                        model.answer(session: session, to: state, text: text)
+                    } else if let digest {
+                        model.answer(session: session, onMac: mac, digest: digest, text: text)
+                    }
+                } else if action == UNNotificationDefaultActionIdentifier {
+                    model.open(session: session, onMac: mac)
+                }
             }
         }
     }
 
-    /// In front, the app shows its own banner instead.
+    /// In front too, iOS's own banner (#66, decided 2026-11-19): the app
+    /// draws none. Not for the session on screen, which is then seen.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([])
+        let session = (notification.request.content.userInfo["session"] as? Int).map { SessionID(truncatingIfNeeded: $0) }
+        DispatchQueue.main.async { [weak self] in
+            if let session, session == self?.model?.openSessionID {
+                completionHandler([])
+            } else {
+                completionHandler([.banner, .list, .sound])
+            }
+        }
     }
+
 }

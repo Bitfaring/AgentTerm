@@ -299,6 +299,10 @@ while let argument = arguments.popFirst() {
         exit(2)
     }
 }
+// The host that an app started for a test starts listens on 127.0.0.1
+// only, as the tests' own hosts do (`--local-only`): the app is given
+// this, and its host has the app's environment (#179).
+if ProcessInfo.processInfo.environment["AGENTTERM_LOCAL_ONLY"] == "1" { listenOnTailscale = false }
 
 let server: HostServer
 do {
@@ -310,6 +314,12 @@ do {
     configuration.release = release
     configuration.revision = revision
     configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)
+    // Notices through Apple for the devices that are away (#66): the
+    // released host's relay, none for a development build. A test names a
+    // stand-in of its own. Not in the help.
+    configuration.pushRelay = ProcessInfo.processInfo.environment["AGENTTERM_PUSH_RELAY"].flatMap(URL.init(string:)) ?? PushRelay.url(for: AppChannel.current)
+    configuration.pushesFile = HostEnvironment.pushesFile
+    configuration.noticesFile = HostEnvironment.noticesFile
     // For the tests of the apps, which do not wait the whole grace. Not in the help.
     if let grace = ProcessInfo.processInfo.environment["AGENTTERM_LINK_GRACE"].flatMap(TimeInterval.init) { configuration.linkGrace = grace }
     // Gives the agents' sessions the MCP server, and takes out what earlier

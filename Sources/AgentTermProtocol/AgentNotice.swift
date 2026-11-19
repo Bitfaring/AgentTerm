@@ -131,23 +131,86 @@ public struct AgentNotice: Equatable, Sendable {
     }
 }
 
-/// When the iPhone shows the Live Activity of the agents on a Mac (#24),
-/// and what ends it.
+/// What the Live Activity shows (#24, #168): the host's state now, a count
+/// of each kind, and the names of the sessions that wait or are done. Never
+/// what an agent said: it is on the lock screen. The same struct is the
+/// activity's content and what the host pushes for it.
+public struct AgentsStatus: Codable, Hashable, Sendable {
+    public var working: Int
+    public var permission: Int
+    public var asking: Int
+    /// Done and not seen on any device (`SessionInfo.unseen`).
+    public var done: Int
+    /// The host or a session's program stopped, not dismissed yet.
+    public var failed: Int
+    /// The names of the sessions that wait, the first one's number.
+    public var waiting: [String]
+    public var firstWaiting: UInt32?
+    public var doneNames: [String]
+
+    public init(
+        working: Int = 0, permission: Int = 0, asking: Int = 0, done: Int = 0, failed: Int = 0, waiting: [String] = [], firstWaiting: UInt32? = nil,
+        doneNames: [String] = []
+    ) {
+        self.working = working
+        self.permission = permission
+        self.asking = asking
+        self.done = done
+        self.failed = failed
+        self.waiting = waiting
+        self.firstWaiting = firstWaiting
+        self.doneNames = doneNames
+    }
+
+    public static func of(sessions: [SessionInfo], failures: [PartFailure]) -> AgentsStatus {
+        let waiting = sessions.filter { $0.state?.isWaiting == true }
+        let done = sessions.filter { session in
+            if case .done = session.state { return session.unseen == true }
+            return false
+        }
+        return AgentsStatus(
+            working: sessions.filter { $0.state?.isWorking == true }.count,
+            permission: sessions.filter { if case .waitingForPermission = $0.state { return true } else { return false } }.count,
+            asking: sessions.filter { if case .waitingForAnswer = $0.state { return true } else { return false } }.count,
+            done: done.count, failed: failures.filter { $0.part == .host || $0.part == .session }.count,
+            waiting: Array(waiting.map(\.displayName).prefix(5)), firstWaiting: waiting.first?.id, doneNames: Array(done.map(\.displayName).prefix(5)))
+    }
+
+    /// An agent works or waits: it is shown.
+    public var isActive: Bool { working + permission + asking > 0 }
+
+    /// "2 working · 1 needs permission · 1 asks · 3 done · 1 stopped".
+    public var summary: String {
+        var parts: [String] = []
+        if working > 0 { parts.append("\(working) working") }
+        if permission > 0 { parts.append(permission == 1 ? "1 needs permission" : "\(permission) need permission") }
+        if asking > 0 { parts.append(asking == 1 ? "1 asks" : "\(asking) ask") }
+        if done > 0 { parts.append("\(done) done") }
+        if failed > 0 { parts.append("\(failed) stopped") }
+        return parts.isEmpty ? "Nothing running" : parts.joined(separator: " · ")
+    }
+
+    /// The words of its switch and of the activity (principle 9).
+    public static let title = "Agents on"
+    public static let toggle = "Live Activity of the Mac's agents"
+}
+
+/// When the iPhone shows the Live Activity of the agents on a Mac (#168,
+/// decided 2026-11-19): while an agent works or waits, whether someone is
+/// at the Mac or not, and whether the phone is connected or not, the host
+/// keeping it true through Apple.
 public enum LiveActivityRule {
     public enum Decision: Equatable, Sendable {
         /// Shown, or kept up to date.
         case show
-        /// Ended at once: it could no longer be kept true, or no one wants it.
+        /// Ended at once: no one wants it.
         case endNow
         /// Every agent is done: the last state may stay, since it stays true.
         case endShowingDone
     }
 
-    /// All three have to hold: the phone is connected to the Mac, no one is
-    /// at the Mac, and an agent works or waits.
-    public static func decide(enabled: Bool, connected: Bool, macInUse: Bool, sessions: [SessionInfo]) -> Decision {
-        guard enabled, connected, !macInUse else { return .endNow }
-        if sessions.contains(where: { $0.state?.isWorking == true || $0.state?.isWaiting == true }) { return .show }
-        return .endShowingDone
+    public static func decide(enabled: Bool, status: AgentsStatus) -> Decision {
+        guard enabled else { return .endNow }
+        return status.isActive ? .show : .endShowingDone
     }
 }

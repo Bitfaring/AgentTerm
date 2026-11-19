@@ -15,3 +15,9 @@ fastlane/report.xml
 fastlane/README.md
 *.ipa
 *.dSYM.zip
+
+# The push relay (relay/README.md): wrangler's own state, packages, and the
+# secrets `wrangler dev` reads, which never belong here.
+relay/.wrangler/
+relay/node_modules/
+relay/.dev.vars

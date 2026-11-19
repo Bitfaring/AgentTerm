@@ -126,6 +126,40 @@ final class PaneUITests: MacUITestCase {
     /// own, nor in the user's Shells tab; in the list right under it. The
     /// button at the end of its row hides its shells, which run on and stay
     /// in the row, and shows them again; so does picking one in the row.
+    /// SIZE-14 (#167): the case as the owner saw it, an agent's shell in the
+    /// lower part of its area, lower than the grid, used by a phone at
+    /// 45×35: the grid stays in the middle, and none of it is cut off.
+    func testAnAgentsShellADeviceUsesIsShownWholeUnderIt() throws {
+        let phone = try device("iPhone")
+        let call = #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"shell_open","arguments":{"title":"server"}}}"#
+        let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#
+        try """
+        #!/bin/sh
+        echo "stand-in claude started"
+        ( printf '%s\\n' '\(initialize)' '\(call)'; sleep 3 ) | '\(hostExecutable.path)' mcp > /dev/null 2>&1 &
+        exec cat
+        """.write(to: root.appendingPathComponent("agents/claude"), atomically: true, encoding: .utf8)
+        app.press(.button("Claude Code"))
+        wait("the agent and its shell") { phone.sessions.count == 2 }
+        let agent = try XCTUnwrap(phone.sessions.first { $0.agent == "claude" })
+        let shell = try XCTUnwrap(phone.sessions.first { $0.openedBy == agent.id })
+        app.wait(for: .id("agent-shells"))
+        let grid = TermSize(cols: 45, rows: 35)
+        phone.send(.attach(session: shell.id, size: grid))
+        phone.send(.takeControl(session: shell.id, size: grid))
+        wait("the phone's size") { phone.size(of: shell.id) == grid }
+        app.wait(for: .containing("In use on iPhone · 45×35"), timeout: 15)
+        phone.connection.sendInput(Data("clear; printf FIRST-ROW; tput cup 34 0; printf LAST-ROW\n".utf8), to: shell.id)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        shot("agent-shell-device")
+        // The shell's own terminal, inside its part of the area.
+        let nodes = app.nodes()
+        let part = try XCTUnwrap(nodes.firstIndex { $0.identifier == "terminal-\(shell.id)" }, "the shell is not shown")
+        let terminal = try XCTUnwrap(
+            nodes[(part + 1)...].prefix { $0.depth > nodes[part].depth }.first { $0.identifier == "terminal-view" }, "the shell's terminal")
+        XCTAssertEqual(terminal.help, "whole grid in sight")
+    }
+
     func testAnAgentsShellsShowUnderIt() throws {
         let phone = try device()
         // A stand-in Claude Code that opens a shell through AgentTerm's MCP

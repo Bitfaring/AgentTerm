@@ -1,3 +1,4 @@
+import AgentTermEditor
 import AgentTermProtocol
 import AppKit
 import SwiftUI
@@ -243,6 +244,19 @@ extension AppModel {
     }
 
     /// The item after or before the one shown, in the group in front.
+    /// The item of that number (from 1) of the row of the group in front,
+    /// left to right, given the keyboard, as clicking it would (#171).
+    func showMember(number: Int) {
+        guard let group = paneLayout.focusedPane.front else { return }
+        let list = members(of: group)
+        guard number >= 1, number <= list.count else { return }
+        selectTab(id: list[number - 1])
+        focusKeyboard()
+    }
+
+    /// How many items the row of the group in front has.
+    var frontMemberCount: Int { paneLayout.focusedPane.front.map { members(of: $0).count } ?? 0 }
+
     func showNextMember(_ offset: Int) {
         guard let group = paneLayout.focusedPane.front, let shown = shownMember(of: group) else { return }
         let list = members(of: group)
@@ -325,7 +339,7 @@ extension AppModel {
                 layout = PaneLayout()
                 if let front { layout.show(front) }
             }
-            layout.sync(with: byProject[key] ?? [])
+            layout.sync(with: byProject[key] ?? [], behind: [Self.theBrowser])
             all[key] = layout
         }
         if all != workspaces { workspaces = all }
@@ -546,10 +560,17 @@ extension AppModel {
     func focusKeyboard() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            KeyboardTargets.cancel()
             // A page in front first: the session picked before it is still
             // `selectedSession`, and took the keyboard from it (PANE-17).
             if let tab = self.frontTabID, let browser = self.browsers.tab(forTab: tab) {
                 browser.focus()
+            } else if self.diffInFront, let file = self.diffTabFile {
+                // A diff or a file picked: its text has the keyboard, as a
+                // terminal does (#171).
+                KeyboardTargets.focus(KeyboardTargets.diff(file.id))
+            } else if let path = self.files.active {
+                KeyboardTargets.focus(KeyboardTargets.file(path))
             } else if let id = self.selectedSession, self.files.active == nil, !self.diffInFront, let controller = self.controller(for: id) {
                 controller.view.window?.makeFirstResponder(controller.view)
             }

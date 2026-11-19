@@ -426,23 +426,36 @@ private struct SyncBar: View {
 
     private func button(_ title: String, symbol: String, count: Int, working: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                if working {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: symbol).font(.system(size: 13, weight: .bold))
-                }
-                Text(title).font(.subheadline.weight(.semibold))
-                if count > 0 {
-                    // What the number counts, beside it, as on the Mac (#50).
-                    Text(CountWords.commits(count)).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
-                }
+            // On one line, never broken in a word (#166): what the number
+            // counts beside it, as on the Mac (#50), where there is room;
+            // the number alone where there is not, its words still read
+            // out (the accessibility label).
+            ViewThatFits(in: .horizontal) {
+                label(title, symbol: symbol, count: count > 0 ? CountWords.commits(count) : nil, working: working)
+                label(title, symbol: symbol, count: count > 0 ? "\(count)" : nil, working: working)
+                label(title, symbol: symbol, count: nil, working: working)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 3)
         }
         .buttonStyle(.bordered)
         .accessibilityLabel(count > 0 ? "\(title), \(CountWords.commits(count))" : title)
+    }
+
+    private func label(_ title: String, symbol: String, count: String?, working: Bool) -> some View {
+        HStack(spacing: 6) {
+            if working {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: symbol).font(.system(size: 13, weight: .bold))
+            }
+            Text(title).font(.subheadline.weight(.semibold))
+            if let count {
+                Text(count).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
+            }
+        }
+        .lineLimit(1)
+        .fixedSize()
     }
 }
 

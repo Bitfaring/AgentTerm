@@ -117,14 +117,7 @@ final class ScreenshotTests: XCTestCase {
     @discardableResult
     private func openTheAgentsPage(shell: Bool) throws -> MCPServerProcess {
         let server = try agentServer()
-        if shell {
-            let opened = server.text("shell_open", ["title": "git"])
-            XCTAssertFalse(opened.failed, opened.text)
-            let found = opened.text.range(of: #"shell \d+"#, options: .regularExpression).flatMap { Int(opened.text[$0].dropFirst(6)) }
-            let number = try XCTUnwrap(found, opened.text)
-            let ran = server.text("shell_run", ["session": number, "command": "git --no-pager diff --stat"])
-            XCTAssertFalse(ran.failed, ran.text)
-        }
+        if shell { try openTheAgentsShell(server) }
         // Served as a development server serves a page, so that its address
         // says nothing of the Mac taking the pictures. Refused until the Mac
         // app, which shows the browser, is up: asked again until it is.
@@ -140,6 +133,17 @@ final class ScreenshotTests: XCTestCase {
         let tab = try XCTUnwrap(shown.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(shown.text[$0].dropFirst(4)) }, shown.text)
         try tab.write(to: agentTab, atomically: true, encoding: .utf8)
         return server
+    }
+
+    /// The shell the agent opens and runs a command in: under it in the
+    /// sessions' lists, and a tab of its row.
+    private func openTheAgentsShell(_ server: MCPServerProcess) throws {
+        let opened = server.text("shell_open", ["title": "git"])
+        XCTAssertFalse(opened.failed, opened.text)
+        let found = opened.text.range(of: #"shell \d+"#, options: .regularExpression).flatMap { Int(opened.text[$0].dropFirst(6)) }
+        let number = try XCTUnwrap(found, opened.text)
+        let ran = server.text("shell_run", ["session": number, "command": "git --no-pager diff --stat"])
+        XCTAssertFalse(ran.failed, ran.text)
     }
 
     /// Where the number of the agent's tab is kept between the parts.
@@ -218,8 +222,15 @@ final class ScreenshotTests: XCTestCase {
     /// shell of the user's.
     func testPart2TheSessionsForTheiPhone() throws {
         try connect()
-        // Without the Mac's part, the session it would have left.
-        if environment["AGENTTERM_SHOTS_FIRST"] != nil, sessions.isEmpty { try start("claude", name: "Claude Code", in: project) }
+        // Without the Mac's part, the session it would have left, and the
+        // shell its agent would have opened (#163): the same sessions
+        // whichever pictures are taken.
+        if environment["AGENTTERM_SHOTS_FIRST"] != nil, sessions.isEmpty {
+            try start("claude", name: "Claude Code", in: project)
+            let server = try agentServer()
+            defer { server.stop() }
+            try openTheAgentsShell(server)
+        }
         let first = try XCTUnwrap(sessions.first, "the Mac's part left no session")
         // It was the Mac's size: a phone's, as the others, until the phone opens it.
         let phone = TermSize(cols: 44, rows: 33)

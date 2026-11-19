@@ -141,8 +141,8 @@ says names the device it runs on.
   remote, is picked; the new branch follows none), and what is started
   there, an agent or a shell. The sheet says when the folder has changes
   that the worktree will not have. An agent can begin fresh or **continue
-  a conversation** (#150), one of the folder's offered first, the newest
-  picked: it is handed off into the new worktree (see Handoff), and the
+  a conversation** (#150), one of the folder's or of its worktrees', and
+  only those (#165), the newest picked: it is handed off into the new worktree (see Handoff), and the
   handoff file says to work there only, not at the folder's paths the
   conversation names. Its own conversation is not resumed there: it holds
   the folder's paths, and the agent would go on changing the folder.
@@ -242,79 +242,82 @@ says names the device it runs on.
 
 ### When an agent is done or needs you
 
-- While the Mac is used from the iPhone, the iPhone says when an agent has
-  finished its task or needs an instruction (a permission, a question):
-  a banner in the app for a session other than the one on screen, and a
-  notification just after the app was left, while iOS lets it run. Once
-  iOS has put the app to sleep nothing arrives, until it is opened again.
-  There is no push through Apple.
-- Each is told once: an agent that asks again something else is told
-  again, one that keeps waiting is not. On connecting, what waits or is
-  done and was not told yet is told at once.
-- Nothing is told on the iPhone while someone is at the Mac: its app in
-  front, or a key or the pointer used in the last five minutes. Once the
-  iPhone (or another device) was used, no one is at the Mac, also after the
-  phone is put away, until the Mac app is used again: a key or a click in
-  its window.
+How both apps tell the user things without being asked was decided again
+by the owner on 2026-11-19 (#66): three channels, each with its own
+switch. Notifications tell events and are answered; the Inbox keeps what
+happened; the Live Activity shows the host's state now (below).
+
+- **What is told:** an agent that asks permission, asks a question, or is
+  done, once for each state it is in (one that asks something else is
+  told again, one that keeps waiting is not); and a failure that stopped
+  work: the host or a session's program stopped, a schedule's run did not
+  start or was stopped. Other failures (a push that could not be sent, the
+  Mac not kept awake, usage not saved) are banners and Inbox items only.
+- **Who is told: every device, and every one sounds**: the Mac and each
+  paired iPhone or iPad, whether someone is at the Mac or not. The host
+  makes each notice once for all of them. The session on a device's
+  screen is not told on that device: it is seen there.
+- **Handled on one, gone from all**: answered, opened or dismissed (from
+  the banner, from Notification Center) on one device, or its agent moving
+  on, and the notification goes from every other device.
+- **On the iPhone and the iPad**, iOS's own notification banner, also
+  with the app open; the app draws none of its own. While the app is
+  asleep, the released build is told through Apple's push service: "Also
+  While the App Is Closed", on by default, under "Tell me when an agent is
+  done or needs me". What it says is encrypted on the Mac for that device
+  alone; one that cannot be opened says "An agent needs you". A
+  notification handled elsewhere while the app is asleep is taken back by
+  a background push, which iOS limits and does not deliver to an app the
+  user closed; what is left goes once the app is opened. (Removing it at
+  once needs Apple's filtering entitlement, asked for on 2026-11-19.) The
+  switch's footnote says when it does not work and why: a development
+  build has none, the Mac has no relay, notifications are not allowed,
+  the relay could not be reached. The app asks iOS whether it may notify
+  once it is paired.
+- **On the Mac**, a banner while the app is in front, for a session other
+  than the one in front, which opens it; a macOS notification while the
+  app is not in front, with Reply and the choices as on the iPhone:
+  "Notify when an agent is done or needs you" in Settings > General, on by
+  default. The banner shows what the agent said on up to six lines; Show
+  All opens it out.
 - A notification for a question, or for a finished task, takes a short
-  reply, written or dictated, sent as the next message; it asks for the
-  phone to be unlocked first. A question's choices are buttons of its
-  notification, shown when it is opened out, each of which answers with
-  that choice; its text is the question alone, so that a long one does not
-  push the choices out of sight. A choice is picked in the agent's
-  own list of them, and a reply that is none of the choices is given as
-  the agent's "other" answer, whichever agent asked. One for a permission has no buttons: the
-  agents do not say which choices they offer, so touching it opens the
-  session. A reply that arrives after the agent moved on is dropped, and
-  the app says so.
+  reply, written or dictated, sent as the next message; on the iPhone it
+  asks for the phone to be unlocked first. A question's choices are
+  buttons, the question alone its text. A choice is picked in the agent's
+  own list of them, a reply that is none of them is given as the agent's
+  "other" answer. One for a permission has no buttons: touching it opens
+  the session. A reply that arrives after the agent moved on is dropped,
+  and the app says so. A reply from a notification that came through
+  Apple is sent once the app has reached the Mac, only while the agent
+  still asks exactly that. Tapping a notification opens its session, on
+  its Mac.
 - What the agent said shows on the lock screen only where iOS shows
   previews there; by default it does not.
-- A switch in the iPhone's Settings ("Tell me when an agent is done or
-  needs me") turns it off.
-- On the Mac, a banner says so for a session that is not the one in front,
-  and opens it.
-- The Mac's banner shows what the agent said on up to six lines: the end
-  of it, where an agent comes to the point. When that leaves something
-  out, Show All opens the banner out to the whole, which is scrolled when
-  it is long, and Show Less closes it again. A long session name gives way
-  in the middle, so why the banner is shown is never cut off.
-- A banner hides by itself once its session is opened, however the user
-  got there (its row, its tab, the banner itself), and does not come back
-  when they leave the session. On the Mac the session counts as opened
-  once the app is in front of the others, not while its window is behind
-  another app's.
-- What was seen on one device is seen on all: opening the session on the
-  Mac hides the iPhone's banner and takes its notification out of
-  Notification Center, and opening it on the iPhone hides the Mac's
-  banner. Opening it on the iPhone takes its notification away too.
-- **The Inbox** (#67) lists what needs the user on the Mac on show, the
-  most pressing first: the agents that wait (a permission, a question),
-  what stopped (a host that stopped unexpectedly, a part of the app that
-  failed), then the agents that are done and were not seen since. Each
-  item says the project and the session, the agent and why it is there,
-  and the end of what the agent said. An agent that waits stays until it
-  is answered. One that is done stays until its session is seen on any
-  device (in front on the Mac while the app is in front of the others, or
-  its terminal on the iPhone's screen), or until it is dismissed, which
-  takes it out of every device's Inbox; a failure, until it is dismissed.
-  An agent that starts working again leaves it. The banners and
-  notifications go on as before; the Inbox keeps what they told until it
-  is dealt with.
+- **Failures** are said in a banner at the top of both apps until they
+  are dismissed on some device, and kept in the Inbox; a one-off error is
+  always said, in an alert, on both apps alike.
+- **Ongoing states** are said in the same words and with the same buttons
+  on both apps: connecting, not reachable (why, and what to do), another
+  release on the Mac, a session's size set by another device ("Use This
+  Size").
+- **The Inbox** (#66, after #67) is each device's own history of what it
+  was told: kept after it is read, for 30 days. Read and deleted are that
+  device's alone; whether a notice was handled, and how (answered,
+  opened, dismissed, the agent moved on), is the same everywhere. An item
+  is deleted on its own, or the read ones, or all of them (asked first);
+  one whose agent still waits for an answer is not deleted until it is
+  answered. What was told while a device was asleep reaches its Inbox when
+  it connects.
 - On the Mac the Inbox is a place of the bar at the left edge, under
-  Sessions, with how many items it holds on it. As History and Schedules,
-  it has the middle of the window to itself: the terminals, the side
-  panel and the Mac's figures are not shown there. Its list is at the
-  left; the item picked, the first until one is, is shown in the middle
-  with all that its agent said or asks (the question and its choices),
-  or what stopped. Picking an item does not count as seeing its session:
-  **Open** shows the session in Sessions, where it is seen. **Dismiss**
-  (not for an agent that waits) takes it out and shows the next, and
-  **Next** shows the item after it. An item that can be dismissed also
-  has a cross when the pointer is over it; its menu has Open and
-  Dismiss. On the iPhone and the iPad the Inbox is at the top of the Sessions
-  list, shown only when it holds something; touching an item opens its
-  session, and a done one has Dismiss in its menu. The Inbox shows the
-  Mac on show.
+  Sessions, with how many items are unread on it. Its list is at the left,
+  unread ones in bold, with a menu for Delete Read and Delete All; the
+  item picked is shown in the middle, and is then read: what its agent
+  said or asks, or what stopped, or, for one that is over, how it was
+  handled. **Open** shows the session in Sessions; **Delete** (not for an
+  agent that waits) takes it out of this Mac's Inbox; **Next** shows the
+  item after it. On the iPhone and the iPad, what is unread or waits is at
+  the top of the Sessions list, with All, which opens the whole Inbox:
+  swiped to delete one, the menu for the read ones or all.
 - **What a turn came to** (#71): an agent that is done shows, in the
   Inbox, what it was asked, what it answered, the commands it ran with
   their exit codes, and the files of its folder that changed while it
@@ -344,18 +347,25 @@ says names the device it runs on.
 
 ### The Live Activity
 
-- While agents work, the iPhone's lock screen and Dynamic Island show it
-  without the app being opened: how many work, which wait for an
-  instruction, which are done, by the sessions' names only. Touching it
-  opens the app on the session that waits.
-- Only while all three hold: the iPhone is connected to the Mac, no one is
-  at the Mac (as for notifications), and an agent works or waits. It ends
-  at once when the connection ends or the Mac is used again, since it
-  could no longer be kept true; when every agent is done it stays showing
-  that, which stays true.
-- It is updated only while iOS lets the app run, a short while after it
-  left the front: there is no push through Apple. A switch in the iPhone's
-  Settings turns it off.
+Decided by the owner on 2026-11-19 (#168): a channel of its own, which
+shows the host's state now rather than events.
+
+- While an agent works or waits, the iPhone's lock screen and Dynamic
+  Island show it, **whether someone is at the Mac or not**: how many work,
+  need permission, ask a question, are done and not seen, and how many
+  sessions or hosts stopped; the names of the sessions that wait, never
+  what an agent said. Touching it opens the app on the session that waits.
+- It is kept true while the app is asleep by Apple's push for Live
+  Activities, which the Mac sends through the relay of #66 on a path of its
+  own, in the released build only: the counts and the names reach the
+  relay and Apple in the clear, since iOS draws the activity from them.
+  The Mac starts it while the app is asleep, a burst of changes is one
+  update, and it is sent again every 15 minutes while agents work; one
+  that gets no update is shown as out of date. When every agent is done it
+  stays showing that, which stays true. Without push (a development
+  build), it goes out of date ten minutes after the app last updated it.
+- "Live Activity of the Mac's agents" in the iPhone's Settings turns it
+  off, apart from notifications.
 
 ### Hooks and MCP (#129)
 
@@ -916,7 +926,11 @@ panel.
   ⌘⇧[ the next and previous tab, and in one of the user's tabs ⌥⌘→ and
   ⌥⌘← (View > Next and Previous Item in Group) the next and previous
   item it holds, with the keyboard in it; in an agent's tab the same keys
-  move about its area (Panes). ⌘W closes what is shown, a session is ended.
+  move about its area (Panes). ⌥⌘ and a number (⌥⌘1 to ⌥⌘9, View > Item
+  1 in Group and on) picks that item of the row of the tab in front, left
+  to right, an agent's row being the agent, its pages, its shells, with the
+  keyboard in it (#171); while ⌥ and ⌘ are held, each of the first nine
+  items shows its number. ⌘W closes what is shown, a session is ended.
   An item's × closes it. **A tab's × closes all it holds** (#145): the
   Shells tab ends its shells ("End 2 shells?", asked first even for one),
   the Browser, Diffs and Files tabs close their pages, diffs and files
@@ -1389,9 +1403,10 @@ and touch up what an agent wrote without leaving the app.
 - Text opens in an editor with syntax coloring for the common languages. It
   saves with ⌘S, and a dot on the tab marks unsaved changes. Closing a tab
   with unsaved changes asks first.
-- Markdown opens as a rendered preview, with a switch to the source. Code
-  blocks in it are colored, and blocks marked `mermaid` are drawn as
-  diagrams. A `.mmd` or `.mermaid` file is previewed as a diagram too.
+- Markdown opens as a rendered preview, with a switch to the source, laid
+  out as GitHub shows it, tables included, on the Mac and the iPhone
+  (#126). Code blocks in it are colored, and blocks marked `mermaid` are
+  drawn as diagrams. HTML written in the file is not run. A `.mmd` or `.mermaid` file is previewed as a diagram too.
 - Images are shown. Files that are not text are not opened. A text file
   larger than 2 MB says so and offers **Open Anyway**, which opens it, up to
   20 MB.

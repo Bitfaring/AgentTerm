@@ -43,4 +43,50 @@ final class FocusUITests: MacUITestCase {
         app.menu(["View", "Previous Item in Group"])
         app.waitForKeyboard(in: "terminal-\(second.id)", "the one before it")
     }
+
+    /// PANE-22 (#171): ⌥⌘ and a number picks that item of the row of the
+    /// group in front, left to right, and gives it the keyboard.
+    func testOptionCommandANumberPicksAnItemOfTheRow() throws {
+        let phone = try device()
+        let first = try newShell(phone, count: 1)
+        let second = try newShell(phone, count: 2)
+        let third = try newShell(phone, count: 3)
+        app.waitForKeyboard(in: "terminal-\(third.id)", "the new shell")
+        app.menu(["View", "Item 1 in Group"])
+        app.waitForKeyboard(in: "terminal-\(first.id)", "the first item of the row")
+        app.menu(["View", "Item 3 in Group"])
+        app.waitForKeyboard(in: "terminal-\(third.id)", "the third item of the row")
+        app.menu(["View", "Item 2 in Group"])
+        app.waitForKeyboard(in: "terminal-\(second.id)", "the second item of the row")
+    }
+
+    /// PANE-25 (#171): the same in the Files tab and in the Diffs tab: the
+    /// file or the diff of that number shown, with the keyboard; the next
+    /// one by the shortcut that moves by one, as before.
+    func testOptionCommandANumberPicksAFileOrADiff() throws {
+        /// Whether the text that has the keyboard is this file's, or this diff's.
+        func keyboard(in text: String) -> Bool { app.keyboardPath().role == kAXTextAreaRole as String && app.keyboardValue().contains(text) }
+        app.press(.button("Files"))
+        app.press(.button("notes.txt"), timeout: 15)
+        app.wait(for: .idEnding("notes.txt", prefix: "item-"), timeout: 15)
+        app.press(.button("new.txt"))
+        app.wait(for: .idEnding("new.txt", prefix: "item-"), timeout: 15)
+        app.menu(["View", "Item 1 in Group"])
+        app.wait("the first file by its number, with the keyboard") { keyboard(in: "second line") }
+        app.menu(["View", "Item 2 in Group"])
+        app.wait("the second file by its number, with the keyboard") { keyboard(in: "a file that is new") }
+        app.menu(["View", "Previous Item in Group"])
+        app.wait("the one before it, as before") { keyboard(in: "second line") }
+
+        app.press(.button("Git"))
+        app.press(.id("change-notes.txt"), timeout: 15)
+        app.press(.id("change-new.txt"), timeout: 15)
+        app.wait("two diffs in the row") { self.app.nodes().filter { $0.identifier.hasPrefix("item-") }.count == 2 }
+        app.menu(["View", "Item 1 in Group"])
+        app.wait("the first diff by its number, with the keyboard") { keyboard(in: "second line") && !keyboard(in: "a file that is new") }
+        app.menu(["View", "Item 2 in Group"])
+        app.wait("the second diff by its number, with the keyboard") { keyboard(in: "a file that is new") }
+        app.menu(["View", "Next Item in Group"])
+        app.wait("round to the first, as before") { keyboard(in: "second line") && !keyboard(in: "a file that is new") }
+    }
 }

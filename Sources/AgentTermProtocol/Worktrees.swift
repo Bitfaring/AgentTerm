@@ -18,6 +18,16 @@ public enum WorktreePath {
         cwd == folder || project(of: cwd) == folder
     }
 
+    /// The conversations a new worktree can carry on (#150, #165): the
+    /// folder's and its worktrees', and only those (the owner's decision,
+    /// 2026-11-19), newest first, each once. `own` is what the folder's
+    /// History holds, `all` every conversation, among which the worktrees'
+    /// are found.
+    public static func conversations(of folder: String, own: [Conversation], all: [Conversation]) -> [Conversation] {
+        var seen = Set<String>()
+        return (own + all).filter { belongs($0.cwd, to: folder) && seen.insert($0.id).inserted }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
     /// The default name of a new worktree's branch: the agent and a number
     /// no branch has yet.
     public static func branchName(agent: String, taken: Set<String>) -> String {

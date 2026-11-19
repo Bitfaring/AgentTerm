@@ -1,0 +1,24 @@
+# The push relay of the released AgentTerm (#66). See relay/README.md.
+# The development build has no push and no relay (principle 7).
+name = "agentterm-push"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[vars]
+APNS_HOST = "api.push.apple.com"
+APNS_TOPIC = "com.manhpham.agentterm"
+# APNS_KEY_ID and APNS_TEAM_ID are set when deploying (see README.md), not here.
+
+# At most 30 pushes a minute to one device.
+[[ratelimits]]
+name = "PUSH_LIMIT"
+namespace_id = "1066"
+simple = { limit = 30, period = 60 }
+
+# At most 5 registrations a minute from one address: a Mac registers its
+# iPhones each time they connect, far fewer.
+[[ratelimits]]
+name = "REGISTER_LIMIT"
+namespace_id = "1067"
+simple = { limit = 5, period = 60 }

@@ -12,7 +12,7 @@ ones `Package.resolved` pins.
 | [Highlightr](https://github.com/raspu/Highlightr) | Syntax coloring in the editor and in previews | MIT |
 | [swift-markdown-ui](https://github.com/gonzalezreal/swift-markdown-ui) | The Markdown preview | MIT |
 | [NetworkImage](https://github.com/gonzalezreal/NetworkImage) | Pictures in the Markdown preview; a dependency of swift-markdown-ui | MIT |
-| [swift-cmark](https://github.com/swiftlang/swift-cmark) | Markdown parsing; a dependency of swift-markdown-ui | BSD 2-Clause, with parts under MIT and other permissive licenses listed in its `COPYING` |
+| [swift-cmark](https://github.com/swiftlang/swift-cmark) | Markdown parsing, and the Markdown preview's HTML (#126); also a dependency of swift-markdown-ui | BSD 2-Clause, with parts under MIT and other permissive licenses listed in its `COPYING` |
 | [swift-argument-parser](https://github.com/apple/swift-argument-parser) | A dependency of SwiftTerm's tools | Apache 2.0 |
 | [swift-png](https://github.com/tayloraswift/swift-png) and [h](https://github.com/rarestype/h) | Dependencies of SwiftTerm | Apache 2.0 |
 

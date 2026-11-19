@@ -18,9 +18,12 @@ targets:
     sources:
       - AgentTerm
       - Shared
+      - NotificationShared
     dependencies:
       # The Live Activity (#24), embedded in the app.
       - target: AgentTermLiveActivity
+      # Opens the pushes from the Mac (#66), embedded in the app.
+      - target: AgentTermNotifications
       - package: AgentTerm
         product: AgentTermProtocol
       - package: AgentTerm
@@ -52,14 +55,20 @@ targets:
       # A build made on a developer's machine is an app of its own next to the
       # one from TestFlight: its own identifier, name and pairing link scheme.
       configs:
+        # Push through Apple is in the released build only (#66): its
+        # entitlements alone ask for it.
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm.dev
           APP_DISPLAY_NAME: AgentTerm Dev
           APP_LINK_SCHEME: agentterm-dev
+          PUSH_KEYCHAIN_GROUP: com.manhpham.agentterm.dev.push
+          CODE_SIGN_ENTITLEMENTS: AgentTerm/AgentTerm.entitlements
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm
           APP_DISPLAY_NAME: AgentTerm
           APP_LINK_SCHEME: agentterm
+          PUSH_KEYCHAIN_GROUP: com.manhpham.agentterm.push
+          CODE_SIGN_ENTITLEMENTS: AgentTerm/AgentTermRelease.entitlements
     info:
       path: AgentTerm/Info.plist
       properties:
@@ -86,6 +95,11 @@ targets:
         NSLocalNetworkUsageDescription: AgentTerm connects to the AgentTerm host running on your Mac.
         ITSAppUsesNonExemptEncryption: false
         NSSupportsLiveActivities: true
+        AgentTermPushKeychainGroup: $(AppIdentifierPrefix)$(PUSH_KEYCHAIN_GROUP)
+        # A background push takes back a notification handled on another
+        # device (#66).
+        UIBackgroundModes:
+          - remote-notification
         CFBundleURLTypes:
           - CFBundleURLName: com.manhpham.agentterm.pair
             CFBundleURLSchemes:
@@ -98,6 +112,10 @@ targets:
     sources:
       - AgentTermLiveActivity
       - Shared
+    dependencies:
+      # What it shows is the host's `AgentsStatus` (#168).
+      - package: AgentTerm
+        product: AgentTermProtocol
     configFiles:
       Debug: Version.xcconfig
       Release: Version.xcconfig
@@ -125,6 +143,47 @@ targets:
         AppLinkScheme: $(APP_LINK_SCHEME)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  # Opens a push from the Mac (#66): decrypts what it says with the key
+  # this iPhone gave that Mac, which it reads from a keychain group of
+  # their own.
+  AgentTermNotifications:
+    type: app-extension
+    platform: iOS
+    sources:
+      - AgentTermNotifications
+      - NotificationShared
+    dependencies:
+      - package: AgentTerm
+        product: AgentTermProtocol
+    configFiles:
+      Debug: Version.xcconfig
+      Release: Version.xcconfig
+    settings:
+      base:
+        PRODUCT_NAME: AgentTermNotifications
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        CODE_SIGN_ENTITLEMENTS: AgentTermNotifications/AgentTermNotifications.entitlements
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm.dev.NotificationService
+          PUSH_KEYCHAIN_GROUP: com.manhpham.agentterm.dev.push
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm.NotificationService
+          PUSH_KEYCHAIN_GROUP: com.manhpham.agentterm.push
+    info:
+      path: AgentTermNotifications/Info.plist
+      properties:
+        CFBundleDisplayName: AgentTerm
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        AgentTermPushKeychainGroup: $(AppIdentifierPrefix)$(PUSH_KEYCHAIN_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
   AgentTermUITests:
     type: bundle.ui-testing
     platform: iOS

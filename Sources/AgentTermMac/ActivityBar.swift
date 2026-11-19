@@ -11,7 +11,7 @@ struct ActivityBar: View {
     var body: some View {
         VStack(spacing: 4) {
             item(.sessions, "Sessions", "terminal")
-            item(.inbox, Inbox.title, "tray", count: model.inboxItems.count)
+            item(.inbox, Inbox.title, "tray", count: model.inbox.unread)
             item(.history, "History", "clock.arrow.circlepath")
             item(.schedules, "Schedules", "calendar.badge.clock")
             Spacer(minLength: 0)

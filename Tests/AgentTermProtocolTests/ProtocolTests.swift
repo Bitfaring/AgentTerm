@@ -355,19 +355,48 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(permission.choice(ofButton: "choice-0"))
     }
 
-    /// LIVE-1: the Live Activity shows only while the phone is connected, no
-    /// one is at the Mac, and an agent works or waits; it ends at once when
-    /// the connection ends or the Mac is used, and shows "done" at the end.
+    /// LIVE-1 (#168): the Live Activity shows while an agent works or
+    /// waits, whether someone is at the Mac or not; it shows "done" at the
+    /// end, and ends at once when it is switched off.
     func testWhenTheLiveActivityShows() {
-        func session(_ state: AgentState?) -> SessionInfo { SessionInfo(id: 1, title: "s", cwd: "/p", size: .default, createdAt: Date(), state: state) }
-        let working = [session(.working(since: Date()))]
-        let waiting = [session(.waitingForAnswer(AgentQuestion(text: "?")))]
-        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: false, sessions: working), .show)
-        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: false, sessions: waiting), .show)
-        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: true, sessions: working), .endNow, "someone is at the Mac")
-        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: false, macInUse: false, sessions: working), .endNow, "no connection to keep it true")
-        XCTAssertEqual(LiveActivityRule.decide(enabled: false, connected: true, macInUse: false, sessions: working), .endNow, "switched off")
-        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: false, sessions: [session(.done(said: nil)), session(nil)]), .endShowingDone)
+        func session(_ id: SessionID, _ state: AgentState?, unseen: Bool? = nil) -> SessionInfo {
+            var info = SessionInfo(id: id, title: "s\(id)", cwd: "/p", size: .default, createdAt: Date(), state: state)
+            info.unseen = unseen
+            return info
+        }
+        let working = AgentsStatus.of(sessions: [session(1, .working(since: Date()))], failures: [])
+        let waiting = AgentsStatus.of(sessions: [session(1, .waitingForAnswer(AgentQuestion(text: "?")))], failures: [])
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, status: working), .show)
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, status: waiting), .show)
+        XCTAssertEqual(LiveActivityRule.decide(enabled: false, status: working), .endNow, "switched off")
+        let over = AgentsStatus.of(sessions: [session(1, .done(said: nil)), session(2, nil)], failures: [])
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, status: over), .endShowingDone)
+    }
+
+    /// LIVE-3 (#168): the whole state, counted by kind, with the names of
+    /// what waits and is done, and what stopped work.
+    func testTheLiveActivityCountsEveryState() {
+        func session(_ id: SessionID, _ state: AgentState?, unseen: Bool? = nil) -> SessionInfo {
+            var info = SessionInfo(id: id, title: "s\(id)", cwd: "/p", size: .default, createdAt: Date(), state: state)
+            info.unseen = unseen
+            return info
+        }
+        let status = AgentsStatus.of(
+            sessions: [
+                session(1, .working(since: Date())), session(2, .working(since: Date())), session(3, .waitingForPermission(AgentQuestion(text: "rm"))),
+                session(4, .waitingForAnswer(AgentQuestion(text: "?"))), session(5, .done(said: "ok"), unseen: true), session(6, .done(said: "seen")),
+            ],
+            failures: [PartFailure(part: .session, name: "x", at: Date(), restarted: false), PartFailure(part: .keepAwake, at: Date(), restarted: false)])
+        XCTAssertEqual(status.working, 2)
+        XCTAssertEqual(status.permission, 1)
+        XCTAssertEqual(status.asking, 1)
+        XCTAssertEqual(status.done, 1, "done and not seen")
+        XCTAssertEqual(status.failed, 1, "what stopped work")
+        XCTAssertEqual(status.waiting, ["s3", "s4"])
+        XCTAssertEqual(status.firstWaiting, 3)
+        XCTAssertEqual(status.doneNames, ["s5"])
+        XCTAssertEqual(status.summary, "2 working · 1 needs permission · 1 asks · 1 done · 1 stopped")
+        XCTAssertEqual(AgentsStatus().summary, "Nothing running")
     }
 
     /// PERF-1: a message larger than a frame may be is sent in pieces, none

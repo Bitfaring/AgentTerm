@@ -13,10 +13,46 @@ public struct AgentLink: Codable, Equatable, Sendable {
     /// AgentTerm's MCP server: it said it started (true), it did not in the
     /// first seconds (false), or not known yet (nil).
     public var mcp: Bool?
+    /// AgentTerm's instructions to the agent (#172): how they reached this
+    /// session, as the host can tell; nil while not known yet.
+    public var prompt: Prompt?
 
-    public init(hooks: Bool? = nil, mcp: Bool? = nil) {
+    /// How AgentTerm's instructions reached a session.
+    public enum Prompt: String, Codable, Equatable, Sendable {
+        /// Given, as far as the host can see: through the MCP server that
+        /// said it started (Claude Code, Codex), or through the session's
+        /// environment (Copilot CLI).
+        case given
+        /// Not given: they reach this agent through its MCP server, which
+        /// did not start.
+        case missing
+        /// The user's text for this agent was empty when it started.
+        case disabled
+        /// Given in a way the host cannot see for one session (Antigravity's
+        /// rule), or for an agent typed by hand.
+        case unverified
+    }
+
+    public init(hooks: Bool? = nil, mcp: Bool? = nil, prompt: Prompt? = nil) {
         self.hooks = hooks
         self.mcp = mcp
+        self.prompt = prompt
+    }
+
+    /// What the instructions came to, from how they are given to `agent`
+    /// and whether there were any (`given`) when it started.
+    public static func prompt(agent: String, given: Bool, mcp: Bool?) -> Prompt? {
+        guard given else { return .disabled }
+        switch agent {
+        case "claude", "codex":
+            switch mcp {
+            case true?: return .given
+            case false?: return .missing
+            case nil: return nil
+            }
+        case "copilot": return .given
+        default: return .unverified
+        }
     }
 
     /// Both heard from.
@@ -59,6 +95,49 @@ public enum AgentLinkWords {
         case true?: return "MCP server: connected. It can open shells and pages of its own."
         case false?: return "MCP server: not connected. It cannot open shells and pages of its own."
         case nil: return "MCP server: not connected yet."
+        }
+    }
+
+    /// The rows of the mark's popover (#172), each a word or two.
+    public static let hooksRow = "Hooks"
+    public static let mcpRow = "MCP"
+    public static let promptRow = "System Prompt"
+    public static let checking = "Checking…"
+
+    public static func hooksStatus(_ heard: Bool?) -> String {
+        switch heard {
+        case true?: return "Heard"
+        case false?: return "Not heard"
+        case nil: return checking
+        }
+    }
+
+    public static func mcpStatus(_ connected: Bool?) -> String {
+        switch connected {
+        case true?: return "Connected"
+        case false?: return "Not connected"
+        case nil: return checking
+        }
+    }
+
+    public static func promptStatus(_ prompt: AgentLink.Prompt?) -> String {
+        switch prompt {
+        case .given?: return "Given"
+        case .missing?: return "Not given"
+        case .disabled?: return "Disabled"
+        case .unverified?: return "Unverified"
+        case nil: return checking
+        }
+    }
+
+    /// Why, under the row.
+    public static func promptDetail(_ prompt: AgentLink.Prompt?) -> String {
+        switch prompt {
+        case .given?: return "AgentTerm's instructions reached this session."
+        case .missing?: return "They come through the MCP server, which did not start."
+        case .disabled?: return "Settings > Agents held no instructions for this agent when it started."
+        case .unverified?: return "Given in a way AgentTerm cannot see for one session."
+        case nil: return "Waiting for the session to start."
         }
     }
 

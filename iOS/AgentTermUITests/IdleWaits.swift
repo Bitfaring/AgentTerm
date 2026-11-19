@@ -79,3 +79,14 @@ enum IdleWaits {
         }
     }
 }
+
+extension XCTestCase {
+    /// Answers iOS's question whether the app may notify, which it asks
+    /// once it is paired (#66), when it is asked: the simulator's keychain,
+    /// and with it the answer, may have been reset.
+    func allowNotifications(timeout: TimeInterval = 15) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.alerts.buttons["Allow"].firstMatch
+        if allow.waitForExistence(timeout: timeout) { allow.tap() }
+    }
+}
