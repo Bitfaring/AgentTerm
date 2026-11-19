@@ -1039,6 +1039,49 @@ final class BrowserUITests: MacUITestCase {
         app.wait(for: .button("Pick an Element for an Agent"))
     }
 
+    /// BROWSER-48 (#164): an element the page replaces right after it is
+    /// picked, as a page that renders again does, reaches the agent with
+    /// its styles, or said to be gone from the page: never with empty ones.
+    func testAnElementThePageReplacesIsNotSentWithEmptyStyles() throws {
+        let folder = root.appendingPathComponent("live")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try """
+        <!doctype html>
+        <html><head><title>Live page</title></head>
+        <body>
+          <div id="feed"><div class="row"><span class="post" style="display:inline-block;width:80px;height:30px">Post</span></div></div>
+          <script>
+            // Rendered again and again: the node picked is soon out of the page.
+            setInterval(() => {
+              const row = document.querySelector('.row');
+              row.replaceWith(row.cloneNode(true));
+            }, 15);
+          </script>
+        </body></html>
+        """.write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": folder.appendingPathComponent("index.html").absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Live page" }
+        let middle = "(() => { const r = document.querySelector('.post').getBoundingClientRect(); return (r.x + r.width / 2) + ',' + (r.y + r.height / 2); })()"
+        let place = server.text("browser_evaluate", ["tab": tab, "script": middle])
+        let point = place.text.split(whereSeparator: { !"0123456789.,".contains($0) }).joined().split(separator: ",").compactMap { Double($0) }
+        XCTAssertEqual(point.count, 2, place.text)
+        let device = try self.device()
+        app.press(.id("browser-pick"))
+        app.wait(for: .button("Stop Picking"))
+        device.send(.browserAsk(id: Int.random(in: 3000..<9000), request: .tap(tab: tab, x: point[0], y: point[1])))
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        XCTAssertNil(app.first(.containing("display: ;")), "the element was sent with empty styles")
+        XCTAssertTrue(
+            app.exists(.containing("display: inline-block")) || app.exists(.containing(BrowserWords.pickedGone)),
+            "neither its styles nor that it is gone from the page")
+        shot("picked-replaced")
+        app.press(.button("Cancel"))
+    }
+
     /// BROWSER-46 (#162): a sign-in in a popup, as "Sign in with Google"
     /// is: the page opens a window, which hands its answer back to the page
     /// that opened it (`window.opener.postMessage`) and closes itself. The

@@ -731,6 +731,11 @@ final class DevToolsSession {
 
     /// What an element is, for an agent: a selector, its HTML and the styles
     /// that usually matter.
+    /// A string as JavaScript reads it, quoted and escaped.
+    static func jsString(_ text: String) -> String {
+        (try? JSONSerialization.data(withJSONObject: [text])).map { String(decoding: $0.dropFirst().dropLast(), as: UTF8.self) } ?? "''"
+    }
+
     func describe(_ node: Int) async -> String {
         let script = """
             function(){
@@ -743,9 +748,11 @@ final class DevToolsSession {
                 part += cls + (same.length > 1 ? ':nth-of-type(' + (same.indexOf(e) + 1) + ')' : '');
                 path.unshift(part);
               }
-              const style = getComputedStyle(this);
+              // Out of the page, it has no computed style: said so (#164).
               const keep = ['display','position','width','height','margin','padding','color','background-color','font-family','font-size','font-weight','line-height','border','border-radius','gap','flex-direction','justify-content','align-items','z-index','overflow'];
-              const styles = keep.map(k => k + ': ' + style.getPropertyValue(k)).join('; ');
+              const styles = this.isConnected
+                ? keep.map(k => k + ': ' + getComputedStyle(this).getPropertyValue(k)).join('; ')
+                : \(Self.jsString(BrowserWords.pickedGone));
               let html = this.outerHTML || '';
               if (html.length > 3000) html = html.slice(0, 3000) + '…';
               return 'Selector: ' + path.join(' > ') + '\\nStyles: ' + styles + '\\nHTML: ' + html;

@@ -456,6 +456,9 @@ public enum BrowserResult: Codable, Equatable, Sendable {
 /// What the apps and the agents are told about the browser, in the same
 /// words everywhere (principle 9).
 public enum BrowserWords {
+    /// What an element picked says when the page took it away before it was
+    /// read (#164): its styles are not known, rather than empty.
+    public static let pickedGone = "The page replaced this element as it was picked: its styles are not known. The HTML is as it was."
     /// No app shows the browser of the Mac whose agent asks.
     public static let noApp =
         "The browser runs in the AgentTerm app on this Mac, and that app is not connected to this Mac's host: it is closed, or it shows another Mac. Ask the user to open it on this Mac."
