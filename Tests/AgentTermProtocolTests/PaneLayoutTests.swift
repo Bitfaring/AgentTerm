@@ -21,6 +21,21 @@ final class PaneLayoutTests: XCTestCase {
         XCTAssertEqual(layout.panes.first?.tabs, ["a", "b", "c"])
     }
 
+    /// BROWSER-47 (#170): the one Browser comes into a new folder's strip
+    /// behind: nothing is in front until the folder has a tab of its own,
+    /// which then is.
+    func testTheBrowserComesIntoANewFolderBehind() {
+        var layout = PaneLayout()
+        layout.sync(with: ["browser"], behind: ["browser"])
+        XCTAssertEqual(layout.focusedPane.tabs, ["browser"])
+        XCTAssertNil(layout.focusedPane.front, "the Browser stood in front of a new folder")
+        layout.sync(with: ["browser", "shell-1"], behind: ["browser"])
+        XCTAssertEqual(layout.focusedPane.front, "shell-1")
+        layout.show("browser")
+        layout.sync(with: ["browser", "shell-1", "shell-2"], behind: ["browser"])
+        XCTAssertEqual(layout.focusedPane.front, "browser", "shown by the user, it stays in front")
+    }
+
     /// PANE-1: a tab is in one pane at most.
     func testATabIsInOnePaneOnly() {
         var layout = three()

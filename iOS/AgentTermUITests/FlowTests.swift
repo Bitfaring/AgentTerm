@@ -693,6 +693,11 @@ final class FlowTests: XCTestCase {
             XCTAssertTrue(push.waitForExistence(timeout: 10), "there is no Push button")
             XCTAssertEqual(push.label, "Push, 1 commit", "one commit is waiting to be pushed")
             XCTAssertTrue(app.buttons["git-pull"].exists)
+            // GIT-79 (#166): its words on one line, as Fetch's: not broken
+            // in the middle of a word to fit the count beside them.
+            let fetch = app.buttons["git-fetch"]
+            capture("7b4-push-count")
+            XCTAssertLessThanOrEqual(push.frame.height, fetch.frame.height + 1, "Push's words are broken over lines: \(push.frame) beside \(fetch.frame)")
             XCTAssertTrue(app.staticTexts["Follows origin/main"].exists)
             push.tap()
             expectation(for: NSPredicate(format: "label == %@", "Push"), evaluatedWith: push)

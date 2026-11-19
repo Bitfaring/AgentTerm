@@ -242,8 +242,11 @@ public struct PaneLayout: Codable, Equatable, Sendable {
     /// Drops tabs that are gone, puts new ones in the pane the keyboard is
     /// in, and orders each pane's tabs as `live` is. A pane left empty by a
     /// tab that went closes, unless it was split off to be given one or it
-    /// is the only pane.
-    public mutating func sync(with live: [String]) {
+    /// is the only pane. A tab of `behind` that comes in is put in the strip
+    /// without being brought to the front: the one Browser, which every
+    /// folder's strip holds, does not stand in front of a folder that has
+    /// nothing of its own yet (#170).
+    public mutating func sync(with live: [String], behind: Set<String> = []) {
         let place = Dictionary(live.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         let placed = Set(allTabs)
         var emptied: [String] = []
@@ -267,7 +270,7 @@ public struct PaneLayout: Codable, Equatable, Sendable {
             update(focused) {
                 $0.tabs.append(contentsOf: new)
                 $0.tabs.sort { place[$0]! < place[$1]! }
-                if $0.front == nil { $0.front = new.first }
+                if $0.front == nil { $0.front = new.first { !behind.contains($0) } }
                 $0.keptEmpty = false
             }
         }

@@ -1164,6 +1164,25 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertEqual(lastTabs().count, 1, "another page was opened for the other folder")
     }
 
+    /// BROWSER-47 (#170): a folder added while a page is open shows its own
+    /// empty workspace when it is first opened, not the Browser: the
+    /// Browser's tab is in its strip, behind.
+    func testANewFolderOpensOnItsOwnWorkspaceNotTheBrowser() throws {
+        let phone = try device()
+        app.press(.id("folder-\(project.path)"))
+        app.menu(["Browser", "New Browser Tab"])
+        app.wait(for: .id("browser-address"), timeout: 15)
+        let other = root.appendingPathComponent("never-opened")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        phone.send(.addFolder(path: other.path))
+        app.wait(for: .id("folder-\(other.path)"), timeout: 15)
+        app.press(.id("folder-\(other.path)"))
+        app.wait(for: .containing("Start an agent in this folder."), timeout: 15)
+        XCTAssertNil(app.first(.id("browser-address")), "the new folder opened on the Browser")
+        app.wait(for: .id("strip-browser"), timeout: 15)
+        shot("new-folder")
+    }
+
     /// BROWSER-42 (#149): an element picked in an agent's page goes to that
     /// agent, though another agent of the project was started before it:
     /// the sheet names it and offers no other.

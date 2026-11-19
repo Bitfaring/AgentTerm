@@ -327,14 +327,9 @@ private struct BrowserGroupRow: View {
                 .lineLimit(1)
             Spacer(minLength: 0)
             if hovering {
-                Button {
+                CloseButton(help: pages.count > 1 ? "Close the browser's \(pages.count) pages" : "Close the browser") {
                     model.requestCloseBrowser(in: project)
-                } label: {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help(pages.count > 1 ? "Close the browser's \(pages.count) pages" : "Close the browser")
             }
         }
         .padding(.leading, loose ? 8 : 24)
@@ -594,14 +589,7 @@ struct BrowserRow: View {
                 Image(systemName: "hand.raised.fill").font(.system(size: 9.5)).foregroundStyle(.orange).help("You have it: its agent waits")
             }
             if hovering {
-                Button {
-                    model.closeBrowserTab(tab)
-                } label: {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Close this tab")
+                CloseButton(help: "Close this tab") { model.closeBrowserTab(tab) }
             }
         }
         .padding(.leading, leading ?? (loose ? 8 : 24))
@@ -704,15 +692,8 @@ struct SessionRow: View {
                 .help("Give this session's work to another agent")
             }
             if hovering {
-                Button {
-                    // Asks first, as everything that ends a session does.
-                    model.requestEnd(session.id)
-                } label: {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("End this session")
+                // Asks first, as everything that ends a session does.
+                CloseButton(help: "End this session") { model.requestEnd(session.id) }
             }
         }
         .padding(.leading, leading ?? (showsPath ? 8 : 24))

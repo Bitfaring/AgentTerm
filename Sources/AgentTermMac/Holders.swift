@@ -232,14 +232,9 @@ private struct ItemChip: View {
             if let session = look.session { AgentStateMark(session: session) }
             if look.dirty { Circle().fill(Color.orange).frame(width: 6, height: 6) }
             if let close = look.close {
-                Button(action: close) {
-                    Image(systemName: "xmark").font(.system(size: 8.5, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .opacity(hovering || selected ? 1 : 0)
-                .help(look.closing)
-                .accessibilityLabel("\(look.closing) \(look.title)")
+                CloseButton(help: look.closing, glyph: 8.5, action: close)
+                    .opacity(hovering || selected ? 1 : 0)
+                    .accessibilityLabel("\(look.closing) \(look.title)")
             }
         }
         .padding(.horizontal, 8)

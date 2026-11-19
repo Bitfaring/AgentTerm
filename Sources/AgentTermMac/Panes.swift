@@ -325,7 +325,7 @@ extension AppModel {
                 layout = PaneLayout()
                 if let front { layout.show(front) }
             }
-            layout.sync(with: byProject[key] ?? [])
+            layout.sync(with: byProject[key] ?? [], behind: [Self.theBrowser])
             all[key] = layout
         }
         if all != workspaces { workspaces = all }
