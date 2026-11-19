@@ -35,7 +35,7 @@ jobs:
         run: make lint
       # The browser's Chromium (#76), pinned in the script: the package is
       # compiled against its headers. Kept between runs.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .build/cef
           key: cef-${{ runner.arch }}-${{ hashFiles('scripts/fetch-cef.sh') }}
