@@ -19,8 +19,9 @@ The Software is developed and published by an individual developer:
 ## 2. The short version
 
 **What you type, what your terminals show, your files, your folders and your conversations with
-coding agents stay on your own devices.** AgentTerm has no server of its own, no account and no
-advertising.
+coding agents stay on your own devices.** AgentTerm has no account and no advertising, and no server that can read
+what you do: the one it has, the relay of the iPhone's notifications through Apple, passes on what
+your Mac encrypted for your iPhone and cannot open it (section 4).
 
 The released apps can send two things to the developer through Google's Firebase, and you control
 both:
@@ -78,6 +79,23 @@ the source yourself sends nothing at all.
 - **Between your iPhone and your Mac.** The iPhone app connects only to the Mac you paired it with,
   over your local network or your own Tailscale network. The developer is not part of that
   connection. Tailscale is a separate service with its own privacy policy.
+- **Notifications through Apple (iPhone, released app).** While the iPhone app is asleep, your Mac
+  tells it that an agent is done or needs you through Apple's push service (APNs), by way of a small
+  relay the developer runs on Cloudflare, which holds the key Apple asks for. What the notification
+  says (the session's name, its folder, what the agent said or asks) is encrypted on your Mac with a
+  key your iPhone made for that Mac alone, and only your iPhone can open it: the relay and Apple
+  see the iPhone's push token, when a notification is sent, its size, and the address your Mac
+  connects from. The relay keeps none of it. "Also While the App Is Closed" in the iPhone's
+  Settings turns it off, and "Tell me when an agent is done or needs me" turns off all
+  notifications; revoking the iPhone on the Mac forgets its token and key. When a notification was
+  handled on another device, the Mac asks the relay to take it back from the iPhone: that request
+  names the notification only. A build made from the source has no relay and sends nothing this way.
+- **The Live Activity through Apple (iPhone, released app).** While agents work, the Mac keeps the
+  iPhone's Live Activity up to date through the same relay and Apple. Unlike a notification it
+  cannot be encrypted for the iPhone, because iOS draws it from what the push carries: how many
+  agents work, wait, are done or stopped, and the names of the sessions that wait or are done. It
+  never carries what an agent said. The relay keeps none of it. "Live Activity of the Mac's agents"
+  in the iPhone's Settings turns it off.
 - **To the services of the coding agents you use.** To show what your account has left (the figures
   the agents show under `/usage` or `/status`), and to know when a schedule set for when your limit
   starts over is to run, the Mac app asks the agent's own service: Anthropic,

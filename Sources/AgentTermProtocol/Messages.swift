@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 31
+public let agenttermProtocolVersion = 32
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -486,6 +486,18 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Someone used the Mac app: a key or a click in its window. The Mac
     /// is then in use again after a device was used.
     case used
+    /// From a device: tell it through Apple while it is away (#66), with
+    /// what that takes. Answered with `pushState`.
+    case pushRegister(PushRegistration)
+    /// From a device: no longer. Answered with `pushState(.off)`.
+    case pushUnregister
+    /// A notice was opened or dismissed on this device (#66): handled on
+    /// every device.
+    case handleNotice(id: UInt64, how: Notice.Handled.How)
+    /// From a device registered for push: the push tokens of its Live
+    /// Activity (#168), to keep it true while the app is asleep, and the one
+    /// that starts one; nil for none, when it is switched off.
+    case liveActivity(token: String?, startToken: String?)
     /// Adds a schedule, or changes the one with its id (#11). One that
     /// skips permissions is refused unless its warning was accepted.
     case saveSchedule(Schedule)
@@ -683,6 +695,18 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// another device (#60): a notice of it is hidden here too. Also sent
     /// on connecting, for what was seen while this device was away.
     case noticeSeen(session: SessionID, state: AgentState)
+    /// To a device: whether it is told through Apple while it is away
+    /// (#66). Sent on connecting and in answer to `pushRegister`.
+    case pushState(PushState)
+    /// The notices of the last 30 days, handled or not, on connecting: what
+    /// a device keeps its Inbox from (#66).
+    case noticeLog([Notice])
+    /// Something to tell the user of now: new, or not told to this device
+    /// yet. Sent once to each device.
+    case notice(Notice)
+    /// A notice was handled, on some device or by its agent moving on: it
+    /// is taken away wherever it is shown.
+    case noticeHandled(id: UInt64, handled: Notice.Handled)
     /// What the last turn of this session's agent came to (#71): when a
     /// turn ends, and on connecting for each session that had one.
     case turnResult(session: SessionID, result: TurnResult)

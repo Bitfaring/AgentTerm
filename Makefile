@@ -4,7 +4,7 @@
 VERSION := $(shell tr -d '[:space:]' < VERSION)
 SIM ?=
 # What the formatter and the linter look at.
-SWIFT_PATHS := Package.swift Sources Tests iOS/AgentTerm iOS/AgentTermUITests
+SWIFT_PATHS := Package.swift Sources Tests iOS/AgentTerm iOS/AgentTermUITests iOS/AgentTermNotifications iOS/NotificationShared
 
 .DEFAULT_GOAL := help
 .PHONY: help version bump build test test-ios test-all run run-ios pair-ios run-all bundle format lint check reset-permissions \

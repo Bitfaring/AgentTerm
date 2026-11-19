@@ -19,6 +19,7 @@ final class ScreenshotTests: XCTestCase {
         let enterLink = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Enter a pairing link'")).firstMatch
         XCTAssertTrue(enterLink.waitForExistence(timeout: 10))
         app.open(try XCTUnwrap(URL(string: link)))
+        allowNotifications()
 
         // The folders and their sessions, pinned and grouped.
         let pinned = app.staticTexts["Fix the flaky parser tests"].firstMatch

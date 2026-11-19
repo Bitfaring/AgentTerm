@@ -122,17 +122,17 @@ final class RealAgentsTests: MacUITestCase {
         // What the Inbox holds, on the Mac.
         app.press(.id("place-inbox"))
         Thread.sleep(forTimeInterval: 1)
-        let rows = app.nodes().filter { $0.identifier.hasPrefix("inbox-session-") }
+        let rows = app.nodes().filter { $0.identifier.hasPrefix("inbox-notice-") }
         for row in rows { print("MEASURE inbox row: \(row.label)") }
         shot("inbox")
         var missing: [String] = []
         for agent in Self.agents {
             guard let id = ids[agent] else { continue }
-            if app.first(.id("inbox-session-\(id)")) == nil {
+            if app.first(.id(phone.inboxRow(id))) == nil {
                 missing.append(agent)
                 continue
             }
-            app.press(.id("inbox-session-\(id)"))
+            app.press(.id(phone.inboxRow(id)))
             Thread.sleep(forTimeInterval: 0.7)
             shot("inbox-\(agent)")
         }

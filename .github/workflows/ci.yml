@@ -45,3 +45,6 @@ jobs:
         run: swift build --build-tests
       - name: Test
         run: swift test
+      # The push relay (#66), with Node's own test runner: no dependencies.
+      - name: Test the push relay
+        run: node --test relay/test/*.test.js

@@ -1,0 +1,9 @@
+{
+  "name": "agentterm-push-relay",
+  "private": true,
+  "type": "module",
+  "description": "The push relay of AgentTerm (#66), a Cloudflare Worker. No dependencies.",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

@@ -163,12 +163,12 @@ final class SessionTests: MacUITestCase {
         return script
     }
 
-    /// INBOX-3 (#67): the Inbox lists the agents that wait and those done
-    /// and not seen, with how many on its place in the rail; the item
+    /// INBOX-3 (#67, #66): the Inbox is this Mac's history of what it was
+    /// told, with how many are unread on its place in the rail; the item
     /// picked is shown in the middle, the terminals hidden as in History,
-    /// without being seen; Open shows its session in Sessions, which sees
-    /// it on every device; Next goes on; Dismiss takes one out; one seen on
-    /// another device leaves; what waits cannot be dismissed.
+    /// and read, without being seen; Open shows its session in Sessions,
+    /// which sees it on every device, and it stays, as opened; Delete takes
+    /// one out here only; what waits cannot be deleted.
     func testTheInboxListsWhatNeedsTheUser() throws {
         let phone = try device()
         app.press(.button("Shell"))
@@ -205,47 +205,50 @@ final class SessionTests: MacUITestCase {
         app.wait(for: .containing("Inbox, 4 items"), timeout: 15)
 
         app.press(.id("place-inbox"))
-        app.wait(for: .id("inbox-session-\(deploy)"))
-        let rows = app.nodes().map(\.identifier).filter { $0.hasPrefix("inbox-session-") }
-        XCTAssertEqual(rows.first, "inbox-session-\(deploy)", "the agent that waits is not first: \(rows)")
-        XCTAssertTrue(app.first(.id("inbox-session-\(deploy)"))?.label.contains("needs permission") == true)
-        XCTAssertTrue(app.first(.id("inbox-session-\(tests)"))?.label.contains("All tests pass.") == true)
-        // The first is shown in the middle, and no terminal.
+        app.wait(for: .id(phone.inboxRow(deploy)))
+        XCTAssertTrue(app.first(.id(phone.inboxRow(deploy)))?.label.contains("needs permission") == true)
+        XCTAssertTrue(app.first(.id(phone.inboxRow(tests)))?.label.contains("All tests pass.") == true)
+        XCTAssertNil(app.first(.id("terminal-\(shell)")), "a terminal shows in the Inbox")
+        // What waits cannot be deleted: it stays until it is answered.
+        app.press(.id(phone.inboxRow(deploy)))
         app.wait(for: .id("inbox-detail-text"))
         XCTAssertTrue(app.first(.id("inbox-detail-text"))?.text.contains("make deploy") == true)
-        XCTAssertNil(app.first(.id("terminal-\(shell)")), "a terminal shows in the Inbox")
-        // What waits cannot be dismissed: it stays until it is answered.
         XCTAssertNil(app.first(.id("inbox-dismiss")))
         shot("inbox")
 
-        // Picked: shown in the middle, and not seen for that.
-        app.press(.id("inbox-session-\(tests)"))
+        // Picked: shown in the middle, read here, and not seen for that.
+        app.press(.id(phone.inboxRow(tests)))
         app.wait(for: .containing("All tests pass."))
         XCTAssertTrue(app.first(.id("inbox-detail-text"))?.text.contains("All tests pass.") == true)
         shot("inbox-done")
         Thread.sleep(forTimeInterval: 1.5)
         XCTAssertEqual(phone.sessions.first { $0.id == tests }?.unseen, true, "picking an item saw its session")
+        app.wait(for: .containing("Inbox, 2 items"))
         // Opened: in Sessions, and seen on every device.
         app.press(.id("inbox-open"))
         app.wait(for: .id("terminal-\(tests)"))
         wait("seen, as the phone is told") { phone.sessions.first { $0.id == tests }?.unseen != true }
-        app.wait(for: .containing("Inbox, 3 items"))
 
-        // Next: the one after the one shown.
+        // Kept after it is read, with how it was handled.
         app.press(.id("place-inbox"))
-        app.wait(for: .id("inbox-detail-text"))
-        XCTAssertTrue(app.first(.id("inbox-detail-text"))?.text.contains("make deploy") == true)
-        app.press(.id("inbox-next"))
+        app.wait(for: .id(phone.inboxRow(tests)))
+        wait("handled, as opened") { app.first(.id(phone.inboxRow(tests)))?.label.contains("Opened") == true }
+        // Deleted: from this Mac's Inbox only; the phone still has it unseen.
+        app.press(.id(phone.inboxRow(docs)))
         app.wait(for: .containing("The docs are written."))
-        // Dismissed: out of the Inbox, on the phone too; the next is shown.
         app.press(.id("inbox-dismiss"))
-        app.waitGone(.id("inbox-session-\(docs)"), timeout: 15)
-        wait("dismissed, as the phone is told") { phone.sessions.first { $0.id == docs }?.unseen != true }
-        app.wait(for: .containing("The notes are tidied."))
-        // Seen on another device: it leaves the Inbox here.
+        app.waitGone(.id(phone.inboxRow(docs)), timeout: 15)
+        XCTAssertEqual(phone.sessions.first { $0.id == docs }?.unseen, true, "deleted here, as seen everywhere")
+        // Seen on another device: handled here too, and kept.
         phone.send(.noticeSeen(session: notes, state: .done(said: "The notes are tidied.")))
-        app.waitGone(.id("inbox-session-\(notes)"), timeout: 15)
-        app.wait(for: .containing("Inbox, 1 item"))
+        wait("handled, as seen elsewhere") { app.first(.id(phone.inboxRow(notes)))?.label.contains("Opened") == true }
+        // Delete All takes everything but what still waits.
+        app.press(.id("inbox-menu"))
+        app.press(.button(InboxWords.deleteAll))
+        app.wait(for: .id("inbox-delete-all"))
+        app.press(.id("inbox-delete-all"))
+        app.waitGone(.id(phone.inboxRow(notes)), timeout: 15)
+        XCTAssertNotNil(app.first(.id(phone.inboxRow(deploy))), "what waits for an answer was deleted")
     }
 
     /// INBOX-6 (#71): a done agent's item shows what its turn came to: what
@@ -294,7 +297,7 @@ final class SessionTests: MacUITestCase {
         wait("what the turns came to", timeout: 20) { told(notes) && told(again) }
 
         app.press(.id("place-inbox"))
-        app.press(.id("inbox-session-\(notes)"))
+        app.press(.id(phone.inboxRow(notes)))
         app.wait(for: .id("inbox-request"))
         XCTAssertTrue(app.first(.id("inbox-request"))?.text.contains("Tidy the notes") == true)
         XCTAssertTrue(app.first(.id("inbox-detail-text"))?.text.contains("lint fails") == true)
@@ -317,7 +320,7 @@ final class SessionTests: MacUITestCase {
         // Continue: the next instruction, typed into the other's session.
         phone.send(.attach(session: again, size: TermSize(cols: 80, rows: 24)))
         app.press(.id("place-inbox"))
-        app.press(.id("inbox-session-\(again)"))
+        app.press(.id(phone.inboxRow(again)))
         app.write("Now fix lint", into: .id("inbox-continue"))
         app.press(.id("inbox-send"))
         wait("the instruction typed into the session") { phone.text(again).contains("Now fix lint") }
@@ -425,15 +428,15 @@ final class SessionTests: MacUITestCase {
         // Only shown on the phone, the session keeps the Mac's size.
         phone.send(.attach(session: id, size: TermSize(cols: 40, rows: 20)))
         wait("the Mac's size, told to the phone") { (phone.size(of: id)?.cols ?? 0) > 40 }
-        XCTAssertFalse(app.exists(.button("Use This Window's Size")))
+        XCTAssertFalse(app.exists(.button("Use This Size")))
         // SIZE-4: used on the phone, it has the phone's size, and the Mac says so and offers to take it back.
         phone.send(.takeControl(session: id, size: TermSize(cols: 40, rows: 20)))
         wait("the phone's size") { phone.size(of: id) == TermSize(cols: 40, rows: 20) }
-        app.wait(for: .button("Use This Window's Size"), timeout: 15)
+        app.wait(for: .button("Use This Size"), timeout: 15)
         // SIZE-10 (#120): named, as the device named itself.
         app.wait(for: .containing("In use on iPhone · 40×20"))
-        app.press(.button("Use This Window's Size"))
-        app.waitGone(.button("Use This Window's Size"), timeout: 15)
+        app.press(.button("Use This Size"))
+        app.waitGone(.button("Use This Size"), timeout: 15)
         wait("the Mac's size again") { (phone.size(of: id)?.cols ?? 0) > 40 }
     }
 
@@ -449,7 +452,7 @@ final class SessionTests: MacUITestCase {
         pad.send(.attach(session: id, size: large))
         pad.send(.takeControl(session: id, size: large))
         wait("the iPad's size") { pad.size(of: id) == large }
-        app.wait(for: .button("Use This Window's Size"), timeout: 15)
+        app.wait(for: .button("Use This Size"), timeout: 15)
         app.wait(for: .containing("In use on iPad · 300×100"))
         // Something on the last row, to look at in the picture.
         pad.connection.sendInput(Data("clear; tput cup 99 0; printf LAST-ROW\n".utf8), to: id)
@@ -457,8 +460,8 @@ final class SessionTests: MacUITestCase {
         shot("larger-device")
         XCTAssertEqual(app.first(.id("terminal-view"))?.help, "whole grid in sight")
         // Taken back, it fills the pane again.
-        app.press(.button("Use This Window's Size"))
-        app.waitGone(.button("Use This Window's Size"), timeout: 15)
+        app.press(.button("Use This Size"))
+        app.waitGone(.button("Use This Size"), timeout: 15)
         app.wait("the terminal whole at the window's size") { self.app.first(.id("terminal-view"))?.help == "whole grid in sight" }
     }
 

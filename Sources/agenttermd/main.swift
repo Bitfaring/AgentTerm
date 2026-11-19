@@ -310,6 +310,12 @@ do {
     configuration.release = release
     configuration.revision = revision
     configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)
+    // Notices through Apple for the devices that are away (#66): the
+    // released host's relay, none for a development build. A test names a
+    // stand-in of its own. Not in the help.
+    configuration.pushRelay = ProcessInfo.processInfo.environment["AGENTTERM_PUSH_RELAY"].flatMap(URL.init(string:)) ?? PushRelay.url(for: AppChannel.current)
+    configuration.pushesFile = HostEnvironment.pushesFile
+    configuration.noticesFile = HostEnvironment.noticesFile
     // For the tests of the apps, which do not wait the whole grace. Not in the help.
     if let grace = ProcessInfo.processInfo.environment["AGENTTERM_LINK_GRACE"].flatMap(TimeInterval.init) { configuration.linkGrace = grace }
     // Gives the agents' sessions the MCP server, and takes out what earlier

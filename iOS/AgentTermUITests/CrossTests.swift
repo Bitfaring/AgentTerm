@@ -28,6 +28,7 @@ final class CrossTests: XCTestCase {
         let enterLink = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Enter a pairing link'")).firstMatch
         XCTAssertTrue(enterLink.waitForExistence(timeout: 10))
         app.open(try XCTUnwrap(URL(string: link)))
+        allowNotifications()
 
         // SES-6, NAME-3: the session the Mac app started is listed, under the same name.
         let macSession = app.staticTexts["zsh"].firstMatch

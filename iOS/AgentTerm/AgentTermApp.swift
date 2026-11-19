@@ -3,8 +3,37 @@ import AgentTermTelemetry
 import AgentTermTerminal
 import SwiftUI
 
+/// The device token APNs gives the app (#66), for the Mac it is handed to.
+final class PushToken: ObservableObject {
+    static let shared = PushToken()
+    @Published var token: String?
+    /// Why iOS gave none, when it said.
+    @Published var failure: String?
+}
+
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushToken.shared.failure = nil
+        PushToken.shared.token = deviceToken.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A notification handled on another device, taken back (#66).
+    func application(
+        _ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        completionHandler(AgentNotifications.takeBack(userInfo) ? .newData : .noData)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        PushToken.shared.token = nil
+        PushToken.shared.failure = error.localizedDescription
+    }
+}
+
 @main
 struct AgentTermApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = PhoneModel()
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var privacy: TelemetryPreferences

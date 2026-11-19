@@ -525,13 +525,23 @@ class MacUITestCase: XCTestCase {
         private(set) var output: [SessionID: Data] = [:]
 
         init(port: UInt16, token: String, name: String) {
-            connection = AgentTermConnection(host: "127.0.0.1", port: port, token: token, clientName: name)
+            // Says what it is, so that it is told the notices (#66).
+            connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: name, kind: .iphone)
             connection.onMessage = { [weak self] in self?.messages.append($0) }
             connection.onOutput = { [weak self] id, data in self?.output[id, default: Data()].append(data) }
             connection.connect()
         }
 
         func last<Value>(_ pick: (ServerMessage) -> Value?) -> Value? { messages.compactMap(pick).last }
+
+        /// The Inbox row of the last notice of a session (#66).
+        func inboxRow(_ session: SessionID) -> String {
+            let notice = messages.compactMap { message -> Notice? in
+                if case .notice(let notice) = message, notice.session == session { return notice }
+                return nil
+            }.last
+            return "inbox-notice-\(notice?.id ?? 0)"
+        }
         var sessions: [SessionInfo] { last { if case .sessions(let list) = $0 { return list } else { return nil } } ?? [] }
         var folders: [String] { last { if case .folders(let list) = $0 { return list } else { return nil } } ?? [] }
         var tabLayout: TabLayout? { last { if case .tabLayout(let layout) = $0 { return layout } else { return nil } } }

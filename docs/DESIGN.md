@@ -273,7 +273,8 @@ Host…, which asks first. It never restarts it by itself (decided by the
 owner on 2026-11-17), and a release that changes nothing of the host says
 nothing. A build outside an app bundle has no revision, and is not compared.
 
-The protocol version is 15 in 0.7.0. It went up with each message that
+The protocol version is 32 added `pushRegister`, `pushUnregister`, `pushState`, `handleNotice`,
+`liveActivity`, `noticeLog`, `notice` and `noticeHandled` (#66, #168). 15 in 0.7.0. It went up with each message that
 changed while the release was made (principle 6): 8 added `agentShellsFaults`
 and gave `agentShellResult`'s list of shells the asking agent's own (see
 "Shells an agent opens"); 13 the lease of a forced push, the commit a
@@ -912,14 +913,14 @@ reads macOS's `HIDIdleTime`. Five minutes without either is no one there.
 A device that types or takes control of a session makes it no one there,
 whatever the two say, until this Mac's own app types, takes control or
 says `used` (a key or a click in its window, sent once after it was told
-no one is there) (NOTE-7). Every client is told `macInUse(Bool)`; the
-iPhone tells nothing while it is true.
+no one is there) (NOTE-7). Every client is told `macInUse(Bool)`. Since
+#66 it holds no notice back: every device is told, whoever is at the Mac.
 
-**On the iPhone.** In front, a banner over the sessions list, for a session
-other than the one on screen. Behind, a local notification
-(`AgentNotifications`): the app asks iOS for a little more time when it
-leaves the front (`beginBackgroundTask`), during which the connection
-lives. A question's or a finished task's notification has a text reply
+**On the iPhone.** Since #66 iOS's own banner, in front as behind, for a
+session other than the one on screen (`AgentNotifications`, from the
+host's `notice`): the app asks iOS for a little more time when it leaves
+the front (`beginBackgroundTask`), during which the connection lives;
+after that, the host pushes. A question's or a finished task's notification has a text reply
 action that asks for the phone to be unlocked; the reply is sent as
 `answer(session:to:text:)`, naming the state it answers, and the host types
 it, then Return, only while the session is still in that state; else it
@@ -948,6 +949,111 @@ to the row after the choices ("Type something.", "Other", "Write-in..."):
 Down past the choices, the text, Return, with a Return before the text in
 Antigravity. The steps are typed 0.15 s apart, as a person types them. Only
 the first of several questions asked together is told and answered.
+
+**Notices, from the host to every device** (#66, decided 2026-11-19). The
+host makes each notice once (`NoticeCenter`, in `AgentTermHost`), from the
+sessions' states as `AgentNotice.notices` has it and from failures
+(`Notice`, in `AgentTermProtocol`): an agent done or waiting, or a
+`PartFailure`, which `alerts` (is a notification) when it stopped work
+(`Notice.tells`). It keeps the last 30 days in `notices.json` (mode 0600),
+with which device was told of which and which through Apple, so that a
+device that comes back, or a host that starts again, tells nothing twice;
+a host that starts again marks what agents asked as over. A client that
+says what it is (`hello`'s `kind`) is told; one that does not
+(`agenttermd mcp`) is not. Devices are keyed by their registry id, the
+Mac's own app as `local`.
+
+- On connecting, after `sessions`: `noticeLog([Notice])`, the 30 days, for
+  the device's Inbox; then `notice(Notice)` for each one not handled that
+  it was not told of. A new notice is `notice` to every client at once,
+  and, when it `alerts`, a push to each registered device that is away.
+- A notice is handled once (`Notice.Handled`: answered, opened, dismissed,
+  moved on): by `answer`, by `noticeSeen` for its session and state, by
+  `handleNotice(id:how:)` (dismissed from a banner or Notification
+  Center, `customDismissAction`), by `dismissFailure` for a failure's, or
+  when its agent's state changes or its session ends. Every client is told
+  `noticeHandled(id:handled:)`; each device that had it through Apple and
+  is away is sent a push that takes it back (`gone`).
+- Neither app works notices out any more: each shows what it is told.
+  The iPhone posts a notification for each (`AgentNotifications.post`,
+  content from `NoticeContent`, shared with the extension), named
+  `"<mac>-<notice id>"`, the name APNs gives a pushed one, and shows it in
+  front too (`willPresent` → banner, list, sound), except for the session
+  on screen, which it then sees. The Mac shows its banner while it is in
+  front and posts a macOS notification while it is not
+  (`MacNotifications`, `notifyOnMac`).
+- **The Inbox** is the device's own `InboxBook` (`AgentTermProtocol`),
+  kept in its preferences by the Mac on show: notices newest first, read or
+  not, what was deleted here so that the log does not bring it back, 30
+  days. `Inbox.items(book:sessions:failures:)` shows a notice whose agent
+  still says it with its session (answered, continued, handed off there),
+  a failure with the failure, the rest as told.
+
+**Through Apple, while the iPhone app is asleep** (#66, R1 of the
+comparison in the issue). A device registers with
+`pushRegister(PushRegistration)`: its APNs device token, a key it made for
+this Mac (AES-256, `PushSeal.newKey`) and its own name for the Mac
+(`SavedHost.id`). The host asks the relay to sign a ticket for the token
+(`POST /v1/register`) and keeps token, ticket, key and name in
+`pushes.json`, mode 0600 (`PushCenter`). It answers `pushState(.on)`, or
+`.unavailable(reason:)` in the words of `PushWords`: a development build
+has no relay (`PushRelay.url(for:)` is nil for it; principle 7), the
+released one has none until it is deployed, the relay could not be
+reached. `pushUnregister` and revoking the device take it out. Each
+connection registers again, so the ticket (30 days) stays fresh.
+
+- A notice for a device is a `PushNotice` (the state shortened to what a
+  notification shows, `stateDigest` naming the whole of it, a failure's
+  headline and details), sealed with AES-GCM under the device's key, its
+  identifier `"<mac>-<notice id>"` authenticated with it (`PushSeal`), and
+  posted to the relay with the ticket. A push that fails is a `PartFailure`
+  of part `push` named after the device, one at a time for each device; a
+  token APNs no longer knows (410) or a ticket the relay refuses (401) is
+  forgotten, and the device, told `pushState(.off)` when it connects,
+  registers again.
+- Taking one back: `{gone: identifier}` to the relay, which sends a
+  background push (`content-available`, priority 5) that wakes the app to
+  remove it (`AgentNotifications.takeBack`), until `FILTERING=on`: then an
+  alert push the extension removes the notification with and shows
+  nothing for, which needs Apple's filtering entitlement.
+- The relay (`relay/worker.js`, a Cloudflare Worker, relay/README.md) keeps
+  nothing; it holds the APNs key (Production, restricted to the topic
+  `com.manhpham.agentterm`), signs the provider token (ES256) and passes
+  the sealed notice on as `e`, with the identifier as `i`, under an `aps`
+  that says "An agent needs you" with `mutable-content`. It signs tickets
+  with HMAC over the token and their expiry, and refuses a push without
+  one, too large, or over 30 a minute to one device.
+- On the iPhone the notification service extension (`AgentTermNotifications`)
+  reads the key and the Mac's name from a keychain group the app and it
+  share (`PushKeys`, `$(AppIdentifierPrefix)com.manhpham.agentterm.push`),
+  which holds nothing else: the pairing tokens stay in the app's own group,
+  listed first in its entitlements. It opens the notice and makes the
+  notification as the app does; a question's choices become a category of
+  its own, which it registers before showing it. One it cannot open is
+  shown as it came. A reply or a choice from a pushed notification carries
+  only the digest: the app goes to its Mac, waits for `sessions`, and
+  sends `answer` with the session's state only when its digest is the
+  same, else it says `PushWords.movedOn`. The device token comes from
+  `registerForRemoteNotifications`, in the released build only, whose
+  entitlements alone have `aps-environment`.
+
+**The Live Activity through Apple** (#168). Its content is `AgentsStatus`
+(`AgentTermProtocol`), the same struct the host pushes: counts of working,
+permission, asking, done and unseen, and stopped (a host's or a session's
+failure), the names of what waits and is done. `LiveActivityRule`: shown
+while an agent works or waits, whoever is at the Mac. The app starts it
+with `pushType: .token` in the released build and hands the host
+`liveActivity(token:startToken:)`, the activity's push token and the
+push-to-start token (iOS 17.2), kept with the device's registration. While
+the device is away, a change of `AgentsStatus` is sent 3 s later (a burst
+is one update) to the relay as `{activity: {token, event, state, mac}}`:
+`update` to the activity's token, `start` to the start token when there is
+none and an agent works or waits, `end` when none does; again every 15
+minutes while agents work (`refreshSummaries`). The relay sends
+`apns-push-type: liveactivity` to the topic
+`com.manhpham.agentterm.push-type.liveactivity`, priority 5 (10 to
+start), with `stale-date` 30 minutes on and, for `end`, `dismissal-date`.
+While connected, the app updates the activity itself.
 
 **On the Mac.** A banner over the window for a session that is not the one
 selected while the app is in front.

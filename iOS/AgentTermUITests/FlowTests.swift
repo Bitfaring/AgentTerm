@@ -319,6 +319,7 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(enterLink.waitForExistence(timeout: 10))
         capture("1-pair")
         app.open(try XCTUnwrap(URL(string: link)))
+        allowNotifications()
 
         // Connected: the Mac's folders and launch buttons show up.
         let start = app.buttons[launchButton].firstMatch
@@ -413,7 +414,7 @@ final class FlowTests: XCTestCase {
         // terminal scaled down, and can take the session back. Only checked
         // when the test is told that something will play the Mac.
         if environment["AGENTTERM_EXPECT_MAC_TAKEOVER"] != nil {
-            let fit = app.buttons["Fit This Screen"]
+            let fit = app.buttons["Use This Size"]
             XCTAssertTrue(fit.waitForExistence(timeout: 30), "the Mac did not take the session")
             // SIZE-10 (#120): the Mac is named, by its own name.
             let named = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "In use on ")).firstMatch
@@ -568,13 +569,22 @@ final class FlowTests: XCTestCase {
             let outcome = app.descendants(matching: .any)["setup-problem-claude"].firstMatch
             XCTAssertTrue(outcome.waitForExistence(timeout: 30) || app.buttons["setup-remove-claude"].exists, "what Install came to did not reach the phone")
             app.navigationBars.buttons.element(boundBy: 0).tap()
-            app.buttons["settings-shell"].firstMatch.tap()
+            // Settings is longer than a screen: scrolled to it first.
+            let settingsShell = app.buttons["settings-shell"].firstMatch
+            for _ in 0..<4 where !settingsShell.isHittable { app.swipeUp() }
+            settingsShell.tap()
             XCTAssertTrue(app.descendants(matching: .any)["shell-program"].firstMatch.waitForExistence(timeout: 10), "the Shell screen has no program")
             app.navigationBars.buttons.element(boundBy: 0).tap()
-            app.buttons["settings-agents"].firstMatch.tap()
+            // Settings is longer than a screen: scrolled to it first.
+            let settingsAgents = app.buttons["settings-agents"].firstMatch
+            for _ in 0..<4 where !settingsAgents.isHittable { app.swipeUp() }
+            settingsAgents.tap()
             XCTAssertTrue(app.textViews["prompt-text"].firstMatch.waitForExistence(timeout: 10), "the Agents screen has no words")
             app.navigationBars.buttons.element(boundBy: 0).tap()
-            app.buttons["settings-browser"].firstMatch.tap()
+            // Settings is longer than a screen: scrolled to it first.
+            let settingsBrowser = app.buttons["settings-browser"].firstMatch
+            for _ in 0..<4 where !settingsBrowser.isHittable { app.swipeUp() }
+            settingsBrowser.tap()
             XCTAssertTrue(app.buttons["profile-new"].firstMatch.waitForExistence(timeout: 10), "the Browser screen cannot add a profile")
             app.navigationBars.buttons.element(boundBy: 0).tap()
             // SCHED-14: Schedules, a tab of its own as on the Mac's bar of
@@ -888,7 +898,7 @@ final class FlowTests: XCTestCase {
         // The second Mac's host says it is of an older release: the phone says so.
         let versionCard = app.descendants(matching: .any)["version-card"].firstMatch
         XCTAssertTrue(versionCard.waitForExistence(timeout: 5), "a Mac of another version is not pointed out")
-        XCTAssertTrue(versionCard.label.contains("Second Mac is an older version"), versionCard.label)
+        XCTAssertTrue(versionCard.label.contains("AgentTerm on Second Mac is from an older release"), versionCard.label)
         capture("8-second-mac")
 
         // SET-4: the second Mac kept awake, then out of reach (the script
@@ -1009,10 +1019,11 @@ final class FlowTests: XCTestCase {
     /// too. A stand-in Antigravity, whose session always has a note:
     /// touched, its mark shows the words, and the session does not open.
     /// Starts in the sessions list.
-    /// INBOX-4 (#67, #71): an agent done while its terminal is not on
+    /// INBOX-10 (#66, #71): an agent done while its terminal is not on
     /// screen is at the top of the Sessions list, under Inbox, with what it
-    /// said; touched, it shows what its turn came to, without being seen;
-    /// Open shows its terminal, and it is then seen: it leaves the Inbox.
+    /// said; touched, it shows what its turn came to; Open shows its
+    /// terminal. Read, it leaves the top of the list and stays in the whole
+    /// Inbox, kept after it is read.
     private func useTheInbox(_ app: XCUIApplication, compose: XCUIElement) {
         // The stand-in Claude Code says it is done a few seconds after it
         // starts (scripts/test-ios.sh): by then the list is on screen.
@@ -1023,10 +1034,12 @@ final class FlowTests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
         let title = app.descendants(matching: .any)["inbox-title"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 15), "nothing came to the Inbox")
-        let item = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "inbox-session-")).firstMatch
+        let items = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES %@", "inbox-[0-9]+"))
+        let item = items.firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "the agent that is done is not in the Inbox")
         XCTAssertTrue(item.label.contains("is done"), item.label)
         XCTAssertTrue(item.label.contains("Decide what you want there"), item.label)
+        let id = item.identifier
         capture("18-inbox")
         item.tap()
         let said = app.descendants(matching: .any)["result-said"].firstMatch
@@ -1040,8 +1053,13 @@ final class FlowTests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(said.waitForExistence(timeout: 5), "back from the terminal is not the result")
         app.navigationBars.buttons.firstMatch.tap()
-        XCTAssertTrue(title.waitForNonExistence(timeout: 10), "the session seen stayed in the Inbox")
+        let read = app.descendants(matching: .any)[id]
+        XCTAssertTrue(read.waitForNonExistence(timeout: 10), "read, it stayed at the top of the list")
         capture("20-inbox-seen")
+        app.descendants(matching: .any)["inbox-all"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)[id].waitForExistence(timeout: 10), "read, it is no longer in the Inbox")
+        capture("20a-inbox-all")
+        app.navigationBars.buttons.firstMatch.tap()
     }
 
     private func readANote(_ app: XCUIApplication, compose: XCUIElement) {

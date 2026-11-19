@@ -100,6 +100,8 @@ struct SessionsView: View {
                     TerminalScreen(session: id)
                 case .result(let id):
                     TurnResultScreen(session: id)
+                case .inbox:
+                    InboxScreen()
                 case .companion(let agent, let item):
                     TerminalScreen(session: agent, initial: item)
                 case .folder(let folder):
@@ -142,17 +144,14 @@ private struct VersionCard: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
             VStack(alignment: .leading, spacing: 2) {
-                Text(match == .hostOlder ? "AgentTerm on \(model.pairing?.name ?? "the Mac") is an older version" : "This app is older than AgentTerm on \(model.pairing?.name ?? "the Mac")")
+                let mac = model.pairing?.name ?? "the Mac"
+                Text(StateWords.versionTitle(match, mac: mac))
                     .font(.subheadline.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
-                Text(
-                    match == .hostOlder
-                        ? "Update AgentTerm on the Mac. If it was just updated, restart its host there. Until then some things will not work."
-                        : "Update this app to the version that goes with the Mac's. Until then some things will not work."
-                )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(StateWords.versionDetail(match, mac: mac))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
         }
@@ -164,118 +163,137 @@ private struct VersionCard: View {
 }
 
 /// A part of AgentTerm on the Mac that stopped without being asked to.
-/// The Inbox, at the top of the Sessions list (#67), when something needs
-/// the user: the same items as the Mac's Inbox, in the same order.
+/// The Inbox, at the top of the Sessions list (#66): what this iPhone was
+/// told of that is not read, and what an agent still waits for; all of it,
+/// for 30 days, a touch away.
 private struct InboxSection: View {
     @EnvironmentObject private var model: PhoneModel
 
     var body: some View {
-        let items = model.inboxItems
-        if !items.isEmpty {
+        let entries = model.inbox.entries.filter { !$0.read || !$0.canBeDeleted }
+        if !model.inbox.entries.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Text(Inbox.title.uppercased())
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    Text("\(items.count)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .accessibilityIdentifier("inbox-title")
+                    if model.inbox.unread > 0 {
+                        Text("\(model.inbox.unread)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    NavigationLink(value: Route.inbox) {
+                        Text("All").font(.caption.weight(.semibold))
+                    }
+                    .accessibilityIdentifier("inbox-all")
                 }
                 .padding(.horizontal, 4)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("inbox-title")
-                ForEach(items) { item in
-                    switch item.kind {
-                    case .failure(let failure): FailureCard(failure: failure)
-                    case .session: InboxRow(item: item)
-                    }
+                ForEach(entries.prefix(5)) { entry in
+                    InboxRow(entry: entry)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+                        .contextMenu { InboxDelete(entry: entry) }
                 }
             }
         }
     }
 }
 
-/// A session of the Inbox: whose it is, why it is there and what was said.
-/// Touched, it opens; a done one can be dismissed from its menu.
-private struct InboxRow: View {
+/// One thing the Mac told of: what, where, how it was handled. Touched, it
+/// opens what it is about and is read.
+struct InboxRow: View {
     @EnvironmentObject private var model: PhoneModel
-    let item: InboxItem
+    let entry: InboxBook.Entry
 
     var body: some View {
-        if case .session(let info) = item.kind {
-            let agent = info.agent ?? info.typedAgent ?? "shell"
-            let waits = info.state?.isWaiting == true
-            Button {
-                model.open(item)
-            } label: {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: AgentStyle.symbol(for: agent))
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(AgentStyle.accent(for: agent))
-                        .frame(width: 22)
-                        .padding(.top, 2)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text((info.cwd as NSString).lastPathComponent + " · " + info.displayName)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                        Text(model.agentName(agent) + " " + (item.notice?.why ?? ""))
+        let notice = entry.notice
+        Button {
+            model.open(entry)
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Circle()
+                    .fill(entry.read ? Color.clear : Palette.tint)
+                    .frame(width: 8, height: 8)
+                    .padding(.top, 6)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(notice.title(on: model.pairing?.name))
+                        .font(.subheadline.weight(entry.read ? .regular : .semibold))
+                        .foregroundStyle(notice.state?.isWaiting == true && notice.handled == nil ? Color.orange : .primary)
+                        .lineLimit(2)
+                    if !notice.body.isEmpty {
+                        Text(notice.body)
                             .font(.footnote)
-                            .foregroundStyle(waits ? Color.orange : .secondary)
-                            .lineLimit(1)
-                        if let detail = item.notice?.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
-                            Text(detail)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Text(
+                        [notice.place(macName: model.pairing?.name ?? "the Mac"), notice.at.formatted(date: .abbreviated, time: .shortened), notice.handledWords]
+                            .compactMap { $0 }.joined(separator: " · ")
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("inbox-\(entry.id)")
+    }
+}
+
+/// Deletes one item, here only; one whose agent still waits says why not.
+struct InboxDelete: View {
+    @EnvironmentObject private var model: PhoneModel
+    let entry: InboxBook.Entry
+
+    var body: some View {
+        if entry.canBeDeleted {
+            Button(InboxWords.deleteOne, systemImage: "trash", role: .destructive) { model.delete(entry) }
+        } else {
+            Text(InboxWords.waitingCannotBeDeleted)
+        }
+    }
+}
+
+/// All of the Inbox, 30 days of it: swiped to delete one, the read ones or
+/// all from the menu.
+struct InboxScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    @State private var askingAll = false
+
+    var body: some View {
+        List {
+            if model.inbox.entries.isEmpty {
+                Text(InboxWords.empty).foregroundStyle(.secondary)
+            }
+            ForEach(model.inbox.entries) { entry in
+                InboxRow(entry: entry)
+                    .swipeActions {
+                        if entry.canBeDeleted {
+                            Button(InboxWords.deleteOne, systemImage: "trash", role: .destructive) { model.delete(entry) }
                         }
                     }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 2)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
-                .contentShape(Rectangle())
+                    .contextMenu { InboxDelete(entry: entry) }
             }
-            .buttonStyle(.plain)
-            .contextMenu {
-                if item.canBeDismissed {
-                    Button(Inbox.dismiss, systemImage: "xmark") { model.dismiss(item) }
-                }
-            }
-            .accessibilityIdentifier("inbox-\(item.id)")
         }
-    }
-}
-
-private struct FailureCard: View {
-    @EnvironmentObject private var model: PhoneModel
-    let failure: PartFailure
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(failure.headline(on: model.pairing?.name ?? "the Mac"))
-                    .font(.subheadline.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(failure.details)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        .navigationTitle(Inbox.title)
+        .toolbar {
+            Menu {
+                Button(InboxWords.deleteRead, systemImage: "envelope.open") { model.deleteReadInbox() }
+                Button(InboxWords.deleteAll, systemImage: "trash", role: .destructive) { askingAll = true }
+            } label: {
+                Image(systemName: "ellipsis.circle")
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("failure-card")
-            Spacer(minLength: 0)
-            Button("Dismiss") { model.dismiss(failure) }
-                .font(.footnote.weight(.semibold))
-                .accessibilityIdentifier("failure-dismiss")
+            .accessibilityIdentifier("inbox-menu")
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.orange.opacity(0.12)))
+        .confirmationDialog(InboxWords.deleteAllQuestion, isPresented: $askingAll, titleVisibility: .visible) {
+            Button(InboxWords.deleteAll, role: .destructive) { model.deleteAllInbox() }
+        }
     }
 }
 
@@ -372,10 +390,12 @@ private struct StatusCard: View {
                 Image(systemName: "wifi.exclamationmark").foregroundStyle(.orange)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.status == .connecting ? "Connecting to your Mac…" : "Can't reach your Mac")
+                let mac = model.pairing?.name ?? "the Mac"
+                Text(model.status == .connecting ? StateWords.connecting(to: mac) : StateWords.cantReach(mac))
                     .font(.subheadline.weight(.semibold))
-                if model.status != .connecting {
-                    Text("Check that Tailscale is connected here and on the Mac, and that AgentTerm is open there.")
+                if case .offline(let reason) = model.status {
+                    // Why, as the Mac says it, and what to do.
+                    Text([reason, StateWords.reachAdvice(mac)].compactMap { $0 }.joined(separator: " "))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -383,7 +403,7 @@ private struct StatusCard: View {
             }
             Spacer(minLength: 0)
             if model.status != .connecting {
-                Button("Retry") { model.retry() }
+                Button(StateWords.tryAgain) { model.retry() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }

@@ -28,6 +28,12 @@ public enum HostEnvironment {
 
     public static var devicesFile: URL { supportDirectory.appendingPathComponent("devices.json") }
 
+    /// The devices told through Apple while they are away, with their keys (#66).
+    public static var pushesFile: URL { supportDirectory.appendingPathComponent("pushes.json") }
+
+    /// The notices of the last 30 days, and which device was told of which (#66).
+    public static var noticesFile: URL { supportDirectory.appendingPathComponent("notices.json") }
+
     public static var foldersFile: URL { supportDirectory.appendingPathComponent("folders.json") }
 
     /// What Claude Code sessions report about their usage, one file each.

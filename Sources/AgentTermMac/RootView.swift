@@ -477,6 +477,8 @@ private struct HostVersionBanner: View {
     @State private var confirming = false
 
     private var title: String {
+        // Another Mac's: the words the iPhone says of it.
+        if let remote = model.remote, otherBuild == nil { return StateWords.versionTitle(match, mac: remote.name) }
         guard let otherBuild else {
             return match == .hostOlder ? "The host that is running is from an older version of AgentTerm." : "The host that is running is from a newer version of AgentTerm."
         }
@@ -487,6 +489,7 @@ private struct HostVersionBanner: View {
     }
 
     private var detail: String {
+        if let remote = model.remote, otherBuild == nil { return StateWords.versionDetail(match, mac: remote.name) }
         if otherBuild != nil, match == .same { return "Restart it to use the host this app comes with." }
         if otherBuild != nil, match == .hostOlder { return "It kept running when the app was updated. Restart it to use this version's host." }
         return match == .hostOlder
@@ -700,18 +703,21 @@ struct CenterView: View {
             case .connecting:
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.small)
-                    Text(model.remote.map { "Connecting to \($0.name)…" } ?? "Starting the AgentTerm host…").foregroundStyle(.secondary)
+                    Text(model.remote.map { StateWords.connecting(to: $0.name) } ?? "Starting the AgentTerm host…").foregroundStyle(.secondary)
                 }
             case .failed(let reason):
                 VStack(spacing: 12) {
                     Image(systemName: "bolt.horizontal.circle").font(.system(size: 34)).foregroundStyle(.secondary)
-                    Text(model.remote.map { "Can't reach \($0.name)" } ?? (model.hostBroken ? "The AgentTerm host keeps stopping" : "Can't reach the AgentTerm host"))
+                    Text(model.remote.map { StateWords.cantReach($0.name) } ?? (model.hostBroken ? "The AgentTerm host keeps stopping" : "Can't reach the AgentTerm host"))
                         .font(.headline)
                     // How the last one ended may be known only after it was said that it keeps stopping.
                     Text(model.hostBroken && !model.isRemote ? model.brokenReason : reason)
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         .frame(maxWidth: 520)
-                    Button("Try Again") { model.reconnect() }
+                    if let remote = model.remote {
+                        Text(StateWords.reachAdvice(remote.name)).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 520)
+                    }
+                    Button(StateWords.tryAgain) { model.reconnect() }
                     if model.isRemote { Button("Use This Mac") { model.switchTo(nil) } }
                 }
                 .padding(40)
@@ -873,7 +879,7 @@ struct ForeignSizeBanner: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer()
-            Button("Use This Window's Size") { model.controller(for: session)?.claimSize() }
+            Button(StateWords.useThisSize) { model.controller(for: session)?.claimSize() }
                 .controlSize(.small)
         }
         .padding(.horizontal, 12)

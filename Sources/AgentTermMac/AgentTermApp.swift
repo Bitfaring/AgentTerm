@@ -264,6 +264,14 @@ struct SettingsView: View {
                         }
                     }
                 }
+                SettingsCard {
+                    // What the host tells while the app is behind (#66).
+                    SettingSwitch(
+                        NoticeWords.macToggle, id: "notify-on-mac",
+                        detail: NoticeWords.macDetail,
+                        help: NoticeWords.macHelp,
+                        isOn: $model.notifyOnMac)
+                }
                 if let keepAwake = model.keepAwake {
                     SettingsCard {
                         SettingSwitch(
