@@ -23,6 +23,9 @@
 //   APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC
 //   APNS_HOST      api.push.apple.com, or api.sandbox.push.apple.com
 //   PUSH_LIMIT     optional: a rate limiting binding, keyed by device token
+//   REGISTER_LIMIT optional: a rate limiting binding for /v1/register, keyed
+//                  by the caller's address, so that tickets are not handed
+//                  out in bulk
 //   FILTERING      "on" once the app has Apple's filtering entitlement: a
 //                  notification is then taken back by an alert push its
 //                  extension removes it with and shows nothing for; until
@@ -52,14 +55,18 @@ async function route(request, env) {
   } catch {
     return reply(400, { error: "body", reason: "not JSON" });
   }
-  if (url.pathname === "/v1/register") return register(body, env);
+  if (url.pathname === "/v1/register") return register(body, env, request.headers.get("cf-connecting-ip") ?? "unknown");
   if (url.pathname === "/v1/push") return push(body, env);
   return reply(404, { error: "path" });
 }
 
-async function register(body, env) {
+async function register(body, env, caller) {
   const token = String(body?.token ?? "").toLowerCase();
   if (!TOKEN.test(token)) return reply(400, { error: "token", reason: "not a device token" });
+  if (env.REGISTER_LIMIT) {
+    const { success } = await env.REGISTER_LIMIT.limit({ key: caller });
+    if (!success) return reply(429, { error: "limit", reason: "too many registrations from this address" });
+  }
   const expires = Math.floor(Date.now() / 1000) + TICKET_DAYS * 86400;
   return reply(200, { ticket: await sign(env, token, expires), expires });
 }

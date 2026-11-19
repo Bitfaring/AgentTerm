@@ -38,9 +38,13 @@ beforeEach(async () => {
   await setUp();
 });
 
-function call(path, body) {
+function call(path, body, ip = "192.0.2.1") {
   return worker.fetch(
-    new Request(`https://relay.test${path}`, { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) }),
+    new Request(`https://relay.test${path}`, {
+      method: "POST",
+      body: typeof body === "string" ? body : JSON.stringify(body),
+      headers: { "cf-connecting-ip": ip },
+    }),
     env,
   );
 }
@@ -184,4 +188,15 @@ test("RELAY-10 a Live Activity is updated, started and ended with its own token,
   assert.equal((await call("/v1/push", { token: TOKEN, ticket: t, expires, activity: { token: "x", event: "update", state } })).status, 400);
   assert.equal((await call("/v1/push", { token: TOKEN, ticket: t, expires, activity: { token: activityToken, event: "explode", state } })).status, 400);
   assert.equal((await call("/v1/push", { token: TOKEN, ticket: "bad", expires, activity: { token: activityToken, event: "update", state } })).status, 401);
+});
+
+test("RELAY-11 registrations are limited by the caller's address", async () => {
+  const counts = {};
+  env.REGISTER_LIMIT = { limit: async ({ key }) => ({ success: (counts[key] = (counts[key] ?? 0) + 1) <= 2 }) };
+  assert.equal((await call("/v1/register", { token: TOKEN }, "198.51.100.7")).status, 200);
+  assert.equal((await call("/v1/register", { token: TOKEN }, "198.51.100.7")).status, 200);
+  const third = await call("/v1/register", { token: TOKEN }, "198.51.100.7");
+  assert.equal(third.status, 429);
+  assert.match((await third.json()).reason, /too many registrations/);
+  assert.equal((await call("/v1/register", { token: TOKEN }, "203.0.113.9")).status, 200, "another address is not held back");
 });

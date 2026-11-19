@@ -238,6 +238,28 @@ final class RemoteMacTests: MacUITestCase {
         wait("this Mac to be on screen again", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == "This Mac" }
     }
 
+    /// REMOTE-23 (#167): on another Mac, a session a phone uses at a grid
+    /// narrower than the pane but taller is shown whole, in the middle, as
+    /// on this Mac (SIZE-10): its first row is not cut off.
+    func testANarrowButTallDevicesSessionOnTheOtherMacIsShownWhole() throws {
+        try startOtherMac()
+        let phone = try device("iPhone", state: otherState, port: otherPort)
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Shell"))
+        wait("a session on the other Mac") { phone.sessions.count == 1 }
+        let id = phone.sessions[0].id
+        let tall = TermSize(cols: 45, rows: 120)
+        phone.send(.attach(session: id, size: tall))
+        phone.send(.takeControl(session: id, size: tall))
+        wait("the phone's size") { phone.size(of: id) == tall }
+        app.wait(for: .button("Use This Size"), timeout: 15)
+        phone.connection.sendInput(Data("clear; printf FIRST-ROW; tput cup 119 0; printf LAST-ROW\n".utf8), to: id)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        shot("narrow-tall-device-other-mac")
+        XCTAssertEqual(app.first(.id("terminal-view"))?.help, "whole grid in sight")
+    }
+
     private var editor: MacDriver.Query { .role(kAXTextAreaRole as String) }
 
     private func listens(on port: UInt16) -> Bool {

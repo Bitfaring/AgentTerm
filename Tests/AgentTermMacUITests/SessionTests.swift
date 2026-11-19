@@ -465,6 +465,48 @@ final class SessionTests: MacUITestCase {
         app.wait("the terminal whole at the window's size") { self.app.first(.id("terminal-view"))?.help == "whole grid in sight" }
     }
 
+    /// SIZE-10 (#167): a session a phone uses at a grid narrower than the
+    /// pane but taller, stays in the middle, as SIZE-5 has it, and none of
+    /// it is cut off: its first row and its last are in sight.
+    func testANarrowButTallDevicesSessionIsShownWhole() throws {
+        let phone = try device("iPhone")
+        app.press(.button("Shell"))
+        wait("the shell") { phone.sessions.count == 1 }
+        let id = phone.sessions[0].id
+        let tall = TermSize(cols: 45, rows: 120)
+        phone.send(.attach(session: id, size: tall))
+        phone.send(.takeControl(session: id, size: tall))
+        wait("the phone's size") { phone.size(of: id) == tall }
+        app.wait(for: .button("Use This Size"), timeout: 15)
+        phone.connection.sendInput(Data("clear; printf FIRST-ROW; tput cup 119 0; printf LAST-ROW\n".utf8), to: id)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        shot("narrow-tall-device")
+        XCTAssertEqual(app.first(.id("terminal-view"))?.help, "whole grid in sight")
+    }
+
+    /// SIZE-11 (#167): a phone that uses a session at a grid that fits, then
+    /// at one taller than the pane, as when it is turned or its keyboard
+    /// goes: the new grid is laid out again, whole.
+    func testADevicesGridThatGrowsIsLaidOutAgain() throws {
+        let phone = try device("iPhone")
+        app.press(.button("Shell"))
+        wait("the shell") { phone.sessions.count == 1 }
+        let id = phone.sessions[0].id
+        let small = TermSize(cols: 45, rows: 20)
+        phone.send(.attach(session: id, size: small))
+        phone.send(.takeControl(session: id, size: small))
+        wait("the phone's size") { phone.size(of: id) == small }
+        app.wait(for: .button("Use This Size"), timeout: 15)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        let tall = TermSize(cols: 45, rows: 120)
+        phone.send(.resize(session: id, size: tall))
+        wait("the phone's new size") { phone.size(of: id) == tall }
+        phone.connection.sendInput(Data("clear; printf FIRST-ROW; tput cup 119 0; printf LAST-ROW\n".utf8), to: id)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        shot("grown-device")
+        XCTAssertEqual(app.first(.id("terminal-view"))?.help, "whole grid in sight")
+    }
+
     func testTheSSHMenuListsTheHostsOfTheConfiguration() throws {
         // LAUNCH-2: the hosts, without the patterns.
         app.press(.button("SSH"))
