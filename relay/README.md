@@ -54,5 +54,12 @@ token and refused the device token (`BadDeviceToken`).
 Once Apple grants the filtering entitlement, `npx wrangler deploy --var FILTERING:on`, with the
 entitlement added to the extension's entitlements, takes notifications back at once.
 
+The limits (30 pushes a minute to one device, 5 registrations a minute from
+one address) are asked of Cloudflare's rate limiting binding, which counts in
+each of its locations and agrees between them later: it is approximate, and
+was seen on 2026-11-19 to let 20 registrations a minute from one address
+through. The relay asks it rightly; how closely it holds is Cloudflare's (the
+owner's decision, 2026-11-19).
+
 Changing `TICKET_SECRET` makes every ticket invalid: each iPhone registers
 again the next time it connects to its Mac.

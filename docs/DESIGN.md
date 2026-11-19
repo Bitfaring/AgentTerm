@@ -1022,7 +1022,9 @@ connection registers again, so the ticket (30 days) stays fresh.
   the sealed notice on as `e`, with the identifier as `i`, under an `aps`
   that says "An agent needs you" with `mutable-content`. It signs tickets
   with HMAC over the token and their expiry, and refuses a push without
-  one, too large, or over 30 a minute to one device.
+  one or too large; it asks Cloudflare's rate limiting binding to hold a
+  device to 30 pushes a minute and an address to 5 registrations, which
+  Cloudflare does only approximately (relay/README.md).
 - On the iPhone the notification service extension (`AgentTermNotifications`)
   reads the key and the Mac's name from a keychain group the app and it
   share (`PushKeys`, `$(AppIdentifierPrefix)com.manhpham.agentterm.push`),
