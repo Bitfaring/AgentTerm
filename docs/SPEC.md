@@ -926,7 +926,11 @@ panel.
   ⌘⇧[ the next and previous tab, and in one of the user's tabs ⌥⌘→ and
   ⌥⌘← (View > Next and Previous Item in Group) the next and previous
   item it holds, with the keyboard in it; in an agent's tab the same keys
-  move about its area (Panes). ⌘W closes what is shown, a session is ended.
+  move about its area (Panes). ⌥⌘ and a number (⌥⌘1 to ⌥⌘9, View > Item
+  1 in Group and on) picks that item of the row of the tab in front, left
+  to right, an agent's row being the agent, its pages, its shells, with the
+  keyboard in it (#171); while ⌥ and ⌘ are held, each of the first nine
+  items shows its number. ⌘W closes what is shown, a session is ended.
   An item's × closes it. **A tab's × closes all it holds** (#145): the
   Shells tab ends its shells ("End 2 shells?", asked first even for one),
   the Browser, Diffs and Files tabs close their pages, diffs and files

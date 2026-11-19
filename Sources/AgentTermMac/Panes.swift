@@ -243,6 +243,19 @@ extension AppModel {
     }
 
     /// The item after or before the one shown, in the group in front.
+    /// The item of that number (from 1) of the row of the group in front,
+    /// left to right, given the keyboard, as clicking it would (#171).
+    func showMember(number: Int) {
+        guard let group = paneLayout.focusedPane.front else { return }
+        let list = members(of: group)
+        guard number >= 1, number <= list.count else { return }
+        selectTab(id: list[number - 1])
+        focusKeyboard()
+    }
+
+    /// How many items the row of the group in front has.
+    var frontMemberCount: Int { paneLayout.focusedPane.front.map { members(of: $0).count } ?? 0 }
+
     func showNextMember(_ offset: Int) {
         guard let group = paneLayout.focusedPane.front, let shown = shownMember(of: group) else { return }
         let list = members(of: group)

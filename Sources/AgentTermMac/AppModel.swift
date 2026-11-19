@@ -414,6 +414,25 @@ final class AppModel: ObservableObject {
     /// waits for the user (#22): shown until it is opened or dismissed.
     /// Told by the host since #66, which makes each notice for every device.
     @Published private(set) var agentNotice: AgentNotice?
+
+    /// Whether ⌥ and ⌘ are held, and nothing else: the items of the row
+    /// in front show their numbers then (#171).
+    @Published private(set) var itemNumbersShown = false
+    private var modifierWatch: Any?
+
+    func watchModifiers() {
+        guard modifierWatch == nil else { return }
+        modifierWatch = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            let held = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
+            let shown = held == [.option, .command]
+            if self?.itemNumbersShown != shown { self?.itemNumbersShown = shown }
+            return event
+        }
+        // Keys let go in another app are never seen here.
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.itemNumbersShown = false }
+        }
+    }
     /// The host's number for it, to take it away when it is handled.
     private var agentNoticeID: UInt64?
 
@@ -1090,6 +1109,7 @@ final class AppModel: ObservableObject {
         }
         loadInbox()
         macNotifications.model = self
+        watchModifiers()
         connect()
         folderChanged()
         // History's reading, pins and searches are the host's, for this Mac too (#46).

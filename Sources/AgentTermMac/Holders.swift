@@ -46,8 +46,20 @@ struct GroupRow: View {
         HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(items, id: \.self) { item in
+                    ForEach(Array(items.enumerated()), id: \.element) { index, item in
                         GroupItemChip(group: group, item: item, selected: onShow.contains(item), keyboard: area && item == keyboard)
+                            // Its number while ⌥ and ⌘ are held (#171): ⌥⌘ and it picks it.
+                            .overlay(alignment: .topTrailing) {
+                                if model.itemNumbersShown, index < 9 {
+                                    Text("\(index + 1)")
+                                        .font(.system(size: 9, weight: .bold).monospacedDigit())
+                                        .padding(.horizontal, 3)
+                                        .background(Capsule().fill(Color.accentColor))
+                                        .foregroundStyle(.white)
+                                        .offset(x: 3, y: -3)
+                                        .accessibilityHidden(true)
+                                }
+                            }
                     }
                 }
             }

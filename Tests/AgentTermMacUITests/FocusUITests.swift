@@ -43,4 +43,20 @@ final class FocusUITests: MacUITestCase {
         app.menu(["View", "Previous Item in Group"])
         app.waitForKeyboard(in: "terminal-\(second.id)", "the one before it")
     }
+
+    /// PANE-22 (#171): ⌥⌘ and a number picks that item of the row of the
+    /// group in front, left to right, and gives it the keyboard.
+    func testOptionCommandANumberPicksAnItemOfTheRow() throws {
+        let phone = try device()
+        let first = try newShell(phone, count: 1)
+        let second = try newShell(phone, count: 2)
+        let third = try newShell(phone, count: 3)
+        app.waitForKeyboard(in: "terminal-\(third.id)", "the new shell")
+        app.menu(["View", "Item 1 in Group"])
+        app.waitForKeyboard(in: "terminal-\(first.id)", "the first item of the row")
+        app.menu(["View", "Item 3 in Group"])
+        app.waitForKeyboard(in: "terminal-\(third.id)", "the third item of the row")
+        app.menu(["View", "Item 2 in Group"])
+        app.waitForKeyboard(in: "terminal-\(second.id)", "the second item of the row")
+    }
 }
