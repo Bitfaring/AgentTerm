@@ -183,6 +183,9 @@ final class PushTests: XCTestCase {
         let push = try XCTUnwrap(relay.sent.first)
         XCTAssertEqual(push["token"] as? String, deviceToken)
         XCTAssertEqual(push["ticket"] as? String, "signed")
+        // The Mac's app is told over its connection, which may come after
+        // the relay was asked.
+        waitUntil("the Mac told") { !mac.notices.isEmpty }
         let question = try XCTUnwrap(mac.notices.first)
         XCTAssertEqual(push["collapse"] as? String, identifier(question.id))
         XCTAssertFalse((push["payload"] as? String ?? "").contains("make test"), "the relay cannot read it")
@@ -209,6 +212,7 @@ final class PushTests: XCTestCase {
         // Back: the log, and no notice again.
         let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
         waitUntil("the log") { phone.log != nil }
+        waitUntil("the Mac told of both") { mac.notices.count == 2 }
         XCTAssertEqual(phone.log?.map(\.id), mac.notices.map(\.id))
         XCTAssertEqual(phone.log?.first?.handled?.how, .movedOn)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
@@ -225,7 +229,7 @@ final class PushTests: XCTestCase {
         waitUntil("someone at the Mac") { inUse() == true }
         mac.connection.sendInput(Data("\n".utf8), to: agent)
         waitUntil("pushed although the Mac is in use") { relay.sent.count == 1 }
-        XCTAssertEqual(mac.notices.count, 1, "the Mac's app is told too")
+        waitUntil("the Mac's app told too") { mac.notices.count == 1 }
 
         let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
         waitUntil("the phone back") { phone.log != nil }
