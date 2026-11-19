@@ -299,6 +299,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | HAND-6 | A running session of an agent | Choose Hand Off from the session's menu | The sheet opens for that session's conversation | P, M |
 | HAND-7 (#150) | A conversation of a repository | Hand it off into a new worktree, on a branch named; again with the same branch | The worktree on that branch, the file written in it, saying it is a worktree and to work there only; the second refused | U |
 | HAND-8 (#150) | A conversation of the folder | "+" of the worktree bar, Begin: Continue a Conversation, Create | The conversation picked already, and what is done said; the agent started in the new worktree on its branch, the handoff file there with the conversation | M |
+| HAND-9 (#165) | Conversations of the folder, of one of its worktrees, of another project, of a subfolder | What a new worktree offers to carry on, on the Mac and the iPhone | The folder's and the worktree's, newest first, each once; not the other project's nor the subfolder's | U |
 
 ### The Mac window and its tabs
 

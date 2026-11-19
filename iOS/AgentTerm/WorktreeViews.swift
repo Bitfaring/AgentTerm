@@ -125,10 +125,9 @@ struct NewWorktreeSheet: View {
 
     private var agent: AgentInfo? { model.installedAgents.first { $0.id == starting } }
 
-    /// The conversations it can carry on: the folder's own first, then the others.
+    /// The conversations it can carry on: the folder's and its worktrees' (#165).
     private var conversations: [Conversation] {
-        let own = model.histories[project] ?? []
-        return own + (model.histories[""] ?? []).filter { other in !own.contains { $0.id == other.id } }
+        WorktreePath.conversations(of: project, own: model.histories[project] ?? [], all: model.histories[""] ?? [])
     }
     private var conversation: Conversation? { conversations.first { $0.id == conversationID } }
     private var branches: [BranchInfo] { model.branches[project] ?? [] }

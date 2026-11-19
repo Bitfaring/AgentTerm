@@ -141,8 +141,8 @@ says names the device it runs on.
   remote, is picked; the new branch follows none), and what is started
   there, an agent or a shell. The sheet says when the folder has changes
   that the worktree will not have. An agent can begin fresh or **continue
-  a conversation** (#150), one of the folder's offered first, the newest
-  picked: it is handed off into the new worktree (see Handoff), and the
+  a conversation** (#150), one of the folder's or of its worktrees', and
+  only those (#165), the newest picked: it is handed off into the new worktree (see Handoff), and the
   handoff file says to work there only, not at the folder's paths the
   conversation names. Its own conversation is not resumed there: it holds
   the folder's paths, and the agent would go on changing the folder.
