@@ -1271,6 +1271,19 @@ reads everywhere, so the rule says it holds only where the server has
 tools. The server outside a session of AgentTerm's gives no words but that
 it has no tools.
 
+What the default asks (#156, MCP-33): to run shell commands in a shell of
+the server's own rather than with the agent's own tool, and, when the
+server's `shell_` or `browser_` tools are not loaded yet (Claude Code
+defers an MCP server's tools until the agent asks for them by name), to
+load them by name before the first command. Tried on 2026-11-19 with the
+four real agents in the development build, each at its cheapest model
+(MCP-35): Claude Code 2.1.328 with Haiku 5.5, Codex 0.169.1 with
+`gpt-5.6-luna` (once in two runs) and Antigravity 1.5.10 opened a shell of
+the server's and ran the commands there; Copilot CLI 1.0.114 called
+`shell_open` and waited for the user's leave to use it, as it asks for any
+tool. Whether an agent follows the words is the model's: Haiku, in a host
+that refused its server, answered with its own file tools.
+
 **What it may reach.** A shell it opens is a session like any other, in the
 agent's folder and at its size, with `SessionInfo.openedBy` naming the
 agent's session. Only that agent sees it: it alone lists, reads, types
