@@ -469,7 +469,9 @@ class MacUITestCase: XCTestCase {
     /// What a test has the app started with besides, when it starts it again.
     /// The onboarding is not shown, but in the test of it (#129): the
     /// stand-in agents are not set up, and it would cover the window.
-    var appEnvironment: [String: String] = ["AGENTTERM_NO_ONBOARDING": "1"]
+    /// Nothing is posted into the user's Notification Center either, nor
+    /// its question asked, which takes the app out of the front (#66).
+    var appEnvironment: [String: String] = ["AGENTTERM_NO_ONBOARDING": "1", "AGENTTERM_NO_SYSTEM_NOTIFICATIONS": "1"]
 
     /// Starts the app on the test's host. Its preferences are its own too:
     /// with a home of its own it reads and writes none of the real app's.

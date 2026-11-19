@@ -14,8 +14,13 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
     private static let replyCategory = "agent-reply"
     private static let openCategory = "agent-open"
 
+    /// None outside an app bundle, and none for the tests, which leave the
+    /// user's Notification Center alone (`AGENTTERM_NO_SYSTEM_NOTIFICATIONS`).
     private var center: UNUserNotificationCenter? {
-        Bundle.main.bundleIdentifier == nil || Bundle.main.bundleURL.pathExtension != "app" ? nil : UNUserNotificationCenter.current()
+        guard Bundle.main.bundleIdentifier != nil, Bundle.main.bundleURL.pathExtension == "app",
+            ProcessInfo.processInfo.environment["AGENTTERM_NO_SYSTEM_NOTIFICATIONS"] == nil
+        else { return nil }
+        return UNUserNotificationCenter.current()
     }
 
     override init() {
