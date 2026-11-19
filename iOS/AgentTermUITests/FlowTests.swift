@@ -311,6 +311,8 @@ final class FlowTests: XCTestCase {
         let app = XCUIApplication()
         // #83: the app writes down the touches it receives.
         if let log = environment["AGENTTERM_TOUCH_LOG"] { app.launchEnvironment["AGENTTERM_TOUCH_LOG"] = log }
+        // PERF-16 (#126): the app notes how long its main thread is held up.
+        if let notes = environment["AGENTTERM_MEASURE_MAIN"] { app.launchEnvironment["AGENTTERM_MEASURE_MAIN"] = notes }
         app.launch()
 
         // Pair by opening the link, as tapping an agentterm:// link would: the
@@ -401,6 +403,11 @@ final class FlowTests: XCTestCase {
         if environment["AGENTTERM_ONLY_INBOX"] != nil {
             app.navigationBars.buttons.firstMatch.tap()
             useTheInbox(app, compose: compose)
+            return
+        }
+        if environment["AGENTTERM_ONLY_MARKDOWN"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            try measureMarkdown(app)
             return
         }
         if environment["AGENTTERM_ONLY_NARROW"] != nil {
@@ -990,6 +997,85 @@ final class FlowTests: XCTestCase {
     /// IPAD-2 (#88): the iPad's window narrowed by the handle at its bottom
     /// right corner, the list is laid out as on the iPhone, as wide as the
     /// window less its margins. Starts in the sessions list.
+    /// PERF-16 (#126): the iPhone's Markdown preview, the Mac's web page,
+    /// measured as the Mac's is (PERF-15): a long document, `TESTING.md`
+    /// of this repository, opened and scrolled through, holds the app's
+    /// main thread up no longer than a small one does, give or take a
+    /// frame. The app notes its stalls (`MainThreadWatch`); while a step is
+    /// measured the test asks it nothing. Starts in the sessions list.
+    private func measureMarkdown(_ app: XCUIApplication) throws {
+        let notes = try XCTUnwrap(environment["AGENTTERM_MEASURE_MAIN"])
+        func stalls(since start: Date) -> [Double] {
+            let text = (try? String(contentsOfFile: notes, encoding: .utf8)) ?? ""
+            return text.split(separator: "\n").compactMap { line -> Double? in
+                let parts = line.split(separator: " ")
+                guard parts.count == 2, let at = Double(parts[0]), let took = Double(parts[1]) else { return nil }
+                return at >= start.timeIntervalSince1970 ? took : nil
+            }
+        }
+        /// Does a step, leaves the app alone, and returns the longest stall.
+        func longestStall(_ what: String, for seconds: UInt32 = 3, _ step: () -> Void) -> Double {
+            sleep(1)
+            let start = Date()
+            step()
+            sleep(seconds)
+            let found = stalls(since: start)
+            let longest = found.max() ?? 0
+            print(
+                "MEASURE markdown, \(what): "
+                    + (found.isEmpty
+                        ? "never held up over 16 ms"
+                        : String(format: "held up %d times, the longest %.0f ms, %.0f ms in all", found.count, longest, found.reduce(0, +))))
+            return longest
+        }
+        app.buttons["folder-details"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Files"].waitForExistence(timeout: 10))
+        app.buttons["Files"].tap()
+        XCTAssertTrue(app.staticTexts["small.md"].waitForExistence(timeout: 15), "the documents are not listed")
+        /// Opens a document of the list, found before the time starts.
+        func open(_ name: String, showing words: String) -> Double {
+            let row = app.staticTexts[name].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 10), "\(name) is not listed")
+            let point = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let longest = longestStall("\(name) opened") { point.tap() }
+            XCTAssertTrue(app.webViews.staticTexts[words].firstMatch.waitForExistence(timeout: 20), "\(name) is not shown")
+            return longest
+        }
+        let atRest = longestStall("at rest, the list open") {}
+        // The first preview starts WebKit's process: not compared.
+        _ = open("first.md", showing: "First")
+        app.navigationBars.buttons.firstMatch.tap()
+        // A text file, in the editor: what any file opened costs.
+        _ = longestStall("notes.txt opened") { app.staticTexts["notes.txt"].firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        XCTAssertTrue(app.textViews["code-editor"].waitForExistence(timeout: 10), "notes.txt did not open")
+        app.navigationBars.buttons.firstMatch.tap()
+        // The small one twice, the longer of the two kept: what opening any
+        // document varies by.
+        var small = 0.0
+        for _ in 0..<2 {
+            small = max(small, open("small.md", showing: "Small"))
+            app.navigationBars.buttons.firstMatch.tap()
+        }
+        var opened: [String: Double] = [:]
+        for (name, heading) in [("RELEASE.md", "Releasing AgentTerm"), ("SPEC.md", "AgentTerm product spec"), ("DESIGN.md", "AgentTerm design"), ("TESTING.md", "Testing AgentTerm")] {
+            opened[name] = open(name, showing: heading)
+            if name != "TESTING.md" { app.navigationBars.buttons.firstMatch.tap() }
+        }
+        capture("M1-testing-md")
+        // TESTING.md on show: six fast swipes up, as a thumb goes through it.
+        let middle = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+        let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15))
+        let scrolled = longestStall("TESTING.md swiped through, six times") {
+            for _ in 0..<6 { middle.press(forDuration: 0.01, thenDragTo: top, withVelocity: .fast, thenHoldForDuration: 0) }
+        }
+        capture("M2-testing-md-scrolled")
+        app.navigationBars.buttons.firstMatch.tap()
+        let allowed = max(small, atRest) + 16
+        let testing = try XCTUnwrap(opened["TESTING.md"])
+        XCTAssertLessThanOrEqual(testing, allowed, "TESTING.md held the app up \(Int(testing)) ms as it opened; a small document \(Int(small)) ms")
+        XCTAssertLessThanOrEqual(scrolled, allowed, "swiping through TESTING.md held the app up \(Int(scrolled)) ms")
+    }
+
     private func narrowTheWindow(_ app: XCUIApplication) {
         guard UIDevice.current.userInterfaceIdiom == .pad else { return }
         // In the screen's points: the app's own frame moves with its window.

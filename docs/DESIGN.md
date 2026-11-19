@@ -532,16 +532,27 @@ documents, and the tab shortcuts count across both.
 
 The editor is an `NSTextView` whose text storage is Highlightr's
 `CodeAttributedString`, which recolors text as it is edited using
-highlight.js. A Markdown file's preview is a web page (#126): MarkdownUI
-turns the Markdown into HTML with cmark, which leaves out the raw HTML of
-the file, and a `WKWebView` shows it with GitHub's look in the dark. The
+highlight.js. A Markdown file's preview is a web page (#126): cmark-gfm,
+the parser MarkdownUI is built on, called directly with GitHub's
+extensions (tables, struck-through text, links found in the text, task
+lists), turns the Markdown into HTML and leaves out the raw HTML of the
+file, and a `WKWebView` shows it with GitHub's look in the dark.
+MarkdownUI's own `renderHTML()` is not used: it builds a table's cells
+without their spans, which cmark-gfm then takes for fillers and writes no
+tags for. The
 page's only scripts are highlight.js (Highlightr's own copy), Mermaid when
 the document has a diagram, and a few lines that start them, each allowed
 by a nonce in the page's Content-Security-Policy; nothing of the file runs.
 The page is made off the main thread and laid out and scrolled in WebKit's
-process, so a long document holds nothing up. On the Mac, for a document on
+process, so a long document holds nothing up. Every preview shares one website
+data store, kept in memory only: one each had WebKit start a process for
+each preview. On the Mac, for a document on
 it, the page is written to a temporary file, so that it may
-read the pictures the document names; a link opens where the app opens it.
+read the pictures the document names: in a folder of the build's and the
+process's own (`<bundle identifier>-preview-<pid>` in the temporary
+folder), each page taken away when its preview is, and the folders that
+ended apps of the same build left taken away at the first preview. A link
+opens where the app opens it.
 What an agent said in a transcript is still drawn by MarkdownUI in place
 (`MarkdownText`). The editor and the previews live in the
 `AgentTermEditor` target, which both apps use: on the iPhone the editor is a

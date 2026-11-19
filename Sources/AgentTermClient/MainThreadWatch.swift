@@ -2,19 +2,20 @@ import Foundation
 
 /// Notes each time the app's main thread was held up for longer than a
 /// frame (#21), when it is asked to with `AGENTTERM_MEASURE_MAIN=<file>`:
-/// for measuring, by `scripts/test-mac.sh` with `MEASURE=1`. Without the
+/// for measuring, by `scripts/test-mac.sh` and `MARKDOWN=only
+/// scripts/test-ios.sh` (#126), in both apps. Without the
 /// variable nothing runs.
 ///
 /// A thread of its own asks the main thread to answer, again and again,
 /// and times each answer: one that takes longer than 16 ms, a frame at 60
 /// Hz, is a moment the window did not answer the user either. Each is
 /// written as a line, when it was noticed and how long it took.
-enum MainThreadWatch {
-    static let variable = "AGENTTERM_MEASURE_MAIN"
+public enum MainThreadWatch {
+    public static let variable = "AGENTTERM_MEASURE_MAIN"
     /// A frame at 60 Hz, in milliseconds.
-    static let frame = 16.0
+    public static let frame = 16.0
 
-    static func startIfAsked(environment: [String: String] = ProcessInfo.processInfo.environment) {
+    public static func startIfAsked(environment: [String: String] = ProcessInfo.processInfo.environment) {
         guard let path = environment[variable], !path.isEmpty else { return }
         FileManager.default.createFile(atPath: path, contents: nil)
         guard let file = FileHandle(forWritingAtPath: path) else { return }

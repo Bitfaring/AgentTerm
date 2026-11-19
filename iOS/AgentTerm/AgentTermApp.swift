@@ -1,3 +1,4 @@
+import AgentTermClient
 import AgentTermFirebase
 import AgentTermTelemetry
 import AgentTermTerminal
@@ -43,6 +44,9 @@ struct AgentTermApp: App {
         // depends on whether this build can report at all.
         #if DEBUG
         TouchLog.startIfAsked()
+        // How long the main thread is held up, for `MARKDOWN=only
+        // scripts/test-ios.sh` (#126).
+        MainThreadWatch.startIfAsked()
         #endif
         FingerWatch.start()
         FirebaseSink.start()

@@ -212,6 +212,56 @@ small text, which AppKit sizes. Opening the file takes 30 ms more than it
 did: its lines are counted then (the text copied, 11 ms, and its line
 ends found, 13 ms).
 
+### A long Markdown document (#126)
+
+Taken on 2026-11-19 with a debug build (`scripts/test-mac.sh
+MarkdownPreviewTimingTests`, PERF-15), the documents being this
+repository's own. Before: MarkdownUI's views, at 626284a, one run. After:
+the preview as a web page in WebKit, two runs, then three more for the
+documents. The small document is opened after a first preview, which
+starts WebKit's process, and a text file in the editor.
+
+| What | Before | After | Over 16 ms still |
+|---|---|---|---|
+| The first preview of all (a few lines) | twice, the longest 78 ms | 3 or 4 times, the longest 85 to 116 ms: WebKit's process started | **yes**, once a launch |
+| A text file opened in the editor, for comparison | not measured | 2 or 3 times, the longest 50 to 79 ms | **yes**: any tab, not the preview |
+| A small document opened | once, 40 ms | once or twice, the longest 23 to 47 ms | **yes**, as any tab |
+| `RELEASE.md` (211 lines) opened | 3 times, the longest 146 ms | once, 28 to 33 ms | **yes**, as a small one |
+| `SPEC.md` (1,292 lines) opened | 3 times, the longest 333 ms, 693 ms in all | once, 22 to 36 ms | **yes**, as a small one |
+| `DESIGN.md` (1,742 lines) opened | twice, the longest 853 ms, 1,450 ms in all | once, 22 to 34 ms | **yes**, as a small one |
+| `TESTING.md` (136 KB, wide tables) opened | once, 1,738 ms | once, 23 to 36 ms | **yes**, as a small one |
+| `TESTING.md` scrolled from top to bottom in a second | 86 times, the longest 150 ms, 4,321 ms in all | never | no |
+
+The page is made off the main thread and laid out and scrolled in
+WebKit's process: how long a document is no longer counts. Found by
+sampling the app (`sample`, the main thread) and changed: every preview
+had a website data store of its own, and WebKit started a process for each
+(30 to 50 ms, most of it registering the user's fonts); they share one, in
+memory only. The folder of the pages, looked for in the temporary folder
+the first time (92 ms), is found off the main thread.
+
+What is left is the same for every document, small or long, and less than
+a text file opened in the editor costs: a tab opened, a web view made and
+its page started, 22 to 36 ms once; and WebKit's process started at the
+first preview, 85 to 116 ms.
+
+On the iPhone, the same page (`MARKDOWN=only scripts/test-ios.sh`, PERF-16,
+a debug build in the iPhone Air simulator, two runs; MarkdownUI's views
+were not measured there before):
+
+| What | Held up |
+|---|---|
+| The first preview of all | 9 times, the longest 721 to 732 ms: WebKit's process started |
+| A text file opened in the editor, for comparison | 7 times, the longest 30 ms, 186 ms in all |
+| A small document opened | 5 to 7 times, the longest 37 to 54 ms, about 200 ms in all |
+| `RELEASE.md`, `SPEC.md`, `DESIGN.md` opened | 6 or 7 times, the longest 38 to 62 ms, about 200 to 235 ms in all |
+| `TESTING.md` opened | 6 times, the longest 45 to 52 ms, about 215 ms in all |
+| `TESTING.md` swiped through, six times | once to 4 times, the longest 26 to 28 ms |
+
+As on the Mac, a long document costs what a small one does. Opening any
+document on the iPhone holds it up for about 200 ms in all, a screen pushed
+and the file fetched from the Mac; not looked into here.
+
 ## Not measured yet
 
 These need what a test on this Mac does not have, and are still to do for

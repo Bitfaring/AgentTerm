@@ -1,6 +1,7 @@
-import MarkdownUI
 import SwiftUI
 import WebKit
+import cmark_gfm
+import cmark_gfm_extensions
 
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
@@ -37,7 +38,7 @@ public struct MarkdownPreview: View {
     public static func page(for text: String, baseURL: URL?, nonce: String) -> String {
         // HTML mixed into the Markdown that has a Markdown meaning is turned
         // into it first, as the preview always did.
-        let body = MarkdownContent(MarkdownHTML.flatten(text)).renderHTML()
+        let body = GitHubMarkdown.html(MarkdownHTML.flatten(text))
         let mermaid = body.contains("language-mermaid") ? WebPreviewAssets.mermaid : nil
         var page = """
             <!doctype html><html><head><meta charset="utf-8">
@@ -56,6 +57,55 @@ public struct MarkdownPreview: View {
 
     private static func escapeAttribute(_ text: String) -> String {
         text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;").replacingOccurrences(of: "<", with: "&lt;")
+    }
+}
+
+/// Markdown as GitHub makes it into HTML: cmark-gfm with its tables,
+/// struck-through text, links found in the text and task lists. Raw HTML
+/// of the file is left out, as cmark's safe default does. MarkdownUI's own
+/// `renderHTML()` is not used: it builds a table's cells without their
+/// spans, which cmark-gfm then takes for fillers and writes no tags for.
+enum GitHubMarkdown {
+    /// The extensions, registered once whichever thread asks first.
+    private static let extensions: [String] = {
+        cmark_gfm_core_extensions_ensure_registered()
+        return ["table", "strikethrough", "autolink", "tasklist"]
+    }()
+
+    static func html(_ markdown: String) -> String {
+        let names = extensions
+        guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { return "" }
+        defer { cmark_parser_free(parser) }
+        for name in names {
+            if let found = cmark_find_syntax_extension(name) { cmark_parser_attach_syntax_extension(parser, found) }
+        }
+        var bytes = Array(markdown.utf8)
+        bytes.withUnsafeMutableBufferPointer { buffer in
+            buffer.baseAddress?.withMemoryRebound(to: CChar.self, capacity: buffer.count) { cmark_parser_feed(parser, $0, buffer.count) }
+        }
+        guard let document = cmark_parser_finish(parser) else { return "" }
+        defer { cmark_node_free(document) }
+        guard let html = cmark_render_html(document, CMARK_OPT_DEFAULT, cmark_parser_get_syntax_extensions(parser)) else { return "" }
+        defer { free(html) }
+        return String(cString: html)
+    }
+}
+
+/// Where the pages of a document with pictures beside it are written (#126):
+/// a folder of the build's and the process's own, so that the released app
+/// and a development build never touch each other's. What an app of the
+/// same build that has ended left is taken away.
+enum PreviewPages {
+    static func folder(in temporary: URL, identifier: String, pid: Int32) -> URL {
+        let manager = FileManager.default
+        let prefix = "\(identifier)-preview-"
+        for name in (try? manager.contentsOfDirectory(atPath: temporary.path)) ?? [] where name.hasPrefix(prefix) {
+            guard let other = Int32(name.dropFirst(prefix.count)), other != pid, kill(other, 0) != 0, errno == ESRCH else { continue }
+            try? manager.removeItem(at: temporary.appendingPathComponent(name))
+        }
+        let folder = temporary.appendingPathComponent(prefix + String(pid), isDirectory: true)
+        try? manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
     }
 }
 
@@ -119,6 +169,8 @@ enum WebPreviewAssets {
         .markdown-body h1 { font-size: 2em; } .markdown-body h2 { font-size: 1.5em; } .markdown-body h3 { font-size: 1.25em; }
         .markdown-body p, .markdown-body ul, .markdown-body ol, .markdown-body table, .markdown-body pre, .markdown-body blockquote { margin: 0 0 16px; }
         .markdown-body ul, .markdown-body ol { padding-left: 2em; }
+        .markdown-body li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.5em; }
+        .markdown-body li > input[type="checkbox"] { margin: 0 .4em 0 0; vertical-align: middle; }
         .markdown-body code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: rgba(255,255,255,.08); padding: .2em .4em; border-radius: 6px; }
         .markdown-body pre { background: rgba(255,255,255,.06); border-radius: 6px; padding: 14px; overflow: auto; }
         .markdown-body pre code { background: none; padding: 0; }
@@ -146,9 +198,14 @@ private struct MarkdownWebView: PreviewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(open: open) }
 
+    /// One store for every preview, kept in memory only: a store of each
+    /// view's own had WebKit start a process for each, 30 to 50 ms of the
+    /// main thread every time a document was opened (#126).
+    @MainActor private static let dataStore = WKWebsiteDataStore.nonPersistent()
+
     private func make(_ coordinator: Coordinator) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
+        configuration.websiteDataStore = Self.dataStore
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = coordinator
         #if canImport(AppKit) && !targetEnvironment(macCatalyst)
@@ -188,20 +245,24 @@ private struct MarkdownWebView: PreviewRepresentable {
 
         deinit { if let page { try? FileManager.default.removeItem(at: page) } }
 
+        static let folder = PreviewPages.folder(
+            in: FileManager.default.temporaryDirectory, identifier: Bundle.main.bundleIdentifier ?? "agentterm", pid: getpid())
+
         /// The page is made off the main thread; a document picked meanwhile wins.
         func load(text: String, baseURL: URL?, into webView: WKWebView) {
             generation += 1
             let generation = generation
             let nonce = UUID().uuidString
-            DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self, weak webView] in
                 let html = MarkdownPreview.page(for: text, baseURL: baseURL, nonce: nonce)
+                // The folder is found here, off the main thread: the first
+                // time, it looks through the temporary folder.
+                let folder = baseURL?.isFileURL == true ? Self.folder : nil
                 DispatchQueue.main.async { [weak self, weak webView] in
                     guard let self, let webView, generation == self.generation else { return }
-                    if let baseURL, baseURL.isFileURL {
+                    if let folder {
                         // Pictures next to the document are files: the page
                         // is one too, which may read them.
-                        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-preview", isDirectory: true)
-                        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                         if let page = self.page { try? FileManager.default.removeItem(at: page) }
                         let page = folder.appendingPathComponent(UUID().uuidString + ".html")
                         self.page = page

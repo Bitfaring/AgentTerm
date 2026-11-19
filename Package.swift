@@ -22,6 +22,10 @@ let package = Package(
         .package(url: "https://github.com/raspu/Highlightr.git", from: "2.2.0"),
         // Markdown preview.
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.0"),
+        // GitHub's Markdown as HTML for the preview's page (#126): the same
+        // cmark-gfm MarkdownUI is built on, whose own HTML drops the cells of
+        // a table.
+        .package(url: "https://github.com/swiftlang/swift-cmark", from: "0.4.0"),
         // Usage statistics and crash reports, in released builds only, and
         // only what the user allows. See Sources/AgentTermTelemetry.
         .package(url: "https://github.com/firebase/firebase-ios-sdk.git", from: "13.1.0"),
@@ -43,6 +47,8 @@ let package = Package(
             dependencies: [
                 .product(name: "Highlightr", package: "Highlightr"),
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
+                .product(name: "cmark-gfm", package: "swift-cmark"),
+                .product(name: "cmark-gfm-extensions", package: "swift-cmark"),
             ],
             exclude: ["Resources/THIRD-PARTY.md"],
             // Mermaid, to draw diagrams without a network.

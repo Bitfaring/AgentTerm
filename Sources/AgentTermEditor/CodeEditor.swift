@@ -59,7 +59,7 @@ public enum EditorStyle {
 /// context, which is not worth doing per file.
 @MainActor
 enum Highlighting {
-    static let theme = "atom-one-dark"
+    nonisolated static let theme = "atom-one-dark"
 
     static let shared: Highlightr? = {
         let highlightr = Highlightr()

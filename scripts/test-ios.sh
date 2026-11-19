@@ -74,6 +74,13 @@ printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"write test
 git init -q -b main "$PROJECT/web"
 printf 'web\n' >> "$PROJECT/.git/info/exclude"
 printf '["%s"]' "$PROJECT" > "$STATE/folders.json"
+# MARKDOWN=only: the documents the Mac's PERF-15 opens, for the phone's
+# preview to be measured the same way (#126).
+if [ "${MARKDOWN:-}" = only ]; then
+    printf '# First\n\nThe first preview, which starts WebKit.\n' > "$PROJECT/first.md"
+    printf '# Small\n\nA few words, and a [link](other.md).\n' > "$PROJECT/small.md"
+    for doc in RELEASE SPEC DESIGN TESTING; do cp "docs/$doc.md" "$PROJECT/$doc.md"; done
+fi
 
 # A host that died on the first Mac before the one started here, with two
 # sessions: the first host has to tell the phone (HOST-8). What a host
@@ -170,6 +177,11 @@ if [ "${NOTE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NOTE=1; fi
 # NARROW=only narrows the iPad's window and looks at the list (IPAD-2), and
 # nothing else. On an iPhone it checks nothing.
 if [ "${NARROW:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NARROW=1; fi
+# MARKDOWN=only opens Markdown documents in their preview, scrolls the
+# longest, and says how long the app's main thread was held up (PERF-16).
+if [ "${MARKDOWN:-}" = only ]; then
+    export TEST_RUNNER_AGENTTERM_ONLY_MARKDOWN=1 TEST_RUNNER_AGENTTERM_MEASURE_MAIN="$STATE/main-thread.txt"
+fi
 # PAGES=only checks that a long session's earlier lines come a page at a time.
 if [ "${PAGES:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_HISTORY=1; fi
 # TAKEOVER=1 has something play the Mac: once the phone has a session open,
@@ -190,6 +202,7 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${IDLE:-}" = only ]; then grep -E "MEASURE idle" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (idle waits measured)."; rm -f "$LOG"; exit 0; fi
     if [ "${NOTE:-}" = only ]; then echo "iOS UI test passed (a note read only)."; rm -f "$LOG"; exit 0; fi
     if [ "${INBOX:-}" = only ]; then echo "iOS UI test passed (the Inbox only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${MARKDOWN:-}" = only ]; then grep -E "MEASURE markdown" "$LOG" | sed 's/^.*MEASURE //' | sort -u; echo "iOS UI test passed (Markdown measured only)."; rm -f "$LOG"; exit 0; fi
     if [ "${NARROW:-}" = only ]; then grep -E "MEASURE narrow" "$LOG" | sed 's/^.*MEASURE //'; echo "iOS UI test passed (the window narrowed only)."; rm -f "$LOG"; exit 0; fi
     if [ -n "${MENU:-}" ]; then grep -E "MEASURE menu" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (menu touches counted)."; rm -f "$LOG"; exit 0; fi
     if [ "${SCROLL:-}" = only ]; then grep -E "Measured \[|average:" "$LOG" | cut -c1-300; echo "iOS UI test passed (scrolling measured)."; rm -f "$LOG"; exit 0; fi
