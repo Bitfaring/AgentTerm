@@ -74,7 +74,7 @@ jobs:
       # changes the dependencies starts from the nearest one there is.
       - name: Restore what the last watched build left
         id: kept
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.KEPT }}
           key: codeql-watched-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
@@ -100,7 +100,7 @@ jobs:
       # fails: the build is what took the time.
       - name: Keep what was built
         if: always() && github.ref == 'refs/heads/main' && steps.kept.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ env.KEPT }}
           key: codeql-watched-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
