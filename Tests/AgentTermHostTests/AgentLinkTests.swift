@@ -7,7 +7,7 @@ import XCTest
 /// Whether each agent's session talks to the host (#129): its hooks and
 /// AgentTerm's MCP server, heard from or said missing; an agent typed by
 /// hand in a shell, found from the program in front of the terminal.
-/// LINK-1 to LINK-4 in docs/TESTING.md.
+/// LINK-1 to LINK-4 and LINK-14 in docs/TESTING.md.
 final class AgentLinkTests: XCTestCase {
     private var root: URL!
     private var server: HostServer!
@@ -18,6 +18,10 @@ final class AgentLinkTests: XCTestCase {
     /// heard by then: on CI's runner it had (LINK-2, 2026-11-17).
     private var firstLink: [SessionID: AgentLink] = [:]
     private let token = "test-token-0123456789abcdef0123456789"
+    /// The state folder the test's process had, while a host given the MCP
+    /// server has one of the test's.
+    private var stateBefore: String?
+    private var stateChanged = false
 
     override func setUpWithError() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-link-\(UUID().uuidString)").standardizedFileURL
@@ -30,6 +34,7 @@ final class AgentLinkTests: XCTestCase {
     override func tearDown() {
         client?.close()
         server?.stop()
+        if let stateBefore { setenv("AGENTTERM_STATE_DIR", stateBefore, 1) } else if stateChanged { unsetenv("AGENTTERM_STATE_DIR") }
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -40,7 +45,9 @@ final class AgentLinkTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
     }
 
-    private func start(grace: TimeInterval) throws {
+    /// With `shells`, the host gives the agents AgentTerm's MCP server and
+    /// its instructions, kept in the test's own state folder.
+    private func start(grace: TimeInterval, shells: Bool = false) throws {
         let agents = root.appendingPathComponent("agents").path
         var configuration = HostServer.Configuration(
             port: 0, token: token, listenOnTailscale: false, detectAgents: { AgentDetector.detect(in: agents) }, home: root.path,
@@ -49,6 +56,12 @@ final class AgentLinkTests: XCTestCase {
         configuration.foldersFile = root.appendingPathComponent("folders.json")
         configuration.linkGrace = grace
         configuration.foregroundInterval = 0.3
+        if shells {
+            stateBefore = ProcessInfo.processInfo.environment["AGENTTERM_STATE_DIR"]
+            stateChanged = true
+            setenv("AGENTTERM_STATE_DIR", root.appendingPathComponent("state").path, 1)
+            configuration.agentShells = AgentShellsSetup(directory: root.appendingPathComponent("state"), tool: "/usr/bin/true")
+        }
         server = HostServer(configuration: configuration)
         let port = try server.start()
         client = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "mac")
@@ -80,13 +93,15 @@ final class AgentLinkTests: XCTestCase {
         client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
         wait("the session") { sessions.count == 1 }
         // As the host first said it, before anything of the agent's ran.
-        XCTAssertEqual(sessions.first.flatMap { firstLink[$0.id] }, AgentLink(), "known before it was heard")
+        // No instructions in a test's host, which gives no MCP server: said
+        // disabled from the start (#172).
+        XCTAssertEqual(sessions.first.flatMap { firstLink[$0.id] }, AgentLink(prompt: .disabled), "known before it was heard")
         wait("its hooks heard") { sessions.first?.link?.hooks == true }
         XCTAssertNil(sessions.first?.link?.mcp)
         wait("its key") { FileManager.default.fileExists(atPath: key.path) }
         let session = try XCTUnwrap(AgentShellsMCP.Session(variable: try String(contentsOf: key, encoding: .utf8)))
         client.send(.agentShell(id: 0, key: session.key, request: .started(agent: "claude")))
-        wait("its server heard") { sessions.first?.link == AgentLink(hooks: true, mcp: true) }
+        wait("its server heard") { sessions.first?.link == AgentLink(hooks: true, mcp: true, prompt: .disabled) }
     }
 
     /// LINK-3: what an agent's session has not heard from within the grace
@@ -96,7 +111,30 @@ final class AgentLinkTests: XCTestCase {
         try start(grace: 1)
         client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
         wait("the session") { sessions.count == 1 }
-        wait("both said missing") { sessions.first?.link == AgentLink(hooks: false, mcp: false) }
+        wait("both said missing") { sessions.first?.link == AgentLink(hooks: false, mcp: false, prompt: .disabled) }
+    }
+
+    /// LINK-14 (#172): an agent given AgentTerm's instructions, which come
+    /// through its MCP server, is checking until the server is heard, then
+    /// given; one whose server is not heard within the grace, not given.
+    func testInstructionsComeThroughTheServerAndAreSaidGivenOrNot() throws {
+        let key = root.appendingPathComponent("key")
+        try standIn("claude", "printf '%s' \"$AGENTTERM_MCP\" > '\(key.path)'\nexec sleep 600")
+        try start(grace: 30, shells: true)
+        client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
+        wait("the session") { sessions.count == 1 }
+        XCTAssertEqual(sessions.first.flatMap { firstLink[$0.id] }, AgentLink(), "not checking before its server was heard")
+        wait("its key") { FileManager.default.fileExists(atPath: key.path) }
+        let session = try XCTUnwrap(AgentShellsMCP.Session(variable: try String(contentsOf: key, encoding: .utf8)))
+        client.send(.agentShell(id: 0, key: session.key, request: .started(agent: "claude")))
+        wait("given") { sessions.first?.link == AgentLink(mcp: true, prompt: .given) }
+    }
+
+    func testInstructionsAreSaidNotGivenWhenTheServerIsNotHeard() throws {
+        try standIn("claude", "exec sleep 600")
+        try start(grace: 1, shells: true)
+        client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
+        wait("not given") { sessions.first?.link == AgentLink(hooks: false, mcp: false, prompt: .missing) }
     }
 
     /// LINK-4: an agent typed by hand in a shell is found from the program

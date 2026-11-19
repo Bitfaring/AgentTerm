@@ -254,7 +254,7 @@ final class AgentShellsGivenTests: XCTestCase {
         XCTAssertFalse(parts[3].isEmpty, "no key for its MCP server")
         // Its session waits to hear from both.
         spin { sessions.first?.link != nil }
-        XCTAssertEqual(sessions.first?.link, AgentLink())
+        XCTAssertEqual(sessions.first?.link, AgentLink(prompt: .disabled))
     }
 }
 
