@@ -260,6 +260,42 @@ final class RemoteMacTests: MacUITestCase {
         XCTAssertEqual(app.first(.id("terminal-view"))?.help, "whole grid in sight")
     }
 
+    /// REMOTE-24 (#167): the case as the owner saw it, on another Mac: an
+    /// agent's shell in the lower part of its area, used by a phone at
+    /// 45×35, is shown whole, in the middle, as on this Mac (SIZE-14).
+    func testAnAgentsShellADeviceUsesOnTheOtherMacIsShownWhole() throws {
+        try startOtherMac()
+        let phone = try device("iPhone", state: otherState, port: otherPort)
+        let call = #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"shell_open","arguments":{"title":"server"}}}"#
+        let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#
+        try """
+        #!/bin/sh
+        echo "stand-in claude started"
+        ( printf '%s\\n' '\(initialize)' '\(call)'; sleep 3 ) | '\(hostExecutable.path)' mcp > /dev/null 2>&1 &
+        exec cat
+        """.write(to: root.appendingPathComponent("agents/claude"), atomically: true, encoding: .utf8)
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Claude Code"))
+        wait("the agent and its shell on the other Mac") { phone.sessions.count == 2 }
+        let agent = try XCTUnwrap(phone.sessions.first { $0.agent == "claude" })
+        let shell = try XCTUnwrap(phone.sessions.first { $0.openedBy == agent.id })
+        app.wait(for: .id("agent-shells"), timeout: 15)
+        let grid = TermSize(cols: 45, rows: 35)
+        phone.send(.attach(session: shell.id, size: grid))
+        phone.send(.takeControl(session: shell.id, size: grid))
+        wait("the phone's size") { phone.size(of: shell.id) == grid }
+        app.wait(for: .containing("In use on iPhone · 45×35"), timeout: 15)
+        phone.connection.sendInput(Data("clear; printf FIRST-ROW; tput cup 34 0; printf LAST-ROW\n".utf8), to: shell.id)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        shot("agent-shell-device-other-mac")
+        let nodes = app.nodes()
+        let part = try XCTUnwrap(nodes.firstIndex { $0.identifier == "terminal-\(shell.id)" }, "the shell is not shown")
+        let terminal = try XCTUnwrap(
+            nodes[(part + 1)...].prefix { $0.depth > nodes[part].depth }.first { $0.identifier == "terminal-view" }, "the shell's terminal")
+        XCTAssertEqual(terminal.help, "whole grid in sight")
+    }
+
     private var editor: MacDriver.Query { .role(kAXTextAreaRole as String) }
 
     private func listens(on port: UInt16) -> Bool {
