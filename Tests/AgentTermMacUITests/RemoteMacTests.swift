@@ -240,7 +240,7 @@ final class RemoteMacTests: MacUITestCase {
 
     /// REMOTE-23 (#167): on another Mac, a session a phone uses at a grid
     /// narrower than the pane but taller is shown whole, in the middle, as
-    /// on this Mac (SIZE-10): its first row is not cut off.
+    /// on this Mac (SIZE-12): its first row is not cut off.
     func testANarrowButTallDevicesSessionOnTheOtherMacIsShownWhole() throws {
         try startOtherMac()
         let phone = try device("iPhone", state: otherState, port: otherPort)

@@ -269,9 +269,9 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SIZE-7 | The Mac's launch screen, its line of figures shown | Start a shell | It starts at the size its pane shows it at, not one it is made smaller to afterwards | M |
 | SIZE-8 | A session the Mac and the iPhone show, the iPhone using it | The iPhone goes; the Mac's window is resized; the Mac app is used; the Mac types in it | The session stays at the iPhone's size and nobody drives until the Mac types, then it takes the Mac's; an iPhone coming back takes its own at once, without a button | H |
 | SIZE-9 | A session started on the Mac, in a pane smaller than an iPad's grid | A second device takes control at 300 × 100 | The Mac shows the whole grid, scaled down to fit its pane, as the iPhone shows the Mac's: the last rows, where the prompt is, are not cut off; taken back, it fills the pane again | M |
-| SIZE-10 (#167) | A phone takes a shell at 45×120: narrower than the pane, taller | The Mac shows it | In the middle, scaled down to fit, the first row and the last in sight | M |
-| SIZE-11 (#167) | A phone takes a shell at 45×20, then grows it to 45×120 | The Mac shows it | Laid out again for the new grid, whole | M |
-| REMOTE-23 (#167) | Another Mac on show; a phone takes one of its shells at 45×120 | This Mac shows it | As SIZE-10 | M |
+| SIZE-12 (#167) | A phone takes a shell at 45×120: narrower than the pane, taller | The Mac shows it | In the middle, scaled down to fit, the first row and the last in sight | M |
+| SIZE-13 (#167) | A phone takes a shell at 45×20, then grows it to 45×120 | The Mac shows it | Laid out again for the new grid, whole | M |
+| REMOTE-23 (#167) | Another Mac on show; a phone takes one of its shells at 45×120 | This Mac shows it | As SIZE-12 | M |
 | SIZE-10 (#120) | A session of the Mac's own app, then used on a device named "Manh's iPad"; on the Mac, a phone named iPhone using one | The device watches; then takes it | The device is told the Mac has it, by the Mac's name; then the Mac is told the device has it, by the device's name; the one that has it is not named to itself. The Mac's banner reads "In use on iPhone · 40×20"; the iPhone's names the Mac by its name, not "another device" | H, M, X |
 | SIZE-11 (#157) | The Mac's app and an iPad that says it is one, attached to a session | The iPad takes it, then the Mac | Each is told the other with what it is (`kind`); an iPad's icon for the iPad, none for the Mac | H |
 

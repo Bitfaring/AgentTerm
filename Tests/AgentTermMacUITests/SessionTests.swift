@@ -465,7 +465,7 @@ final class SessionTests: MacUITestCase {
         app.wait("the terminal whole at the window's size") { self.app.first(.id("terminal-view"))?.help == "whole grid in sight" }
     }
 
-    /// SIZE-10 (#167): a session a phone uses at a grid narrower than the
+    /// SIZE-12 (#167): a session a phone uses at a grid narrower than the
     /// pane but taller, stays in the middle, as SIZE-5 has it, and none of
     /// it is cut off: its first row and its last are in sight.
     func testANarrowButTallDevicesSessionIsShownWhole() throws {
@@ -484,7 +484,7 @@ final class SessionTests: MacUITestCase {
         XCTAssertEqual(app.first(.id("terminal-view"))?.help, "whole grid in sight")
     }
 
-    /// SIZE-11 (#167): a phone that uses a session at a grid that fits, then
+    /// SIZE-13 (#167): a phone that uses a session at a grid that fits, then
     /// at one taller than the pane, as when it is turned or its keyboard
     /// goes: the new grid is laid out again, whole.
     func testADevicesGridThatGrowsIsLaidOutAgain() throws {
