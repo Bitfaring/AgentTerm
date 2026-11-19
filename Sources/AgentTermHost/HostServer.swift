@@ -241,6 +241,9 @@ public final class HostServer {
         /// in it was found (#129). Its hooks and MCP server have until a
         /// grace after it to be heard from.
         var agentSince: Date?
+        /// Whether AgentTerm had instructions for its agent when it started
+        /// (#172): what the session was given, whatever is saved later.
+        var promptGiven = true
         /// A call of one of AgentTerm's own tools that its agent said it is
         /// about to make, and when: until the call comes to its server, or
         /// the agent says anything else (#141).
@@ -3214,9 +3217,11 @@ public final class HostServer {
         )
         let session = Session(info: info, process: process, screenLines: configuration.screenLines)
         session.agentKey = agentKey
-        if agent != nil {
+        if let agentID = info.agent {
             session.info.link = AgentLink()
             session.agentSince = configuration.now()
+            session.promptGiven = agentPrompt(for: agentID) != nil
+            refreshPrompt(session)
         }
         session.marksPrepared = marksPrepared
         session.info.openedBy = openedBy
@@ -3396,6 +3401,7 @@ public final class HostServer {
         case .hooks: session.info.link?.hooks = true
         case .mcp: session.info.link?.mcp = true
         }
+        refreshPrompt(session)
         return session.info != before
     }
 
@@ -3406,6 +3412,16 @@ public final class HostServer {
         session.agentSince = configuration.now()
         let early = heardEarly.removeValue(forKey: session.info.id) ?? []
         session.info.link = AgentLink(hooks: early.contains(.hooks) ? true : nil, mcp: early.contains(.mcp) ? true : nil)
+        session.promptGiven = agentPrompt(for: agent) != nil
+        refreshPrompt(session)
+    }
+
+    /// What AgentTerm's instructions came to in a session (#172), from how
+    /// they reach its agent and what its MCP server did.
+    private func refreshPrompt(_ session: Session) {
+        guard let agent = session.info.agent ?? session.info.typedAgent, var link = session.info.link else { return }
+        link.prompt = AgentLink.prompt(agent: agent, given: session.promptGiven, mcp: link.mcp)
+        session.info.link = link
     }
 
     /// Looks at each session's agent: one typed in a shell is found from
@@ -3436,6 +3452,9 @@ public final class HostServer {
             guard var link = session.info.link, let since = session.agentSince, now.timeIntervalSince(since) >= configuration.linkGrace else { continue }
             if link.hooks == nil { link.hooks = false }
             if link.mcp == nil { link.mcp = false }
+            if let agent = session.info.agent ?? session.info.typedAgent {
+                link.prompt = AgentLink.prompt(agent: agent, given: session.promptGiven, mcp: link.mcp)
+            }
             if link != session.info.link {
                 session.info.link = link
                 changed = true

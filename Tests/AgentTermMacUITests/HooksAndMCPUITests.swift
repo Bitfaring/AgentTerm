@@ -202,11 +202,26 @@ final class HooksAndMCPUITests: MacUITestCase {
     /// and AgentTerm's MCP server are heard: missing for the stand-in, which
     /// has neither, with what to do.
     func testAnAgentsSessionShowsWhetherItsHooksAndServerAreHeard() throws {
+        // Instructions saved for Claude Code: a test's host gives none by
+        // default, having no MCP server of its own to give.
+        let phone = try device()
+        phone.send(.setAgentPrompt(agent: "claude", text: "Run your commands in AgentTerm's shells."))
+        wait("the instructions saved") {
+            phone.last { if case .agentPrompts(let custom, _) = $0 { return custom } else { return nil } }?["claude"] != nil
+        }
         app.press(.button("Claude Code"))
         app.wait(for: .id("agent-link"), timeout: 20)
         app.wait("said missing", timeout: 15) { self.label("agent-link") == AgentLinkWords.summary(AgentLink(hooks: false, mcp: false)) }
         let value = app.first(.id("agent-link"))?.value ?? ""
         XCTAssertTrue(value.contains(AgentLinkWords.fix), value)
+        // LINK-13 (#172): three rows, Hooks, MCP and System Prompt, each
+        // with its state: Claude Code's instructions come through its MCP
+        // server, which did not start, so they were not given.
+        XCTAssertTrue(value.contains("\(AgentLinkWords.hooksRow): \(AgentLinkWords.hooksStatus(false))"), value)
+        XCTAssertTrue(value.contains("\(AgentLinkWords.mcpRow): \(AgentLinkWords.mcpStatus(false))"), value)
+        XCTAssertTrue(value.contains("\(AgentLinkWords.promptRow): \(AgentLinkWords.promptStatus(.missing))"), value)
+        app.press(.id("agent-link"))
+        app.wait(for: .id("agent-link-prompt"), timeout: 10)
         shot("agent-link")
     }
 }

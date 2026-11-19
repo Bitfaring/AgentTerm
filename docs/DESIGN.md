@@ -1217,6 +1217,17 @@ of 0.6, and is the released build's. While the agent is told anything
 (its words in Settings > Agents are not empty) the variable ends with
 `use`, and it names the session's agent (`agent:claude`).
 
+**Whether a session was told** (#172). `AgentLink.prompt` says what
+AgentTerm's instructions came to in one session: given, missing, disabled
+or unverified, from how they reach its agent (`AgentLink.prompt(agent:given:mcp:)`):
+through the MCP server for Claude Code and Codex, so given once the server
+is heard and missing when it is not; through the environment for Copilot
+CLI, so given; through a rule of its plugin for Antigravity, which the host
+cannot see for one session. Whether there were instructions is taken when
+the agent starts (`Session.promptGiven`): a change in Settings later is the
+next session's. The mark's popover has a row each for Hooks, MCP and System
+Prompt.
+
 **What an agent is told.** The host works out one text for each agent:
 what the user saved for it in Settings > Agents (`setAgentPrompt`, kept in
 `agent-prompts.json` of the host's folder and told to every device with
