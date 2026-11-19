@@ -273,7 +273,8 @@ Host…, which asks first. It never restarts it by itself (decided by the
 owner on 2026-11-17), and a release that changes nothing of the host says
 nothing. A build outside an app bundle has no revision, and is not compared.
 
-The protocol version is 32 added `pushRegister`, `pushUnregister`, `pushState`, `handleNotice`,
+The protocol version is 33. 33 added `readNotices`, `noticesRead` and
+`noticeAlert`, and `Notice.read` (#180). 32 added `pushRegister`, `pushUnregister`, `pushState`, `handleNotice`,
 `liveActivity`, `noticeLog`, `notice` and `noticeHandled` (#66, #168). 15 in 0.7.0. It went up with each message that
 changed while the release was made (principle 6): 8 added `agentShellsFaults`
 and gave `agentShellResult`'s list of shells the asking agent's own (see
@@ -985,9 +986,23 @@ says what it is (`hello`'s `kind`) is told; one that does not
 Mac's own app as `local`.
 
 - On connecting, after `sessions`: `noticeLog([Notice])`, the 30 days, for
-  the device's Inbox; then `notice(Notice)` for each one not handled that
-  it was not told of. A new notice is `notice` to every client at once,
-  and, when it `alerts`, a push to each registered device that is away.
+  the device's Inbox; then `noticeAlert(id:)` for each one due, not
+  handled nor read, that it was not shown yet. A new notice is `notice` to
+  every client at once, for the Inbox and the Mac's banner. When it
+  `alerts`, its time to be a notification comes at once, or after
+  `Notice.pushWait` (30 s, `Configuration.pushWait`) when
+  `Notice.pushWaits(macInUse:)` says so: a done agent always, anything else
+  while someone is at the Mac (#180, decided 2026-11-20). Then, if it is
+  still not handled nor read (`NoticeCenter.pending`), it is due
+  (`becameDue`): `noticeAlert(id:)` to every client and a push to each
+  registered device that is away, at the same moment.
+- **Read** (#180) is the host's too: `readNotices(ids:)` from a device marks
+  them read in the log (`Notice.read`, `NoticeCenter.read`), and every
+  client is told `noticesRead(ids:)`; each device that had one through
+  Apple and is away has it taken back (`gone`). Handled by being answered,
+  opened or dismissed is read too (`Notice.reads`); moved on is not. A
+  device keeps read in its `InboxBook` as well, and on `noticeLog` says what
+  it read while not connected (`InboxBook.readHere(notTold:)`).
 - A notice is handled once (`Notice.Handled`: answered, opened, dismissed,
   moved on): by `answer`, by `noticeSeen` for its session and state, by
   `handleNotice(id:how:)` (dismissed from a banner or Notification
@@ -995,14 +1010,24 @@ Mac's own app as `local`.
   when its agent's state changes or its session ends. Every client is told
   `noticeHandled(id:handled:)`; each device that had it through Apple and
   is away is sent a push that takes it back (`gone`).
-- Neither app works notices out any more: each shows what it is told.
-  The iPhone posts a notification for each (`AgentNotifications.post`,
-  content from `NoticeContent`, shared with the extension), named
-  `"<mac>-<notice id>"`, the name APNs gives a pushed one, and shows it in
-  front too (`willPresent` → banner, list, sound), except for the session
-  on screen, which it then sees. The Mac shows its banner while it is in
-  front and posts a macOS notification while it is not
-  (`MacNotifications`, `notifyOnMac`).
+- Neither app works notices out any more: each shows what it is told,
+  and posts a notification only on `noticeAlert`. The iPhone posts one
+  (`AgentNotifications.post`, content from `NoticeContent`, shared with the
+  extension), named `"<mac>-<notice id>"`, the name APNs gives a pushed
+  one, and shows it in front too (`willPresent` → banner, list, sound),
+  except for the session on screen, which it then sees. The Mac shows its
+  banner on `notice` and posts a macOS notification on `noticeAlert`, in
+  front too and for the session in front too (`MacNotifications`,
+  `willPresent` → banner, list, sound; `notifyOnMac`). On the Mac the
+  session in front is seen only when the user does something
+  (`hideNoticeOfTheSessionInFront`: choosing it, the app coming to the
+  front, Sessions shown), no longer when its agent's state changes.
+- **Permission to notify** (#180) is asked up front: on the Mac in the
+  onboarding's Permissions step (`Permission.notifications`,
+  `MacNotifications.askPermission`), on the iPhone on a first screen of its
+  own after the reporting question (`NotificationAsk`,
+  `PhoneModel.asksNotifications`), once, while iOS was not asked
+  (`AGENTTERM_ASK_NOTIFICATIONS` shows it to a test).
 - **The Inbox** is the device's own `InboxBook` (`AgentTermProtocol`),
   kept in its preferences by the Mac on show: notices newest first, read or
   not, what was deleted here so that the log does not bring it back, 30
@@ -1071,8 +1096,12 @@ push-to-start token (iOS 17.2), kept with the device's registration. While
 the device is away, a change of `AgentsStatus` is sent 3 s later (a burst
 is one update) to the relay as `{activity: {token, event, state, mac}}`:
 `update` to the activity's token, `start` to the start token when there is
-none and an agent works or waits, `end` when none does; again every 15
-minutes while agents work (`refreshSummaries`). The relay sends
+none and an agent works or waits, `end` once none has for
+`LiveActivityRule.keptIdle` (15 minutes, `Configuration.activityKeptIdle`;
+#180): until then, with nothing working or waiting, it is an `update`
+showing so, and a new turn updates the same activity rather than starting
+one, whose start push must carry an alert; again every 15 minutes while
+agents work (`refreshSummaries`). The relay sends
 `apns-push-type: liveactivity` to the topic
 `com.manhpham.agentterm.push-type.liveactivity`, priority 5 (10 to
 start), with `stale-date` 30 minutes on and, for `end`, `dismissal-date`.
@@ -1145,9 +1174,10 @@ with `AgentsActivityAttributes` (`iOS/Shared`, in both targets): the Mac's
 name, and as content how many work and the names of those that wait and
 are done. The app starts, updates and ends it (`PhoneModel.updateLiveActivity`)
 whenever the sessions, the connection or `macInUse` change, as
-`LiveActivityRule.decide` says: shown while connected, no one at the Mac
-and an agent working or waiting; ended at once otherwise, but with the
-last state left showing when every agent is done. Its link,
+`LiveActivityRule.decide` says: shown while an agent works or waits, and
+for `keptIdle` after the last one stopped (#180), updated, not ended;
+ended after that with the last state left showing; ended at once when
+switched off. Its link,
 `<scheme>://session?id=<n>`, opens the session that waits. No push token is
 asked for: updates come from the app while iOS lets it run.
 

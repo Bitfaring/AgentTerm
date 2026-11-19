@@ -56,4 +56,36 @@ final class InboxBookTests: XCTestCase {
         book.prune(now: now.addingTimeInterval(120))
         XCTAssertEqual(book.entries, [])
     }
+
+    /// INBOX-11 (#180): read on another device is read here, and never
+    /// unread again; handled by being answered, opened or dismissed is
+    /// read, by moving on is not; what was read here while away is what
+    /// the host is told once the log comes.
+    func testReadIsTheSameOnEveryDevice() {
+        var book = InboxBook()
+        book.take([notice(1, .done(said: nil)), notice(2, asked), notice(3, .done(said: "x"))], now: now)
+        book.markRead(ids: [1])
+        XCTAssertEqual(book.unread, 2)
+        var read = notice(2, asked)
+        read.read = true
+        book.take([read], now: now)
+        XCTAssertEqual(book.entries.first { $0.id == 2 }?.read, true, "read in the host's log")
+        book.take([notice(2, asked)], now: now)
+        XCTAssertEqual(book.entries.first { $0.id == 2 }?.read, true, "never unread again")
+        book.handled(3, Notice.Handled(at: now, how: .movedOn))
+        XCTAssertEqual(book.entries.first { $0.id == 3 }?.read, false, "moved on is not read")
+        book.handled(3, Notice.Handled(at: now, how: .opened))
+        XCTAssertEqual(book.entries.first { $0.id == 3 }?.read, true)
+        XCTAssertEqual(book.unread, 0)
+
+        // The host's log knows 2 as read; 1 and 3 were read here only.
+        XCTAssertEqual(Set(book.readHere(notTold: [notice(1, .done(said: nil)), read, notice(3, .done(said: "x"))])), [1, 3])
+        XCTAssertEqual(book.readHere(notTold: [read]), [], "not in the log: not told")
+
+        var fresh = InboxBook()
+        fresh.take([notice(4, asked), notice(5, .done(said: nil))], now: now)
+        XCTAssertEqual(fresh.unread(session: 4), [4])
+        fresh.take([notice(6, asked, handled: .dismissed)], now: now)
+        XCTAssertEqual(fresh.entries.first { $0.id == 6 }?.read, true, "taken handled by dismissing: read")
+    }
 }

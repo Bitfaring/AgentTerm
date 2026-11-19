@@ -255,11 +255,28 @@ happened; the Live Activity shows the host's state now (below).
   Mac not kept awake, usage not saved) are banners and Inbox items only.
 - **Who is told: every device, and every one sounds**: the Mac and each
   paired iPhone or iPad, whether someone is at the Mac or not. The host
-  makes each notice once for all of them. The session on a device's
-  screen is not told on that device: it is seen there.
+  makes each notice once for all of them. The session on an iPhone's or
+  iPad's screen is not told there: it is seen there. On the Mac no session
+  is left out, the one in front included (#180): being in front does not
+  make it seen, something the user does there does (choosing it, typing
+  into it, the notification).
+- **When it is a notification** (#180, decided by the owner on
+  2026-11-20): every notice is in each device's Inbox, and the Mac's
+  banner, at once; it is a notification on the Mac and on every iPhone or
+  iPad **at the same moment**, which the host says. An agent that is done
+  waits 30 seconds first, always; anything else waits 30 seconds while
+  someone is at the Mac, and is told at once otherwise. Handled or read
+  within those 30 seconds (the agent works again; opened, answered,
+  dismissed or read on some device), it is a notification nowhere. Short
+  turns that end one after the other do not buzz the phone each time.
 - **Handled on one, gone from all**: answered, opened or dismissed (from
   the banner, from Notification Center) on one device, or its agent moving
   on, and the notification goes from every other device.
+- **Read on one, read on all** (#180, replacing what #66 decided): a
+  notice read on one device (picked in the Inbox, its session opened, its
+  notification tapped, answered or dismissed) is read on every device, and
+  its notification goes from all of them. What is read while a device is
+  not connected is said to the host once it is.
 - **On the iPhone and the iPad**, iOS's own notification banner, also
   with the app open; the app draws none of its own. While the app is
   asleep, the released build is told through Apple's push service: "Also
@@ -272,13 +289,16 @@ happened; the Live Activity shows the host's state now (below).
   once needs Apple's filtering entitlement, asked for on 2026-11-19.) The
   switch's footnote says when it does not work and why: a development
   build has none, the Mac has no relay, notifications are not allowed,
-  the relay could not be reached. The app asks iOS whether it may notify
-  once it is paired.
-- **On the Mac**, a banner while the app is in front, for a session other
-  than the one in front, which opens it; a macOS notification while the
-  app is not in front, with Reply and the choices as on the iPhone:
-  "Notify when an agent is done or needs you" in Settings > General, on by
-  default. The banner shows what the agent said on up to six lines; Show
+  the relay could not be reached. At its first launch, once the question
+  about reports is answered, the app's first screen asks only whether it
+  may notify (Allow Notifications, Not Now), not an onboarding like the
+  Mac's (#180).
+- **On the Mac**, a banner while the app is in front, which opens the
+  session; and a macOS notification, with the app in front or not (#180),
+  with Reply and the choices as on the iPhone: "Notify when an agent is
+  done or needs you" in Settings > General, on by default. macOS is asked
+  whether the app may notify in the onboarding's Permissions step, where
+  Notifications is one of the permissions listed. The banner shows what the agent said on up to six lines; Show
   All opens it out.
 - A notification for a question, or for a finished task, takes a short
   reply, written or dictated, sent as the next message; on the iPhone it
@@ -301,9 +321,9 @@ happened; the Live Activity shows the host's state now (below).
   release on the Mac, a session's size set by another device ("Use This
   Size").
 - **The Inbox** (#66, after #67) is each device's own history of what it
-  was told: kept after it is read, for 30 days. Read and deleted are that
-  device's alone; whether a notice was handled, and how (answered,
-  opened, dismissed, the agent moved on), is the same everywhere. An item
+  was told: kept after it is read, for 30 days. Deleted is that device's
+  alone; read (#180), and whether a notice was handled and how (answered,
+  opened, dismissed, the agent moved on), are the same everywhere. An item
   is deleted on its own, or the read ones, or all of them (asked first);
   one whose agent still waits for an answer is not deleted until it is
   answered. What was told while a device was asleep reaches its Inbox when
@@ -361,8 +381,12 @@ shows the host's state now rather than events.
   relay and Apple in the clear, since iOS draws the activity from them.
   The Mac starts it while the app is asleep, a burst of changes is one
   update, and it is sent again every 15 minutes while agents work; one
-  that gets no update is shown as out of date. When every agent is done it
-  stays showing that, which stays true. Without push (a development
+  that gets no update is shown as out of date. **One activity is kept
+  between turns and only updated** (#180, decided by the owner on
+  2026-11-20): when every agent is done it shows that, and is ended only
+  once nothing has worked or waited for 15 minutes, leaving the last state,
+  which stays true. A new turn within those 15 minutes updates it rather
+  than starting another, whose start through Apple comes with an alert. Without push (a development
   build), it goes out of date ten minutes after the app last updated it.
 - "Live Activity of the Mac's agents" in the iPhone's Settings turns it
   off, apart from notifications.

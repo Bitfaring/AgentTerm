@@ -61,6 +61,8 @@ final class PushTests: XCTestCase {
         var failures: [PartFailure] { messages.compactMap { if case .failures(let list) = $0 { return list } else { return nil } }.last ?? [] }
         var notices: [Notice] { messages.compactMap { if case .notice(let notice) = $0 { return notice } else { return nil } } }
         var log: [Notice]? { messages.compactMap { if case .noticeLog(let list) = $0 { return list } else { return nil } }.last }
+        var alerts: [UInt64] { messages.compactMap { if case .noticeAlert(let id) = $0 { return id } else { return nil } } }
+        var read: [UInt64] { messages.flatMap { if case .noticesRead(let ids) = $0 { return ids } else { return [] } } }
     }
 
     private var root: URL!
@@ -69,6 +71,9 @@ final class PushTests: XCTestCase {
     private let token = "test-token-0123456789abcdef0123456789"
     private var relay: Relay!
     private var idle: TimeInterval = 6 * 60
+    /// Shortened, as the wait of a notice that waits (#180).
+    private var pushWait: TimeInterval = 1
+    private var activityKeptIdle: TimeInterval = 2
     private let lock = NSLock()
     private var tool: URL { Bundle(for: PushTests.self).bundleURL.deletingLastPathComponent().appendingPathComponent("agenttermd") }
     private let deviceToken = String(repeating: "ab", count: 32)
@@ -97,6 +102,8 @@ final class PushTests: XCTestCase {
             return self?.idle
         }
         configuration.refreshInterval = 0.2
+        configuration.pushWait = pushWait
+        configuration.activityKeptIdle = activityKeptIdle
         configuration.pushRelay = url
         configuration.pushesFile = root.appendingPathComponent("pushes.json")
         configuration.pushTransport = relay.transport
@@ -228,8 +235,9 @@ final class PushTests: XCTestCase {
         lock.lock(); idle = 5; lock.unlock()
         waitUntil("someone at the Mac") { inUse() == true }
         mac.connection.sendInput(Data("\n".utf8), to: agent)
-        waitUntil("pushed although the Mac is in use") { relay.sent.count == 1 }
-        waitUntil("the Mac's app told too") { mac.notices.count == 1 }
+        waitUntil("the Mac's app told") { mac.notices.count == 1 }
+        // Someone at the Mac: it waits before it is a notification (#180).
+        waitUntil("pushed after the wait") { relay.sent.count == 1 }
 
         let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
         waitUntil("the phone back") { phone.log != nil }
@@ -281,9 +289,17 @@ final class PushTests: XCTestCase {
         mac.connection.sendInput(Data("\n".utf8), to: agent)
         mac.connection.sendInput(Data("\n".utf8), to: agent)
         waitUntil("done") { mac.sessions.first?.state == .done(said: "All tests pass.") }
-        waitUntil("ended", timeout: 15) { activities().last?["event"] as? String == "end" }
+        // Kept between turns (#180): updated to done, not ended at once.
+        waitUntil("updated to done", timeout: 15) {
+            (activities().last?["state"] as? [String: Any])?["done"] as? Int == 1
+        }
+        XCTAssertEqual(activities().last?["event"] as? String, "update")
+        let updated = Date()
+        waitUntil("ended once nothing worked for a while", timeout: 15) { activities().last?["event"] as? String == "end" }
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(updated), 1, "ended at once")
         XCTAssertTrue(activities().dropFirst().allSatisfy { $0["token"] as? String == own })
-        XCTAssertLessThanOrEqual(activities().count, 4, "a burst is gathered: \(activities().map { $0["event"] ?? "" })")
+        XCTAssertEqual(activities().filter { $0["event"] as? String == "start" }.count, 1, "started again")
+        XCTAssertLessThanOrEqual(activities().count, 5, "a burst is gathered: \(activities().map { $0["event"] ?? "" })")
     }
 
     /// PUSH-4: a push the relay refuses is said in both apps' banner, once
@@ -341,5 +357,77 @@ final class PushTests: XCTestCase {
         phone.connection.send(.pushRegister(PushRegistration(token: deviceToken, key: key, mac: macName)))
         waitUntil("told why") { phone.pushState == .unavailable(reason: PushWords.notInThisBuild) }
         XCTAssertEqual(relay.registered, [])
+    }
+
+    /// PUSH-8 (#180): while someone is at the Mac, a notice waits: it is
+    /// in the Mac's Inbox at once, and a notification nowhere before the
+    /// wait; then on the Mac and the iPhone at the same moment.
+    func testANoticeWaitsWhileSomeoneIsAtTheMacThenGoesToBoth() throws {
+        pushWait = 2
+        // Someone at the Mac from the start.
+        lock.lock(); idle = 5; lock.unlock()
+        server.stop()
+        try start(relay: URL(string: "https://relay.test"))
+        let (mac, _, agent) = try phoneAway()
+        func inUse() -> Bool? { mac.messages.compactMap { if case .macInUse(let on) = $0 { return on } else { return nil } }.last }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(inUse(), true)
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("in the Mac's Inbox at once") { mac.notices.count == 1 }
+        let asked = Date()
+        let id = try XCTUnwrap(mac.notices.first).id
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(relay.sent.count, 0, "pushed before the wait")
+        XCTAssertEqual(mac.alerts, [], "a notification on the Mac before the wait")
+        waitUntil("on both after the wait") { relay.sent.count == 1 && mac.alerts == [id] }
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(asked), 1.8)
+        XCTAssertEqual(try opened(relay.sent[0]).id, id)
+    }
+
+    /// PUSH-9 (#180): one that waits and is handled or read within the
+    /// wait is a notification nowhere; one that does not wait (no one at
+    /// the Mac, an agent asking) is one at once on both.
+    func testANoticeHandledOrReadWithinTheWaitIsShownNowhere() throws {
+        pushWait = 2
+        server.stop()
+        try start(relay: URL(string: "https://relay.test"))
+        let (mac, _, agent) = try phoneAway()
+        // No one at the Mac: the question is shown at once, on both.
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("the question") { mac.notices.count == 1 }
+        let question = try XCTUnwrap(mac.notices.first).id
+        waitUntil("at once, on both", timeout: 1.5) { relay.sent.count == 1 && mac.alerts == [question] }
+
+        // Done always waits: read on the Mac within it, it is not shown.
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("done") { mac.notices.count == 2 }
+        let done = try XCTUnwrap(mac.notices.last).id
+        mac.connection.send(.readNotices(ids: [done]))
+        waitUntil("read, said back") { mac.read == [done] }
+        RunLoop.main.run(until: Date().addingTimeInterval(2.5))
+        XCTAssertFalse(mac.alerts.contains(done), "shown on the Mac though it was read")
+        let pushed = relay.sent.filter { $0["payload"] != nil }.compactMap { try? opened($0).id }
+        XCTAssertFalse(pushed.contains(done), "pushed though it was read")
+    }
+
+    /// READ-1 (#180): read on one device is read on every device: the
+    /// others are told, a phone that comes back finds it read in the log,
+    /// and one that had it through Apple has it taken back.
+    func testReadOnOneDeviceIsReadOnEvery() throws {
+        let (mac, phoneToken, agent) = try phoneAway()
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("pushed") { relay.sent.count == 1 }
+        waitUntil("the Mac told") { mac.notices.count == 1 }
+        let id = try XCTUnwrap(mac.notices.first).id
+        let other = Client(port: port, credential: .token(token), name: "mac 2", kind: .mac)
+        waitUntil("the other's log") { other.log != nil }
+        mac.connection.send(.readNotices(ids: [id]))
+        waitUntil("the other told") { other.read == [id] }
+        waitUntil("taken back from the phone") { relay.sent.contains { $0["gone"] as? String == self.identifier(id) } }
+        let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
+        waitUntil("the log") { phone.log != nil }
+        XCTAssertEqual(phone.log?.first { $0.id == id }?.read, true)
+        XCTAssertEqual(phone.alerts, [], "read: not shown again")
     }
 }

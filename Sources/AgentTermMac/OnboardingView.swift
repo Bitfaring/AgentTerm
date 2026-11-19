@@ -121,6 +121,12 @@ struct OnboardingView: View {
             }
         case .permissions:
             PermissionsView()
+                // Asked here, up front, rather than at the first one (#180).
+                .onAppear {
+                    MacNotifications.readPermission {
+                        if MacNotifications.permission == .notDetermined { MacNotifications.askPermission {} }
+                    }
+                }
         case .agents:
             VStack(alignment: .leading, spacing: 14) {
                 Text(AgentLinkWords.title).font(.system(size: 17, weight: .semibold))

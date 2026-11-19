@@ -25,6 +25,7 @@ final class CrossTests: XCTestCase {
         let link = try XCTUnwrap(environment["AGENTTERM_PAIR_URL"])
         let app = XCUIApplication()
         app.launch()
+        passNotificationAsk(app)
         let enterLink = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Enter a pairing link'")).firstMatch
         XCTAssertTrue(enterLink.waitForExistence(timeout: 10))
         app.open(try XCTUnwrap(URL(string: link)))

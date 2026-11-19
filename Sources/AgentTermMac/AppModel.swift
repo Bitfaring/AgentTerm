@@ -454,24 +454,45 @@ final class AppModel: ObservableObject {
 
     private func saveInbox() { UserDefaults.standard.set(MessageCoding.encode(inbox), forKey: inboxKey) }
 
-    /// What the host told: into the Inbox; a banner while the app is in
-    /// front, a macOS notification while it is not; nothing for the session
-    /// in front of someone, which is then seen.
+    /// What the host told: into the Inbox, and the app's banner. A macOS
+    /// notification once the host says its time has come (`alerted`). The
+    /// session in front is no exception (the owner's decision, 2026-11-20):
+    /// it is seen when the user does something, not by being in front.
     private func told(_ notice: Notice) {
         inbox.take([notice])
         saveInbox()
-        if NSApp.isActive, place == .sessions, let session = notice.session, session == selectedSession {
-            hideNoticeOfTheSessionInFront()
-            return
+        guard notice.alerts, let agent = notice.agentNotice else { return }
+        agentNotice = agent
+        agentNoticeID = notice.id
+    }
+
+    /// Time to show it as a macOS notification, in front or not, as on the
+    /// iPhone at the same moment.
+    private func alerted(_ id: UInt64) {
+        guard notifyOnMac, let entry = inbox.entries.first(where: { $0.id == id }), !entry.read,
+            entry.notice.handled == nil
+        else { return }
+        macNotifications.post(entry.notice, host: remote?.name ?? "this Mac")
+    }
+
+    /// Read here: read on every device.
+    private func readHere(_ ids: [UInt64]) {
+        guard !ids.isEmpty else { return }
+        inbox.markRead(ids: ids)
+        saveInbox()
+        macNotifications.remove(ids)
+        connection?.send(.readNotices(ids: ids))
+    }
+
+    /// Read on another device.
+    private func readThere(_ ids: [UInt64]) {
+        inbox.markRead(ids: ids)
+        saveInbox()
+        macNotifications.remove(ids)
+        if let current = agentNoticeID, ids.contains(current) {
+            agentNotice = nil
+            agentNoticeID = nil
         }
-        guard notice.alerts else { return }
-        // The banner, there when the window is looked at; a macOS
-        // notification too while the app is not in front.
-        if let agent = notice.agentNotice {
-            agentNotice = agent
-            agentNoticeID = notice.id
-        }
-        if !NSApp.isActive, notifyOnMac { macNotifications.post(notice, host: remote?.name ?? "this Mac") }
     }
 
     private func noticeHandled(_ id: UInt64, _ handled: Notice.Handled) {
@@ -484,8 +505,8 @@ final class AppModel: ObservableObject {
         macNotifications.remove([id])
     }
 
-    /// A macOS notification while the app is not in front (#66): a switch
-    /// in Settings, on by default.
+    /// A macOS notification, in front or not (#66): a switch in Settings,
+    /// on by default.
     @Published var notifyOnMac: Bool = UserDefaults.standard.object(forKey: "notifyOnMac") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(notifyOnMac, forKey: "notifyOnMac")
@@ -544,10 +565,7 @@ final class AppModel: ObservableObject {
     func pick(_ item: InboxItem) {
         inboxPicked = item.id
         // Shown in the middle: read, here.
-        if let entry = item.entry, !entry.read {
-            inbox.markRead(entry.id)
-            saveInbox()
-        }
+        if let entry = item.entry, !entry.read { readHere([entry.id]) }
     }
 
     func deleteReadInbox() {
@@ -616,6 +634,8 @@ final class AppModel: ObservableObject {
     private func hideNoticeOfTheSessionInFront() {
         guard place == .sessions, NSApp.isActive, let front = selectedSession else { return }
         if agentNotice?.session == front { agentNotice = nil }
+        // What it said is read, on every device.
+        readHere(inbox.unread(session: front))
         // Told again while the host still has it unseen (#67): the same
         // words said twice are two turns.
         guard let info = sessions.first(where: { $0.id == front }), let state = info.state, !state.isWorking,
@@ -720,6 +740,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var agentSetup: AgentSetupReport?
     /// The onboarding, shown over the window.
     @Published var showOnboarding = false
+    /// The first launch's question about reporting is on the window: the
+    /// onboarding waits until it has gone, one sheet at a time.
+    @Published var reportingQuestionShown = Telemetry.shared.shouldAskAboutCrashReports
     /// Whether the onboarding was looked at in this run of the app: it is
     /// shown at most once a run, when an installed agent is not set up.
     private var onboardingChecked = false
@@ -1712,8 +1735,6 @@ final class AppModel: ObservableObject {
                 agentNotice = nil
                 agentNoticeID = nil
             }
-            // Done or asking while it is in front of someone: seen (#67).
-            hideNoticeOfTheSessionInFront()
             // Pick up sessions that were already running before this window opened.
             for info in list where controllers[info.id] == nil {
                 connection?.send(.attach(session: info.id, size: info.size))
@@ -1759,9 +1780,16 @@ final class AppModel: ObservableObject {
         case .noticeLog(let list):
             inbox.take(list, log: true)
             saveInbox()
-            macNotifications.remove(list.filter { $0.handled != nil }.map(\.id))
+            macNotifications.remove(list.filter { $0.handled != nil || $0.read == true }.map(\.id))
+            // Read here while the host was not reached.
+            let unsaid = inbox.readHere(notTold: list)
+            if !unsaid.isEmpty { connection?.send(.readNotices(ids: unsaid)) }
         case .notice(let notice):
             told(notice)
+        case .noticeAlert(let id):
+            alerted(id)
+        case .noticesRead(let ids):
+            readThere(ids)
         case .noticeHandled(let id, let handled):
             noticeHandled(id, handled)
         case .browserCall(let id, let agent, let request):

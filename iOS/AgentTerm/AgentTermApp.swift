@@ -1,5 +1,6 @@
 import AgentTermClient
 import AgentTermFirebase
+import AgentTermProtocol
 import AgentTermTelemetry
 import AgentTermTerminal
 import SwiftUI
@@ -73,9 +74,19 @@ struct AgentTermApp: App {
             // Shown once, at the first launch of a build that can send
             // anything (#48): the app's own screen, a switch for each kind
             // of report, both on. Until it is answered nothing is sent.
-            .sheet(isPresented: $privacy.needsAsking) {
+            .sheet(isPresented: $privacy.needsAsking, onDismiss: { model.reportingQuestionShown = false }) {
                 ReportingChoices(preferences: privacy)
                     .interactiveDismissDisabled()
+                    .preferredColorScheme(.dark)
+            }
+            // Then whether the app may notify (#180), once that has gone.
+            .fullScreenCover(
+                isPresented: Binding(
+                    get: { model.asksNotifications && !model.reportingQuestionShown },
+                    set: { if !$0 { model.answerNotificationAsk(allow: false) } })
+            ) {
+                NotificationAsk()
+                    .environmentObject(model)
                     .preferredColorScheme(.dark)
             }
             .onOpenURL { url in if !model.openFromLink(url) { model.pair(with: url) } }
@@ -130,5 +141,41 @@ private struct ReportingChoices: View {
             .navigationTitle("Reports")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+}
+
+/// The first screen (#180): only whether the app may notify, in the words
+/// the Mac uses for it.
+private struct NotificationAsk: View {
+    @EnvironmentObject private var model: PhoneModel
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            Image(systemName: "bell.badge.fill")
+                .font(.system(size: 54))
+                .foregroundStyle(Palette.tint)
+            Text(NoticeWords.permissionTitle).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
+            Text(NoticeWords.permissionPurpose)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Spacer()
+            Button {
+                model.answerNotificationAsk(allow: true)
+            } label: {
+                Text(NoticeWords.permissionAllow).font(.headline).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .accessibilityIdentifier("notifications-allow")
+            Button(NoticeWords.permissionNotNow) { model.answerNotificationAsk(allow: false) }
+                .accessibilityIdentifier("notifications-not-now")
+        }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Palette.canvas)
+        .accessibilityIdentifier("notifications-ask")
     }
 }

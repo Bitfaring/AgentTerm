@@ -186,9 +186,11 @@ private struct MenuBarMenu: View {
 /// for a question of the system's. Until it is answered nothing is sent.
 private struct CrashReportQuestion: ViewModifier {
     @StateObject private var preferences = TelemetryPreferences()
+    @EnvironmentObject private var model: AppModel
 
     func body(content: Content) -> some View {
-        content.sheet(isPresented: $preferences.needsAsking) {
+        // Once it has gone, the onboarding may come (ONBOARD-2).
+        content.sheet(isPresented: $preferences.needsAsking, onDismiss: { model.reportingQuestionShown = false }) {
             ReportingChoices(preferences: preferences)
                 .interactiveDismissDisabled()
         }

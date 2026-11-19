@@ -14,6 +14,7 @@ final class NoticeCenter {
         var nextID: UInt64
         var told: [String: Set<UInt64>]
         var pushed: [String: Set<UInt64>]
+        var due: Set<UInt64>?
     }
 
     private let file: URL?
@@ -21,8 +22,11 @@ final class NoticeCenter {
     private var nextID: UInt64 = 1
     /// What each session's agent was told in, as `AgentNotice.notices` keeps it.
     private var states: [SessionID: AgentState] = [:]
-    /// The notices each device was told of, by device (`HostServer.noticeKey`).
+    /// The notices each device was shown as a notification, by device
+    /// (`HostServer.noticeKey`).
     private var told: [String: Set<UInt64>] = [:]
+    /// The notices whose time to be a notification has come (`noticeAlert`).
+    private var due: Set<UInt64> = []
     /// Of those, the ones told through Apple: taken back the same way.
     private var pushed: [String: Set<UInt64>] = [:]
 
@@ -33,6 +37,7 @@ final class NoticeCenter {
             nextID = saved.nextID
             told = saved.told
             pushed = saved.pushed
+            due = saved.due ?? []
         }
         // A host that starts again has none of the sessions of the last one:
         // what they were told of is over.
@@ -85,6 +90,7 @@ final class NoticeCenter {
     func handle(_ id: UInt64, how: Notice.Handled.How, now: Date) -> Notice? {
         guard let index = log.firstIndex(where: { $0.id == id }), log[index].handled == nil else { return nil }
         log[index].handled = Notice.Handled(at: now, how: how)
+        if Notice.reads(how) { log[index].read = true }
         save()
         return log[index]
     }
@@ -104,12 +110,38 @@ final class NoticeCenter {
         return ids.compactMap { handle($0, how: .dismissed, now: now) }
     }
 
+    // MARK: Reading them
+
+    /// Read on a device: the ones that were not read yet.
+    func read(_ ids: [UInt64]) -> [UInt64] {
+        let ids = Set(ids)
+        var newly: [UInt64] = []
+        for index in log.indices where ids.contains(log[index].id) && log[index].read != true {
+            log[index].read = true
+            newly.append(log[index].id)
+        }
+        if !newly.isEmpty { save() }
+        return newly
+    }
+
     // MARK: Who was told
 
-    /// The notices not handled that this device was not told of yet.
+    /// Still to be shown as a notification: not handled, not read.
+    func pending(_ id: UInt64) -> Notice? {
+        log.first { $0.id == id && $0.handled == nil && $0.read != true }
+    }
+
+    /// Its time to be a notification has come.
+    func becameDue(_ id: UInt64) {
+        due.insert(id)
+        save()
+    }
+
+    /// The notices due, not handled nor read, that this device was not
+    /// shown yet.
     func untold(to device: String) -> [Notice] {
         let known = told[device] ?? []
-        return log.filter { $0.handled == nil && !known.contains($0.id) }
+        return log.filter { due.contains($0.id) && $0.handled == nil && $0.read != true && !known.contains($0.id) }
     }
 
     func told(_ id: UInt64, to device: String, throughApple: Bool) {
@@ -136,11 +168,12 @@ final class NoticeCenter {
         let ids = Set(log.map(\.id))
         told = told.mapValues { $0.intersection(ids) }
         pushed = pushed.mapValues { $0.intersection(ids) }
+        due.formIntersection(ids)
     }
 
     private func save() {
         guard let file else { return }
-        let data = MessageCoding.encode(Saved(log: log, nextID: nextID, told: told, pushed: pushed))
+        let data = MessageCoding.encode(Saved(log: log, nextID: nextID, told: told, pushed: pushed, due: due))
         try? FileManager.default.createDirectory(
             at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // What agents said: the user's alone.

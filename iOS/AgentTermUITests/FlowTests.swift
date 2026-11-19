@@ -220,6 +220,7 @@ final class FlowTests: XCTestCase {
         // back and in again keeps what the terminal has.)
         app.terminate()
         app.launch()
+        passNotificationAsk(app)
         if app.buttons["First Mac"].waitForExistence(timeout: 15) { app.buttons["First Mac"].tap() }
         let row = app.staticTexts["zsh"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5))
@@ -313,7 +314,16 @@ final class FlowTests: XCTestCase {
         if let log = environment["AGENTTERM_TOUCH_LOG"] { app.launchEnvironment["AGENTTERM_TOUCH_LOG"] = log }
         // PERF-16 (#126): the app notes how long its main thread is held up.
         if let notes = environment["AGENTTERM_MEASURE_MAIN"] { app.launchEnvironment["AGENTTERM_MEASURE_MAIN"] = notes }
+        // NOTIFY-1 (#180): the first screen asks only whether the app may
+        // notify, whatever iOS was told before on this simulator.
+        app.launchEnvironment["AGENTTERM_ASK_NOTIFICATIONS"] = "1"
         app.launch()
+        XCTAssertTrue(app.otherElements["notifications-ask"].firstMatch.waitForExistence(timeout: 10) || app.buttons["notifications-allow"].waitForExistence(timeout: 1))
+        XCTAssertTrue(app.staticTexts["Know When an Agent Needs You"].exists)
+        XCTAssertTrue(app.buttons["notifications-not-now"].exists)
+        capture("0-notifications")
+        passNotificationAsk(app)
+        XCTAssertTrue(app.buttons["notifications-allow"].waitForNonExistence(timeout: 10), "the screen stays")
 
         // Pair by opening the link, as tapping an agentterm:// link would: the
         // simulator has no camera to scan with.
@@ -515,6 +525,7 @@ final class FlowTests: XCTestCase {
         // Also when the app was closed in between.
         app.terminate()
         app.launch()
+        passNotificationAsk(app)
         XCTAssertTrue(app.buttons["First Mac"].waitForExistence(timeout: 15))
         app.buttons["First Mac"].tap()
         XCTAssertTrue(app.staticTexts["zsh"].firstMatch.waitForExistence(timeout: 15))

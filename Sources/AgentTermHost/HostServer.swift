@@ -78,6 +78,12 @@ public final class HostServer {
         /// How long an agent's hooks and MCP server have to be heard from
         /// before its session says they are missing (#129). Tests shorten it.
         public var linkGrace: TimeInterval = 20
+        /// How long a notice that waits is kept from being a notification
+        /// (`Notice.pushWaits`). Tests shorten it.
+        public var pushWait: TimeInterval = Notice.pushWait
+        /// How long the Live Activity is kept, updated, with nothing
+        /// working or waiting (`LiveActivityRule.keptIdle`). Tests shorten it.
+        public var activityKeptIdle: TimeInterval = LiveActivityRule.keptIdle
         /// The relay that passes notices on to Apple for devices that are
         /// away (#66). Nil sends none: a development build, a test.
         public var pushRelay: URL?
@@ -1869,14 +1875,43 @@ public final class HostServer {
         queue.asyncAfter(deadline: .now() + (force ? 0 : 3)) { [weak self] in self?.sendActivity() }
     }
 
+    private func endActivityIfIdle() {
+        guard let since = activityIdleSince, !activityEnded,
+            configuration.now().timeIntervalSince(since) >= configuration.activityKeptIdle
+        else { return }
+        updateActivity(force: true)
+    }
+
+    /// Since when nothing has worked or waited; nil while something does.
+    private var activityIdleSince: Date?
+    /// The activities were ended, after `activityKeptIdle` with nothing.
+    private var activityEnded = false
+
     private func sendActivity() {
         activityPending = false
         let status = AgentsStatus.of(sessions: sessions.values.map(\.info).sorted { $0.id < $1.id }, failures: failures)
+        let now = configuration.now()
+        if status.isActive {
+            activityIdleSince = nil
+            activityEnded = false
+        } else if activityIdleSince == nil {
+            activityIdleSince = now
+            // Looked at again once it has been idle long enough to end.
+            queue.asyncAfter(deadline: .now() + configuration.activityKeptIdle + 0.05) { [weak self] in
+                self?.endActivityIfIdle()
+            }
+        }
+        let decision = LiveActivityRule.decide(
+            enabled: true, status: status, idleSince: activityIdleSince, now: now, keptIdle: configuration.activityKeptIdle)
+        let end = decision != .show
+        // Ended once; nothing more until something works again.
+        if end && activityEnded { return }
+        activityEnded = end
         activityStatus = status
-        activitySentAt = configuration.now()
+        activitySentAt = now
         let mac = Host.current().localizedName ?? "Mac"
         for device in push.activityDevices where !connectedDevices.contains(device) {
-            if let item = push.activity(status, mac: mac, to: device) { sendPush(item) }
+            if let item = push.activity(status, end: end, mac: mac, to: device) { sendPush(item) }
         }
     }
 
@@ -1906,23 +1941,50 @@ public final class HostServer {
         for notice in handled { tellHandled(notice) }
     }
 
-    /// A new notice: to every client that is told, once, and through Apple
-    /// to each registered device that is away.
+    /// A new notice: to every client's Inbox at once; a notification on
+    /// every device at once, or after `Notice.pushWait` when it waits and
+    /// is still not handled nor read by then (the owner's decision,
+    /// 2026-11-20).
     private func tellEveryone(_ notice: Notice) {
+        for client in clients.values where client.authenticated && noticeKey(of: client) != nil {
+            send(.notice(notice), to: client)
+        }
+        guard notice.alerts else { return }
+        let wait = notice.pushWaits(macInUse: macInUse) ? configuration.pushWait : 0
+        if wait <= 0 { return alert(notice.id) }
+        queue.asyncAfter(deadline: .now() + wait) { [weak self] in self?.alert(notice.id) }
+    }
+
+    /// Its time has come: a notification on every device, over the
+    /// connection or, for a device that is away, through Apple.
+    private func alert(_ id: UInt64) {
+        guard let notice = notices.pending(id) else { return }
+        notices.becameDue(id)
         var reached: Set<String> = []
         for client in clients.values where client.authenticated {
-            guard let key = noticeKey(of: client) else { continue }
-            send(.notice(notice), to: client)
+            guard let key = noticeKey(of: client), !reached.contains(key) else { continue }
+            send(.noticeAlert(id: id), to: client)
             reached.insert(key)
         }
-        for key in reached { notices.told(notice.id, to: key, throughApple: false) }
-        // Through Apple only what is a notification; the rest reaches the
-        // device's Inbox when it connects.
-        guard notice.alerts else { return }
+        for key in reached { notices.told(id, to: key, throughApple: false) }
         for device in Set(push.targets.keys).subtracting(connectedDevices) {
             guard let item = push.push(notice, to: device) else { continue }
-            notices.told(notice.id, to: device, throughApple: true)
+            notices.told(id, to: device, throughApple: true)
             sendPush(item)
+        }
+    }
+
+    /// Read on a device: read on every one, and taken away from the
+    /// devices that had it through Apple and are away.
+    private func tellRead(_ ids: [UInt64]) {
+        guard !ids.isEmpty else { return }
+        for client in clients.values where client.authenticated && noticeKey(of: client) != nil {
+            send(.noticesRead(ids: ids), to: client)
+        }
+        for id in ids {
+            for device in notices.pushedTo(id) where !connectedDevices.contains(device) {
+                if let item = push.takeBack(id, from: device) { sendPush(item) }
+            }
         }
     }
 
@@ -2551,6 +2613,8 @@ public final class HostServer {
             push.setActivity(device: id, token: token, start: start)
         case .handleNotice(let id, let how):
             if let notice = notices.handle(id, how: how, now: configuration.now()) { tellHandled(notice) }
+        case .readNotices(let ids):
+            tellRead(notices.read(ids))
         }
     }
 
@@ -2995,7 +3059,7 @@ public final class HostServer {
         if let key = noticeKey(of: client) {
             send(.noticeLog(notices.log), to: client)
             for notice in notices.untold(to: key) {
-                send(.notice(notice), to: client)
+                send(.noticeAlert(id: notice.id), to: client)
                 notices.told(notice.id, to: key, throughApple: false)
             }
         }

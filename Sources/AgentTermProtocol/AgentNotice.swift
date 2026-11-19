@@ -198,19 +198,31 @@ public struct AgentsStatus: Codable, Hashable, Sendable {
 /// When the iPhone shows the Live Activity of the agents on a Mac (#168,
 /// decided 2026-11-19): while an agent works or waits, whether someone is
 /// at the Mac or not, and whether the phone is connected or not, the host
-/// keeping it true through Apple.
+/// keeping it true through Apple. One activity is kept between turns and
+/// only updated (#180, decided 2026-11-20): with nothing working or
+/// waiting it says so, and ends only once that has lasted `keptIdle`.
 public enum LiveActivityRule {
     public enum Decision: Equatable, Sendable {
         /// Shown, or kept up to date.
         case show
         /// Ended at once: no one wants it.
         case endNow
-        /// Every agent is done: the last state may stay, since it stays true.
+        /// Every agent has been done for `keptIdle`: the last state may
+        /// stay, since it stays true.
         case endShowingDone
     }
 
-    public static func decide(enabled: Bool, status: AgentsStatus) -> Decision {
+    /// How long it stays, updated, with nothing working or waiting.
+    public static let keptIdle: TimeInterval = 15 * 60
+
+    /// `idleSince`: when nothing has worked or waited since; nil while
+    /// something does.
+    public static func decide(
+        enabled: Bool, status: AgentsStatus, idleSince: Date? = nil, now: Date = Date(), keptIdle: TimeInterval = keptIdle
+    ) -> Decision {
         guard enabled else { return .endNow }
-        return status.isActive ? .show : .endShowingDone
+        if status.isActive { return .show }
+        guard let idleSince, now.timeIntervalSince(idleSince) < keptIdle else { return .endShowingDone }
+        return .show
     }
 }

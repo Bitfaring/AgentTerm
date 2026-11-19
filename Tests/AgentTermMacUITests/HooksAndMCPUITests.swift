@@ -120,6 +120,9 @@ final class HooksAndMCPUITests: MacUITestCase {
         app.wait(for: .id("onboarding-add-folder"))
         app.press(.id("onboarding-next"))
         app.wait(for: .containing("Permissions"))
+        // Notifications among them, asked here up front (#180).
+        app.wait(for: .containing("Tells you when an agent is done"))
+        shot("onboarding-permissions")
         app.press(.id("onboarding-next"))
         app.wait(for: .id("setup-claude"), timeout: 20)
         shot("onboarding-agents")
@@ -149,6 +152,23 @@ final class HooksAndMCPUITests: MacUITestCase {
         app.press(.id("onboarding-hide"))
         app.press(.id("onboarding-skip"))
         app.waitGone(.id("onboarding"))
+    }
+
+    /// ONBOARD-2: at the first launch of a build that reports, the question
+    /// about what it may send comes alone; the onboarding comes once it is
+    /// answered, not on top of it.
+    func testTheOnboardingWaitsForTheReportingQuestion() throws {
+        appEnvironment["AGENTTERM_REPORTING_PREVIEW"] = "agentterm-ui-test-\(UUID().uuidString)"
+        try relaunchApp()
+        app.wait(for: .id("reporting-choices"), timeout: 15)
+        // Long enough for the host to have said the agents miss their setup.
+        RunLoop.current.run(until: Date().addingTimeInterval(6))
+        shot("onboard-2-question-alone")
+        XCTAssertFalse(app.exists(.id("onboarding")), "the onboarding is shown over the reporting question")
+        app.press(.id("reporting-continue"))
+        app.waitGone(.id("reporting-choices"))
+        app.wait(for: .id("onboarding"), timeout: 15)
+        XCTAssertFalse(app.exists(.id("reporting-choices")))
     }
 
     /// LINK-8 (#129): a shell opened with the key of a shell of the user's,

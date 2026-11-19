@@ -64,6 +64,7 @@ final class ProtocolTests: XCTestCase {
             .hello(token: "secret", client: "iPhone", kind: .iphone),
             .hello(token: "secret", client: "Studio"),
             .list,
+            .readNotices(ids: [3, 4]),
             .agents(refresh: true),
             .create(CreateRequest(command: "claude", cwd: "/tmp", title: "Claude", size: TermSize(cols: 48, rows: 30))),
             .attach(session: 7, size: TermSize(cols: 120, rows: 40)),
@@ -144,6 +145,8 @@ final class ProtocolTests: XCTestCase {
             .welcome(version: agenttermProtocolVersion, host: "Mac"),
             .welcome(version: agenttermProtocolVersion, host: "Mac", release: "0.10.0", revision: "1f3a9c0d2b4e6f70"),
             .sessions([info]),
+            .noticeAlert(id: 9),
+            .noticesRead(ids: [9, 10]),
             .agents([AgentInfo(id: "claude", name: "Claude Code", path: "/usr/local/bin/claude"), AgentInfo(id: "agy", name: "Antigravity", path: nil)]),
             .folders(["/Users/me/app"]),
             .attached(info),
@@ -371,6 +374,14 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(LiveActivityRule.decide(enabled: false, status: working), .endNow, "switched off")
         let over = AgentsStatus.of(sessions: [session(1, .done(said: nil)), session(2, nil)], failures: [])
         XCTAssertEqual(LiveActivityRule.decide(enabled: true, status: over), .endShowingDone)
+        // Kept between turns (#180): updated while it has been over for
+        // less than `keptIdle`, ended after.
+        let now = Date()
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, status: over, idleSince: now.addingTimeInterval(-60), now: now), .show)
+        XCTAssertEqual(
+            LiveActivityRule.decide(enabled: true, status: over, idleSince: now.addingTimeInterval(-LiveActivityRule.keptIdle), now: now),
+            .endShowingDone)
+        XCTAssertEqual(LiveActivityRule.decide(enabled: false, status: over, idleSince: now, now: now), .endNow)
     }
 
     /// LIVE-3 (#168): the whole state, counted by kind, with the names of

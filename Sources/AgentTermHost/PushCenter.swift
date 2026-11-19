@@ -89,13 +89,13 @@ public final class PushCenter {
     var activityDevices: [String] { targets.filter { $0.value.activity != nil || $0.value.activityStart != nil }.map(\.key) }
 
     /// An update of a device's Live Activity: the host's state now, to its
-    /// activity's token; or, with none, one that starts it, when an agent
-    /// works or waits. Nil when there is nothing to send.
-    func activity(_ status: AgentsStatus, mac: String, to device: String) -> Push? {
+    /// activity's token, or its end (`end`); or, with none, one that starts
+    /// it, when an agent works or waits. Nil when there is nothing to send.
+    func activity(_ status: AgentsStatus, end: Bool, mac: String, to device: String) -> Push? {
         guard relay != nil, let target = targets[device] else { return nil }
         guard let state = try? JSONSerialization.jsonObject(with: MessageCoding.encode(status)) else { return nil }
         if let token = target.activity {
-            let event = status.isActive ? "update" : "end"
+            let event = end ? "end" : "update"
             return request(target, device: device, ["activity": ["token": token, "event": event, "state": state, "mac": mac]])
         }
         guard status.isActive, let start = target.activityStart else { return nil }

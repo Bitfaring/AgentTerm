@@ -88,10 +88,10 @@ the source yourself sends nothing at all.
   connects from. The relay keeps none of it. "Also While the App Is Closed" in the iPhone's
   Settings turns it off, and "Tell me when an agent is done or needs me" turns off all
   notifications; revoking the iPhone on the Mac forgets its token and key. When a notification was
-  handled on another device, the Mac asks the relay to take it back from the iPhone: that request
+  handled or read on another device, the Mac asks the relay to take it back from the iPhone: that request
   names the notification only. A build made from the source has no relay and sends nothing this way.
-- **The Live Activity through Apple (iPhone, released app).** While agents work, the Mac keeps the
-  iPhone's Live Activity up to date through the same relay and Apple. Unlike a notification it
+- **The Live Activity through Apple (iPhone, released app).** While agents work, and for 15 minutes
+  after the last one stops, the Mac keeps the iPhone's Live Activity up to date through the same relay and Apple. Unlike a notification it
   cannot be encrypted for the iPhone, because iOS draws it from what the push carries: how many
   agents work, wait, are done or stopped, and the names of the sessions that wait or are done. It
   never carries what an agent said. The relay keeps none of it. "Live Activity of the Mac's agents"

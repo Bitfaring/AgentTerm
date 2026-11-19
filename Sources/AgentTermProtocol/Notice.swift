@@ -46,6 +46,8 @@ public struct Notice: Codable, Equatable, Sendable, Identifiable {
     public var folder: String
     public var kind: Kind
     public var handled: Handled?
+    /// Read on some device: read on every one. Nil while it is not.
+    public var read: Bool?
 
     public init(id: UInt64, at: Date, session: SessionID?, name: String, folder: String, kind: Kind, handled: Handled? = nil) {
         self.id = id
@@ -59,6 +61,22 @@ public struct Notice: Codable, Equatable, Sendable, Identifiable {
 
     /// How long the host keeps them, and a device's Inbox too.
     public static let kept: TimeInterval = 30 * 24 * 3600
+
+    /// How long a notification waits before it goes to an iPhone through
+    /// Apple, when it can (`pushWaits`): handled or read on the Mac by then,
+    /// it does not go at all.
+    public static let pushWait: TimeInterval = 30
+
+    /// Whether its push waits `pushWait` (the owner's decision,
+    /// 2026-11-20): an agent that is done, always; anything else while
+    /// someone is at the Mac, who may handle it there first.
+    public func pushWaits(macInUse: Bool) -> Bool {
+        if case .agent(.done) = kind { return true }
+        return macInUse
+    }
+
+    /// Handled in a way that means it was looked at: read too.
+    public static func reads(_ how: Handled.How) -> Bool { how != .movedOn }
 
     /// What a notice about an agent says and offers: the words of #22.
     public var agentNotice: AgentNotice? {
@@ -139,9 +157,17 @@ public enum InboxWords {
 /// The words of the notifications' switches (#66).
 public enum NoticeWords {
     public static let macToggle = "Notify when an agent is done or needs you"
-    public static let macDetail = "A macOS notification while the app is not in front; a banner while it is."
+    /// What the permission is for, in the Mac's Permissions and the
+    /// iPhone's first screen (#180).
+    public static let permissionTitle = "Know When an Agent Needs You"
+    public static let permissionAllow = "Allow Notifications"
+    public static let permissionNotNow = "Not Now"
+    public static let permissionPurpose =
+        "Tells you when an agent is done, asks something or needs your permission, on this device and your others at the same moment."
+    public static let macDetail =
+        "A macOS notification, with the app in front or not, at the same moment as on the iPhone. When an agent is done, or while you are at the Mac, it waits 30 seconds first: handled or read by then, it is not shown."
     public static let macHelp =
-        "Every paired device is told too. Answered, opened or dismissed on one, it goes from all of them. Each device keeps its own Inbox for 30 days."
+        "Every paired device is told too. Answered, opened, dismissed or read on one, it goes from all of them, and is read on all. Each device keeps its own Inbox for 30 days."
 }
 
 /// What a host's `error` says, in the same words on both apps (#66: a

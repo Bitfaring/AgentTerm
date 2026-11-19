@@ -662,6 +662,42 @@ final class PhoneModel: ObservableObject {
         }
     }
 
+    // MARK: The first screen: may the app notify? (#180)
+
+    /// Shown once, at the first launch, while iOS was not asked yet: the
+    /// question alone, not an onboarding like the Mac's (the owner's
+    /// decision, 2026-11-20).
+    @Published private(set) var asksNotifications = false
+    /// The reporting question is on screen: this one waits until it has
+    /// gone, one at a time.
+    @Published var reportingQuestionShown = Telemetry.shared.shouldAskAboutCrashReports
+    static let notificationsAskedKey = "notifications.asked"
+
+    private func checkNotificationAsk() {
+        // A test sees it whatever iOS was told before (`AGENTTERM_ASK_NOTIFICATIONS`).
+        if ProcessInfo.processInfo.environment["AGENTTERM_ASK_NOTIFICATIONS"] != nil { return asksNotifications = true }
+        guard !UserDefaults.standard.bool(forKey: Self.notificationsAskedKey) else { return }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            let ask = settings.authorizationStatus == .notDetermined
+            Task { @MainActor [weak self] in self?.asksNotifications = ask }
+        }
+    }
+
+    /// Allowed, or not now: not shown again either way.
+    func answerNotificationAsk(allow: Bool) {
+        UserDefaults.standard.set(true, forKey: Self.notificationsAskedKey)
+        guard allow else {
+            asksNotifications = false
+            return
+        }
+        notifications.askOnce { _ in
+            Task { @MainActor [weak self] in
+                self?.asksNotifications = false
+                self?.updatePush()
+            }
+        }
+    }
+
     // MARK: Through Apple while the app is closed (#66)
 
     /// Whether to be told through Apple too: a switch under the one above.
@@ -800,28 +836,41 @@ final class PhoneModel: ObservableObject {
         UserDefaults.standard.set(MessageCoding.encode(inbox), forKey: Self.inboxKey(mac))
     }
 
-    /// What the Mac told: into the Inbox, and a notification unless its
-    /// session is on screen, which is then seen.
+    /// What the Mac told: into the Inbox; seen at once when its session is
+    /// on screen. A notification only once the host says its time has come
+    /// (`alerted`).
     private func told(_ notice: Notice) {
         inbox.take([notice])
         saveInbox()
-        guard let mac = pairing?.id else { return }
-        if active, let session = notice.session, session == openSessionID {
-            sawNotice(of: session)
-            return
-        }
-        guard notifyAgents, notice.alerts else { return }
-        notifications.post(notice, mac: mac, macName: pairing?.name ?? "the Mac")
+        if active, let session = notice.session, session == openSessionID { sawNotice(of: session) }
+    }
+
+    /// Time to show it as a notification, at the same moment as the Mac:
+    /// unless it was read or handled, or its session is on screen.
+    private func alerted(_ id: UInt64) {
+        guard let mac = pairing?.id, let entry = inbox.entries.first(where: { $0.id == id }), !entry.read,
+            entry.notice.handled == nil, notifyAgents, entry.notice.alerts
+        else { return }
+        if active, let session = entry.notice.session, session == openSessionID { return sawNotice(of: session) }
+        notifications.post(entry.notice, mac: mac, macName: pairing?.name ?? "the Mac")
+    }
+
+    /// Read here: read on every device. Said to the Mac once connected,
+    /// if it is not now (`noticeLog`).
+    private func readHere(_ ids: [UInt64]) {
+        guard !ids.isEmpty else { return }
+        inbox.markRead(ids: ids)
+        saveInbox()
+        if let mac = pairing?.id { notifications.remove(mac: mac, notices: ids) }
+        if status == .connected { connection?.send(.readNotices(ids: ids)) }
     }
 
     private func readInbox(session: SessionID) {
-        inbox.markRead(session: session)
-        saveInbox()
+        readHere(inbox.unread(session: session))
     }
 
     func read(_ entry: InboxBook.Entry) {
-        inbox.markRead(entry.id)
-        saveInbox()
+        readHere([entry.id])
     }
 
     func delete(_ entry: InboxBook.Entry) {
@@ -870,6 +919,9 @@ final class PhoneModel: ObservableObject {
     private var activityToken: String?
     private var activityStartToken: String?
     private var activityWatch: Task<Void, Never>?
+    /// Since when nothing has worked or waited here; nil while something does.
+    private var activityIdleSince: Date?
+    private var activityIdleCheck: Task<Void, Never>?
     private var activityStartWatch: Task<Void, Never>?
 
     private static var activityPushes: Bool { AppChannel.current == .release }
@@ -885,7 +937,22 @@ final class PhoneModel: ObservableObject {
         // goes out of date by itself.
         guard status == .connected || !enabled else { return }
         let state = AgentsStatus.of(sessions: sessions, failures: failures)
-        let decision = LiveActivityRule.decide(enabled: enabled, status: state)
+        // Kept between turns, only updated (#180): ended once nothing has
+        // worked or waited for `LiveActivityRule.keptIdle`.
+        if state.isActive {
+            activityIdleSince = nil
+        } else if activityIdleSince == nil {
+            activityIdleSince = Date()
+            activityIdleCheck?.cancel()
+            activityIdleCheck = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(LiveActivityRule.keptIdle + 1))
+                guard !Task.isCancelled else { return }
+                await MainActor.run { self?.updateLiveActivity() }
+            }
+        }
+        let decision = LiveActivityRule.decide(enabled: enabled, status: state, idleSince: activityIdleSince)
+        // Nothing is started for a state with nothing in it.
+        if decision == .show, !state.isActive, liveActivity == nil { return }
         // Without push nothing keeps it true once the app sleeps.
         let content = ActivityContent(state: state, staleDate: Self.activityPushes ? nil : Date().addingTimeInterval(10 * 60))
         if decision == .show {
@@ -1039,6 +1106,7 @@ final class PhoneModel: ObservableObject {
         pairing = hosts.first { $0.id == last } ?? hosts.first
         loadInbox()
         notifications.model = self
+        checkNotificationAsk()
         pushTokenWatch = PushToken.shared.$token.receive(on: DispatchQueue.main).sink { [weak self] token in
             self?.deviceToken = token
             self?.updatePush()
@@ -1599,9 +1667,20 @@ final class PhoneModel: ObservableObject {
             saveInbox()
             // What was handled while this iPhone was away goes from
             // Notification Center too.
-            if let mac = pairing?.id { notifications.remove(mac: mac, notices: list.filter { $0.handled != nil }.map(\.id)) }
+            if let mac = pairing?.id {
+                notifications.remove(mac: mac, notices: list.filter { $0.handled != nil || $0.read == true }.map(\.id))
+            }
+            // Read here while the Mac was not reached.
+            let unsaid = inbox.readHere(notTold: list)
+            if !unsaid.isEmpty { connection?.send(.readNotices(ids: unsaid)) }
         case .notice(let notice):
             told(notice)
+        case .noticeAlert(let id):
+            alerted(id)
+        case .noticesRead(let ids):
+            inbox.markRead(ids: ids)
+            saveInbox()
+            if let mac = pairing?.id { notifications.remove(mac: mac, notices: ids) }
         case .noticeHandled(let id, let handled):
             inbox.handled(id, handled)
             saveInbox()
