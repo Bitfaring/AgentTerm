@@ -35,7 +35,7 @@ These are always asked, whatever a principle says:
 - **Anything of the user's own.** Their installed app, its sessions, its preferences, its paired devices, their simulators, their accounts, the tools installed on their Mac. This includes every question a tool asks about itself while it is being tried: an update, a sign-in, whether to trust something. Decline it or stop; do not answer it.
 - **Security and privacy.** Dismissing or working around a code scanning alert, widening what a client or a plugin may do, anything that touches tokens, pairing, or what is sent off the machine.
 - **Doing less than was asked.** Leaving part of a task undone, or solving it only in part.
-- **Planning.** Which release an issue belongs to, what is in or out of a milestone, closing an issue, what is said in release notes.
+- **Planning.** Which release an issue belongs to, what is in or out of a milestone, closing an issue that is not done in full (rule 4), what is said in release notes.
 
 Not decisions to ask about: how to name a local variable, which of two equal ways to write a loop, the order of tests in a file. When unsure whether a principle covers something, it does not: ask.
 
@@ -77,8 +77,9 @@ Nothing is reported as done before it has been tested, and the report says what 
 
 - **A bug found during a session** gets an issue at once, labelled `bug`, in the milestone being worked on, saying what was seen, what was tried and what is not known yet, written as rule 5 says.
 - **Work that is done and tested** (rule 2) is committed on the milestone's branch and pushed, without asking. Then CI is run on the branch, which it does by itself only for pull requests and `main` (`gh workflow run ci.yml --ref <branch>`, then `gh run watch`), and what fails is fixed, shown and committed the same way, until it is green. A check that cannot be made green without a decision (rule 1) is reported and asked about.
+- **An issue done in full is closed**, as the owner decided (2026-11-19): a bug or an enhancement whose whole definition of done is true (fixed or made, its tests passing in the layers rule 2 asks for, pushed), with a comment that names the commits and what was run; and a bug not reproduced in principle 8's 5 tries, with a comment that says so. An issue done only in part stays open and says what is left.
 - **A real agent is used when a trial needs one** (principle 5), as the owner decided (2026-11-19): Claude Code, Codex, Antigravity or Copilot CLI is started without asking, with its cheapest model and its lowest level of thinking (for Claude Code, Haiku with thinking off; for the others, their own smallest), and the issue says which agent, version, model and level were used. What rule 1 says of the user's tools still holds: a question the agent asks about itself (an update, a sign-in, whether to trust a folder) is declined or the trial is stopped, and the trial runs in a folder of its own, not in the user's projects.
-- What stays asked: opening and merging a pull request, releasing, deploying, deleting, closing an issue that is not a fixed bug, and planning (rule 1).
+- What stays asked: opening and merging a pull request, releasing, deploying, deleting, closing an issue that is not done in full (above), and planning (rule 1).
 
 ### 5. How an issue is written, as the owner decided (2026-11-19)
 
