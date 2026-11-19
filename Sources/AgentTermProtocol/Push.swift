@@ -173,9 +173,9 @@ public enum PushSeal {
 /// The relay of each build. The development build has none (principle 7,
 /// and #66: push is tried on TestFlight builds only).
 public enum PushRelay {
-    /// Where the released host sends pushes: nil until the relay is
-    /// deployed (relay/README.md), which then says so in the switch.
-    public static let release: URL? = nil
+    /// Where the released host sends pushes: the relay deployed on
+    /// 2026-11-19 (relay/README.md).
+    public static let release: URL? = URL(string: "https://agentterm-push.agentterm.workers.dev")
 
     public static func url(for channel: AppChannel) -> URL? { channel == .release ? release : nil }
 }

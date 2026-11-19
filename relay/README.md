@@ -44,7 +44,12 @@ npx wrangler deploy --var APNS_KEY_ID:<key id> --var APNS_TEAM_ID:<team id>
 
 Then the relay's address goes into `PushRelay.release` in
 `Sources/AgentTermProtocol/Push.swift`, and the next release carries it.
-Until then the released app's switch says that the Mac has no relay set up.
+
+Deployed on 2026-11-19 at `https://agentterm-push.agentterm.workers.dev`
+(the account's workers.dev subdomain is `agentterm`), with Workers Logs off.
+Tried then with a made-up device token: `/v1/register` gave a ticket, and
+`/v1/push` reached APNs Production over HTTP/2, which accepted the provider
+token and refused the device token (`BadDeviceToken`).
 
 Once Apple grants the filtering entitlement, `npx wrangler deploy --var FILTERING:on`, with the
 entitlement added to the extension's entitlements, takes notifications back at once.
