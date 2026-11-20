@@ -1,4 +1,5 @@
 import AgentTermProtocol
+import AgentTermTelemetry
 import SwiftUI
 
 /// The onboarding (#129): what AgentTerm needs to be set up, a step at a
@@ -10,13 +11,19 @@ struct OnboardingView: View {
     @EnvironmentObject private var model: AppModel
     @State private var step = 0
     @State private var hideAgain = false
+    /// What may be sent to the developer, while it is not answered (#48):
+    /// a step of its own, answered by its Next. Not answered, nothing is
+    /// sent, and it is asked again at the next launch.
+    @StateObject private var reporting = TelemetryPreferences()
+    @State private var asksReporting = Telemetry.shared.shouldAskAboutCrashReports
 
     enum Step: Int, CaseIterable {
-        case welcome, folders, permissions, agents, iPhone
+        case welcome, reports, folders, permissions, agents, iPhone
 
         var title: String {
             switch self {
             case .welcome: return "Welcome"
+            case .reports: return "Reports"
             case .folders: return "Folders"
             case .permissions: return "Permissions"
             case .agents: return AgentLinkWords.title
@@ -25,14 +32,16 @@ struct OnboardingView: View {
         }
     }
 
-    private var current: Step { Step(rawValue: step) ?? .welcome }
+    /// Its steps: Reports only while it is to be answered.
+    private var steps: [Step] { Step.allCases.filter { $0 != .reports || asksReporting } }
+    private var current: Step { steps.indices.contains(step) ? steps[step] : .welcome }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                ForEach(Step.allCases, id: \.rawValue) { each in
+                ForEach(steps, id: \.rawValue) { each in
                     Button {
-                        step = each.rawValue
+                        step = steps.firstIndex(of: each) ?? 0
                     } label: {
                         Text(each.title)
                             .font(.system(size: 12, weight: each == current ? .semibold : .regular))
@@ -44,7 +53,7 @@ struct OnboardingView: View {
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(each == current ? .isSelected : [])
                     .accessibilityIdentifier("onboarding-step-\(each.rawValue)")
-                    if each != Step.allCases.last {
+                    if each != steps.last {
                         Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.tertiary)
                     }
                 }
@@ -70,6 +79,8 @@ struct OnboardingView: View {
                         .accessibilityIdentifier("onboarding-back")
                 }
                 Button(current == .iPhone ? "Done" : "Next") {
+                    // Its Next is the answer: what its switches say is kept.
+                    if current == .reports { reporting.answer() }
                     if current == .iPhone { finish() } else { step += 1 }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -100,6 +111,8 @@ struct OnboardingView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        case .reports:
+            ReportingChoices(preferences: reporting)
         case .folders:
             VStack(alignment: .leading, spacing: 14) {
                 Text("Your projects").font(.system(size: 17, weight: .semibold))

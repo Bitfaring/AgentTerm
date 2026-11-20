@@ -102,6 +102,8 @@ struct SessionsView: View {
                     TurnResultScreen(session: id)
                 case .inbox:
                     InboxScreen()
+                case .notice(let id):
+                    NoticeScreen(id: id)
                 case .companion(let agent, let item):
                     TerminalScreen(session: agent, initial: item)
                 case .folder(let folder):
@@ -202,8 +204,8 @@ private struct InboxSection: View {
     }
 }
 
-/// One thing the Mac told of: what, where, how it was handled. Touched, it
-/// opens what it is about and is read.
+/// One thing the Mac told of: what, all of what was said, where, how it was
+/// handled. Touched, it is read and shown whole (`NoticeScreen`).
 struct InboxRow: View {
     @EnvironmentObject private var model: PhoneModel
     let entry: InboxBook.Entry
@@ -222,12 +224,12 @@ struct InboxRow: View {
                     Text(notice.title(on: model.pairing?.name))
                         .font(.subheadline.weight(entry.read ? .regular : .semibold))
                         .foregroundStyle(notice.state?.isWaiting == true && notice.handled == nil ? Color.orange : .primary)
-                        .lineLimit(2)
-                    if !notice.body.isEmpty {
-                        Text(notice.body)
+                    // All of it, not a few lines (the owner's decision, 2026-11-21).
+                    if !notice.fullBody.isEmpty {
+                        Text(notice.fullBody)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
                     }
                     Text(
                         [notice.place(macName: model.pairing?.name ?? "the Mac"), notice.at.formatted(date: .abbreviated, time: .shortened), notice.handledWords]

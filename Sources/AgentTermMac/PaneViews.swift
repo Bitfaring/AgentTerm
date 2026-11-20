@@ -50,7 +50,8 @@ struct SplitContainer<First: View, Second: View>: View {
     @ViewBuilder let second: () -> Second
     @State private var dragging: Double?
 
-    private static var divider: CGFloat { 1 }
+    /// A gutter rather than a line, so that the parts read as parts.
+    private static var divider: CGFloat { 6 }
 
     var body: some View {
         GeometryReader { proxy in
@@ -63,12 +64,32 @@ struct SplitContainer<First: View, Second: View>: View {
             layout {
                 first()
                     .frame(width: axis == .sideBySide ? firstLength : nil, height: axis == .stacked ? firstLength : nil)
-                Theme.hairline
+                // Lighter than the parts on both sides, edged by a line on
+                // each, so that where one ends is seen at once.
+                Color(white: 0.17)
                     .frame(width: axis == .sideBySide ? Self.divider : nil, height: axis == .stacked ? Self.divider : nil)
                     .overlay {
-                        // A handle wider than the line, so it is easy to catch.
+                        let edge = Color.white.opacity(0.10)
+                        if axis == .sideBySide {
+                            HStack(spacing: 0) {
+                                edge.frame(width: 1); Spacer(minLength: 0); edge.frame(width: 1)
+                            }
+                        } else {
+                            VStack(spacing: 0) {
+                                edge.frame(height: 1); Spacer(minLength: 0); edge.frame(height: 1)
+                            }
+                        }
+                    }
+                    // A grip in the middle, which says it can be dragged.
+                    .overlay {
+                        Capsule()
+                            .fill(Color.white.opacity(0.35))
+                            .frame(width: axis == .sideBySide ? 2 : 28, height: axis == .stacked ? 2 : 28)
+                    }
+                    .overlay {
+                        // A handle wider than the gutter, so it is easy to catch.
                         Color.clear
-                            .frame(width: axis == .sideBySide ? 9 : nil, height: axis == .stacked ? 9 : nil)
+                            .frame(width: axis == .sideBySide ? 12 : nil, height: axis == .stacked ? 12 : nil)
                             .contentShape(Rectangle())
                             .onHover { inside in
                                 if inside { (axis == .sideBySide ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push() } else { NSCursor.pop() }
@@ -131,6 +152,8 @@ struct PaneView: View {
                 GroupRow(group: front)
                 if TabID.holder(of: front) == nil, model.hasArea(front), let agent = model.session(forTab: front) {
                     AgentAreaView(agent: agent, paneFocused: focused)
+                } else if model.isShellsSplit(front) {
+                    ShellsSplitView(group: front, paneFocused: focused)
                 } else {
                     MemberContent(group: front, item: item, focused: focused)
                 }
@@ -146,13 +169,19 @@ struct PaneView: View {
 struct PaneFrameReader: View {
     @EnvironmentObject private var model: AppModel
     let place: PanePlace
+    /// Which reader wrote the place's frame. When a part is made again, as
+    /// when a page or a shell comes beside the agent, the new reader
+    /// appears before the old one goes: the old one then took the new
+    /// one's frame away, and a click in the agent found no part and left
+    /// the keyboard where it was (the owner's report, 2026-11-21).
+    @State private var token = UUID()
 
     var body: some View {
         GeometryReader { proxy in
             Color.clear
-                .onAppear { model.paneFrames[place] = proxy.frame(in: .global) }
-                .onChange(of: proxy.frame(in: .global)) { _, frame in model.paneFrames[place] = frame }
-                .onDisappear { model.paneFrames[place] = nil }
+                .onAppear { model.setPaneFrame(proxy.frame(in: .global), for: place, by: token) }
+                .onChange(of: proxy.frame(in: .global)) { _, frame in model.setPaneFrame(frame, for: place, by: token) }
+                .onDisappear { model.setPaneFrame(nil, for: place, by: token) }
         }
     }
 }
@@ -341,11 +370,11 @@ struct AgentAreaView: View {
     }
 
     private var shellsPart: some View {
-        ShellsPart(agentTab: agentTab, shown: area.shownShell(among: shells), focused: paneFocused && focus == .shells)
+        ShellsPart(agentTab: agentTab, shown: area.shownShell(among: shells), focused: paneFocused && focus == .shells, ringed: severalShown)
     }
 
     private var browserPart: some View {
-        BrowserPart(agentTab: agentTab, shown: area.shownBrowser(among: browserTabs), focused: paneFocused && focus == .browser)
+        BrowserPart(agentTab: agentTab, shown: area.shownBrowser(among: browserTabs), focused: paneFocused && focus == .browser, ringed: severalShown)
     }
 
     /// The page beside the agent, shown as a device: as wide as its screen,
@@ -373,17 +402,44 @@ struct AgentAreaView: View {
     private var agentPart: some View {
         SessionContent(session: agent, focused: paneFocused && focus == .agent, showsUsage: false)
             .id(agent.id)
+            .modifier(PartRing(on: paneFocused && focus == .agent && severalShown))
             .background(PaneFrameReader(place: .part(agent: agentTab, .agent)))
+    }
+
+    /// More than the agent on show, side by side or one above the other:
+    /// the part the keyboard is in is then framed.
+    private var severalShown: Bool {
+        model.agentAreaAlone[agentTab] == nil && ((!shells.isEmpty && !area.shellsHidden) || (!browserTabs.isEmpty && !area.browserHidden))
     }
 }
 
-/// The agent's shell picked, under it. The part the keyboard is in has a
-/// line at its top, as its strip had.
+/// The frame of the part of an agent's area the keyboard is in, when the
+/// area shows more than one (owner's request, 2026-11-21): a line at its
+/// top was hard to see, and the agent had none.
+struct PartRing: ViewModifier {
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if on {
+                Rectangle()
+                    .strokeBorder(Color.accentColor.opacity(0.85), lineWidth: 2)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// The agent's shell picked, under it. The part the keyboard is in is
+/// framed (`PartRing`).
 private struct ShellsPart: View {
     @EnvironmentObject private var model: AppModel
     let agentTab: String
     let shown: String?
     let focused: Bool
+    /// Framed when it has the keyboard: not when it is shown alone.
+    let ringed: Bool
 
     var body: some View {
         ZStack {
@@ -392,7 +448,7 @@ private struct ShellsPart: View {
                 SessionContent(session: session, focused: focused, showsUsage: false).id(session.id)
             }
         }
-        .overlay(alignment: .top) { if focused { Color.accentColor.opacity(0.6).frame(height: 1.5) } }
+        .modifier(PartRing(on: focused && ringed))
         .background(PaneFrameReader(place: .part(agent: agentTab, .shells)))
         .background(PartName(label: "Its shells", identifier: "agent-shells"))
     }
@@ -404,6 +460,8 @@ private struct BrowserPart: View {
     let agentTab: String
     let shown: String?
     let focused: Bool
+    /// Framed when it has the keyboard: not when it is shown alone.
+    let ringed: Bool
 
     var body: some View {
         ZStack {
@@ -412,7 +470,7 @@ private struct BrowserPart: View {
                 BrowserPaneView(tab: tab, focused: focused).id(tab.id)
             }
         }
-        .overlay(alignment: .top) { if focused { Color.accentColor.opacity(0.6).frame(height: 1.5) } }
+        .modifier(PartRing(on: focused && ringed))
         .background(PaneFrameReader(place: .part(agent: agentTab, .browser)))
         .background(PartName(label: "Its page", identifier: "agent-browser"))
     }

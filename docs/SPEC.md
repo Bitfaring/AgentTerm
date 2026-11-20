@@ -334,10 +334,15 @@ happened; the Live Activity shows the host's state now (below).
   item picked is shown in the middle, and is then read: what its agent
   said or asks, or what stopped, or, for one that is over, how it was
   handled. **Open** shows the session in Sessions; **Delete** (not for an
-  agent that waits) takes it out of this Mac's Inbox; **Next** shows the
-  item after it. On the iPhone and the iPad, what is unread or waits is at
-  the top of the Sessions list, with All, which opens the whole Inbox:
-  swiped to delete one, the menu for the read ones or all.
+  agent that waits) takes it out of this Mac's Inbox. On the iPhone and
+  the iPad, what is unread or waits is at the top of the Sessions list,
+  with All, which opens the whole Inbox: swiped to delete one, the menu for
+  the read ones or all. On both, an item touched or clicked shows that
+  item, all of it, with Open for its session; it never opens the session
+  by itself: an agent done whose session runs shows what its turn came to,
+  anything else what was said or asked, its choices, and how it was
+  handled. Each item of the list shows all of what was said, not its end
+  only (the owner's decisions, 2026-11-21).
 - **What a turn came to** (#71): an agent that is done shows, in the
   Inbox, what it was asked, what it answered, the commands it ran with
   their exit codes, and the files of its folder that changed while it
@@ -948,7 +953,19 @@ panel.
   + Page and + Shell, which open one more for that agent: a page it lists
   and drives (the user's until it is given back), and a shell in its
   folder, which it lists and uses as one it opened itself. The Shells and
-  Browser rows have a + for one more of the user's. A tab is started from the header
+  Browser rows have a + for one more of the user's. A Shells tab splits as
+  an agent's area does (the owner's request, 2026-11-21): the two buttons
+  at the end of its row show a shell on the right and one below, the first
+  not on show, or a new one when none is left; the shell picked stays on
+  the left. The parts are parted and framed as an agent's area's, and
+  dragged the same; a click in a part, or its shell picked in the row,
+  puts the keyboard there, and a shell picked that is not on show is shown
+  in the part the keyboard is in. A shell's menu in the row shows it on
+  the left, on the right or below, and a shell dragged from the row and
+  dropped on a part is shown there; either turns that part on, and one
+  already shown in another part changes places with it. Turned off, a part's shell keeps running
+  and stays in the row. The Browser tab is not split; the split is not
+  kept when the app quits. A tab is started from the header
   (the agents, Shell, Browser) or the File and Browser menus. Command and
   a number (⌘1 to ⌘9) shows the tab in that place of the strip, ⌘⇧] and
   ⌘⇧[ the next and previous tab, and in one of the user's tabs ⌥⌘→ and
@@ -957,8 +974,10 @@ panel.
   move about its area (Panes). ⌥⌘ and a number (⌥⌘1 to ⌥⌘9, View > Item
   1 in Group and on) picks that item of the row of the tab in front, left
   to right, an agent's row being the agent, its pages, its shells, with the
-  keyboard in it (#171); while ⌥ and ⌘ are held, each of the first nine
-  items shows its number. ⌘W closes what is shown, a session is ended.
+  keyboard in it (#171); each of the first nine items shows the keys
+  that pick it (⌥⌘1 and on) at its end, always, as each tab of the strip
+  shows its ⌘1 to ⌘9, its × taking their place under the pointer, and
+  its tooltip says them too (the owner's decision, 2026-11-21). ⌘W closes what is shown, a session is ended.
   An item's × closes it. **A tab's × closes all it holds** (#145): the
   Shells tab ends its shells ("End 2 shells?", asked first even for one),
   the Browser, Diffs and Files tabs close their pages, diffs and files
@@ -1001,7 +1020,11 @@ panel.
   the agent's session, so picking another agent shows that one's. A shell
   or page picked in the row, in the list or from a notice is shown in its
   part, with the keyboard in it; the row marks what is on show, and
-  which of them has the keyboard. The dividers are dragged. The two
+  which of them has the keyboard. The parts are parted by a gutter
+  lighter than them, with a grip in its middle, which is dragged; the
+  part the keyboard is in is framed in the accent colour while more than
+  one part is shown, and a click in a part, the agent's included, puts
+  the keyboard and the frame there (the owner's request, 2026-11-21). The two
   buttons at the end of the agent's row hide the page and the shell
   beside it and show them again: hidden, a shell keeps running and a page
   stays open, both stay in the row and in the list, and picking one there
@@ -1258,11 +1281,16 @@ panel.
 A released build of either app can send two things to its developer
 through Google's Firebase: crash reports, and usage statistics, counts of
 which features are used. Never what a terminal shows, prompts, file names
-or folders. At its first launch such a build shows a screen of its own
-(#48), not an alert that could be taken for one of the system's: what
-each kind is, a switch for each, both on, and Continue. It cannot be
-closed any other way, and until it is answered nothing is sent, of
-either kind. Afterwards both switches are in Settings > Privacy on the
+or folders. At its first launch such a build asks it (#48), never in an
+alert that could be taken for one of the system's, and never as a second
+sheet over another (the owner's decision, 2026-11-21): on the Mac it is
+the Reports step of the onboarding, which shows at once while it is not
+answered, whatever else; on the iPhone it is the first part of the one
+first screen, before whether the app may notify. It says what each kind
+is, with a switch for each, both on; the step's Next (the Mac) or
+Continue (the iPhone) answers it. Until it is answered nothing is sent, of
+either kind, and an onboarding closed before it is asked again at the
+next launch. Afterwards both switches are in Settings > Privacy on the
 Mac and under Privacy in the iPhone's Settings tab, in the same words. A
 build from source and AgentTerm Dev have no service to send to: they show
 no screen and send nothing, whatever the switches say. `PRIVACY.md` says

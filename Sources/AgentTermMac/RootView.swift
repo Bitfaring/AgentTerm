@@ -97,13 +97,7 @@ private struct WindowSheets: ViewModifier {
             .sheet(isPresented: $model.showPairMac) {
                 PairMacSheet()
             }
-            // Not over the first launch's question about reporting.
-            .sheet(
-                isPresented: Binding(
-                    get: { model.showOnboarding && !model.reportingQuestionShown },
-                    set: { model.showOnboarding = $0 }
-                )
-            ) {
+            .sheet(isPresented: $model.showOnboarding) {
                 OnboardingView()
             }
             .sheet(isPresented: $model.showBrowseFolders) {

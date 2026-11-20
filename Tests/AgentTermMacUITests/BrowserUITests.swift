@@ -12,6 +12,8 @@ final class BrowserUITests: MacUITestCase {
     private static var bundle: URL? { testBundle }
 
     private var site: URL!
+    /// Where the app writes the places a click finds, for PANE-28.
+    private let places = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-places-\(UUID().uuidString).txt")
     /// The app was started once in this test: what it kept is kept when
     /// it is started again.
     private var launched = false
@@ -20,6 +22,7 @@ final class BrowserUITests: MacUITestCase {
         try XCTSkipUnless(Self.bundle != nil, "the app bundle is built by scripts/test-mac.sh")
         // What a page holds, readable as VoiceOver reads it (BROWSER-37).
         if name.contains("RightClick") || name.contains("ExtensionTrial") { appEnvironment["AGENTTERM_WEB_ACCESSIBILITY"] = "1" }
+        if name.contains("ClickFindsTheAgent") { appEnvironment["AGENTTERM_PANE_PLACES"] = places.path }
         try super.setUpWithError()
     }
 
@@ -1530,6 +1533,35 @@ final class BrowserUITests: MacUITestCase {
         app.press(.id("item-b\(tab)"))
         app.wait(for: .id("agent-browser"))
         app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page, picked in the row")
+    }
+
+    /// PANE-28: a click finds every part of an agent's area, the agent's
+    /// too, after its page and its shell came beside it, and after its page
+    /// was hidden and shown again. The test cannot click: the app writes
+    /// down the places a click looks in. Before the fix the agent's was
+    /// taken away by the part made before it, and a click in the agent left
+    /// the keyboard, and its frame, where they were (the owner's report,
+    /// 2026-11-21).
+    func testAClickFindsTheAgentBesideItsPageAndShell() throws {
+        defer { try? FileManager.default.removeItem(at: places) }
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let page = root.appendingPathComponent("page.html")
+        try "<!doctype html><title>One</title><p>A page</p>".write(to: page, atomically: true, encoding: .utf8)
+        _ = server.text("browser_open", ["url": page.absoluteString])
+        XCTAssertFalse(server.text("shell_open").failed)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait(for: .id("agent-shells"), timeout: 20)
+        func found() -> [String] { ((try? String(contentsOf: places, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init) }
+        func has(_ part: String) -> Bool { found().contains { $0.contains("\"\(agent.layoutID)\"") && $0.hasSuffix(".\(part))") } }
+        wait("every part found by a click: \(found())") { has("agent") && has("browser") && has("shells") }
+        // Hidden and shown again: the agent's part made again beside it.
+        app.press(.id("agent-part-browser"))
+        app.waitGone(.id("agent-browser"))
+        app.press(.id("agent-part-browser"))
+        app.wait(for: .id("agent-browser"))
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        wait("every part found by a click again: \(found())") { has("agent") && has("browser") && has("shells") }
     }
 
     /// PANE-24 (#171): ⌥⌘ and a number in the user's Browser tab, then in

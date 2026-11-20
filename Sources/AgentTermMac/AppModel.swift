@@ -258,6 +258,17 @@ final class AppModel: ObservableObject {
     /// The part of an agent's area shown alone for a while, filling it
     /// (#69); not kept when the app quits.
     @Published var agentAreaAlone: [String: AgentAreaPart] = [:]
+    /// The user's Shells tabs split as an agent's area is, by the group's
+    /// tab: a shell on the right and one below (the owner's request,
+    /// 2026-11-21); not kept when the app quits.
+    @Published var shellSplits: [String: ShellSplit] = [:]
+    /// The part of a split Shells tab the keyboard is in.
+    @Published var shellSplitFocus: [String: ShellPart] = [:]
+    /// A part turned on with no shell left to show in it: the new shell
+    /// it opened goes there.
+    var shellPartWaiting: (group: String, part: ShellPart)?
+    /// A shell of a Shells tab's row being dragged to a part of it.
+    @Published var draggedShell: String?
 
     // The browser (#76).
     /// ⌘L and ⌥⌘F ask the browser in front for its address field and its find bar.
@@ -272,6 +283,24 @@ final class AppModel: ObservableObject {
     /// Where each pane, and each part of an agent's area, is in the window,
     /// in its coordinates from the top left: a click finds its place here.
     var paneFrames: [PanePlace: CGRect] = [:]
+    /// The reader that wrote each frame (`PaneFrameReader`).
+    private var paneFrameWriters: [PanePlace: UUID] = [:]
+
+    /// A place's frame, from its reader; nil when the reader goes, unless
+    /// another has written it since.
+    func setPaneFrame(_ frame: CGRect?, for place: PanePlace, by writer: UUID) {
+        if let frame {
+            paneFrames[place] = frame
+            paneFrameWriters[place] = writer
+        } else if paneFrameWriters[place] == writer {
+            paneFrames[place] = nil
+            paneFrameWriters[place] = nil
+        }
+        // For a test, which cannot click: the places a click finds.
+        if let path = ProcessInfo.processInfo.environment["AGENTTERM_PANE_PLACES"] {
+            try? paneFrames.keys.map { "\($0)" }.sorted().joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        }
+    }
     /// The tab of the user's own (Shells, Browser, Diffs, Files) whose
     /// closing, with all it holds, waits for the user's answer (#145).
     @Published var pendingGroupClose: String?
@@ -415,24 +444,6 @@ final class AppModel: ObservableObject {
     /// Told by the host since #66, which makes each notice for every device.
     @Published private(set) var agentNotice: AgentNotice?
 
-    /// Whether ⌥ and ⌘ are held, and nothing else: the items of the row
-    /// in front show their numbers then (#171).
-    @Published private(set) var itemNumbersShown = false
-    private var modifierWatch: Any?
-
-    func watchModifiers() {
-        guard modifierWatch == nil else { return }
-        modifierWatch = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let held = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
-            let shown = held == [.option, .command]
-            if self?.itemNumbersShown != shown { self?.itemNumbersShown = shown }
-            return event
-        }
-        // Keys let go in another app are never seen here.
-        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.itemNumbersShown = false }
-        }
-    }
     /// The host's number for it, to take it away when it is handled.
     private var agentNoticeID: UInt64?
 
@@ -738,11 +749,10 @@ final class AppModel: ObservableObject {
     /// What each agent has of AgentTerm's in its own configuration, as the
     /// host found it; nil until it has said.
     @Published private(set) var agentSetup: AgentSetupReport?
-    /// The onboarding, shown over the window.
-    @Published var showOnboarding = false
-    /// The first launch's question about reporting is on the window: the
-    /// onboarding waits until it has gone, one sheet at a time.
-    @Published var reportingQuestionShown = Telemetry.shared.shouldAskAboutCrashReports
+    /// The onboarding, shown over the window: at once while what may be
+    /// sent to the developer is not answered, whose question is one of its
+    /// steps (#48, the owner's decision, 2026-11-21), whatever else.
+    @Published var showOnboarding = Telemetry.shared.shouldAskAboutCrashReports
     /// Whether the onboarding was looked at in this run of the app: it is
     /// shown at most once a run, when an installed agent is not set up.
     private var onboardingChecked = false
@@ -1132,7 +1142,6 @@ final class AppModel: ObservableObject {
         }
         loadInbox()
         macNotifications.model = self
-        watchModifiers()
         connect()
         folderChanged()
         // History's reading, pins and searches are the host's, for this Mac too (#46).

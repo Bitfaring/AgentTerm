@@ -23,7 +23,6 @@ struct AgentTermApp: App {
     var body: some Scene {
         Window(AppChannel.current.appName, id: "main") {
             RootView()
-                .modifier(CrashReportQuestion())
                 .modifier(MainWindowOpener())
                 .environmentObject(model)
                 .environmentObject(model.files)
@@ -181,24 +180,11 @@ private struct MenuBarMenu: View {
     }
 }
 
-/// Shown once, at the first launch of a build that can send anything
-/// (#48): what may be sent to the developer, a switch for each kind, both
-/// on, and Continue. The app's own sheet, not an alert that could be taken
-/// for a question of the system's. Until it is answered nothing is sent.
-private struct CrashReportQuestion: ViewModifier {
-    @StateObject private var preferences = TelemetryPreferences()
-    @EnvironmentObject private var model: AppModel
-
-    func body(content: Content) -> some View {
-        // Once it has gone, the onboarding may come (ONBOARD-2).
-        content.sheet(isPresented: $preferences.needsAsking, onDismiss: { model.reportingQuestionShown = false }) {
-            ReportingChoices(preferences: preferences)
-                .interactiveDismissDisabled()
-        }
-    }
-}
-
-private struct ReportingChoices: View {
+/// What may be sent to the developer (#48): a switch for each kind of
+/// report, both on. A step of the onboarding (the owner's decision,
+/// 2026-11-21), not a sheet of its own over it: answered by its Next, and
+/// until it is answered nothing is sent.
+struct ReportingChoices: View {
     @ObservedObject var preferences: TelemetryPreferences
 
     var body: some View {
@@ -212,15 +198,7 @@ private struct ReportingChoices: View {
             choice(TelemetryPreferences.Wording.crashTitle, TelemetryPreferences.Wording.questionDetail, $preferences.offersCrashReports, "reporting-crash")
             choice(TelemetryPreferences.Wording.usageTitle, TelemetryPreferences.Wording.usageDetail, $preferences.offersUsageStatistics, "reporting-usage")
             Text(TelemetryPreferences.Wording.screenFooter).font(.system(size: 11.5)).foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button(TelemetryPreferences.Wording.screenButton) { preferences.answer() }
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("reporting-continue")
-            }
         }
-        .padding(24)
-        .frame(width: 520)
         // A group of its own, so that what is in it keeps its own names.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reporting-choices")

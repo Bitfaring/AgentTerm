@@ -8,6 +8,69 @@ import XCTest
 /// accessibility, and the mouse's own events cannot be given to the app
 /// without moving the pointer of the person at the Mac.
 final class FocusUITests: MacUITestCase {
+    /// SHELL-SPLIT-1: a Shells tab split as an agent's area is (the owner's
+    /// request, 2026-11-21): a shell on the right, the one not shown yet;
+    /// one below, a new shell when none is left; each with the keyboard as
+    /// it comes; picking one in the row puts the keyboard in its part; its
+    /// menu's Show on the Right puts it there, the two changing places;
+    /// turned off, its shell keeps running in the row.
+    func testAShellsTabSplitsInThree() throws {
+        let phone = try device()
+        let first = try newShell(phone, count: 1)
+        let second = try newShell(phone, count: 2)
+        app.press(.id("item-\(first.id)"))
+        app.waitForKeyboard(in: "terminal-\(first.id)", "the first shell")
+        // The right: the shell not on show.
+        app.press(.id("shells-part-right"))
+        app.wait(for: .id("terminal-\(second.id)"), timeout: 10)
+        XCTAssertTrue(app.exists(.id("terminal-\(first.id)")), "the left's shell went")
+        app.waitForKeyboard(in: "terminal-\(second.id)", "the shell on the right")
+        // Below: none left, a new one, there.
+        app.press(.id("shells-part-below"))
+        wait("a third shell") { phone.sessions.count == 3 }
+        let third = try XCTUnwrap(phone.sessions.max { $0.id < $1.id })
+        app.wait(for: .id("terminal-\(third.id)"), timeout: 15)
+        app.waitForKeyboard(in: "terminal-\(third.id)", "the shell below")
+        XCTAssertTrue(app.exists(.id("terminal-\(first.id)")) && app.exists(.id("terminal-\(second.id)")), "not all three shown")
+        shot("shells-in-three")
+        // Picked in the row: the keyboard goes to its part, nothing moves.
+        app.press(.id("item-\(first.id)"))
+        app.waitForKeyboard(in: "terminal-\(first.id)", "the left again")
+        XCTAssertTrue(app.exists(.id("terminal-\(second.id)")) && app.exists(.id("terminal-\(third.id)")))
+        // From its menu: the left's shell on the right, the two changing places.
+        app.perform("Show on the Right", on: .id("item-\(first.id)"))
+        app.waitForKeyboard(in: "terminal-\(first.id)", "the first, now on the right")
+        wait("the first on the right of the second") {
+            guard let left = self.app.frame(of: .id("terminal-\(second.id)")), let right = self.app.frame(of: .id("terminal-\(first.id)")) else { return false }
+            return right.minX > left.maxX - 1
+        }
+        // The right off: its shell runs, in the row, not on show.
+        app.press(.id("shells-part-right"))
+        app.waitGone(.id("terminal-\(first.id)"))
+        XCTAssertTrue(app.exists(.id("item-\(first.id)")), "the shell on the right left the row")
+        XCTAssertEqual(phone.sessions.count, 3, "turning the right off ended its shell")
+    }
+
+    /// PANE-26 (#171): each of the first nine items of the row says the
+    /// keys that pick it, always, at its end, as each tab of the strip says
+    /// its ⌘ and number (the owner's decision, 2026-11-21). Before, only a
+    /// number while ⌥⌘ was held, set above the chip, where the row's scroll
+    /// view cut it off under the strip.
+    func testEachItemSaysItsKeys() throws {
+        app.press(.button("Files"))
+        app.press(.button("notes.txt"), timeout: 15)
+        app.press(.button("new.txt"), timeout: 15)
+        app.wait(for: .idEnding("new.txt", prefix: "item-"), timeout: 15)
+        for (number, file) in [(1, "notes.txt"), (2, "new.txt")] {
+            app.wait(for: .id("row-shortcut-\(number)"), timeout: 10)
+            XCTAssertEqual(app.first(.id("row-shortcut-\(number)"))?.value, "⌥⌘\(number)")
+            let shortcut = try XCTUnwrap(app.frame(of: .id("row-shortcut-\(number)")))
+            let chip = try XCTUnwrap(app.frame(of: .idEnding(file, prefix: "item-")))
+            XCTAssertTrue(chip.contains(shortcut), "the shortcut of \(file) is not within its chip: \(shortcut) over \(chip)")
+        }
+        shot("row-shortcuts")
+    }
+
     @discardableResult
     private func newShell(_ phone: Device, count: Int) throws -> SessionInfo {
         app.menu(["File", "New Shell"])

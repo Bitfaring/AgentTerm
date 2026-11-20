@@ -23,6 +23,9 @@ struct GroupRow: View {
     /// Its height, which a terminal does not have.
     static let height: CGFloat = 30
 
+    /// The keys that pick the item of that number in the row in front.
+    static func shortcut(_ number: Int) -> String { "⌥⌘\(number)" }
+
     private var pluses: [GroupPlus] {
         if let holder = TabID.holder(of: group) {
             switch holder.kind {
@@ -41,25 +44,21 @@ struct GroupRow: View {
         let items = model.members(of: group)
         // The item the keyboard is in; an agent's area shows more than it.
         let keyboard = model.shownMember(of: group)
-        let area = TabID.holder(of: group) == nil && model.hasArea(group)
-        let onShow = area ? model.itemsOnShow(of: group) : Set([keyboard].compactMap { $0 })
+        let split = model.isShellsSplit(group)
+        // An agent's area, or a split Shells tab: several on show, one with the keyboard.
+        let area = (TabID.holder(of: group) == nil && model.hasArea(group)) || split
+        let onShow =
+            split ? model.shellsOnShow(of: group) : area ? model.itemsOnShow(of: group) : Set([keyboard].compactMap { $0 })
         HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
                     ForEach(Array(items.enumerated()), id: \.element) { index, item in
-                        GroupItemChip(group: group, item: item, selected: onShow.contains(item), keyboard: area && item == keyboard)
-                            // Its number while ⌥ and ⌘ are held (#171): ⌥⌘ and it picks it.
-                            .overlay(alignment: .topTrailing) {
-                                if model.itemNumbersShown, index < 9 {
-                                    Text("\(index + 1)")
-                                        .font(.system(size: 9, weight: .bold).monospacedDigit())
-                                        .padding(.horizontal, 3)
-                                        .background(Capsule().fill(Color.accentColor))
-                                        .foregroundStyle(.white)
-                                        .offset(x: 3, y: -3)
-                                        .accessibilityHidden(true)
-                                }
-                            }
+                        GroupItemChip(
+                            group: group, item: item, selected: onShow.contains(item), keyboard: area && item == keyboard,
+                            shortcut: index < 9 ? Self.shortcut(index + 1) : nil
+                        )
+                        // Its shortcut, told on the pointer too (#171).
+                        .help(index < 9 ? "\(Self.shortcut(index + 1)) shows it" : "")
                     }
                 }
             }
@@ -76,7 +75,11 @@ struct GroupRow: View {
                 .accessibilityIdentifier(plus.id)
             }
             Spacer(minLength: 0)
-            if area { AgentPartToggles(agent: group) }
+            if TabID.holder(of: group)?.kind == .shells {
+                ShellSplitToggles(group: group)
+            } else if area {
+                AgentPartToggles(agent: group)
+            }
         }
         .padding(.horizontal, 8)
         .frame(height: Self.height)
@@ -154,12 +157,25 @@ private struct GroupItemChip: View {
     let selected: Bool
     /// The one the keyboard is in, of those an agent's area shows.
     var keyboard = false
+    /// The keys that pick it, for the first nine (#171).
+    var shortcut: String?
 
     var body: some View {
         if let tab = model.browsers.tab(forTab: item) {
-            PageItemChip(tab: tab, selected: selected, keyboard: keyboard)
+            PageItemChip(tab: tab, selected: selected, keyboard: keyboard, shortcut: shortcut)
         } else {
-            ItemChip(look: look, selected: selected, keyboard: keyboard) { model.selectTab(id: item) }
+            ItemChip(look: look, selected: selected, keyboard: keyboard, shortcut: shortcut, places: places) { model.selectTab(id: item) }
+                // A shell of the user's: dragged to a part of the split tab.
+                .modifier(ShellDrag(item: item, enabled: TabID.holder(of: group)?.kind == .shells))
+        }
+    }
+
+    /// Where a shell of the user's may be shown in its tab split in three
+    /// (the owner's request, 2026-11-21): its menu says each.
+    private var places: [ItemPlace] {
+        guard TabID.holder(of: group)?.kind == .shells else { return [] }
+        return [(ShellPart.main, ShellSplitWords.left), (.right, ShellSplitWords.right), (.below, ShellSplitWords.below)].map { part, title in
+            ItemPlace(title: title) { model.showShell(item, in: part, of: group) }
         }
     }
 
@@ -196,12 +212,13 @@ private struct PageItemChip: View {
     @ObservedObject var tab: BrowserTab
     let selected: Bool
     var keyboard = false
+    var shortcut: String?
 
     var body: some View {
         let look = ItemLook(
             symbol: tab.loading ? "arrow.triangle.2.circlepath" : "globe", title: tab.displayTitle, closing: "Close Tab", identifier: "item-b\(tab.id)"
         ) { model.closeBrowserTab(tab) }
-        ItemChip(look: look, selected: selected, keyboard: keyboard) { model.selectTab(id: tab.tabID) }
+        ItemChip(look: look, selected: selected, keyboard: keyboard, shortcut: shortcut) { model.selectTab(id: tab.tabID) }
     }
 }
 
@@ -210,6 +227,12 @@ private struct ItemChip: View {
     let selected: Bool
     /// The one the keyboard is in, of several on show: a line under it.
     var keyboard = false
+    /// The keys that pick it, at its end as a tab of the strip has its ⌘
+    /// and number (#171, the owner's decision, 2026-11-21): the close
+    /// button takes their place under the pointer.
+    var shortcut: String?
+    /// Where else it may be shown, from its menu: a shell of a Shells tab.
+    var places: [ItemPlace] = []
     let select: () -> Void
     @State private var hovering = false
 
@@ -223,9 +246,32 @@ private struct ItemChip: View {
             .accessibilityAddTraits(traits)
             .accessibilityAction { select() }
             .accessibilityAction(named: look.closing) { look.close?() }
+            .modifier(PlaceActions(places: places))
+            // Drawn over the place kept for it at the chip's end: over the
+            // chip, it is an element of its own, which the chip's one
+            // element would take in otherwise.
+            .overlay(alignment: .trailing) {
+                if let shortcut {
+                    shortcutText(shortcut)
+                        .opacity(hovering ? 0 : 1)
+                        .padding(.trailing, 8)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier(shortcutIdentifier)
+                }
+            }
+    }
+
+    /// As a tab of the strip shows its ⌘ and number.
+    private func shortcutText(_ shortcut: String) -> some View {
+        Text(shortcut)
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(.tertiary)
+            .fixedSize()
     }
 
     private var spoken: String { look.dirty ? "\(look.title), unsaved changes" : look.title }
+    /// "row-shortcut-1" for ⌥⌘1, for the tests.
+    private var shortcutIdentifier: String { "row-shortcut-" + String(shortcut?.last.map(String.init) ?? "") }
     private var traits: AccessibilityTraits { selected ? [.isButton, .isSelected] : .isButton }
     private var fill: Color { selected ? Color.white.opacity(0.12) : (hovering ? Color.white.opacity(0.05) : .clear) }
 
@@ -243,10 +289,16 @@ private struct ItemChip: View {
                 .fixedSize(horizontal: true, vertical: false)
             if let session = look.session { AgentStateMark(session: session) }
             if look.dirty { Circle().fill(Color.orange).frame(width: 6, height: 6) }
-            if let close = look.close {
-                CloseButton(help: look.closing, glyph: 8.5, action: close)
-                    .opacity(hovering || selected ? 1 : 0)
-                    .accessibilityLabel("\(look.closing) \(look.title)")
+            if shortcut != nil || look.close != nil {
+                ZStack {
+                    // Its place: the shortcut is drawn over it (`body`).
+                    if let shortcut { shortcutText(shortcut).hidden() }
+                    if let close = look.close {
+                        CloseButton(help: look.closing, glyph: 8.5, action: close)
+                            .opacity(shortcut == nil ? (hovering || selected ? 1 : 0) : (hovering ? 1 : 0))
+                            .accessibilityLabel("\(look.closing) \(look.title)")
+                    }
+                }
             }
         }
         .padding(.horizontal, 8)
@@ -256,7 +308,50 @@ private struct ItemChip: View {
         .onHover { hovering = $0 }
         .onTapGesture(perform: select)
         .contextMenu {
+            ForEach(places) { place in Button(place.title, action: place.action) }
+            if !places.isEmpty { Divider() }
             if let close = look.close { Button(look.closing, action: close) }
+        }
+    }
+}
+
+/// Somewhere an item of the row may be shown, offered in its menu.
+struct ItemPlace: Identifiable {
+    let title: String
+    let action: () -> Void
+    var id: String { title }
+}
+
+/// An item's places as actions of its own, for VoiceOver and the tests,
+/// as its menu has them.
+private struct PlaceActions: ViewModifier {
+    let places: [ItemPlace]
+
+    func body(content: Content) -> some View {
+        places.reduce(AnyView(content)) { view, place in AnyView(view.accessibilityAction(named: place.title, place.action)) }
+    }
+}
+
+/// A shell of a Shells tab's row, picked up to be dropped on a part of it.
+private struct ShellDrag: ViewModifier {
+    @EnvironmentObject private var model: AppModel
+    let item: String
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.onDrag {
+                model.draggedTab = nil
+                model.startShellDrag(item)
+                let provider = NSItemProvider()
+                provider.registerDataRepresentation(forTypeIdentifier: TabDrag.type.identifier, visibility: .ownProcess) { done in
+                    done(Data(item.utf8), nil)
+                    return nil
+                }
+                return provider
+            }
+        } else {
+            content
         }
     }
 }

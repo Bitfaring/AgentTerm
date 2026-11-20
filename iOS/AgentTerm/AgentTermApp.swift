@@ -71,22 +71,15 @@ struct AgentTermApp: App {
             .preferredColorScheme(.dark)
             .tint(Palette.tint)
             .environmentObject(privacy)
-            // Shown once, at the first launch of a build that can send
-            // anything (#48): the app's own screen, a switch for each kind
-            // of report, both on. Until it is answered nothing is sent.
-            .sheet(isPresented: $privacy.needsAsking, onDismiss: { model.reportingQuestionShown = false }) {
-                ReportingChoices(preferences: privacy)
-                    .interactiveDismissDisabled()
-                    .preferredColorScheme(.dark)
-            }
-            // Then whether the app may notify (#180), once that has gone.
-            .fullScreenCover(
-                isPresented: Binding(
-                    get: { model.asksNotifications && !model.reportingQuestionShown },
-                    set: { if !$0 { model.answerNotificationAsk(allow: false) } })
-            ) {
-                NotificationAsk()
+            // The first launch's one screen (the owner's decision,
+            // 2026-11-21): what may be sent to the developer, in a build
+            // that can send anything (#48), then whether the app may notify
+            // (#180), one after the other in the same screen, never two
+            // over each other. Until the first is answered nothing is sent.
+            .fullScreenCover(isPresented: Binding(get: { privacy.needsAsking || model.asksNotifications }, set: { _ in })) {
+                FirstLaunch(preferences: privacy)
                     .environmentObject(model)
+                    .interactiveDismissDisabled()
                     .preferredColorScheme(.dark)
             }
             .onOpenURL { url in if !model.openFromLink(url) { model.pair(with: url) } }
@@ -106,6 +99,19 @@ enum Palette {
     static let tint = Color(red: 0.45, green: 0.62, blue: 0.98)
     static let danger = Color(red: 0.96, green: 0.45, blue: 0.47)
     static let added = Color(red: 0.36, green: 0.80, blue: 0.52)
+}
+
+/// The first launch's screen: its steps, those still to be answered.
+private struct FirstLaunch: View {
+    @ObservedObject var preferences: TelemetryPreferences
+
+    var body: some View {
+        if preferences.needsAsking {
+            ReportingChoices(preferences: preferences)
+        } else {
+            NotificationAsk()
+        }
+    }
 }
 
 /// What may be sent to the developer, a switch for each kind, and

@@ -127,6 +127,18 @@ public struct Notice: Codable, Equatable, Sendable, Identifiable {
         }
     }
 
+    /// All of what the agent said or asks, its choices with a question's;
+    /// what a failure ended and why: for the Inbox, which shows it whole
+    /// on both apps (the owner's decision, 2026-11-21). `body` is a
+    /// notification's: the last 300 characters (`AgentNotice.detailLength`)
+    /// of what an agent said.
+    public var fullBody: String {
+        switch kind {
+        case .agent: return agentNotice?.full?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        case .failure(let failure): return failure.details
+        }
+    }
+
     /// "app on Studio": where it happened.
     public func place(macName: String) -> String {
         folder.isEmpty ? macName : "\((folder as NSString).lastPathComponent) on \(macName)"

@@ -20,6 +20,9 @@ enum Route: Hashable {
     case result(SessionID)
     /// All of the Inbox (#66).
     case inbox
+    /// One item of the Inbox, all of it: what touching it opens, as on the
+    /// Mac (the owner's decision, 2026-11-21).
+    case notice(UInt64)
     /// An agent's screen with one of its own shells ("s:<id>") or pages
     /// ("b:<id>") in front.
     case companion(agent: SessionID, item: String)
@@ -668,9 +671,6 @@ final class PhoneModel: ObservableObject {
     /// question alone, not an onboarding like the Mac's (the owner's
     /// decision, 2026-11-20).
     @Published private(set) var asksNotifications = false
-    /// The reporting question is on screen: this one waits until it has
-    /// gone, one at a time.
-    @Published var reportingQuestionShown = Telemetry.shared.shouldAskAboutCrashReports
     static let notificationsAskedKey = "notifications.asked"
 
     private func checkNotificationAsk() {
@@ -1035,15 +1035,13 @@ final class PhoneModel: ObservableObject {
 
     /// Opens what an Inbox item is about: a done agent's result, the
     /// session of one that asks. A failure is only read.
+    /// An item of the Inbox touched: read, and shown whole, whatever it is,
+    /// as the Mac shows the item picked (the owner's decision, 2026-11-21);
+    /// its session is opened from there.
     func open(_ entry: InboxBook.Entry) {
         read(entry)
-        guard let agent = entry.notice.agentNotice else { return }
-        guard sessions.contains(where: { $0.id == agent.session }) else {
-            message = PushWords.sessionEnded
-            return
-        }
         tab = "sessions"
-        if case .done = agent.state { path = [.result(agent.session)] } else { path = [.session(agent.session)] }
+        path = [.notice(entry.id)]
     }
 
     // MARK: The Inbox (#67)

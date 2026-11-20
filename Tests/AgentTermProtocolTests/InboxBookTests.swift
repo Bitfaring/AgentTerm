@@ -12,6 +12,19 @@ final class InboxBookTests: XCTestCase {
             handled: handled.map { Notice.Handled(at: now, how: $0) })
     }
 
+    /// INBOX-12: the Inbox shows all of what an agent said, on both apps (the
+    /// owner's report, 2026-11-21: its messages were cut). A notification
+    /// keeps the end only; a question's choices come with it.
+    func testTheInboxHasAllOfWhatWasSaid() {
+        let long = String(repeating: "word ", count: 200) + "the point."
+        let done = notice(1, .done(said: long))
+        XCTAssertEqual(done.fullBody, long.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertLessThanOrEqual(done.body.count, AgentNotice.detailLength)
+        XCTAssertTrue(done.body.hasSuffix("the point."))
+        let question = notice(2, .waitingForAnswer(AgentQuestion(text: "Red or blue?", choices: ["Red", "Blue"])))
+        XCTAssertTrue(question.fullBody.contains("Red or blue?") && question.fullBody.contains("Blue"), question.fullBody)
+    }
+
     /// INBOX-7: kept after it is read, newest first; brought up to date
     /// when it is handled.
     func testWhatWasToldIsKeptAfterItIsRead() {

@@ -1025,10 +1025,15 @@ Mac's own app as `local`.
   front, Sessions shown), no longer when its agent's state changes.
 - **Permission to notify** (#180) is asked up front: on the Mac in the
   onboarding's Permissions step (`Permission.notifications`,
-  `MacNotifications.askPermission`), on the iPhone on a first screen of its
-  own after the reporting question (`NotificationAsk`,
-  `PhoneModel.asksNotifications`), once, while iOS was not asked
-  (`AGENTTERM_ASK_NOTIFICATIONS` shows it to a test).
+  `MacNotifications.askPermission`), on the iPhone as the second part of
+  its one first screen (`FirstLaunch`: `ReportingChoices` while
+  `TelemetryPreferences.needsAsking`, then `NotificationAsk` while
+  `PhoneModel.asksNotifications`, one cover, never two over each other),
+  once, while iOS was not asked (`AGENTTERM_ASK_NOTIFICATIONS` shows it to
+  a test). On the Mac the reporting question is the onboarding's Reports
+  step (`OnboardingView.Step.reports`, shown while
+  `Telemetry.shouldAskAboutCrashReports`; `AppModel.showOnboarding` starts
+  true then), answered by its Next.
 - **The Inbox** is the device's own `InboxBook` (`AgentTermProtocol`),
   kept in its preferences by the Mac on show: notices newest first, read or
   not, what was deleted here so that the log does not bring it back, 30
@@ -1162,8 +1167,11 @@ Another agent's session working in the same folder, or one inside or
 around it, at any moment of the turn makes it `shared`. A file changed in
 the moment between the prompt and the first look is taken for the folder
 as it was. The Mac shows it in `InboxDetail`; the iPhone in
-`TurnResultScreen`, a route of its own (`Route.result`), which the Inbox
-opens for a done item. Continue is the `answer` a notification's reply
+`TurnResultScreen`. Every item of the iPhone's Inbox opens `NoticeScreen`
+(`Route.notice`), as every item of the Mac's shows in `InboxDetail`:
+`TurnResultScreen` for an agent done whose session runs, the notice whole
+otherwise (`Notice.fullBody`, all of what was said; `body`, the last 300
+characters, is a notification's). Continue is the `answer` a notification's reply
 sends. A session also counts as seen when it
 becomes done while it is already in front: both apps look again when the
 list of sessions comes.
