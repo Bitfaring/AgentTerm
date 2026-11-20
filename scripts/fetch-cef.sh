@@ -48,7 +48,14 @@ if [ ! -d "$FRAMEWORK" ] || [ ! -f "$DIR/$NAME/include/cef_version.h" ]; then
     tar -xjf "$ARCHIVE.part" -C "$DIR"
     rm -f "$ARCHIVE.part"
 fi
-ln -sfn "$NAME" "$DIR/current"
+if [ "$(readlink "$DIR/current" 2>/dev/null || true)" != "$NAME" ]; then
+    ln -sfn "$NAME" "$DIR/current"
+    # CAgentTermCEF finds CEF's headers with __has_include: compiled before
+    # they were here, it is not compiled again when they come, since a
+    # header that was missing is not one SwiftPM watches (#181). Its source
+    # is marked changed, so that the next build has Chromium.
+    touch Sources/CAgentTermCEF/AgentTermCEF.m
+fi
 
 if [ "$PRINT" -eq 1 ]; then
     echo "$PWD/$DIR/$NAME"

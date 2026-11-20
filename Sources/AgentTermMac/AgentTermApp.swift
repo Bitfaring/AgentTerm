@@ -24,6 +24,7 @@ struct AgentTermApp: App {
         Window(AppChannel.current.appName, id: "main") {
             RootView()
                 .modifier(CrashReportQuestion())
+                .modifier(MainWindowOpener())
                 .environmentObject(model)
                 .environmentObject(model.files)
                 .environmentObject(model.browsers)
@@ -716,10 +717,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated { Chromium.shared.shutDown() }
     }
 
-    /// Opened again from the Dock or the Finder: back to a normal app.
+    /// Opened again from the Dock, Launchpad or the Finder: back to a
+    /// normal app, with its window. SwiftUI does not open a `Window` scene
+    /// again by itself once it was closed while the app stayed in the menu
+    /// bar, so the app showed nothing (#182).
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         NSApp.setActivationPolicy(.regular)
+        if !flag { MainWindow.open?() }
+        NSApp.activate(ignoringOtherApps: true)
         return true
+    }
+}
+
+/// The way to open the main window again from outside SwiftUI's views (the
+/// app's delegate), kept by the window when it is first shown.
+@MainActor
+enum MainWindow {
+    static var open: (() -> Void)?
+}
+
+/// Keeps `MainWindow.open`: SwiftUI's action, which still opens the window
+/// after it was closed.
+private struct MainWindowOpener: ViewModifier {
+    @Environment(\.openWindow) private var openWindow
+
+    func body(content: Content) -> some View {
+        content.onAppear { MainWindow.open = { openWindow(id: "main") } }
     }
 }
 

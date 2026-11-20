@@ -56,6 +56,15 @@ full log is.
 | The iPhone app on its side | `LANDSCAPE=only scripts/test-ios.sh "iPhone Air"` | a few minutes |
 | Both apps on one host | `scripts/test-both.sh "iPhone Air"` | 5 minutes |
 
+**Chromium is fetched before the Mac app is built** (#181).
+`scripts/test-mac.sh` runs `scripts/fetch-cef.sh` before its first build.
+`CAgentTermCEF` finds CEF's headers with `__has_include`, and SwiftPM does
+not watch a header that was missing. So a `.build` that compiled it before
+`.build/cef/current` existed kept a browser that says "made without
+Chromium", and 39 tests of `BrowserUITests` failed. When `fetch-cef.sh`
+sets or changes that link, it marks `Sources/CAgentTermCEF/AgentTermCEF.m`
+changed, and the next build has Chromium, whatever was built before.
+
 **A menu held the iPhone's test up for a minute at each step** (#65). A
 row of the sessions' list can be dragged and has a menu, and for as long as
 such a menu is open iOS keeps the app busy: XCUITest, which waits for the
@@ -314,6 +323,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | WIN-3 | The window with all three panes | Press Sessions in the bar of places twice, the Side Panel button twice | Each pane goes and comes back | M |
 | WIN-4 | The window on Sessions, with a session, conversations in two folders | Press History, then Settings, then Sessions | History lists every conversation at the left; the side panel is in Sessions only; Settings lists its panes at the left and shows General in the middle, the terminal hidden; the line of figures is in neither; back on Sessions the folders, the line of figures and the session's terminal are there again | M |
 | WIN-5 | The window on Settings, History or Schedules | Start a shell or an agent from the header | It is shown in Sessions | M |
+| WIN-6 | The app staying in the menu bar (on by default), its window closed (#182) | Open the app again, from the Dock, Launchpad or the Finder | Its window is shown, in front | M |
 | TAB-1 | A shell and two agents | Pick the shell in the sidebar | Each agent has a tab; the shell is in the Shells tab, in its row, not a tab of its own (#127), and its terminal is shown | M |
 | TAB-2 | The same | Pin an agent's tab | The host has the pin | H, M |
 | TAB-3 | The arrangement from TAB-2 | Quit the Mac app and open it again; look on a second device | The same arrangement on both, also after the restart | H, M |

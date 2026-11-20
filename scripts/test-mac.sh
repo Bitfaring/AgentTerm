@@ -15,6 +15,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# Chromium first, so that the first build already has it (#181).
+./scripts/fetch-cef.sh
 swift build --build-tests
 export AGENTTERM_MAC_UI=1
 # The browser's tests (#76) need the app bundle, where Chromium runs: built
