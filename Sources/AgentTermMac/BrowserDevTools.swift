@@ -603,6 +603,57 @@ final class DevToolsSession {
         }
     }
 
+    /// The mouse of a Mac showing another Mac's page (#147), at a point of
+    /// the page: the left button, or none while it only moves.
+    func pointer(_ event: PagePointer) async throws {
+        let type: String
+        switch event.kind {
+        case .moved: type = "mouseMoved"
+        case .pressed: type = "mousePressed"
+        case .released: type = "mouseReleased"
+        }
+        let down = event.kind != .moved || event.held
+        try await call(
+            "Input.dispatchMouseEvent",
+            [
+                "type": type, "x": event.x, "y": event.y, "button": down ? "left" : "none", "buttons": event.held || event.kind == .pressed ? 1 : 0,
+                "clickCount": event.kind == .moved ? 0 : max(1, event.clicks),
+            ], seconds: 5)
+    }
+
+    /// The link at a point of the page, if there is one, and what is
+    /// selected in it (#147). Without a point, what is selected only.
+    func context(x: Double?, y: Double?) async throws -> (link: String?, selection: String) {
+        let point = x.flatMap { x in y.map { y in "[\(x), \(y)]" } } ?? "null"
+        let script = """
+            (() => {
+              const at = \(point);
+              let link = null;
+              if (at) {
+                let e = document.elementFromPoint(at[0], at[1]);
+                while (e && e.shadowRoot) {
+                  const inner = e.shadowRoot.elementFromPoint(at[0], at[1]);
+                  if (!inner || inner === e) break;
+                  e = inner;
+                }
+                const a = e && e.closest ? e.closest('a[href]') : null;
+                if (a) link = a.href;
+              }
+              let selection = String(window.getSelection ? window.getSelection() : '');
+              const f = document.activeElement;
+              if (!selection && f && (f.tagName === 'INPUT' || f.tagName === 'TEXTAREA') && typeof f.selectionStart === 'number') {
+                selection = f.value.substring(f.selectionStart, f.selectionEnd);
+              }
+              return JSON.stringify({ link, selection });
+            })()
+            """
+        let answer = try await call("Runtime.evaluate", ["expression": script, "returnByValue": true], seconds: 5)
+        guard let json = (answer["result"] as? [String: Any])?["value"] as? String,
+            let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        else { throw Failure(text: "The page did not say what is there.") }
+        return (object["link"] as? String, object["selection"] as? String ?? "")
+    }
+
     /// Whether what has the keyboard in the page takes text: a field, a
     /// text area, something editable, or a frame of another site, whose
     /// insides are not seen.

@@ -215,6 +215,8 @@ extension AgentShellsMCP {
             return ([["type": "text", "text": field ? "Touched a field." : "Touched."]], false)
         case .opened(let tab):
             return ([["type": "text", "text": "Opened tab \(tab)."]], false)
+        case .context(let link, let selection):
+            return ([["type": "text", "text": (link.map { "Link: \($0)\n" } ?? "") + "Selected: \(selection)"]], false)
         case .profiles(let profiles):
             let names = profiles.sorted { $0.isDefault && !$1.isDefault }.map(\.name)
             return ([["type": "text", "text": BrowserWords.profiles(names, uses: nil)]], false)

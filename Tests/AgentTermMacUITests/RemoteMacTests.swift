@@ -84,10 +84,29 @@ final class RemoteMacTests: MacUITestCase {
         app.press(.id("remote-page"))
         wait("the click sent", timeout: 15) { calls().contains { if case .tap("7", _, _) = $0.request { return true } else { return false } } }
 
+        // ⌘C: what is selected there is asked for. Answered with nothing, so
+        // that the test leaves this Mac's pasteboard as it is.
+        app.menu(["Edit", "Copy"])
+        wait("the selection asked for", timeout: 15) { calls().contains { if case .copy("7") = $0.request { return true } else { return false } } }
+        for call in calls() where call.request == .copy(tab: "7") { browser.send(.browserReply(id: call.id, result: .text(""))) }
+        // A right click: a menu of this Mac's, made from what is at that
+        // point there; its link opened there.
+        app.perform("AXShowMenu", on: .id("remote-page"))
+        wait("what is at the point asked for", timeout: 15) { calls().contains { if case .contextAt("7", _, _) = $0.request { return true } else { return false } } }
+        let context = try XCTUnwrap(calls().last { if case .contextAt = $0.request { return true } else { return false } })
+        browser.send(.browserReply(id: context.id, result: .context(link: "http://localhost:3000/far", selection: "")))
+        app.wait(for: .button(BrowserWords.PageMenu.openLink), timeout: 15, menus: true)
+        app.wait(for: .button(BrowserWords.PageMenu.copyLink), menus: true)
+        shot("remote-page-menu")
+        app.press(.button(BrowserWords.PageMenu.openLink), menus: true)
+        wait("the link opened there", timeout: 15) {
+            calls().contains { if case .newTab(_, "http://localhost:3000/far", _, _) = $0.request { return true } else { return false } }
+        }
+
         // A new page: opened on the other Mac, shown here once it is listed.
         app.menu(["Browser", "New Browser Tab"])
-        wait("a new page asked for", timeout: 15) { calls().contains { if case .newTab = $0.request { return true } else { return false } } }
-        let asked = try XCTUnwrap(calls().last { if case .newTab = $0.request { return true } else { return false } })
+        wait("a new page asked for", timeout: 15) { calls().contains { if case .newTab(_, nil, _, _) = $0.request { return true } else { return false } } }
+        let asked = try XCTUnwrap(calls().last { if case .newTab(_, nil, _, _) = $0.request { return true } else { return false } })
         browser.send(
             .browserTabs([
                 BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default"),

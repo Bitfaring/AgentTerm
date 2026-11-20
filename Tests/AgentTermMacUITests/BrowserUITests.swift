@@ -43,12 +43,24 @@ final class BrowserUITests: MacUITestCase {
         let told = root.appendingPathComponent("agent-variable")
         // A second agent's own, not the first's.
         try? FileManager.default.removeItem(at: told)
+        // Started as the agent, with no arguments, it writes its variable
+        // down; asked anything else, such as the host asking of its plugins,
+        // it is the stand-in every test has. Written down whatever it was
+        // asked, the host's own asking, which has no session, overwrote the
+        // agent's variable with nothing, now and then (#186).
+        let agents = root.appendingPathComponent("agents")
+        let standIn = agents.appendingPathComponent("claude-stand-in")
+        if !FileManager.default.fileExists(atPath: standIn.path) {
+            try FileManager.default.moveItem(at: agents.appendingPathComponent("claude"), to: standIn)
+        }
         try """
         #!/bin/sh
+        [ $# -gt 0 ] && exec '\(standIn.path)' "$@"
         printf '%s' "$AGENTTERM_MCP" > '\(told.path)'
         echo "stand-in claude started"
         exec cat
-        """.write(to: root.appendingPathComponent("agents/claude"), atomically: true, encoding: .utf8)
+        """.write(to: agents.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agents.appendingPathComponent("claude").path)
         let phone = try device()
         wait("the sessions listed") { phone.messages.contains { if case .sessions = $0 { return true } else { return false } } }
         let before = Set(phone.sessions.filter { $0.agent == "claude" }.map(\.id))
@@ -735,6 +747,79 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertEqual(frames().count, count, "pictures came after the device stopped watching")
     }
 
+    /// BROWSER-49 (#147): what a Mac showing this Mac's page does with its
+    /// mouse, on the real Chromium: the pointer passing over an element is
+    /// a hover the page sees; a drag across a text selects it, and ⌘C there
+    /// copies it; a right click asks what is at its point, a link's address
+    /// and the selection, for that Mac's own menu, and none opens here.
+    func testAnotherMacsMouseHoversDragsSelectsAndCopies() throws {
+        let folder = root.appendingPathComponent("mouse")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = folder.appendingPathComponent("mouse.html")
+        try """
+        <!doctype html><title>Mouse</title>
+        <style>body { margin: 0; font: 20px monospace } p { margin: 0; padding: 20px; white-space: nowrap }</style>
+        <p id="hover" onmouseover="document.title = 'Hovered'">Pass over me</p>
+        <p id="words">alpha beta gamma delta</p>
+        <p><a id="link" href="https://example.com/far">a link</a></p>
+        """.write(to: page, atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let mac = try device()
+        var asked = 2000
+        func ask(_ request: BrowserRequest) -> BrowserResult? {
+            asked += 1
+            let id = asked
+            mac.send(.browserAsk(id: id, request: request))
+            var answer: BrowserResult?
+            wait("the answer to \(request)") {
+                answer = mac.messages.lazy.compactMap { if case .browserAnswer(id, let result) = $0 { return result } else { return nil } }.first
+                return answer != nil
+            }
+            if case .refused(let why)? = answer { XCTFail("\(request): \(why)") }
+            return answer
+        }
+        func rect(_ id: String) throws -> (x: Double, y: Double, right: Double, middle: Double) {
+            let text = server.text("browser_evaluate", ["tab": tab, "script": "(r => [r.x, r.y, r.right, r.y + r.height / 2])(document.getElementById('\(id)').getBoundingClientRect())"]).text
+            let numbers = text.split { !"0123456789.".contains($0) }.compactMap { Double($0) }
+            XCTAssertEqual(numbers.count, 4, text)
+            return (numbers[0], numbers[1], numbers[2], numbers[3])
+        }
+        func title() -> String { server.text("browser_evaluate", ["tab": tab, "script": "document.title"]).text }
+        wait("the page", timeout: 15) { title().contains("Mouse") }
+
+        // Where each is, read by the agent while the tab is still its own:
+        // a press of the mouse makes it the user's, as a tap does.
+        let hover = try rect("hover"), words = try rect("words"), link = try rect("link")
+        // Passing over: a hover, no click; the agent keeps its tab.
+        _ = ask(.pointer(tab: tab, event: PagePointer(kind: .moved, x: hover.x + 30, y: hover.middle)))
+        wait("the page saw the pointer pass, not \(title())") { title().contains("Hovered") }
+
+        // A drag across the words: they are selected; ⌘C gives them.
+        let from = words.x + 20, to = words.right - 20
+        _ = ask(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from, y: words.middle)))
+        _ = ask(.pointer(tab: tab, event: PagePointer(kind: .pressed, x: from, y: words.middle, held: true)))
+        for step in 1...5 {
+            _ = ask(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from + (to - from) * Double(step) / 5, y: words.middle, held: true)))
+        }
+        _ = ask(.pointer(tab: tab, event: PagePointer(kind: .released, x: to, y: words.middle)))
+        guard case .text(let copied)? = ask(.copy(tab: tab)) else { return XCTFail("no text copied") }
+        XCTAssertEqual(copied.trimmingCharacters(in: .whitespaces), "alpha beta gamma delta")
+
+        // A right click on the link: its address and the selection, for a
+        // menu of the other Mac's; none is opened on this Mac.
+        guard case .context(let address, let selection)? = ask(.contextAt(tab: tab, x: link.x + 10, y: link.middle)) else { return XCTFail("no context") }
+        XCTAssertEqual(address, "https://example.com/far")
+        XCTAssertEqual(selection.trimmingCharacters(in: .whitespaces), "alpha beta gamma delta")
+        guard case .context(let none, _)? = ask(.contextAt(tab: tab, x: words.x + 5, y: words.middle)) else { return XCTFail("no context") }
+        XCTAssertNil(none, "a link where there is none")
+        // Chromium's menu here would have Inspect, which no other menu has.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertNil(app.first(.text("Inspect"), menus: true), "a menu opened on the Mac the browser runs on")
+    }
+
     /// BROWSER-19 (#100): a page shown on the Mac as a device whose pixels
     /// are not the screen's, watched by a device: what the Mac shows of it
     /// stays as it is, the page standing still.
@@ -904,6 +989,9 @@ final class BrowserUITests: MacUITestCase {
         server.arguments = ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", page.deletingLastPathComponent().path]
         server.standardOutput = FileHandle.nullDevice
         server.standardError = FileHandle.nullDevice
+        // /usr/bin/python3 starts the real one as a child, which outlives
+        // it: whatever listens on the port is stopped after (#185).
+        defer { stopWhateverListens(on: UInt16(port)) }
         try server.run()
         defer { server.terminate() }
         let (agent, _) = try startAgent()
@@ -944,6 +1032,9 @@ final class BrowserUITests: MacUITestCase {
         server.arguments = ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", page.deletingLastPathComponent().path]
         server.standardOutput = FileHandle.nullDevice
         server.standardError = FileHandle.nullDevice
+        // /usr/bin/python3 starts the real one as a child, which outlives
+        // it: whatever listens on the port is stopped after (#185).
+        defer { stopWhateverListens(on: UInt16(port)) }
         try server.run()
         defer { server.terminate() }
         func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("item-b") } }

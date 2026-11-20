@@ -205,6 +205,11 @@ enum LineBreaks {
 /// that: a tab and a wide letter take more room than a letter of the
 /// font, and how much is read from the layout made to show the line.
 final class EditorTextView: NSTextView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        KeyboardTargets.arrived(self)
+    }
+
     /// From this length, in UTF-16 units, the view sizes itself.
     static let selfSizedFrom = 1024 * 1024
     /// The longest change whose breaks are counted unit by unit as it is
@@ -449,6 +454,15 @@ extension EditorTextView: NSTextStorageDelegate {
 
     /// The keyboard went elsewhere: nothing waits for it any more.
     public static func cancel() { pending = nil }
+
+    /// A view put in a window. One is registered when it is made, before
+    /// SwiftUI puts it in the window: the keyboard asked for in between
+    /// waited for it, and nothing gave it once it was there, now and then
+    /// (#184). Its views call this as they move into a window.
+    public static func arrived(_ view: NSView) {
+        guard let key = pending, view.window != nil, views.object(forKey: key as NSString) === view else { return }
+        focus(key)
+    }
 }
 
 /// A plain text editor with syntax coloring.
@@ -504,6 +518,13 @@ public struct CodeEditor: NSViewRepresentable {
         textView.isContinuousSpellCheckingEnabled = false
         textView.isGrammarCheckingEnabled = false
         textView.smartInsertDeleteEnabled = false
+        // No text checking at all, links and data included: left on, the
+        // first file opened started the spelling checker on the main
+        // thread, about 25 ms (#178).
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.isAutomaticTextCompletionEnabled = false
+        textView.enabledTextCheckingTypes = 0
         textView.string = text
 
         let scroll = NSScrollView()

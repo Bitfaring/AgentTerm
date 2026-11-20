@@ -58,13 +58,41 @@ stop_the_tests() {
         done
         [ -n "$alive" ] && kill -9 $alive 2>/dev/null
     fi
+    # And what is no longer anybody's child: a host the bundled app started.
+    left_behind > /dev/null 2>&1 || true
     echo "test-mac.sh: stopped; what the tests started was ended. Log in $LOG" >&2
     exit 130
+}
+# What a test starts and must have ended by the time it is over: the app
+# under test, its host, the bundle's processes (Chromium's, a host the
+# bundled app started by itself), all of them told apart by their paths.
+LEFT_BEHIND="$TEST_BUNDLE_DIR/|/AgentTermMacUITest( |\$)|agentterm-mac-ui-"
+# Anything of them still running once the tests are over is a test that
+# did not end what it started (#185): it is said, ended, and the run fails.
+left_behind() {
+    local left=""
+    for _ in $(seq 1 50); do
+        left="$(pgrep -f "$LEFT_BEHIND" || true)"
+        [ -z "$left" ] && return 0
+        sleep 0.1
+    done
+    echo "test-mac.sh: the tests left these running, now ended:" >&2
+    ps -o pid=,command= -p "$(echo $left | tr ' ' ',')" | cut -c1-200 >&2 || true
+    kill $left 2>/dev/null || true
+    sleep 1
+    kill -9 $(pgrep -f "$LEFT_BEHIND" || true) 2>/dev/null || true
+    return 1
 }
 trap stop_the_tests INT TERM
 swift test --skip-build --filter "$FILTER" --skip "CrossTests" > "$LOG" 2>&1 &
 TESTS=$!
-if wait "$TESTS"; then
+PASSED=0
+wait "$TESTS" && PASSED=1
+if ! left_behind; then
+    echo "test-mac.sh: failed, full log in $LOG" >&2
+    exit 1
+fi
+if [ "$PASSED" -eq 1 ]; then
     # A name that matches no test runs none, which `swift test` takes for a
     # pass: it is not one, and is said (#137).
     if ! grep -qE "Executed [1-9][0-9]* test" "$LOG"; then

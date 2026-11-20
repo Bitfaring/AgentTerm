@@ -703,8 +703,12 @@ user sees.
 - **A Mac showing another Mac** (#147) has that Mac's browser as the iPhone
   has it: its pages in the Browser tab and beside its agents, each drawn
   from the pictures that Mac sends while it is shown, and used from here:
-  a click, scrolling, the keys and typing, ⌘V pasting what this Mac
-  copied, the address, back, forward, reload, stop, close, taking a page
+  a click, a double click, the pointer passing over the page (hover), a
+  drag, selecting text by dragging and ⌘C copying it to this Mac,
+  scrolling, the keys and typing, ⌘V pasting what this Mac copied, a right
+  click's menu (this Mac's: Copy, Open Link in New Tab, Copy Link Address,
+  Back, Forward, Reload; a page's own right-click menu is not shown), the
+  address, back, forward, reload, stop, close, taking a page
   from its agent and giving it back, and a new page of the user's (in that
   Mac's default profile). What is done in a Mac's own Chromium (picking an
   element, Show As, finding, zooming, the developer tools, a page beside an

@@ -547,7 +547,7 @@ extension AppModel {
             try await tab.emulate(device)
             done(device.map { "Shows the page as \($0.name)" } ?? "Shows the page as itself")
             return .text(device.map { "Tab \(tab.id) is shown as \($0.name)" + ($0.width > 0 ? ", \($0.width) × \($0.height)" : "") + "." } ?? "Tab \(tab.id) is shown as itself again.")
-        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles, .profile:
+        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles, .profile, .pointer, .contextAt, .copy:
             return .refused("That is not for this tab.")
         }
     }
@@ -630,6 +630,33 @@ extension AppModel {
             if tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }
             tab.stop()
             return .text("Stopped.")
+        case .pointer(_, let event):
+            // The mouse of a Mac showing this page (#147): the user's, as a
+            // tap is. Only a press takes an agent's tab over: hovering over
+            // it as the pointer passes does not.
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            if event.kind == .pressed, tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }
+            do {
+                try await tab.devtools.pointer(event)
+                return event.kind == .released ? .touched(field: (try? await tab.devtools.fieldHasKeyboard()) ?? false) : .text("Done.")
+            } catch {
+                return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
+            }
+        case .contextAt(_, let x, let y):
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            do {
+                let (link, selection) = try await tab.devtools.context(x: x, y: y)
+                return .context(link: link, selection: selection)
+            } catch {
+                return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
+            }
+        case .copy:
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            do {
+                return .text(try await tab.devtools.context(x: nil, y: nil).selection)
+            } catch {
+                return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
+            }
         case .emulate(_, let device):
             // As the Show As menu does on the Mac: the page stays its agent's.
             guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }

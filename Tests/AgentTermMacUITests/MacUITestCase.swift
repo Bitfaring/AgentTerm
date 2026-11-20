@@ -23,6 +23,11 @@ class MacUITestCase: XCTestCase {
     private(set) var app: MacDriver!
     private var host: Process?
     private var others: [Process] = []
+    /// Every app the test started, kept from the moment it starts: one whose
+    /// window never came stopped the set-up before it was the test's `app`,
+    /// and was left running; losing its host, it started one of its own
+    /// (#185).
+    private var launched: [MacDriver] = []
     private var clients: [AgentTermConnection] = []
 
     /// A port nothing else in a run uses.
@@ -75,6 +80,8 @@ class MacUITestCase: XCTestCase {
         clients.forEach { $0.close() }
         clients = []
         app?.quit()
+        launched.forEach { $0.quit() }
+        launched = []
         // A host the app started by itself is not a child of this test.
         stopWhateverListens(on: port)
         for process in [host].compactMap({ $0 }) + others where process.isRunning {
@@ -165,8 +172,15 @@ class MacUITestCase: XCTestCase {
         environment["AGENTTERM_STATE_DIR"] = state.path
         environment["AGENTTERM_PORT"] = String(appPort)
         environment["CFFIXED_USER_HOME"] = home.path
-        let driver = try MacDriver(executable: bundle.appendingPathComponent("Contents/MacOS/AgentTerm"), environment: environment)
+        let driver = try startDriver(executable: bundle.appendingPathComponent("Contents/MacOS/AgentTerm"), environment: environment)
         driver.wait(for: .id("mac-switcher"), timeout: 30)
+        return driver
+    }
+
+    /// Starts an app, kept to be quit when the test ends however it ends.
+    func startDriver(executable: URL, environment: [String: String]) throws -> MacDriver {
+        let driver = try MacDriver(executable: executable, environment: environment)
+        launched.append(driver)
         return driver
     }
 
@@ -510,7 +524,7 @@ class MacUITestCase: XCTestCase {
         if !FileManager.default.fileExists(atPath: executable.path) {
             try FileManager.default.createSymbolicLink(at: executable, withDestinationURL: products.appendingPathComponent("AgentTermMac"))
         }
-        let driver = try MacDriver(executable: executable, environment: environment)
+        let driver = try startDriver(executable: executable, environment: environment)
         driver.wait(for: .id("mac-switcher"), timeout: 20)
         return driver
     }

@@ -273,7 +273,8 @@ Host…, which asks first. It never restarts it by itself (decided by the
 owner on 2026-11-17), and a release that changes nothing of the host says
 nothing. A build outside an app bundle has no revision, and is not compared.
 
-The protocol version is 33. 33 added `readNotices`, `noticesRead` and
+The protocol version is 34. 34 added the browser's `pointer`, `contextAt` and
+`copy`, and the result `context` (#147). 33 added `readNotices`, `noticesRead` and
 `noticeAlert`, and `Notice.read` (#180). 32 added `pushRegister`, `pushUnregister`, `pushState`, `handleNotice`,
 `liveActivity`, `noticeLog`, `notice` and `noticeHandled` (#66, #168). 15 in 0.7.0. It went up with each message that
 changed while the release was made (principle 6): 8 added `agentShellsFaults`
@@ -1582,7 +1583,22 @@ app for a tab's pictures when its first watcher comes and stops it when
 its last goes, a device that goes included. The app sends each picture
 as a JPEG no wider than the device asked, with the size in CSS pixels of
 what the page shows (`browserFrame`); the host passes it to the
-watchers. While the Mac draws the page (`BrowserTab.isDrawn`: in a pane
+watchers. A Mac showing another Mac's page (#147, `RemotePageView`) draws
+those pictures and sends its mouse as `pointer` events in the page's CSS
+pixels: moved (a hover, and with the button held a drag, which selects
+text), pressed and released, each sent once the one before it is answered
+so that they keep their order, the moves made meanwhile kept to the latest.
+The Mac the browser runs on gives them to Chromium as
+`Input.dispatchMouseEvent`; a press takes an agent's page over, as a tap
+does, a move does not. A right click is not sent to Chromium, whose menu
+would open on that Mac: `contextAt` asks what is at the point (the link
+there, read with `document.elementFromPoint`, and the selection), and the
+viewing Mac shows its own menu with Chromium's words (`BrowserWords.PageMenu`):
+Copy, Open Link in New Tab, Copy Link Address, Back, Forward, Reload. ⌘C
+asks `copy`, the page's selection, or a field's, as text, and puts it on
+the viewing Mac's pasteboard. A page's own right-click menu, made by its
+script, is not shown from another Mac.
+While the Mac draws the page (`BrowserTab.isDrawn`: in a pane
 of a window on screen and not covered) the pictures are streamed
 (`Page.startScreencast`), about ten a second, each acknowledged a tenth
 of a second after it comes. While it does not, Chromium draws nothing to

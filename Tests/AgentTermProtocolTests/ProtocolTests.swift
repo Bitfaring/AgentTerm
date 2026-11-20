@@ -59,12 +59,34 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(Inbox.item(after: nil, in: []))
     }
 
+    /// BROWSER-49 (#147): another Mac's mouse is a device's, about a tab;
+    /// a move, a press or a release acts on the page, asking what is at a
+    /// point or copying does not; and what is at a point comes back whole.
+    func testAnotherMacsMouseIsADevicesRequest() throws {
+        let pointer = BrowserRequest.pointer(tab: "7", event: PagePointer(kind: .released, x: 1, y: 2))
+        for request in [pointer, .contextAt(tab: "7", x: 1, y: 2), .copy(tab: "7")] {
+            XCTAssertTrue(request.isTheDevices, "\(request)")
+            XCTAssertEqual(request.tab, "7")
+        }
+        XCTAssertTrue(pointer.acts)
+        XCTAssertFalse(BrowserRequest.copy(tab: "7").acts)
+        XCTAssertFalse(BrowserRequest.contextAt(tab: "7", x: 1, y: 2).acts)
+        for result in [BrowserResult.context(link: "https://example.com/a b", selection: "chữ"), .context(link: nil, selection: "")] {
+            XCTAssertEqual(try JSONDecoder().decode(BrowserResult.self, from: try JSONEncoder().encode(result)), result)
+        }
+    }
+
     func testClientMessagesRoundTrip() {
         let messages: [ClientMessage] = [
             .hello(token: "secret", client: "iPhone", kind: .iphone),
             .hello(token: "secret", client: "Studio"),
             .list,
             .readNotices(ids: [3, 4]),
+            // A Mac's mouse on another Mac's page (#147).
+            .browserAsk(id: 1, request: .pointer(tab: "7", event: PagePointer(kind: .moved, x: 10.5, y: 20, held: true))),
+            .browserAsk(id: 2, request: .pointer(tab: "7", event: PagePointer(kind: .pressed, x: 1, y: 2, held: true, clicks: 2))),
+            .browserAsk(id: 3, request: .contextAt(tab: "7", x: 3, y: 4)),
+            .browserAsk(id: 4, request: .copy(tab: "7")),
             .agents(refresh: true),
             .create(CreateRequest(command: "claude", cwd: "/tmp", title: "Claude", size: TermSize(cols: 48, rows: 30))),
             .attach(session: 7, size: TermSize(cols: 120, rows: 40)),

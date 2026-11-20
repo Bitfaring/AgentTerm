@@ -35,7 +35,18 @@ it does only while in front stops. What was on screen when a test failed
 names the app in front first, and says so when it is not the one under
 test. A run of `scripts/test-mac.sh` stopped in the middle, by Control-C or by
 `kill`, ends every app, host and helper its tests started (#179): left
-behind, they kept a test's port, and a later run of that test met them. All
+behind, they kept a test's port, and a later run of that test met them.
+When the tests are over, the script looks for anything of theirs still
+running: the app under test, the bundle's processes (a host the bundled app
+started by itself, Chromium's), a test's host or web server. It names and
+ends what it finds, and the run fails (#185). Such leftovers came from an
+app whose window never came, for example with the screen locked: the test's
+set-up stopped before the app was its `app`, so it was never quit, and once
+the test's host was stopped it started a host of its own. Every app a test
+starts is now kept from the moment it starts (`startDriver`). Two web
+servers of `BrowserUITests` were left too: `/usr/bin/python3` runs the real
+one as a child that outlives it, and whatever listens on its port is now
+stopped after the test. All
 layers use state folders, ports, a home folder and preferences of their own,
 and stand-in agents (small scripts) instead of the installed ones: the
 installed app, its sessions, its paired devices and the user's accounts are
@@ -363,7 +374,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | PANE-22 (#171) | Three shells in the Shells tab | View > Item 1, 3, 2 in Group (⌥⌘1, ⌥⌘3, ⌥⌘2) | That shell shown each time, with the keyboard | M |
 | PANE-23 (#171) | A tab whose row holds several items | ⌥ and ⌘ held, then either let go | A number on each of the first nine; gone when a key is let go or the app is left | hand: the tests do not press keys |
 | PANE-24 (#171) | The user's Browser tab with two pages; an agent's tab with its page and its shell | ⌥⌘1, ⌥⌘2, then View > Previous Item in Group; in the agent's tab ⌥⌘2, ⌥⌘3, ⌥⌘1, then Keyboard to Its Page | That page or part shown, with the keyboard; the shortcuts that move by one as before | M |
-| PANE-25 (#171) | Two files open in the Files tab; two diffs in the Diffs tab | ⌥⌘1, ⌥⌘2, then the shortcut that moves by one | That file or diff shown, its text with the keyboard. Before the fix the keyboard stayed with the window: only a terminal or a page was given it | M |
+| PANE-25 (#171) | Two files open in the Files tab; two diffs in the Diffs tab | ⌥⌘1, ⌥⌘2, then the shortcut that moves by one | That file or diff shown, its text with the keyboard. Before the fix the keyboard stayed with the window: only a terminal or a page was given it. Asked for while the new editor was made but not yet in the window, it was lost now and then (#184, 3 failures in 10 runs): the editor and the diff's text now take it as they move into the window | M |
 | PANE-18 | Tabs, the browser beside an agent | Click a tab, its close button, a session in the list, the agent's terminal while the page has the keyboard | Each click does what it says at once, and the keyboard goes where it was clicked | hand: the mouse's own events cannot be given to the app without moving the user's pointer |
 
 ### Git
@@ -600,7 +611,7 @@ A second host stands in for the other Mac, with a project of its own.
 | REMOTE-17 | A file of the other Mac open with unsaved changes | Choose Forget for the Mac on screen, confirm | Refused, with a message to save or discard first; the other Mac stays on screen and in the menu | M |
 | REMOTE-18 | The app last on the other Mac, and this Mac's host not running, as after a restart | Open the app | It comes back to the other Mac, and this Mac's host is started all the same; in a test, that host listens on 127.0.0.1 only (`AGENTTERM_LOCAL_ONLY`, #179): before the fix it listened on the Tailscale address too | M |
 | REMOTE-19 | The other Mac on screen, a session `deploy` running there | The other Mac's host is killed and started again there | A banner says that the host on the other Mac stopped unexpectedly and was started again, and that `deploy` ended with it, rather than an empty list | M |
-| REMOTE-22 (#147) | This Mac showing another, a stand-in for that Mac's app showing a page | Pick the Browser row; a picture of the page sent; press the page; New Browser Tab | The page shown, without Pick; watched, its picture drawn; the click sent as a tap; a new page asked of that Mac, and shown once listed | M |
+| REMOTE-22 (#147) | This Mac showing another, a stand-in for that Mac's app showing a page | Pick the Browser row; a picture of the page sent; press the page; New Browser Tab | The page shown, without Pick; watched, its picture drawn; the click sent as a tap; Edit > Copy asks that Mac for the selection; the page's menu (`AXShowMenu`) asks what is at its point and shows this Mac's menu, whose Open Link in New Tab opens the link there; a new page asked of that Mac, and shown once listed | M |
 
 ### iPhone only
 
@@ -907,6 +918,7 @@ and the test talks to the real `agenttermd mcp` with it.
 | BROWSER-41 (#139) | A page of the user's whose title changes five times a second | A right-click menu opened on it (`AXShowMenu`) and left open two seconds; then closed with no choice | The title shown goes on changing while the menu is open (it stood still before the fix: CEF runs the menu from inside its own work, and every other turn of it waited for the menu to close); the menu stays open; the title goes on after | M |
 | BROWSER-40 (#134) | A page of the user's, shown as this Mac | Show As, the first device picked from its list and Show As pressed again at once; back to this Mac; Show As as it is found then, pressed once another device has been picked | The list opened again at once stays, the device in use marked in it, when the page comes to be shown as the device; the button found before the device was picked opens its list after: it is one button whatever the page is shown as. Its label was of another shape with a device's name in it, and the button was made anew: the list was closed with the button left as open, and the press was lost though reported as done | M |
 | BROWSER-47 (#170) | A page open in the Browser; a folder never opened before, added | The folder is picked | Its own empty workspace, "Start an agent in this folder."; the Browser's tab in its strip, behind | M, U |
+| BROWSER-49 (#147) | A page with an element that changes the title on hover, a line of words and a link; a device asking as a Mac showing this Mac does | The pointer moved over the first; pressed, moved across the words and released; `copy`; `contextAt` on the link, then on the words | The page saw the hover, the agent kept its tab until the press; the words selected and copied; the link's address and the selection given; no menu opened on this Mac. The requests are a device's, a move or a press acting, asking not (`ProtocolTests`) | M |
 | BROWSER-48 (#164) | A page that replaces an element every 15 ms, as one that renders again does | The element is picked for an agent | It is read before its picture is taken; what is sent has its styles, or says the page replaced it and its styles are not known, never empty styles | M |
 
 ### Vietnamese input
