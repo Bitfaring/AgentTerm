@@ -324,6 +324,9 @@ final class FlowTests: XCTestCase {
         capture("0-notifications")
         passNotificationAsk(app)
         XCTAssertTrue(app.buttons["notifications-allow"].waitForNonExistence(timeout: 10), "the screen stays")
+        // Opening a link launches the app again with this environment: from
+        // here it is the answer kept by the app that says not to ask again.
+        app.launchEnvironment.removeValue(forKey: "AGENTTERM_ASK_NOTIFICATIONS")
 
         // Pair by opening the link, as tapping an agentterm:// link would: the
         // simulator has no camera to scan with.
