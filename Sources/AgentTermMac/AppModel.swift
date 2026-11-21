@@ -48,7 +48,15 @@ final class AppModel: ObservableObject {
     @Published var shownWorktree: String? { didSet { if shownWorktree != oldValue { folderChanged() } } }
     /// What the side panel shows: the worktree picked, or the folder.
     var panelFolder: String? { shownWorktree ?? selectedFolder }
-    @Published var selectedSession: SessionID? {
+    /// What is in front, the session, the page, the diff and the item each
+    /// group shows (`groupShown`), is told by `front` only, not by the
+    /// whole model: opening or picking a tab updated every view of the
+    /// window, 20 to 45 ms of the main thread, and only what shows the tab
+    /// in front need be (#178, the owner's decision, 2026-11-21).
+    let front = FrontState()
+
+    var selectedSession: SessionID? {
+        willSet { if newValue != selectedSession { front.objectWillChange.send() } }
         // The side panel shows the worktree of the session in front, however
         // it came to be selected (#23).
         didSet {
@@ -96,12 +104,14 @@ final class AppModel: ObservableObject {
         var tabID: String { "d:" + folder + "\n" + (commit?.hash ?? "") + "\n" + file.path }
     }
     /// Whether the diff's tab is the one in front.
-    @Published private(set) var diffInFront = false {
+    private(set) var diffInFront = false {
+        willSet { if newValue != diffInFront { front.objectWillChange.send() } }
         didSet { if diffInFront, !oldValue { frontChanged() } }
     }
     /// The browser's tab in front, when one is (#76): before a file, the
     /// diff or a session.
-    @Published var browserInFront: String? {
+    var browserInFront: String? {
+        willSet { if newValue != browserInFront { front.objectWillChange.send() } }
         didSet { if browserInFront != nil, browserInFront != oldValue { frontChanged() } }
     }
     private var observers: Set<AnyCancellable> = []
@@ -191,13 +201,27 @@ final class AppModel: ObservableObject {
         launchedDaemon = false
         connectAttempts = 0
         DispatchQueue.global(qos: .userInitiated).async {
-            if let listener = DaemonLauncher.listener(onPort: port) { DaemonLauncher.stop(listener.pid) }
+            // Never a program that is not a host (#204).
+            if let listener = DaemonLauncher.listener(onPort: port), DaemonLauncher.isAHost(listener.path) { DaemonLauncher.stop(listener.pid) }
         }
     }
 
-    /// Set when the host that answered is not the one this app ships with:
-    /// the path of that other host. It may be an older version.
-    @Published private(set) var otherHost: String?
+    /// What listens on this Mac's port when it is not the host this app
+    /// ships with.
+    enum PortHolder: Equatable {
+        /// The host of another copy of AgentTerm, by its path. It may be an
+        /// older version.
+        case otherCopysHost(path: String)
+        /// A program that is not an AgentTerm host at all (#204), by its
+        /// name: a proxy in front of the host, say. The app never stops it.
+        case otherProgram(name: String, port: UInt16)
+    }
+
+    /// Set when what answered on this Mac's port is not the host this app
+    /// ships with.
+    @Published private(set) var otherHost: PortHolder?
+    /// The other copy's host, which Use This App's Host stops; never set
+    /// for a program that is not a host.
     private var otherHostPID: pid_t?
 
     /// Looks at which program is the host, off the main thread.
@@ -206,9 +230,15 @@ final class AppModel: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let listener = DaemonLauncher.listener(onPort: port)
             let foreign = listener.flatMap { DaemonLauncher.isBundled($0.path) ? nil : $0 }
+            // Another copy's host is an `agenttermd`; anything else is said
+            // by its name, and is not offered to be stopped (#204).
+            let holder: PortHolder? = foreign.map {
+                DaemonLauncher.isAHost($0.path)
+                    ? .otherCopysHost(path: $0.path) : .otherProgram(name: ($0.path as NSString).lastPathComponent, port: port)
+            }
             DispatchQueue.main.async {
-                self?.otherHost = foreign?.path
-                self?.otherHostPID = foreign?.pid
+                self?.otherHost = holder
+                self?.otherHostPID = foreign.flatMap { DaemonLauncher.isAHost($0.path) ? $0.pid : nil }
             }
         }
     }
@@ -258,6 +288,19 @@ final class AppModel: ObservableObject {
     /// The part of an agent's area shown alone for a while, filling it
     /// (#69); not kept when the app quits.
     @Published var agentAreaAlone: [String: AgentAreaPart] = [:]
+    /// The user's Shells tabs split as an agent's area is, by the group's
+    /// tab: a shell on the right and one below (the owner's request,
+    /// 2026-11-21), and the parts waiting for a new shell; not kept when
+    /// the app quits.
+    @Published var shellSplits: [String: ShellSplit] = [:]
+    /// The part of a split Shells tab the keyboard is in.
+    @Published var shellSplitFocus: [String: ShellPart] = [:]
+    /// The number of the last shell launched for a part of a Shells tab
+    /// (`CreateRequest.requestID`, #189): the host gives it back with the
+    /// session it made, or with its refusal.
+    var lastShellPartLaunch = 0
+    /// A shell of a Shells tab's row being dragged to a part of it.
+    @Published var draggedShell: String?
 
     // The browser (#76).
     /// ⌘L and ⌥⌘F ask the browser in front for its address field and its find bar.
@@ -268,10 +311,29 @@ final class AppModel: ObservableObject {
     /// The item each of the user's groups of the strip shows, by the
     /// group's id (#127): a shell, a page, a diff, a file. What an agent's
     /// tab shows is its area's (`agentAreas`).
-    @Published var groupShown: [String: String] = [:]
+    /// Told by `front` only, as what is in front is (#178).
+    var groupShown: [String: String] = [:] { willSet { if newValue != groupShown { front.objectWillChange.send() } } }
     /// Where each pane, and each part of an agent's area, is in the window,
     /// in its coordinates from the top left: a click finds its place here.
     var paneFrames: [PanePlace: CGRect] = [:]
+    /// The reader that wrote each frame (`PaneFrameReader`).
+    private var paneFrameWriters: [PanePlace: UUID] = [:]
+
+    /// A place's frame, from its reader; nil when the reader goes, unless
+    /// another has written it since.
+    func setPaneFrame(_ frame: CGRect?, for place: PanePlace, by writer: UUID) {
+        if let frame {
+            paneFrames[place] = frame
+            paneFrameWriters[place] = writer
+        } else if paneFrameWriters[place] == writer {
+            paneFrames[place] = nil
+            paneFrameWriters[place] = nil
+        }
+        // For a test, which cannot click: the places a click finds.
+        if let path = ProcessInfo.processInfo.environment["AGENTTERM_PANE_PLACES"] {
+            try? paneFrames.keys.map { "\($0)" }.sorted().joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        }
+    }
     /// The tab of the user's own (Shells, Browser, Diffs, Files) whose
     /// closing, with all it holds, waits for the user's answer (#145).
     @Published var pendingGroupClose: String?
@@ -286,6 +348,14 @@ final class AppModel: ObservableObject {
     var remoteTabs: [BrowserTabInfo] = []
     var remoteBrowserAsks: [Int: (BrowserResult) -> Void] = [:]
     var nextRemoteBrowserAsk = 1
+    /// Those of them the app sent by itself, with what each asks: their
+    /// refusal is said only as `BrowserRefusal` says (#210).
+    var remoteBrowserAsksByItself: [Int: BrowserRequest] = [:]
+    /// True from the connection to the other Mac closing until its host
+    /// lists its pages again: the pages shown meanwhile are the ones it
+    /// listed before, and what is asked of them is asked by the app itself,
+    /// as the panes come back with the connection (#210).
+    var remotePagesFromBefore = false
     var pendingRemotePage: String?
     /// The tab the element sent last was picked in.
     weak var lastPicked: BrowserTab?
@@ -415,24 +485,6 @@ final class AppModel: ObservableObject {
     /// Told by the host since #66, which makes each notice for every device.
     @Published private(set) var agentNotice: AgentNotice?
 
-    /// Whether ⌥ and ⌘ are held, and nothing else: the items of the row
-    /// in front show their numbers then (#171).
-    @Published private(set) var itemNumbersShown = false
-    private var modifierWatch: Any?
-
-    func watchModifiers() {
-        guard modifierWatch == nil else { return }
-        modifierWatch = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let held = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
-            let shown = held == [.option, .command]
-            if self?.itemNumbersShown != shown { self?.itemNumbersShown = shown }
-            return event
-        }
-        // Keys let go in another app are never seen here.
-        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.itemNumbersShown = false }
-        }
-    }
     /// The host's number for it, to take it away when it is handled.
     private var agentNoticeID: UInt64?
 
@@ -454,24 +506,45 @@ final class AppModel: ObservableObject {
 
     private func saveInbox() { UserDefaults.standard.set(MessageCoding.encode(inbox), forKey: inboxKey) }
 
-    /// What the host told: into the Inbox; a banner while the app is in
-    /// front, a macOS notification while it is not; nothing for the session
-    /// in front of someone, which is then seen.
+    /// What the host told: into the Inbox, and the app's banner. A macOS
+    /// notification once the host says its time has come (`alerted`). The
+    /// session in front is no exception (the owner's decision, 2026-11-20):
+    /// it is seen when the user does something, not by being in front.
     private func told(_ notice: Notice) {
         inbox.take([notice])
         saveInbox()
-        if NSApp.isActive, place == .sessions, let session = notice.session, session == selectedSession {
-            hideNoticeOfTheSessionInFront()
-            return
+        guard notice.alerts, let agent = notice.agentNotice else { return }
+        agentNotice = agent
+        agentNoticeID = notice.id
+    }
+
+    /// Time to show it as a macOS notification, in front or not, as on the
+    /// iPhone at the same moment.
+    private func alerted(_ id: UInt64) {
+        guard notifyOnMac, let entry = inbox.entries.first(where: { $0.id == id }), !entry.read,
+            entry.notice.handled == nil
+        else { return }
+        macNotifications.post(entry.notice, host: remote?.name ?? "this Mac")
+    }
+
+    /// Read here: read on every device.
+    private func readHere(_ ids: [UInt64]) {
+        guard !ids.isEmpty else { return }
+        inbox.markRead(ids: ids)
+        saveInbox()
+        macNotifications.remove(ids)
+        connection?.send(.readNotices(ids: ids))
+    }
+
+    /// Read on another device.
+    private func readThere(_ ids: [UInt64]) {
+        inbox.markRead(ids: ids)
+        saveInbox()
+        macNotifications.remove(ids)
+        if let current = agentNoticeID, ids.contains(current) {
+            agentNotice = nil
+            agentNoticeID = nil
         }
-        guard notice.alerts else { return }
-        // The banner, there when the window is looked at; a macOS
-        // notification too while the app is not in front.
-        if let agent = notice.agentNotice {
-            agentNotice = agent
-            agentNoticeID = notice.id
-        }
-        if !NSApp.isActive, notifyOnMac { macNotifications.post(notice, host: remote?.name ?? "this Mac") }
     }
 
     private func noticeHandled(_ id: UInt64, _ handled: Notice.Handled) {
@@ -484,8 +557,8 @@ final class AppModel: ObservableObject {
         macNotifications.remove([id])
     }
 
-    /// A macOS notification while the app is not in front (#66): a switch
-    /// in Settings, on by default.
+    /// A macOS notification, in front or not (#66): a switch in Settings,
+    /// on by default.
     @Published var notifyOnMac: Bool = UserDefaults.standard.object(forKey: "notifyOnMac") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(notifyOnMac, forKey: "notifyOnMac")
@@ -544,10 +617,7 @@ final class AppModel: ObservableObject {
     func pick(_ item: InboxItem) {
         inboxPicked = item.id
         // Shown in the middle: read, here.
-        if let entry = item.entry, !entry.read {
-            inbox.markRead(entry.id)
-            saveInbox()
-        }
+        if let entry = item.entry, !entry.read { readHere([entry.id]) }
     }
 
     func deleteReadInbox() {
@@ -616,6 +686,8 @@ final class AppModel: ObservableObject {
     private func hideNoticeOfTheSessionInFront() {
         guard place == .sessions, NSApp.isActive, let front = selectedSession else { return }
         if agentNotice?.session == front { agentNotice = nil }
+        // What it said is read, on every device.
+        readHere(inbox.unread(session: front))
         // Told again while the host still has it unseen (#67): the same
         // words said twice are two turns.
         guard let info = sessions.first(where: { $0.id == front }), let state = info.state, !state.isWorking,
@@ -718,8 +790,10 @@ final class AppModel: ObservableObject {
     /// What each agent has of AgentTerm's in its own configuration, as the
     /// host found it; nil until it has said.
     @Published private(set) var agentSetup: AgentSetupReport?
-    /// The onboarding, shown over the window.
-    @Published var showOnboarding = false
+    /// The onboarding, shown over the window: at once while what may be
+    /// sent to the developer is not answered, whose question is one of its
+    /// steps (#48, the owner's decision, 2026-11-21), whatever else.
+    @Published var showOnboarding = Telemetry.shared.shouldAskAboutCrashReports
     /// Whether the onboarding was looked at in this run of the app: it is
     /// shown at most once a run, when an installed agent is not set up.
     private var onboardingChecked = false
@@ -766,7 +840,7 @@ final class AppModel: ObservableObject {
 
     /// Opens `ssh <host>` in a new session.
     func connectSSH(_ host: String) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         lastError = nil
         selectNextAttached = true
         Telemetry.shared.record(.sessionStart(agent: .init(id: nil)))
@@ -1109,7 +1183,6 @@ final class AppModel: ObservableObject {
         }
         loadInbox()
         macNotifications.model = self
-        watchModifiers()
         connect()
         folderChanged()
         // History's reading, pins and searches are the host's, for this Mac too (#46).
@@ -1425,6 +1498,10 @@ final class AppModel: ObservableObject {
         let old = connection
         connection = nil
         old?.close()
+        // What waited for the Mac left is answered, not said: the user
+        // switched (#196).
+        refuseRemoteBrowserAsks(macName: remote?.name ?? "the other Mac", tell: false)
+        remotePagesFromBefore = false
         remote = mac
         UserDefaults.standard.set(mac?.id, forKey: Self.currentMacKey)
         forgetHostState()
@@ -1444,7 +1521,6 @@ final class AppModel: ObservableObject {
         // on show (#76).
         browsers.closeAll()
         remoteTabs = []
-        remoteBrowserAsks = [:]
         pendingRemotePage = nil
         browserInFront = nil
         folders = []
@@ -1503,7 +1579,7 @@ final class AppModel: ObservableObject {
                     RemoteMacStore.save(self.remoteMacs)
                     self.showPairMac = false
                     self.switchTo(mac)
-                case .error(let text):
+                case .error(let text, _):
                     self.pairMacError =
                         text == "invalid pairing code" ? "That link has expired or was already used. Show a new one on the other Mac and try again." : text
                 default:
@@ -1579,6 +1655,7 @@ final class AppModel: ObservableObject {
         }
         tabLayoutKnown = false
         sessions = []
+        stopShellPartWaits()
         foreignSizes = [:]
         selectedSession = nil
     }
@@ -1606,6 +1683,12 @@ final class AppModel: ObservableObject {
             wasConnected = false
             stoppingHost = false
             connection = nil
+            // What waited for the other Mac's browser cannot be answered
+            // by it now: answered at once, and said (#196).
+            if let remote {
+                refuseRemoteBrowserAsks(macName: remote.name, tell: true)
+                remotePagesFromBefore = true
+            }
             files.connectionLost()
             search.connectionLost()
             historyStore.reset()
@@ -1712,8 +1795,6 @@ final class AppModel: ObservableObject {
                 agentNotice = nil
                 agentNoticeID = nil
             }
-            // Done or asking while it is in front of someone: seen (#67).
-            hideNoticeOfTheSessionInFront()
             // Pick up sessions that were already running before this window opened.
             for info in list where controllers[info.id] == nil {
                 connection?.send(.attach(session: info.id, size: info.size))
@@ -1749,7 +1830,7 @@ final class AppModel: ObservableObject {
             hostSaysMacInUse = inUse
         case .browserAnswer(let id, let result):
             // What the other Mac's browser answered (#147).
-            remoteBrowserAsks.removeValue(forKey: id)?(result)
+            remoteBrowserAnswered(id: id, result: result)
         case .agentShellResult, .agentBrowserResult:
             // For `agenttermd mcp`.
             break
@@ -1759,9 +1840,16 @@ final class AppModel: ObservableObject {
         case .noticeLog(let list):
             inbox.take(list, log: true)
             saveInbox()
-            macNotifications.remove(list.filter { $0.handled != nil }.map(\.id))
+            macNotifications.remove(list.filter { $0.handled != nil || $0.read == true }.map(\.id))
+            // Read here while the host was not reached.
+            let unsaid = inbox.readHere(notTold: list)
+            if !unsaid.isEmpty { connection?.send(.readNotices(ids: unsaid)) }
         case .notice(let notice):
             told(notice)
+        case .noticeAlert(let id):
+            alerted(id)
+        case .noticesRead(let ids):
+            readThere(ids)
         case .noticeHandled(let id, let handled):
             noticeHandled(id, handled)
         case .browserCall(let id, let agent, let request):
@@ -1771,6 +1859,7 @@ final class AppModel: ObservableObject {
             // This Mac's own are this app's, which said them; another Mac's
             // are shown here as its host lists them (#147).
             guard isRemote else { break }
+            remotePagesFromBefore = false
             remoteTabs = list
             browsers.mirror(list, sessions: sessions)
             if let wanted = pendingRemotePage, let tab = browsers.tab(id: wanted) {
@@ -1827,12 +1916,15 @@ final class AppModel: ObservableObject {
             if let tab = diffTab, !list.contains(tab.folder) { closeDiffTab() }
             if selectedFolder == nil || !list.contains(selectedFolder ?? "") { selectedFolder = list.first }
             migrateLocalFolders(known: list)
-        case .attached(let info):
+        case .attached(let info, let request):
             if controllers[info.id] == nil { controllers[info.id] = makeController(for: info.id) }
             // What follows is the session's earlier output, until `replayed`.
             controllers[info.id]?.beginReplay(size: info.size)
             replaying.insert(info.id)
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
+            // The shell launched for a part of a Shells tab, known by its
+            // request, before it is put in front below (#189).
+            if let request { shellPartLaunched(request: request, session: info) }
             if selectNextAttached || selectedSession == nil {
                 // A session that was just started comes to the front, also
                 // when a file, the diff or a page of the browser was showing
@@ -1868,8 +1960,11 @@ final class AppModel: ObservableObject {
                 syncTabs()
                 adoptFocusedFront()
             }
-        case .error(let text):
+        case .error(let text, let request):
             starting = nil
+            // The part waiting for the launch this refuses waits no more, and
+            // what failed is said below; the other parts still wait (#189).
+            if let request { stopShellPartWait(request: request) }
             if isRemote, text == "invalid token", let mac = remote {
                 // The other Mac took this one off its paired devices. What
                 // was not saved there cannot be saved any more.
@@ -2004,21 +2099,37 @@ final class AppModel: ObservableObject {
 
     // MARK: Actions
 
-    /// Starts an agent, or a plain shell when `agent` is nil, in the selected folder.
-    func launch(_ agent: AgentInfo?) {
-        guard status == .connected else { return }
+    /// Whether a session can be started now. While the app is not
+    /// connected to the host it cannot: the user is told at once why, and
+    /// nothing waits for a session that will not come (#202, principle 3).
+    /// Every way of starting one asks this first: File > New Shell and New
+    /// <agent>, the menu bar's, a Shells tab's part, a worktree, SSH,
+    /// resuming, a handoff.
+    func canStartSessions() -> Bool {
+        guard status == .connected else {
+            notice = StateWords.notStarted(macName)
+            return false
+        }
+        return true
+    }
+
+    /// Starts an agent, or a plain shell when `agent` is nil, in the selected
+    /// folder. `request`, for a shell launched for a part of a Shells tab,
+    /// comes back with the session or the host's refusal (#189).
+    func launch(_ agent: AgentInfo?, request: Int? = nil) {
+        guard canStartSessions() else { return }
         lastError = nil
         selectNextAttached = true
         let size = startingSize
         Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
-        connection?.send(.create(CreateRequest(command: agent?.id, cwd: startingDirectory, title: agent?.name, size: size)))
+        connection?.send(.create(CreateRequest(command: agent?.id, cwd: startingDirectory, title: agent?.name, size: size, requestID: request)))
     }
 
     /// Starts a shell for an agent (#127), from its group's row: in its
     /// folder, under it, and the agent sees and uses it as one it opened
     /// itself.
     func newShell(besideAgent agentTab: String) {
-        guard status == .connected, let agent = session(forTab: agentTab), agent.agent != nil else { return }
+        guard canStartSessions(), let agent = session(forTab: agentTab), agent.agent != nil else { return }
         lastError = nil
         selectNextAttached = true
         Telemetry.shared.record(.sessionStart(agent: .init(id: nil)))
@@ -2031,7 +2142,7 @@ final class AppModel: ObservableObject {
     /// From the worktree bar's sheet (#43) the branch is named and the
     /// branch it starts from picked; the sheet says what the question asks.
     func launchInWorktree(_ agent: AgentInfo?, branch: String? = nil, from: String? = nil, confirmed: Bool = false) {
-        guard status == .connected, let folder = selectedFolder else { return }
+        guard canStartSessions(), let folder = selectedFolder else { return }
         if !confirmed, let diff, !(diff.staged.isEmpty && diff.unstaged.isEmpty) {
             worktreeQuestion = agent.map { .agent($0) } ?? .shell
             return
@@ -2064,7 +2175,7 @@ final class AppModel: ObservableObject {
     /// run: the user reads it there and presses Return, or does not. The
     /// app runs nothing it fetched by itself (CLAUDE.md, principle 2).
     func installInNewShell(_ guide: AgentInstallGuide) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         lastError = nil
         selectNextAttached = true
         installGuide = nil
@@ -2385,7 +2496,7 @@ final class AppModel: ObservableObject {
     /// `folder` is where the receiving agent starts: the conversation's own
     /// folder, or another one to carry the work over to.
     func handoff(_ conversation: Conversation, to target: AgentInfo, plan: Handoff.Plan, prompt: String, note: String, in folder: String? = nil) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         Telemetry.shared.record(
             .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
         let size = startingSize
@@ -2431,7 +2542,7 @@ final class AppModel: ObservableObject {
     }
 
     func handoffOnRemote(_ conversation: Conversation, to target: AgentInfo, plan: String, prompt: String?, note: String, in folder: String?) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         Telemetry.shared.record(
             .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
         selectNextAttached = true
@@ -2447,7 +2558,7 @@ final class AppModel: ObservableObject {
     /// (#150): the host makes it, writes the handoff file there and starts
     /// `target` in it; what fails is said as any handoff's.
     func handoffInNewWorktree(_ conversation: Conversation, to target: AgentInfo, branch: String?, from: String?) {
-        guard status == .connected, let folder = panelFolder else { return }
+        guard canStartSessions(), let folder = panelFolder else { return }
         Telemetry.shared.record(.handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: true))
         selectNextAttached = true
         beginStarting("Handing off to \(target.name)…")
@@ -2517,7 +2628,7 @@ final class AppModel: ObservableObject {
 
     /// Reopens a past conversation in its agent, in a new session.
     func resume(_ conversation: Conversation) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         lastError = nil
         selectNextAttached = true
         let size = startingSize
@@ -3260,3 +3371,9 @@ final class AppModel: ObservableObject {
 
     var hostPort: UInt16 { port }
 }
+
+/// What is in front (#178): the session, the page, the diff, the item each
+/// group shows. Kept by `AppModel`, told by this object, which only what
+/// shows them observes.
+@MainActor
+final class FrontState: ObservableObject {}

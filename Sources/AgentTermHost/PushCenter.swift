@@ -23,6 +23,10 @@ public final class PushCenter {
         /// one (#168).
         var activity: String?
         var activityStart: String?
+        /// An activity was started through Apple whose token the device
+        /// has not given yet (#194): not started again meanwhile, which
+        /// would show a second one.
+        var activityStarted: Bool?
     }
 
     /// One request to the relay: its path, the JSON body; answers with the
@@ -81,6 +85,9 @@ public final class PushCenter {
         guard var target = targets[device] else { return }
         target.activity = token?.lowercased()
         target.activityStart = start?.lowercased()
+        // What it has now is known: what was started is in `token`, or
+        // gone.
+        target.activityStarted = nil
         targets[device] = target
         save()
     }
@@ -89,16 +96,27 @@ public final class PushCenter {
     var activityDevices: [String] { targets.filter { $0.value.activity != nil || $0.value.activityStart != nil }.map(\.key) }
 
     /// An update of a device's Live Activity: the host's state now, to its
-    /// activity's token; or, with none, one that starts it, when an agent
-    /// works or waits. Nil when there is nothing to send.
-    func activity(_ status: AgentsStatus, mac: String, to device: String) -> Push? {
-        guard relay != nil, let target = targets[device] else { return nil }
+    /// activity's token, or its end (`end`), after which the token is
+    /// forgotten, the activity being gone (#194); or, with none, one that
+    /// starts it, when an agent works or waits, once until the device gives
+    /// the new activity's token (`setActivity`). Nil when there is nothing
+    /// to send.
+    func activity(_ status: AgentsStatus, end: Bool, mac: String, to device: String) -> Push? {
+        guard relay != nil, var target = targets[device] else { return nil }
         guard let state = try? JSONSerialization.jsonObject(with: MessageCoding.encode(status)) else { return nil }
         if let token = target.activity {
-            let event = status.isActive ? "update" : "end"
+            let event = end ? "end" : "update"
+            if end {
+                target.activity = nil
+                targets[device] = target
+                save()
+            }
             return request(target, device: device, ["activity": ["token": token, "event": event, "state": state, "mac": mac]])
         }
-        guard status.isActive, let start = target.activityStart else { return nil }
+        guard status.isActive, let start = target.activityStart, target.activityStarted != true else { return nil }
+        target.activityStarted = true
+        targets[device] = target
+        save()
         return request(target, device: device, ["activity": ["token": start, "event": "start", "state": state, "mac": mac]])
     }
 

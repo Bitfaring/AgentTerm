@@ -14,6 +14,9 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# None of the installed app's variables reaches the tests (#207).
+source scripts/lib-own-environment.sh
+own_environment AGENTTERM_LAUNCH
 command -v xcodegen >/dev/null || { echo "test-ios.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
 source scripts/lib-simulator.sh
 source scripts/lib-cleanup.sh
@@ -104,6 +107,8 @@ for agent in claude codex agy copilot; do cp scripts/demo-agent.py "$AGENTS/$age
 # that its turn is done (#67).
 INBOX_DONE_AFTER=""
 if [ "${INBOX:-}" = only ]; then INBOX_DONE_AFTER=8; fi
+# NOTNOW=only too: a notice after Not Now asks nothing of iOS (NOTIFY-2).
+if [ "${NOTNOW:-}" = only ]; then INBOX_DONE_AFTER=8; fi
 HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
@@ -182,6 +187,14 @@ if [ "${NARROW:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NARROW=1; fi
 if [ "${MARKDOWN:-}" = only ]; then
     export TEST_RUNNER_AGENTTERM_ONLY_MARKDOWN=1 TEST_RUNNER_AGENTTERM_MEASURE_MAIN="$STATE/main-thread.txt"
 fi
+# NOTNOW=only answers Not Now on the first screen, pairs, and checks that
+# iOS is not asked and the app's notifications are off (NOTIFY-2), and
+# nothing else. The app is installed afresh for it, so that iOS was not
+# asked before.
+if [ "${NOTNOW:-}" = only ]; then
+    export TEST_RUNNER_AGENTTERM_ONLY_NOT_NOW=1
+    xcrun simctl uninstall "$DEVICE" com.manhpham.agentterm.dev || true
+fi
 # PAGES=only checks that a long session's earlier lines come a page at a time.
 if [ "${PAGES:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_HISTORY=1; fi
 # TAKEOVER=1 has something play the Mac: once the phone has a session open,
@@ -199,6 +212,7 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${TAKEOVER:-}" = only ]; then echo "iOS UI test passed (Mac takeover only)."; rm -f "$LOG"; exit 0; fi
     if [ "${LANDSCAPE:-}" = only ]; then echo "iOS UI test passed (landscape only)."; rm -f "$LOG"; exit 0; fi
     if [ "${PAGES:-}" = only ]; then echo "iOS UI test passed (paged history only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${NOTNOW:-}" = only ]; then echo "iOS UI test passed (Not Now only)."; rm -f "$LOG"; exit 0; fi
     if [ "${IDLE:-}" = only ]; then grep -E "MEASURE idle" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (idle waits measured)."; rm -f "$LOG"; exit 0; fi
     if [ "${NOTE:-}" = only ]; then echo "iOS UI test passed (a note read only)."; rm -f "$LOG"; exit 0; fi
     if [ "${INBOX:-}" = only ]; then echo "iOS UI test passed (the Inbox only)."; rm -f "$LOG"; exit 0; fi

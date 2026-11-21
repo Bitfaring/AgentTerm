@@ -16,6 +16,7 @@ final class ScreenshotTests: XCTestCase {
         let link = try XCTUnwrap(environment["AGENTTERM_PAIR_URL"])
         let app = XCUIApplication()
         app.launch()
+        passNotificationAsk(app)
         let enterLink = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Enter a pairing link'")).firstMatch
         XCTAssertTrue(enterLink.waitForExistence(timeout: 10))
         app.open(try XCTUnwrap(URL(string: link)))
@@ -80,6 +81,7 @@ final class ScreenshotTests: XCTestCase {
         try XCTSkipUnless(environment["AGENTTERM_SCREENSHOTS"] != nil, "run this test through scripts/screenshots.sh")
         let app = XCUIApplication()
         app.launch()
+        passNotificationAsk(app)
         // Paired by the pictures above; else by the link.
         let pinned = app.staticTexts["Fix the flaky parser tests"].firstMatch
         if !pinned.waitForExistence(timeout: 15), let link = environment["AGENTTERM_PAIR_URL"].flatMap(URL.init(string:)) {

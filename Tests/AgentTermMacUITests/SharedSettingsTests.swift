@@ -32,14 +32,19 @@ final class SharedSettingsTests: MacUITestCase {
         // it, and its answer kept in preferences of this test's own.
         appEnvironment["AGENTTERM_REPORTING_PREVIEW"] = "agentterm-ui-test-\(UUID().uuidString)"
         try relaunchApp()
+        // The onboarding shows for it, whatever else (#48): its Reports step.
+        app.wait(for: .id("onboarding"), timeout: 15)
+        app.press(.id("onboarding-step-1"))
         app.wait(for: .id("reporting-choices"), timeout: 15)
         app.wait(for: .text("What AgentTerm May Send to Its Developer"))
         wait("both switches on") { self.app.first(.id("reporting-crash"))?.value == "1" && self.app.first(.id("reporting-usage"))?.value == "1" }
         shot("tel-3-screen")
         app.press(.id("reporting-usage"))
         wait("usage statistics off") { self.app.first(.id("reporting-usage"))?.value == "0" }
-        app.press(.id("reporting-continue"))
+        app.press(.id("onboarding-next"))
         app.waitGone(.id("reporting-choices"))
+        app.press(.id("onboarding-skip"))
+        app.waitGone(.id("onboarding"))
 
         openSettings("Privacy")
         app.wait(for: .id("privacy-crash"))
@@ -49,7 +54,7 @@ final class SharedSettingsTests: MacUITestCase {
         // Answered: not asked again.
         try relaunchApp()
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
-        XCTAssertFalse(app.exists(.id("reporting-choices")))
+        XCTAssertFalse(app.exists(.id("onboarding")), "the onboarding came again, the question answered")
     }
 
     /// SET-1: Settings opens on General each time, not on the pane it was left on.

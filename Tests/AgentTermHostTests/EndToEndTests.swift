@@ -27,7 +27,7 @@ final class EndToEndTests: XCTestCase {
         func text(_ session: SessionID) -> String { String(decoding: output[session] ?? Data(), as: UTF8.self) }
 
         var attached: SessionInfo? {
-            messages.compactMap { if case .attached(let info) = $0 { return info } else { return nil } }.last
+            messages.compactMap { if case .attached(let info, _) = $0 { return info } else { return nil } }.last
         }
 
         var lastResize: (size: TermSize, driver: Bool)? {
@@ -144,6 +144,49 @@ final class EndToEndTests: XCTestCase {
         waitUntil("run once Return is pressed") { client.text(id).contains("typed-42") }
         client.connection.send(.kill(session: id))
         waitUntil("ended") { client.sessions == [] }
+    }
+
+    /// SES-29 (#189): the number a client gives its `create` comes back to
+    /// it, and to it alone, with the session made (`attached`) or with the
+    /// refusal (`error`); a session started elsewhere meanwhile, and an
+    /// attach to a session, carry none.
+    func testTheRequestOfACreateComesBackToItsCreator() throws {
+        let mac = connect("Mac")
+        let phone = connect("iPhone")
+        func requests(_ client: TestClient) -> [(SessionID, Int?)] {
+            client.messages.compactMap { if case .attached(let info, let request) = $0 { return (info.id, request) } else { return nil } }
+        }
+        func refusals(_ client: TestClient) -> [Int?] {
+            client.messages.compactMap { if case .error(_, let request) = $0 { return request } else { return nil } }
+        }
+
+        mac.connection.send(.create(CreateRequest(cwd: "/tmp", title: "mine", requestID: 41)))
+        // Started on the iPhone while the Mac waits: no number of the Mac's.
+        phone.connection.send(.create(CreateRequest(cwd: "/tmp", title: "elsewhere")))
+        waitUntil("both attached") { requests(mac).count == 1 && requests(phone).count == 1 }
+        let mine = try XCTUnwrap(requests(mac).first)
+        XCTAssertEqual(mine.1, 41)
+        XCTAssertEqual(mac.attached?.title, "mine")
+        let elsewhere = try XCTUnwrap(requests(phone).first)
+        XCTAssertNil(elsewhere.1, "the iPhone's own launch carries a request")
+        // The Mac watching the iPhone's session: an attach, not its launch.
+        mac.connection.send(.attach(session: elsewhere.0, size: .default))
+        waitUntil("attached to the other") { requests(mac).count == 2 }
+        XCTAssertNil(requests(mac).last?.1)
+        XCTAssertFalse(requests(phone).contains { $0.1 == 41 }, "another client was given the Mac's request")
+
+        // Refused: a shell for an agent that does not run; a worktree of a
+        // folder that is not a repository.
+        mac.connection.send(.create(CreateRequest(openedBy: mine.0, requestID: 42)))
+        waitUntil("refused") { refusals(mac).contains(42) }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-ses29-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        mac.connection.send(.createInWorktree(request: CreateRequest(cwd: folder.path, requestID: 43), branch: nil, from: nil))
+        waitUntil("the worktree refused") { refusals(mac).contains(43) }
+        XCTAssertTrue(refusals(phone).allSatisfy { $0 == nil }, "the iPhone was told of the Mac's refusals")
+        for id in [mine.0, elsewhere.0] { mac.connection.send(.kill(session: id)) }
+        waitUntil("ended") { mac.sessions == [] }
     }
 
     func testInteractiveShellWithVietnameseInput() {
@@ -547,6 +590,9 @@ final class EndToEndTests: XCTestCase {
             XCTAssertFalse(host.isKeepingAwake)
             mac.connection.send(.create(CreateRequest(command: "sleep 30", cwd: nil, title: nil, size: .default)))
             waitUntil("awake with a session") { host.isKeepingAwake }
+            // The host keeps awake as it starts the session, before the
+            // Mac is told it is attached: waited for, not assumed (#205).
+            waitUntil("the Mac attached to it") { mac.attached != nil }
             let id = try XCTUnwrap(mac.attached?.id)
             mac.connection.send(.kill(session: id))
             waitUntil("asleep again without one") { !host.isKeepingAwake }
@@ -763,13 +809,13 @@ final class EndToEndTests: XCTestCase {
         // A name that is taken is refused and nothing is overwritten.
         phone.connection.send(.createFile(directory: root, name: "ghi chú.md", isDirectory: false))
         waitUntil("refused") {
-            phone.messages.contains { if case .error(let text) = $0 { return text.contains("already exists") } else { return false } }
+            phone.messages.contains { if case .error(let text, _) = $0 { return text.contains("already exists") } else { return false } }
         }
         XCTAssertEqual(try String(contentsOfFile: root + "/ghi chú.md", encoding: .utf8), "đã sửa\n")
         // Nor can a name reach out of the folder.
         phone.connection.send(.createFile(directory: root, name: "../escape.txt", isDirectory: false))
         waitUntil("refused again") {
-            phone.messages.contains { if case .error(let text) = $0 { return text.contains("cannot be used as a name") } else { return false } }
+            phone.messages.contains { if case .error(let text, _) = $0 { return text.contains("cannot be used as a name") } else { return false } }
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.deletingLastPathComponent().appendingPathComponent("escape.txt").path))
     }
@@ -946,7 +992,7 @@ final class EndToEndTests: XCTestCase {
         // Nothing staged: git refuses, the phone is told why, nothing is committed.
         phone.connection.send(.gitCommit(path: directory.path, message: "nothing yet"))
         waitUntil("refused") {
-            phone.messages.contains { if case .error(let text) = $0 { return text.lowercased().contains("no changes added") || text.lowercased().contains("nothing") } else { return false } }
+            phone.messages.contains { if case .error(let text, _) = $0 { return text.lowercased().contains("no changes added") || text.lowercased().contains("nothing") } else { return false } }
         }
 
         phone.connection.send(.gitStage(path: directory.path, files: []))
@@ -1011,7 +1057,7 @@ final class EndToEndTests: XCTestCase {
         // Nothing left: said, and the list is sent all the same.
         phone.connection.send(.gitDiscard(path: directory.path, files: []))
         waitUntil("told there is nothing") {
-            phone.messages.contains { if case .error(let text) = $0 { return text == "There is no change to discard." } else { return false } }
+            phone.messages.contains { if case .error(let text, _) = $0 { return text == "There is no change to discard." } else { return false } }
         }
     }
 
@@ -1057,7 +1103,7 @@ final class EndToEndTests: XCTestCase {
         try "mine\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         phone.connection.send(.gitSwitch(path: directory.path, branch: "feature/x"))
         waitUntil("refused") {
-            phone.messages.contains { if case .error(let text) = $0 { return text.hasPrefix("Switching to feature/x would lose changes") } else { return false } }
+            phone.messages.contains { if case .error(let text, _) = $0 { return text.hasPrefix("Switching to feature/x would lose changes") } else { return false } }
         }
         XCTAssertEqual(branch(), "main")
         git("checkout", "-q", "--", "a.txt", in: directory)
@@ -1065,7 +1111,7 @@ final class EndToEndTests: XCTestCase {
         // Not merged: kept unless forced.
         phone.connection.send(.gitDeleteBranch(path: directory.path, name: "feature/x", force: false))
         waitUntil("kept") {
-            phone.messages.contains { if case .error(let text) = $0 { return text.contains("not fully merged") } else { return false } }
+            phone.messages.contains { if case .error(let text, _) = $0 { return text.contains("not fully merged") } else { return false } }
         }
         phone.connection.send(.gitRenameBranch(path: directory.path, from: "feature/x", to: "feature/y"))
         waitUntil("renamed") { branches() == ["* main", "feature/y"] }
@@ -1410,7 +1456,7 @@ final class EndToEndTests: XCTestCase {
         git("commit", "-q", "-m", "mine", in: mine)
         phone.connection.send(.gitPush(path: mine.path))
         waitUntil("refused") {
-            phone.messages.contains { if case .error(let text) = $0 { return text.contains("rejected") || text.contains("fetch first") } else { return false } }
+            phone.messages.contains { if case .error(let text, _) = $0 { return text.contains("rejected") || text.contains("fetch first") } else { return false } }
         }
         waitUntil("still ahead") { latest(mine)?.upstream == "origin/main" && latest(mine)?.ahead == 1 }
     }
@@ -1600,7 +1646,7 @@ final class EndToEndTests: XCTestCase {
             waitUntil("unknown agent dropped") { settings(phone) == CommitWriterSettings() }
             phone.connection.send(.writeCommitMessage(path: project.path))
             waitUntil("nothing staged", timeout: 30) {
-                phone.messages.contains { if case .error(let text) = $0 { return text.contains("Stage the changes") } else { return false } }
+                phone.messages.contains { if case .error(let text, _) = $0 { return text.contains("Stage the changes") } else { return false } }
                     && answers(phone).count == 3
             }
             mac.connection.send(.setCommitWriter(wanted))
@@ -1784,7 +1830,7 @@ final class EndToEndTests: XCTestCase {
             phone.connection.send(.connectSSH(host: name, size: .default))
         }
         waitUntil("refused") {
-            phone.messages.filter { if case .error(let text) = $0 { return text.contains("is not a host in this Mac's SSH configuration") } else { return false } }.count == 3
+            phone.messages.filter { if case .error(let text, _) = $0 { return text.contains("is not a host in this Mac's SSH configuration") } else { return false } }.count == 3
         }
         XCTAssertEqual(host.sessionCount, 0)
 

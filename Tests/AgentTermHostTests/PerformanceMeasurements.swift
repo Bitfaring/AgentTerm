@@ -182,7 +182,7 @@ final class PerformanceMeasurements: XCTestCase {
         }
         wait { output > 600_000 }
         RunLoop.main.run(until: Date().addingTimeInterval(1))
-        guard let id = messages.compactMap({ if case .attached(let info) = $0 { return info.id } else { return nil } }).first else { return XCTFail("no session") }
+        guard let id = messages.compactMap({ if case .attached(let info, _) = $0 { return info.id } else { return nil } }).first else { return XCTFail("no session") }
 
         var asked: [ServerMessage] = []
         let other = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "other")
@@ -286,7 +286,7 @@ final class PerformanceMeasurements: XCTestCase {
         let host = Process()
         host.executableURL = tool
         host.arguments = ["--port", String(port), "--local-only", "--no-account-usage", "--home", root.path, "--agents", root.path]
-        var environment = ProcessInfo.processInfo.environment
+        var environment = OwnEnvironment.withoutAgentTerms
         environment["AGENTTERM_STATE_DIR"] = state.path
         environment["HOME"] = root.path
         environment["ZDOTDIR"] = root.path

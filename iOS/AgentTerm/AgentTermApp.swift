@@ -1,5 +1,6 @@
 import AgentTermClient
 import AgentTermFirebase
+import AgentTermProtocol
 import AgentTermTelemetry
 import AgentTermTerminal
 import SwiftUI
@@ -70,11 +71,14 @@ struct AgentTermApp: App {
             .preferredColorScheme(.dark)
             .tint(Palette.tint)
             .environmentObject(privacy)
-            // Shown once, at the first launch of a build that can send
-            // anything (#48): the app's own screen, a switch for each kind
-            // of report, both on. Until it is answered nothing is sent.
-            .sheet(isPresented: $privacy.needsAsking) {
-                ReportingChoices(preferences: privacy)
+            // The first launch's one screen (the owner's decision,
+            // 2026-11-21): what may be sent to the developer, in a build
+            // that can send anything (#48), then whether the app may notify
+            // (#180), one after the other in the same screen, never two
+            // over each other. Until the first is answered nothing is sent.
+            .fullScreenCover(isPresented: Binding(get: { privacy.needsAsking || model.asksNotifications }, set: { _ in })) {
+                FirstLaunch(preferences: privacy)
+                    .environmentObject(model)
                     .interactiveDismissDisabled()
                     .preferredColorScheme(.dark)
             }
@@ -95,6 +99,19 @@ enum Palette {
     static let tint = Color(red: 0.45, green: 0.62, blue: 0.98)
     static let danger = Color(red: 0.96, green: 0.45, blue: 0.47)
     static let added = Color(red: 0.36, green: 0.80, blue: 0.52)
+}
+
+/// The first launch's screen: its steps, those still to be answered.
+private struct FirstLaunch: View {
+    @ObservedObject var preferences: TelemetryPreferences
+
+    var body: some View {
+        if preferences.needsAsking {
+            ReportingChoices(preferences: preferences)
+        } else {
+            NotificationAsk()
+        }
+    }
 }
 
 /// What may be sent to the developer, a switch for each kind, and
@@ -130,5 +147,43 @@ private struct ReportingChoices: View {
             .navigationTitle("Reports")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+}
+
+/// The first screen (#180): only whether the app may notify, in the words
+/// the Mac uses for it.
+private struct NotificationAsk: View {
+    @EnvironmentObject private var model: PhoneModel
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            Image(systemName: "bell.badge.fill")
+                .font(.system(size: 54))
+                .foregroundStyle(Palette.tint)
+            Text(NoticeWords.permissionTitle).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
+            Text(NoticeWords.permissionPurpose)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Spacer()
+            Button {
+                model.answerNotificationAsk(allow: true)
+            } label: {
+                Text(NoticeWords.permissionAllow).font(.headline).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .accessibilityIdentifier("notifications-allow")
+            Button(NoticeWords.permissionNotNow) { model.answerNotificationAsk(allow: false) }
+                .accessibilityIdentifier("notifications-not-now")
+        }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Palette.canvas)
+        // Contained, so that the buttons keep identifiers of their own.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("notifications-ask")
     }
 }

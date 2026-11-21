@@ -226,6 +226,8 @@ private struct HolderListRow: View {
 
 /// A diff or a file in the list, under its group's row.
 private struct ItemListRow: View {
+    /// What is in front, which it shows (#178).
+    @EnvironmentObject private var front: FrontState
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
     let item: String
@@ -304,6 +306,8 @@ private struct ItemListRow: View {
 /// tab holds them: its pages are under it. Picking it shows the page that
 /// tab shows.
 private struct BrowserGroupRow: View {
+    /// What is in front, which it shows (#178).
+    @EnvironmentObject private var front: FrontState
     @EnvironmentObject private var model: AppModel
     let project: String
     let pages: [BrowserTab]
@@ -553,6 +557,8 @@ struct FolderRow: View {
 /// and which profile it uses. Picking it shows it, beside its agent when an
 /// agent opened it.
 struct BrowserRow: View {
+    /// What is in front, which it shows (#178).
+    @EnvironmentObject private var front: FrontState
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var profiles: BrowserProfiles
     @ObservedObject var tab: BrowserTab
@@ -612,6 +618,8 @@ struct BrowserRow: View {
 }
 
 struct SessionRow: View {
+    /// What is in front, which it shows (#178).
+    @EnvironmentObject private var front: FrontState
     @EnvironmentObject private var model: AppModel
     let session: SessionInfo
     var showsPath = false

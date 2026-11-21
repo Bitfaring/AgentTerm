@@ -30,6 +30,9 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# None of the installed app's variables reaches the tests (#207).
+source scripts/lib-own-environment.sh
+own_environment
 source scripts/lib-cleanup.sh
 ONLY="${ONLY:-both}"
 DO_MAC=yes DO_IPHONE=yes DO_IPAD=yes

@@ -89,4 +89,13 @@ extension XCTestCase {
         let allow = springboard.alerts.buttons["Allow"].firstMatch
         if allow.waitForExistence(timeout: timeout) { allow.tap() }
     }
+
+    /// The first screen asks whether the app may notify (#180), on a
+    /// simulator where iOS was not asked yet: allowed, and iOS answered.
+    func passNotificationAsk(_ app: XCUIApplication) {
+        let allow = app.buttons["notifications-allow"]
+        guard allow.waitForExistence(timeout: 4) else { return }
+        allow.tap()
+        allowNotifications(timeout: 5)
+    }
 }

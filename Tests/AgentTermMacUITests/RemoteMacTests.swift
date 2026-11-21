@@ -21,13 +21,19 @@ final class RemoteMacTests: MacUITestCase {
         try startHost(state: otherState, home: otherHome, port: otherPort)
     }
 
-    private func pair() {
-        let link = pairingLink(state: otherState, port: otherPort, name: "Other Mac")
+    /// Pairs with the other Mac, on its host's port or on one in front of it.
+    private func pair(through port: UInt16? = nil) {
+        let link = pairingLink(state: otherState, port: port ?? otherPort, name: "Other Mac")
         XCTAssertFalse(link.isEmpty, "the other host gave no pairing link")
         app.press(.id("mac-switcher"))
         app.press(.button("Pair with Another Mac…"), menus: true)
         app.write(link, into: .id("pair-mac-link"), confirm: true)
         wait("the other Mac to be on screen", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == "Other Mac" }
+    }
+
+    /// REMOTE-27's app notes each answer of the other Mac's browser.
+    override func beforeTheAppStarts() throws {
+        if name.contains("ThisMacSwitches") { appEnvironment["AGENTTERM_BROWSER_ANSWERS"] = root.appendingPathComponent("browser-answers").path }
     }
 
     private func switchTo(_ name: String) {
@@ -83,11 +89,32 @@ final class RemoteMacTests: MacUITestCase {
         // A click there, at the page's point.
         app.press(.id("remote-page"))
         wait("the click sent", timeout: 15) { calls().contains { if case .tap("7", _, _) = $0.request { return true } else { return false } } }
+        // Answered, as that Mac's app answers it: what comes after it waits for that (#199).
+        for call in calls() { if case .tap = call.request { browser.send(.browserReply(id: call.id, result: .text("Tapped."))) } }
+
+        // ⌘C: what is selected there is asked for. Answered with nothing, so
+        // that the test leaves this Mac's pasteboard as it is.
+        app.menu(["Edit", "Copy"])
+        wait("the selection asked for", timeout: 15) { calls().contains { if case .copy("7") = $0.request { return true } else { return false } } }
+        for call in calls() where call.request == .copy(tab: "7") { browser.send(.browserReply(id: call.id, result: .text(""))) }
+        // A right click: a menu of this Mac's, made from what is at that
+        // point there; its link opened there.
+        app.perform("AXShowMenu", on: .id("remote-page"))
+        wait("what is at the point asked for", timeout: 15) { calls().contains { if case .contextAt("7", _, _) = $0.request { return true } else { return false } } }
+        let context = try XCTUnwrap(calls().last { if case .contextAt = $0.request { return true } else { return false } })
+        browser.send(.browserReply(id: context.id, result: .context(link: "http://localhost:3000/far", selection: "")))
+        app.wait(for: .button(BrowserWords.PageMenu.openLink), timeout: 15, menus: true)
+        app.wait(for: .button(BrowserWords.PageMenu.copyLink), menus: true)
+        shot("remote-page-menu")
+        app.press(.button(BrowserWords.PageMenu.openLink), menus: true)
+        wait("the link opened there", timeout: 15) {
+            calls().contains { if case .newTab(_, "http://localhost:3000/far", _, _) = $0.request { return true } else { return false } }
+        }
 
         // A new page: opened on the other Mac, shown here once it is listed.
         app.menu(["Browser", "New Browser Tab"])
-        wait("a new page asked for", timeout: 15) { calls().contains { if case .newTab = $0.request { return true } else { return false } } }
-        let asked = try XCTUnwrap(calls().last { if case .newTab = $0.request { return true } else { return false } })
+        wait("a new page asked for", timeout: 15) { calls().contains { if case .newTab(_, nil, _, _) = $0.request { return true } else { return false } } }
+        let asked = try XCTUnwrap(calls().last { if case .newTab(_, nil, _, _) = $0.request { return true } else { return false } })
         browser.send(
             .browserTabs([
                 BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default"),
@@ -95,6 +122,167 @@ final class RemoteMacTests: MacUITestCase {
             ]))
         browser.send(.browserReply(id: asked.id, result: .opened(tab: "8")))
         app.wait(for: .id("browser-8"), timeout: 15)
+    }
+
+    /// REMOTE-25 (#196): what this Mac asked of the other Mac's browser,
+    /// still not answered when the connection to that Mac closes, is
+    /// answered at once and said, with why: it was left waiting, and
+    /// nothing said so.
+    func testWhatWaitsForTheOtherMacsBrowserIsAnsweredWhenTheConnectionCloses() throws {
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        func calls() -> [(id: Int, request: BrowserRequest)] {
+            browser.messages.compactMap { if case .browserCall(let id, _, let request) = $0 { return (id, request) } else { return nil } }
+        }
+        wait("the page watched", timeout: 15) { calls().contains { if case .watch("7", true, _) = $0.request { return true } else { return false } } }
+        for call in calls() { browser.send(.browserReply(id: call.id, result: .text("Watching tab 7."))) }
+
+        // ⌘C asked there, and not answered by that Mac's browser.
+        app.press(.id("remote-page"))
+        app.menu(["Edit", "Copy"])
+        wait("the selection asked for", timeout: 15) { calls().contains { if case .copy("7") = $0.request { return true } else { return false } } }
+        XCTAssertNil(app.first(.containing(BrowserWords.otherMacClosed("Other Mac"))), "said before the connection closed")
+
+        // The connection closes, as when that Mac's host stops.
+        killHost(on: otherPort)
+        app.wait(for: .containing(BrowserWords.otherMacClosed("Other Mac")), timeout: 20)
+        shot("remote-browser-gone")
+        app.press(.button("OK"))
+    }
+
+    /// REMOTE-27 (#196): what this Mac asked of the other Mac's browser,
+    /// still not answered when the user switches to this Mac, is answered
+    /// at once, refused in the words of a closed connection, and not said:
+    /// the user asked for the switch. Before the fix the switch emptied the
+    /// table of what waited without answering any of it. Seen through
+    /// `AGENTTERM_BROWSER_ANSWERS`, the app's note of each answer.
+    func testWhatWaitsForTheOtherMacsBrowserIsAnsweredWhenThisMacSwitches() throws {
+        let answers = root.appendingPathComponent("browser-answers")
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        func calls() -> [(id: Int, request: BrowserRequest)] {
+            browser.messages.compactMap { if case .browserCall(let id, _, let request) = $0 { return (id, request) } else { return nil } }
+        }
+        wait("the page watched", timeout: 15) { calls().contains { if case .watch("7", true, _) = $0.request { return true } else { return false } } }
+        for call in calls() { browser.send(.browserReply(id: call.id, result: .text("Watching tab 7."))) }
+        func refused() -> Int {
+            ((try? String(contentsOf: answers, encoding: .utf8)) ?? "").split(separator: "\n")
+                .filter { $0 == "refused " + BrowserWords.otherMacClosed("Other Mac") }.count
+        }
+
+        // ⌘C asked there, and not answered by that Mac's browser.
+        app.press(.id("remote-page"))
+        app.menu(["Edit", "Copy"])
+        wait("the selection asked for", timeout: 15) { calls().contains { if case .copy("7") = $0.request { return true } else { return false } } }
+        XCTAssertEqual(refused(), 0, "answered before the switch")
+
+        // The user switches to this Mac: it is answered, and nothing is said.
+        switchTo("This Mac")
+        wait("what waited answered", timeout: 10) { refused() > 0 }
+        XCTAssertNil(app.first(.containing(BrowserWords.otherMacClosed("Other Mac"))), "a switch the user asked for was said")
+        shot("switched")
+    }
+
+    /// BROWSER-54 (#199): what is done on the other Mac's page waits for
+    /// what was done there before it to be answered, as the mouse's events
+    /// do: a click right after ⌘C, whose answer that Mac's stand-in holds
+    /// back, is sent once the copy is answered, not before. The keys, text
+    /// typed and the wheel wait in the same queue (`PageInputQueueTests`),
+    /// which accessibility cannot make: it presses, it cannot type into a
+    /// picture nor turn a wheel. Before the fix the click, as the keys and
+    /// the wheel, was sent at once, past what waited.
+    func testWhatIsDoneOnTheOtherMacsPageWaitsForWhatWasDoneBeforeIt() throws {
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        func calls() -> [(id: Int, request: BrowserRequest)] {
+            browser.messages.compactMap { if case .browserCall(let id, _, let request) = $0 { return (id, request) } else { return nil } }
+        }
+        func taps() -> [Int] { calls().compactMap { if case .tap("7", _, _) = $0.request { return $0.id } else { return nil } } }
+        wait("the page watched", timeout: 15) { calls().contains { if case .watch("7", true, _) = $0.request { return true } else { return false } } }
+        for call in calls() { browser.send(.browserReply(id: call.id, result: .text("Watching tab 7."))) }
+        // A picture of the page, which a press clicks in the middle of.
+        let image = NSImage(size: NSSize(width: 400, height: 200))
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: 400, height: 200).fill()
+        image.unlockFocus()
+        let jpeg = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation))?.representation(using: .jpeg, properties: [:]))
+        browser.send(.browserFrame(tab: "7", jpeg: jpeg, width: 400, height: 200))
+
+        // Drawn: white, against the dark the view shows before a picture.
+        // Looked for well inside the picture, 100 points down, and where
+        // the view is read each time: the page moved 24 points down within
+        // a second of being shown, before the line of figures had its place
+        // from the start (#206, SYS-4), and a point 20 points down was in
+        // the picture at one look and above it at the next.
+        wait("the picture drawn", timeout: 15) {
+            guard let page = self.app.frame(of: .id("remote-page")),
+                let color = self.app.color(at: CGPoint(x: page.midX, y: page.minY + 100))?.usingColorSpace(.sRGB)
+            else { return false }
+            return color.redComponent > 0.7 && color.greenComponent > 0.7 && color.blueComponent > 0.7
+        }
+
+        // A first click, answered: the keyboard and Edit's commands go to the page.
+        app.press(.id("remote-page"))
+        wait("the click sent", timeout: 15) { !taps().isEmpty }
+        for id in taps() { browser.send(.browserReply(id: id, result: .text("Tapped."))) }
+        let clicked = taps().count
+
+        // ⌘C asked there, its answer held back by that Mac's stand-in.
+        app.menu(["Edit", "Copy"])
+        wait("the selection asked for", timeout: 15) { calls().contains { if case .copy("7") = $0.request { return true } else { return false } } }
+        let copy = try XCTUnwrap(calls().last { $0.request == .copy(tab: "7") })
+        // A click right after it waits for its answer.
+        app.press(.id("remote-page"))
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertEqual(taps().count, clicked, "the click was sent before the copy before it was answered")
+        // Answered with nothing, so that the test leaves this Mac's pasteboard as it is.
+        browser.send(.browserReply(id: copy.id, result: .text("")))
+        wait("the click sent once the copy is answered", timeout: 15) { taps().count == clicked + 1 }
+    }
+
+    /// SYS-4 (#206): the line of the Mac's figures has its place from the
+    /// start, so the page under it does not move when they come. Before
+    /// the fix the line was not there until the host's first figures, which
+    /// came a moment after the other Mac's page was shown, and the page
+    /// moved 24 points down: read at (344, 187, 821, 705), then at
+    /// (344, 211, 821, 681).
+    func testTheOtherMacsPageStaysWhereItIsShownWhenTheFiguresCome() throws {
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        let first = try XCTUnwrap(app.frame(of: .id("remote-page")))
+        shot("first")
+        // The figures, measured: a number where the line had none.
+        wait("the other Mac's figures", timeout: 15) { self.app.first(.id("system-cpu"))?.label.contains { $0.isNumber } ?? false }
+        // Accessibility tells of a move a moment after it is drawn.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        let later = try XCTUnwrap(app.frame(of: .id("remote-page")))
+        shot("later")
+        XCTAssertEqual(first, later, "the page moved once it was shown")
     }
 
     func testPairingShowsTheOtherMacAndWorkingOnItChangesItsDisk() throws {
@@ -422,6 +610,80 @@ final class RemoteMacTests: MacUITestCase {
         // run stopped in the middle was found on the Tailscale address.
         let addresses = listeningAddresses(on: port)
         XCTAssertTrue(addresses.allSatisfy { $0.hasPrefix("127.0.0.1:") || $0.hasPrefix("[::1]:") }, "the host the app started listens on \(addresses)")
+    }
+
+    /// REMOTE-30 (#209): this Mac showing the other Mac's page when the
+    /// connection to that Mac drops and comes back (a proxy in front of its
+    /// host, stopped and made again on the same port). The page is shown
+    /// again by itself and watched again: nothing is shown as live without
+    /// being watched. Checked for #209's gap on the iPhone, which the Mac
+    /// does not have: the page's view is made again with the connection.
+    func testAPageOfTheOtherMacShownAcrossAReconnectIsWatchedAgain() throws {
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        func watches() -> Int {
+            browser.messages.filter { if case .browserCall(_, _, .watch("7", true, _)) = $0 { return true } else { return false } }.count
+        }
+        var proxy = try SlowProxy(to: otherPort, bytesPerSecond: 50_000_000)
+        let proxyPort = proxy.start()
+        defer { proxy.stop() }
+        pair(through: proxyPort)
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        wait("the page watched", timeout: 15) { watches() == 1 }
+
+        // The link drops, and comes back on the same port.
+        proxy.stop()
+        app.waitGone(.id("remote-page"), timeout: 15)
+        proxy = try SlowProxy(to: otherPort, bytesPerSecond: 50_000_000, port: proxyPort)
+        XCTAssertEqual(proxy.start(), proxyPort)
+        // Shown again by itself, and watched again.
+        app.wait(for: .id("remote-page"), timeout: 30)
+        wait("the page shown again watched again", timeout: 15) { watches() == 2 }
+        shot("watched-again")
+    }
+
+    /// REMOTE-31 (#210): the other Mac's host restarts, this Mac is back on
+    /// it before that Mac's app is, and that app comes back later as the
+    /// browser. The page on show says why it waits, not that it loads, and
+    /// is watched again once that app is back, without being opened again.
+    func testAPageOfTheOtherMacIsWatchedAgainWhenItsAppIsBack() throws {
+        try startOtherMac()
+        func provide(_ browser: Device) {
+            browser.send(.browserProvider(true))
+            browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        }
+        func watched(_ browser: Device) -> Bool {
+            browser.messages.contains { if case .browserCall(_, _, .watch("7", true, _)) = $0 { return true } else { return false } }
+        }
+        let first = try device("Mac", state: otherState, port: otherPort)
+        provide(first)
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        wait("the page watched", timeout: 15) { watched(first) }
+
+        // That Mac's host restarts; this Mac is back on it first.
+        killHost(on: otherPort)
+        try startHost(state: otherState, home: otherHome, port: otherPort)
+        app.wait(for: .containing("The host on Other Mac stopped unexpectedly"), timeout: 30)
+        // Its pages go with its app: none is shown as loading meanwhile.
+        app.waitGone(.id("remote-page"), timeout: 15)
+        // The page's watch and unwatch, sent by the app itself as the
+        // panes come back, are refused without an alert (REMOTE-32, the
+        // owner's decision, 2026-11-21).
+        XCTAssertNil(app.first(.containing(BrowserWords.noApp)), "a watch the app sent by itself was refused in an alert")
+        shot("app-not-back")
+        // That Mac's app comes back, with its page.
+        let second = try device("Mac", state: otherState, port: otherPort)
+        provide(second)
+        wait("the page watched again once that Mac's app is back", timeout: 20) { watched(second) }
+        app.wait(for: .id("remote-page"), timeout: 15)
+        shot("app-back")
     }
 
     /// REMOTE-19: the other Mac's host dies and is started again there.

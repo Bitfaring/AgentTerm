@@ -17,26 +17,50 @@ struct SystemStatsLine: View {
         percent >= 90 ? Self.red : (percent >= 75 ? Self.amber : .primary.opacity(0.9))
     }
 
+    /// What a figure not measured yet shows: not known, rather than nothing.
+    static let notKnown = "—"
+
     var body: some View {
-        if let stats = store.stats {
-            // The clock only moves the uptime along; the rest comes from the host.
-            TimelineView(.periodic(from: .now, by: 30)) { timeline in
-                // In a narrow pane the names go and the symbols say it.
-                ViewThatFits(in: .horizontal) {
-                    row(stats, labels: true, now: timeline.date)
-                    row(stats, labels: false, now: timeline.date)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 5)
-                .background(Theme.panel)
-                .overlay(alignment: .bottom) { Theme.hairline.frame(height: 1) }
+        // Its place is kept from the start, the figures not known until the
+        // host's first come: the line appearing with them moved what is
+        // under it 24 points down, another Mac's page for one (#206, SYS-4).
+        let stats = store.stats
+        // The clock only moves the uptime along; the rest comes from the host.
+        TimelineView(.periodic(from: .now, by: 30)) { timeline in
+            // In a narrow pane the names go and the symbols say it.
+            ViewThatFits(in: .horizontal) {
+                row(stats, labels: true, now: timeline.date)
+                row(stats, labels: false, now: timeline.date)
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("system-stats")
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 5)
+            .background(Theme.panel)
+            .overlay(alignment: .bottom) { Theme.hairline.frame(height: 1) }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("system-stats")
+    }
+
+    @ViewBuilder
+    private func row(_ stats: SystemStats?, labels: Bool, now: Date) -> some View {
+        if let stats {
+            measured(stats, labels: labels, now: now)
+        } else {
+            HStack(spacing: labels ? 18 : 12) {
+                let calm = Color.secondary
+                figure("cpu", "CPU", Self.notKnown, calm, labels: labels, id: "system-cpu")
+                figure("memorychip", "RAM", Self.notKnown, calm, labels: labels, id: "system-memory")
+                figure("arrow.down", "Down", Self.notKnown, calm, labels: labels, id: "system-down")
+                figure("arrow.up", "Up", Self.notKnown, calm, labels: labels, id: "system-up")
+                figure("thermometer.medium", "Temp", Self.notKnown, calm, labels: labels, id: "system-temperature")
+                figure("battery.75percent", "Battery", Self.notKnown, calm, labels: labels, id: "system-battery")
+                figure("clock", "Uptime", Self.notKnown, calm, labels: labels, id: "system-uptime")
+                figure("internaldrive", "Memory", Self.notKnown, calm, labels: labels, id: "system-memory-used")
+            }
         }
     }
 
-    private func row(_ stats: SystemStats, labels: Bool, now: Date) -> some View {
+    private func measured(_ stats: SystemStats, labels: Bool, now: Date) -> some View {
         HStack(spacing: labels ? 18 : 12) {
             figure("cpu", "CPU", "\(Int(stats.cpuPercent.rounded()))%", color(forUsed: stats.cpuPercent), labels: labels, id: "system-cpu")
             figure("memorychip", "RAM", "\(Int(stats.memoryPercent.rounded()))%", color(forUsed: stats.memoryPercent), labels: labels, id: "system-memory")

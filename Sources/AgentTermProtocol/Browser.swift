@@ -390,6 +390,18 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     /// on the Mac (#155): answered with `profiles`. The user's, never an
     /// agent's.
     case profile(ProfileChange)
+    /// The mouse of a Mac showing another Mac's page (#147), at a point of
+    /// the page in its CSS pixels: moved (hover, and a drag while the
+    /// button is down, which selects text), pressed and released. The left
+    /// button only: a right click is `contextAt`, whose menu is the
+    /// viewing Mac's, not one opened on the Mac the browser runs on.
+    case pointer(tab: String, event: PagePointer)
+    /// What is at a point of the page, for the menu of a right click on a
+    /// Mac showing another Mac's page (#147): answered with `context`.
+    case contextAt(tab: String, x: Double, y: Double)
+    /// The text selected in the page, for ⌘C on a Mac showing another
+    /// Mac's page (#147): answered with `text`.
+    case copy(tab: String)
 
     /// The tab it is about, when it is about one.
     public var tab: String? {
@@ -398,7 +410,8 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
         case .navigate(let tab, _), .history(let tab, _), .snapshot(let tab, _), .screenshot(let tab, _, _), .click(let tab, _, _), .hover(let tab, _),
             .type(let tab, _, _, _, _), .select(let tab, _, _), .upload(let tab, _, _), .press(let tab, _), .scroll(let tab, _, _, _), .wait(let tab, _, _, _),
             .evaluate(let tab, _), .console(let tab, _), .network(let tab, _), .emulate(let tab, _), .close(let tab), .picture(let tab),
-            .takeOver(let tab), .giveBack(let tab), .watch(let tab, _, _), .tap(let tab, _, _), .text(let tab, _), .stop(let tab):
+            .takeOver(let tab), .giveBack(let tab), .watch(let tab, _, _), .tap(let tab, _, _), .text(let tab, _), .stop(let tab),
+            .pointer(let tab, _), .contextAt(let tab, _, _), .copy(let tab):
             return tab
         }
     }
@@ -407,8 +420,22 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     /// the tab; looking at it is not.
     public var acts: Bool {
         switch self {
-        case .navigate, .history, .click, .hover, .type, .select, .upload, .press, .scroll, .evaluate, .emulate, .tap, .text, .stop: return true
+        case .navigate, .history, .click, .hover, .type, .select, .upload, .press, .scroll, .evaluate, .emulate, .tap, .text, .stop, .pointer: return true
         default: return false
+        }
+    }
+
+    /// Whether a device's request is done after what that device sent the
+    /// page before it, in the order sent: what acts on it, and what reads
+    /// what that input made, the selection a drag made and what is at a
+    /// point (#147). Each is answered in a task of its own, and ⌘C right
+    /// after a drag must not read the page before the drag's last moves.
+    /// Not `acts`: copying and asking what is at a point are not refused
+    /// while the user has the tab.
+    public var followsTheDevicesInput: Bool {
+        switch self {
+        case .copy, .contextAt: return true
+        default: return acts
         }
     }
 
@@ -417,7 +444,8 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     /// acting on its page; showing it as a device, or closing it, does not.
     public var isTheDevices: Bool {
         switch self {
-        case .picture, .takeOver, .giveBack, .watch, .tap, .text, .press, .scroll, .history, .navigate, .stop, .newTab, .emulate, .close, .profiles, .profile:
+        case .picture, .takeOver, .giveBack, .watch, .tap, .text, .press, .scroll, .history, .navigate, .stop, .newTab, .emulate, .close, .profiles, .profile,
+            .pointer, .contextAt, .copy:
             return true
         default: return false
         }
@@ -451,6 +479,45 @@ public enum BrowserResult: Codable, Equatable, Sendable {
     case opened(tab: String)
     /// The profiles there are, for a device.
     case profiles([BrowserProfileInfo])
+    /// What is at a point of a page (#147): the link there, and what is
+    /// selected in the page.
+    case context(link: String?, selection: String)
+}
+
+/// A mouse event of a Mac showing another Mac's page (#147), in the page's
+/// CSS pixels.
+public struct PagePointer: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable { case moved, pressed, released }
+    public var kind: Kind
+    public var x: Double
+    public var y: Double
+    /// Whether the left button is down: moved with it, a drag.
+    public var held: Bool
+    /// The click it is, for a press or a release: 2 for a double click.
+    public var clicks: Int
+
+    public init(kind: Kind, x: Double, y: Double, held: Bool = false, clicks: Int = 1) {
+        self.kind = kind
+        self.x = x
+        self.y = y
+        self.held = held
+        self.clicks = clicks
+    }
+}
+
+/// Whether the Mac says, in an alert, what another Mac's browser refused
+/// it (#210). The owner decided (2026-11-21) that a watch or an unwatch the
+/// app sent by itself (a page shown again as the connection comes back, a
+/// page that goes, a new width), refused because that Mac's app is not
+/// connected (`BrowserWords.noApp`), is not said: the page says it waits,
+/// and it is watched again once that app is back (REMOTE-31). A watch the
+/// user asked for, by opening a page, is still refused out loud, and so is
+/// every other refusal.
+public enum BrowserRefusal {
+    public static func isSaid(_ why: String, of request: BrowserRequest, byItself: Bool) -> Bool {
+        guard byItself, why == BrowserWords.noApp, case .watch = request else { return true }
+        return false
+    }
 }
 
 /// What the apps and the agents are told about the browser, in the same
@@ -463,6 +530,16 @@ public enum BrowserWords {
     public static let noApp =
         "The browser runs in the AgentTerm app on this Mac, and that app is not connected to this Mac's host: it is closed, or it shows another Mac. Ask the user to open it on this Mac."
     public static let notInBuild = "This build of AgentTerm has no browser."
+    /// The menu of a right click on a page, as Chromium's on the Mac it
+    /// runs on says it, and on a Mac showing that page (#147).
+    public enum PageMenu {
+        public static let copy = "Copy"
+        public static let openLink = "Open Link in New Tab"
+        public static let copyLink = "Copy Link Address"
+        public static let back = "Back"
+        public static let forward = "Forward"
+        public static let reload = "Reload"
+    }
     /// The name a private tab's profile goes by.
     public static let privateProfile = "Private"
     /// The profiles, for an agent: `names` with the default first.
@@ -495,6 +572,13 @@ public enum BrowserWords {
     /// Mac's own Chromium.
     public static let onTheOtherMac =
         "Picking an element, Show As, finding, zooming and the developer tools are on the Mac whose page it is."
+
+    /// What waited for another Mac's browser when the connection to that
+    /// Mac closed (#196): answered at once, and whether it was done there
+    /// is not known.
+    public static func otherMacClosed(_ mac: String) -> String {
+        "The connection to \(mac) closed before its browser answered, so what was asked of its page may not have been done. Try again once \(mac) is back."
+    }
 
     /// + Page beside an agent of another Mac's (#147): a device opens the
     /// user's pages only.

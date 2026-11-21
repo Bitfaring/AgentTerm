@@ -42,6 +42,7 @@ final class RealAgentsTests: MacUITestCase {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-lc", command]
+        process.environment = withoutAgentTerms
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice

@@ -7,7 +7,7 @@ import XCTest
 /// Whether each agent's session talks to the host (#129): its hooks and
 /// AgentTerm's MCP server, heard from or said missing; an agent typed by
 /// hand in a shell, found from the program in front of the terminal.
-/// LINK-1 to LINK-4 and LINK-14 in docs/TESTING.md.
+/// LINK-2 to LINK-4 and LINK-14 in docs/TESTING.md.
 final class AgentLinkTests: XCTestCase {
     private var root: URL!
     private var server: HostServer!
@@ -170,12 +170,15 @@ final class AgentLinkTests: XCTestCase {
         let process = Process()
         process.executableURL = root.appendingPathComponent("bin/claude")
         process.arguments = ["5"]
+        process.environment = OwnEnvironment.withoutAgentTerms
         try process.run()
         defer { process.terminate() }
         wait("its name") { ProcessNames.command(of: process.processIdentifier) == "claude" }
         XCTAssertEqual(ProcessNames.parent(of: process.processIdentifier), getpid())
         XCTAssertEqual(ProcessNames.agent(above: process.processIdentifier, known: { SessionSummaries.agent(forCommand: $0) }), "claude")
-        XCTAssertNil(ProcessNames.agent(above: getpid(), known: { SessionSummaries.agent(forCommand: $0) }))
+        // None above launchd: the test's own process may well be under an
+        // agent, the tests being run from one (#187).
+        XCTAssertNil(ProcessNames.agent(above: 1, known: { SessionSummaries.agent(forCommand: $0) }))
     }
 }
 

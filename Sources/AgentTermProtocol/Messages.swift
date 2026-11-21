@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 32
+public let agenttermProtocolVersion = 36
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -125,10 +125,15 @@ public struct CreateRequest: Codable, Equatable, Sendable {
     /// (#127): the agent sees and uses it as one it opened itself. A shell
     /// only, in the agent's folder.
     public var openedBy: SessionID?
+    /// A number the client picks for this launch (#189), given back to it
+    /// alone with the session made (`attached`'s `request`) or with the
+    /// refusal (`error`'s `request`), so that it knows its own launch from
+    /// a session started elsewhere meanwhile. Nil when it does not ask.
+    public var requestID: Int?
 
     public init(
         command: String? = nil, cwd: String? = nil, title: String? = nil, size: TermSize = .default, typed: String? = nil,
-        openedBy: SessionID? = nil
+        openedBy: SessionID? = nil, requestID: Int? = nil
     ) {
         self.command = command
         self.cwd = cwd
@@ -136,6 +141,7 @@ public struct CreateRequest: Codable, Equatable, Sendable {
         self.size = size
         self.typed = typed
         self.openedBy = openedBy
+        self.requestID = requestID
     }
 }
 
@@ -477,6 +483,11 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case answer(session: SessionID, to: AgentState, text: String)
     /// The Mac app is in front, or is no longer: then the Mac is in use.
     case appInFront(Bool)
+    /// A device's app went to the background (true) or came back to the
+    /// front (false) (#190): sent at each change and on connecting. In the
+    /// background the device is away, though iOS may keep its connection
+    /// open while it is suspended, and is told through Apple only.
+    case deviceInBackground(Bool)
     /// The user opened this session on this device while its agent was
     /// done or waited, in `state`, or dismissed it from the Inbox: what it
     /// was told about is seen (#60). The host passes it on to the other
@@ -494,6 +505,8 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// A notice was opened or dismissed on this device (#66): handled on
     /// every device.
     case handleNotice(id: UInt64, how: Notice.Handled.How)
+    /// These notices were read on this device: read on every device.
+    case readNotices(ids: [UInt64])
     /// From a device registered for push: the push tokens of its Live
     /// Activity (#168), to keep it true while the app is asleep, and the one
     /// that starts one; nil for none, when it is switched off.
@@ -549,7 +562,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case agents([AgentInfo])
     /// Project folders on the host, in the order they were added.
     case folders([String])
-    case attached(SessionInfo)
+    /// The sender is attached to this session. `request` is the
+    /// `CreateRequest.requestID` of the `create` that made it (#189), sent
+    /// only to the client that asked; nil for any other attach.
+    case attached(SessionInfo, request: Int? = nil)
     /// Sent after `attached`, before the session's earlier output: where in
     /// the session's output what follows starts. It is the `have` the
     /// client attached with when the host could go on from there. Any other
@@ -565,7 +581,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// another (#120).
     case resized(session: SessionID, size: TermSize, driver: Bool, by: SizeDriver? = nil)
     case exited(session: SessionID, status: Int32)
-    case error(String)
+    /// What the host refused or what failed, in words. `request` is the
+    /// `CreateRequest.requestID` of the `create` it refused (#189); nil for
+    /// every other error.
+    case error(String, request: Int? = nil)
     /// Answer to `pair`: the token this device connects with from now on.
     case paired(device: String, token: String)
     /// Answer to `createPairingCode`.
@@ -701,12 +720,20 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// The notices of the last 30 days, handled or not, on connecting: what
     /// a device keeps its Inbox from (#66).
     case noticeLog([Notice])
-    /// Something to tell the user of now: new, or not told to this device
-    /// yet. Sent once to each device.
+    /// Something to tell the user of: new, for the Inbox and the app's own
+    /// banner. A notification only once `noticeAlert` says so.
     case notice(Notice)
+    /// Time to show this notice as a notification (#66): at once, or after
+    /// `Notice.pushWait` when it waits, and still not handled nor read. The
+    /// same moment on every device; sent once to each, and on connecting
+    /// for what came due while it was away.
+    case noticeAlert(id: UInt64)
     /// A notice was handled, on some device or by its agent moving on: it
     /// is taken away wherever it is shown.
     case noticeHandled(id: UInt64, handled: Notice.Handled)
+    /// These notices were read on some device: read here too, and taken
+    /// away from Notification Center.
+    case noticesRead(ids: [UInt64])
     /// What the last turn of this session's agent came to (#71): when a
     /// turn ends, and on connecting for each session that had one.
     case turnResult(session: SessionID, result: TurnResult)

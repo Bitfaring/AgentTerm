@@ -3,7 +3,7 @@ import AppKit
 import UserNotifications
 
 /// macOS notifications of what the host tells (#66, decided 2026-11-19),
-/// while the app is not in front: the same words, Reply and choices as on
+/// in front or not (2026-11-20): the same words, Reply and choices as on
 /// the iPhone. Handled on one device, taken away here; dismissed here,
 /// handled on all.
 ///
@@ -16,11 +16,35 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     /// None outside an app bundle, and none for the tests, which leave the
     /// user's Notification Center alone (`AGENTTERM_NO_SYSTEM_NOTIFICATIONS`).
-    private var center: UNUserNotificationCenter? {
+    private var center: UNUserNotificationCenter? { Self.systemCenter }
+
+    static var systemCenter: UNUserNotificationCenter? {
         guard Bundle.main.bundleIdentifier != nil, Bundle.main.bundleURL.pathExtension == "app",
             ProcessInfo.processInfo.environment["AGENTTERM_NO_SYSTEM_NOTIFICATIONS"] == nil
         else { return nil }
         return UNUserNotificationCenter.current()
+    }
+
+    /// Whether macOS lets the app notify, as last read (`readPermission`);
+    /// nil while not known, or where there is no Notification Center.
+    static private(set) var permission: UNAuthorizationStatus?
+
+    /// Reads it again, then `done` on the main thread.
+    static func readPermission(then done: @escaping () -> Void = {}) {
+        guard let center = systemCenter else { return done() }
+        center.getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                permission = settings.authorizationStatus
+                done()
+            }
+        }
+    }
+
+    /// Asked of macOS once, in the onboarding's Permissions step (#180),
+    /// rather than at the first notification.
+    static func askPermission(then done: @escaping () -> Void) {
+        guard let center = systemCenter else { return done() }
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in readPermission(then: done) }
     }
 
     override init() {
@@ -119,11 +143,12 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    /// In front, the app shows its own banner instead.
+    /// In front too (the owner's decision, 2026-11-20): shown as it is on
+    /// the iPhone at the same moment.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([])
+        completionHandler([.banner, .list, .sound])
     }
 }

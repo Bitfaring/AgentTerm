@@ -19,9 +19,11 @@ final class SessionTests: MacUITestCase {
             app.wait(for: .id(figure), timeout: 15)
         }
         XCTAssertTrue(app.first(.id("system-cpu"))?.label.hasPrefix("CPU ") ?? false)
-        // #154: the memory in gigabytes too, as the iPhone has it ("12.4/32 GB").
-        let memory = app.first(.id("system-memory-used"))?.label ?? ""
-        XCTAssertNotNil(memory.range(of: #"^Memory \d+\.\d/\d+ GB$"#, options: .regularExpression), memory)
+        // #154: the memory in gigabytes too, as the iPhone has it ("12.4/32 GB"),
+        // once measured: until then the line says it is not known (SYS-4).
+        wait("the memory in gigabytes", timeout: 15) {
+            (self.app.first(.id("system-memory-used"))?.label ?? "").range(of: #"^Memory \d+\.\d/\d+ GB$"#, options: .regularExpression) != nil
+        }
     }
 
     /// LAUNCH-6 (#50): an agent that is not installed, pressed in the

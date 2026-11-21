@@ -12,6 +12,8 @@ final class BrowserUITests: MacUITestCase {
     private static var bundle: URL? { testBundle }
 
     private var site: URL!
+    /// Where the app writes the places a click finds, for PANE-28.
+    private let places = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-places-\(UUID().uuidString).txt")
     /// The app was started once in this test: what it kept is kept when
     /// it is started again.
     private var launched = false
@@ -20,6 +22,7 @@ final class BrowserUITests: MacUITestCase {
         try XCTSkipUnless(Self.bundle != nil, "the app bundle is built by scripts/test-mac.sh")
         // What a page holds, readable as VoiceOver reads it (BROWSER-37).
         if name.contains("RightClick") || name.contains("ExtensionTrial") { appEnvironment["AGENTTERM_WEB_ACCESSIBILITY"] = "1" }
+        if name.contains("ClickFindsTheAgent") { appEnvironment["AGENTTERM_PANE_PLACES"] = places.path }
         try super.setUpWithError()
     }
 
@@ -43,12 +46,24 @@ final class BrowserUITests: MacUITestCase {
         let told = root.appendingPathComponent("agent-variable")
         // A second agent's own, not the first's.
         try? FileManager.default.removeItem(at: told)
+        // Started as the agent, with no arguments, it writes its variable
+        // down; asked anything else, such as the host asking of its plugins,
+        // it is the stand-in every test has. Written down whatever it was
+        // asked, the host's own asking, which has no session, overwrote the
+        // agent's variable with nothing, now and then (#186).
+        let agents = root.appendingPathComponent("agents")
+        let standIn = agents.appendingPathComponent("claude-stand-in")
+        if !FileManager.default.fileExists(atPath: standIn.path) {
+            try FileManager.default.moveItem(at: agents.appendingPathComponent("claude"), to: standIn)
+        }
         try """
         #!/bin/sh
+        [ $# -gt 0 ] && exec '\(standIn.path)' "$@"
         printf '%s' "$AGENTTERM_MCP" > '\(told.path)'
         echo "stand-in claude started"
         exec cat
-        """.write(to: root.appendingPathComponent("agents/claude"), atomically: true, encoding: .utf8)
+        """.write(to: agents.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agents.appendingPathComponent("claude").path)
         let phone = try device()
         wait("the sessions listed") { phone.messages.contains { if case .sessions = $0 { return true } else { return false } } }
         let before = Set(phone.sessions.filter { $0.agent == "claude" }.map(\.id))
@@ -735,6 +750,240 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertEqual(frames().count, count, "pictures came after the device stopped watching")
     }
 
+    /// BROWSER-49 (#147): what a Mac showing this Mac's page does with its
+    /// mouse, on the real Chromium: the pointer passing over an element is
+    /// a hover the page sees; a drag across a text selects it, and ⌘C there
+    /// copies it; a right click asks what is at its point, a link's address
+    /// and the selection, for that Mac's own menu, and none opens here.
+    func testAnotherMacsMouseHoversDragsSelectsAndCopies() throws {
+        let folder = root.appendingPathComponent("mouse")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = folder.appendingPathComponent("mouse.html")
+        try """
+        <!doctype html><title>Mouse</title>
+        <style>body { margin: 0; font: 20px monospace } p { margin: 0; padding: 20px; white-space: nowrap }</style>
+        <p id="hover" onmouseover="document.title = 'Hovered'">Pass over me</p>
+        <p id="words">alpha beta gamma delta</p>
+        <p><a id="link" href="https://example.com/far">a link</a></p>
+        """.write(to: page, atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let mac = try device()
+        var asked = 2000
+        func ask(_ request: BrowserRequest) -> BrowserResult? {
+            asked += 1
+            let id = asked
+            mac.send(.browserAsk(id: id, request: request))
+            var answer: BrowserResult?
+            wait("the answer to \(request)") {
+                answer = mac.messages.lazy.compactMap { if case .browserAnswer(id, let result) = $0 { return result } else { return nil } }.first
+                return answer != nil
+            }
+            if case .refused(let why)? = answer { XCTFail("\(request): \(why)") }
+            return answer
+        }
+        func rect(_ id: String) throws -> (x: Double, y: Double, right: Double, middle: Double) {
+            let text = server.text("browser_evaluate", ["tab": tab, "script": "(r => [r.x, r.y, r.right, r.y + r.height / 2])(document.getElementById('\(id)').getBoundingClientRect())"]).text
+            let numbers = text.split { !"0123456789.".contains($0) }.compactMap { Double($0) }
+            XCTAssertEqual(numbers.count, 4, text)
+            return (numbers[0], numbers[1], numbers[2], numbers[3])
+        }
+        func title() -> String { server.text("browser_evaluate", ["tab": tab, "script": "document.title"]).text }
+        wait("the page", timeout: 15) { title().contains("Mouse") }
+
+        // Where each is, read by the agent while the tab is still its own:
+        // a press of the mouse makes it the user's, as a tap does.
+        let hover = try rect("hover"), words = try rect("words"), link = try rect("link")
+        // Passing over: a hover, no click; the agent keeps its tab.
+        _ = ask(.pointer(tab: tab, event: PagePointer(kind: .moved, x: hover.x + 30, y: hover.middle)))
+        wait("the page saw the pointer pass, not \(title())") { title().contains("Hovered") }
+
+        // A drag across the words: they are selected; ⌘C gives them.
+        let from = words.x + 20, to = words.right - 20
+        _ = ask(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from, y: words.middle)))
+        _ = ask(.pointer(tab: tab, event: PagePointer(kind: .pressed, x: from, y: words.middle, held: true)))
+        for step in 1...5 {
+            _ = ask(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from + (to - from) * Double(step) / 5, y: words.middle, held: true)))
+        }
+        _ = ask(.pointer(tab: tab, event: PagePointer(kind: .released, x: to, y: words.middle)))
+        guard case .text(let copied)? = ask(.copy(tab: tab)) else { return XCTFail("no text copied") }
+        XCTAssertEqual(copied.trimmingCharacters(in: .whitespaces), "alpha beta gamma delta")
+
+        // A right click on the link: its address and the selection, for a
+        // menu of the other Mac's; none is opened on this Mac.
+        guard case .context(let address, let selection)? = ask(.contextAt(tab: tab, x: link.x + 10, y: link.middle)) else { return XCTFail("no context") }
+        XCTAssertEqual(address, "https://example.com/far")
+        XCTAssertEqual(selection.trimmingCharacters(in: .whitespaces), "alpha beta gamma delta")
+        guard case .context(let none, _)? = ask(.contextAt(tab: tab, x: words.x + 5, y: words.middle)) else { return XCTFail("no context") }
+        XCTAssertNil(none, "a link where there is none")
+        // Chromium's menu here would have Inspect, which no other menu has.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertNil(app.first(.text("Inspect"), menus: true), "a menu opened on the Mac the browser runs on")
+    }
+
+    /// BROWSER-50 (#191): a drag from a Mac showing this Mac's page, its
+    /// events sent without waiting for their answers, and ⌘C asked at once
+    /// after its release, then a second drag and a right click asked at
+    /// once: each reads what its whole drag selected, not the page as it
+    /// was before the drag's last moves. It depends on timing: with the
+    /// copy not waiting for the device's input before it, it reached
+    /// Chromium before the moves that were still waiting for theirs.
+    func testACopyOrARightClickRightAfterADragReadsAllItSelected() throws {
+        let folder = root.appendingPathComponent("drag")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = folder.appendingPathComponent("drag.html")
+        try """
+        <!doctype html><title>Drag</title>
+        <style>body { margin: 0; font: 20px monospace } p { margin: 0; padding: 20px; white-space: nowrap }</style>
+        <p id="first">alpha beta gamma delta</p>
+        <p id="second">epsilon zeta eta theta</p>
+        """.write(to: page, atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let mac = try device()
+        var asked = 3000
+        // Sent, its answer not waited for.
+        func send(_ request: BrowserRequest) -> Int {
+            asked += 1
+            mac.send(.browserAsk(id: asked, request: request))
+            return asked
+        }
+        func answer(_ id: Int) -> BrowserResult? {
+            var answer: BrowserResult?
+            wait("the answer to \(id)") {
+                answer = mac.messages.lazy.compactMap { if case .browserAnswer(id, let result) = $0 { return result } else { return nil } }.first
+                return answer != nil
+            }
+            return answer
+        }
+        func rect(_ id: String) throws -> (x: Double, right: Double, middle: Double) {
+            let text = server.text("browser_evaluate", ["tab": tab, "script": "(r => [r.x, r.right, r.y + r.height / 2])(document.getElementById('\(id)').getBoundingClientRect())"]).text
+            let numbers = text.split { !"0123456789.".contains($0) }.compactMap { Double($0) }
+            XCTAssertEqual(numbers.count, 3, text)
+            return (numbers[0], numbers[1], numbers[2])
+        }
+        wait("the page", timeout: 15) { server.text("browser_evaluate", ["tab": tab, "script": "document.title"]).text.contains("Drag") }
+        let first = try rect("first"), second = try rect("second")
+        // Moved to, pressed, held across in five moves, released: all sent
+        // at once, as a Mac whose mouse is quicker than the link would.
+        func drag(across line: (x: Double, right: Double, middle: Double)) -> [Int] {
+            let from = line.x + 20, to = line.right - 20
+            var sent = [
+                send(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from, y: line.middle))),
+                send(.pointer(tab: tab, event: PagePointer(kind: .pressed, x: from, y: line.middle, held: true))),
+            ]
+            for step in 1...5 {
+                sent.append(send(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from + (to - from) * Double(step) / 5, y: line.middle, held: true))))
+            }
+            sent.append(send(.pointer(tab: tab, event: PagePointer(kind: .released, x: to, y: line.middle))))
+            return sent
+        }
+
+        let dragged = drag(across: first)
+        let copy = send(.copy(tab: tab))
+        guard case .text(let copied)? = answer(copy) else { return XCTFail("no text copied") }
+        XCTAssertEqual(copied.trimmingCharacters(in: .whitespaces), "alpha beta gamma delta", "⌘C read the page before the drag was done")
+        for id in dragged { if case .refused(let why)? = answer(id) { XCTFail(why) } }
+
+        let draggedAgain = drag(across: second)
+        let context = send(.contextAt(tab: tab, x: second.x + 30, y: second.middle))
+        guard case .context(_, let selection)? = answer(context) else { return XCTFail("no context") }
+        XCTAssertEqual(selection.trimmingCharacters(in: .whitespaces), "epsilon zeta eta theta", "the right click read the page before the drag was done")
+        for id in draggedAgain { if case .refused(let why)? = answer(id) { XCTFail(why) } }
+    }
+
+    /// BROWSER-54 (#199), the Mac whose page it is: text typed right after
+    /// a click into a field, and a scroll right after a drag, all sent
+    /// without waiting for their answers, are done in the order sent. The
+    /// viewing Mac now sends them in order (`PageInputQueueTests`); this is
+    /// the host keeping that order, which it already did
+    /// (`followsTheDevicesInput`): it was not seen failing before the fix.
+    /// With text and scrolls taken out of `followsTheDevicesInput`, the
+    /// text was seen to go in before the click (the field empty); the
+    /// scroll was not seen to pass the drag.
+    func testTextRightAfterAClickAndAScrollRightAfterADragKeepTheirOrder() throws {
+        let folder = root.appendingPathComponent("order")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = folder.appendingPathComponent("order.html")
+        try """
+        <!doctype html><title>Order</title>
+        <style>body { margin: 0; font: 20px monospace } p { margin: 0; padding: 20px; white-space: nowrap } input { font: 20px monospace; margin: 20px; width: 400px }</style>
+        <input id="field">
+        <p id="line">alpha beta gamma delta</p>
+        <div style="height: 3000px"></div>
+        """.write(to: page, atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let mac = try device()
+        var asked = 4000
+        // Sent, its answer not waited for.
+        func send(_ request: BrowserRequest) -> Int {
+            asked += 1
+            mac.send(.browserAsk(id: asked, request: request))
+            return asked
+        }
+        func answer(_ id: Int) -> BrowserResult? {
+            var answer: BrowserResult?
+            wait("the answer to \(id)") {
+                answer = mac.messages.lazy.compactMap { if case .browserAnswer(id, let result) = $0 { return result } else { return nil } }.first
+                return answer != nil
+            }
+            return answer
+        }
+        func evaluate(_ script: String) -> String { server.text("browser_evaluate", ["tab": tab, "script": script]).text }
+        func rect(_ id: String) throws -> (x: Double, right: Double, middle: Double) {
+            let text = evaluate("(r => [r.x, r.right, r.y + r.height / 2])(document.getElementById('\(id)').getBoundingClientRect())")
+            let numbers = text.split { !"0123456789.".contains($0) }.compactMap { Double($0) }
+            XCTAssertEqual(numbers.count, 3, text)
+            return (numbers[0], numbers[1], numbers[2])
+        }
+        wait("the page", timeout: 15) { evaluate("document.title").contains("Order") }
+        let field = try rect("field"), line = try rect("line")
+
+        // A click into the field, then text typed at once.
+        let x = field.x + 30
+        var sent = [
+            send(.pointer(tab: tab, event: PagePointer(kind: .moved, x: x, y: field.middle))),
+            send(.pointer(tab: tab, event: PagePointer(kind: .pressed, x: x, y: field.middle, held: true))),
+            send(.pointer(tab: tab, event: PagePointer(kind: .released, x: x, y: field.middle))),
+        ]
+        let typed = send(.text(tab: tab, text: "typed"))
+        if case .refused(let why)? = answer(typed) { XCTFail(why) }
+        // The press took the agent's tab over for the user, and the agent
+        // is refused the page until it is given back: given back, to read it.
+        func readAsTheAgent(_ script: String) -> String {
+            if case .refused(let why)? = answer(send(.giveBack(tab: tab))) { XCTFail(why) }
+            return evaluate(script)
+        }
+        // A string comes back as JSON.
+        XCTAssertEqual(readAsTheAgent("document.getElementById('field').value"), "\"typed\"", "the text reached the page before the click put the caret in the field")
+
+        // A drag across the line, then a scroll at once, then what it selected.
+        let from = line.x + 20, to = line.right - 20
+        sent += [
+            send(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from, y: line.middle))),
+            send(.pointer(tab: tab, event: PagePointer(kind: .pressed, x: from, y: line.middle, held: true))),
+        ]
+        for step in 1...5 {
+            sent.append(send(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from + (to - from) * Double(step) / 5, y: line.middle, held: true))))
+        }
+        sent.append(send(.pointer(tab: tab, event: PagePointer(kind: .released, x: to, y: line.middle))))
+        let scrolled = send(.scroll(tab: tab, ref: nil, x: 0, y: 600))
+        let copy = send(.copy(tab: tab))
+        guard case .text(let copied)? = answer(copy) else { return XCTFail("no text copied") }
+        XCTAssertEqual(copied.trimmingCharacters(in: .whitespaces), "alpha beta gamma delta", "the scroll was done before the drag")
+        if case .refused(let why)? = answer(scrolled) { XCTFail(why) }
+        _ = readAsTheAgent("0")
+        wait("the page scrolled") { (Double(evaluate("window.scrollY")) ?? 0) > 0 }
+        for id in sent { if case .refused(let why)? = answer(id) { XCTFail(why) } }
+    }
+
     /// BROWSER-19 (#100): a page shown on the Mac as a device whose pixels
     /// are not the screen's, watched by a device: what the Mac shows of it
     /// stays as it is, the page standing still.
@@ -904,6 +1153,9 @@ final class BrowserUITests: MacUITestCase {
         server.arguments = ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", page.deletingLastPathComponent().path]
         server.standardOutput = FileHandle.nullDevice
         server.standardError = FileHandle.nullDevice
+        // /usr/bin/python3 starts the real one as a child, which outlives
+        // it: whatever listens on the port is stopped after (#185).
+        defer { stopWhateverListens(on: UInt16(port)) }
         try server.run()
         defer { server.terminate() }
         let (agent, _) = try startAgent()
@@ -944,6 +1196,9 @@ final class BrowserUITests: MacUITestCase {
         server.arguments = ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", page.deletingLastPathComponent().path]
         server.standardOutput = FileHandle.nullDevice
         server.standardError = FileHandle.nullDevice
+        // /usr/bin/python3 starts the real one as a child, which outlives
+        // it: whatever listens on the port is stopped after (#185).
+        defer { stopWhateverListens(on: UInt16(port)) }
         try server.run()
         defer { server.terminate() }
         func pages() -> [String] { app.nodes().map(\.identifier).filter { $0.hasPrefix("item-b") } }
@@ -1439,6 +1694,35 @@ final class BrowserUITests: MacUITestCase {
         app.press(.id("item-b\(tab)"))
         app.wait(for: .id("agent-browser"))
         app.waitForKeyboard(in: "browser-\(tab)", page: true, "its page, picked in the row")
+    }
+
+    /// PANE-28: a click finds every part of an agent's area, the agent's
+    /// too, after its page and its shell came beside it, and after its page
+    /// was hidden and shown again. The test cannot click: the app writes
+    /// down the places a click looks in. Before the fix the agent's was
+    /// taken away by the part made before it, and a click in the agent left
+    /// the keyboard, and its frame, where they were (the owner's report,
+    /// 2026-11-21).
+    func testAClickFindsTheAgentBesideItsPageAndShell() throws {
+        defer { try? FileManager.default.removeItem(at: places) }
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let page = root.appendingPathComponent("page.html")
+        try "<!doctype html><title>One</title><p>A page</p>".write(to: page, atomically: true, encoding: .utf8)
+        _ = server.text("browser_open", ["url": page.absoluteString])
+        XCTAssertFalse(server.text("shell_open").failed)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait(for: .id("agent-shells"), timeout: 20)
+        func found() -> [String] { ((try? String(contentsOf: places, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init) }
+        func has(_ part: String) -> Bool { found().contains { $0.contains("\"\(agent.layoutID)\"") && $0.hasSuffix(".\(part))") } }
+        wait("every part found by a click: \(found())") { has("agent") && has("browser") && has("shells") }
+        // Hidden and shown again: the agent's part made again beside it.
+        app.press(.id("agent-part-browser"))
+        app.waitGone(.id("agent-browser"))
+        app.press(.id("agent-part-browser"))
+        app.wait(for: .id("agent-browser"))
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        wait("every part found by a click again: \(found())") { has("agent") && has("browser") && has("shells") }
     }
 
     /// PANE-24 (#171): ⌥⌘ and a number in the user's Browser tab, then in

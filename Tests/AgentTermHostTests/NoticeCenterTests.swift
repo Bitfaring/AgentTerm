@@ -70,7 +70,11 @@ final class NoticeCenterTests: XCTestCase {
         let center = NoticeCenter(file: file)
         let first = try XCTUnwrap(center.update(sessions: [session(1, asked)], now: now).new.first)
         let second = try XCTUnwrap(center.update(sessions: [session(1, asked), session(2, .done(said: nil))], now: now).new.first)
+        center.becameDue(first.id)
         center.told(first.id, to: "phone", throughApple: true)
+        // Not due yet: not a notification yet, anywhere (#180).
+        XCTAssertEqual(center.untold(to: "phone").map(\.id), [])
+        center.becameDue(second.id)
         XCTAssertEqual(center.untold(to: "phone").map(\.id), [second.id])
         XCTAssertEqual(center.pushedTo(first.id), ["phone"])
 
@@ -86,5 +90,46 @@ final class NoticeCenterTests: XCTestCase {
         XCTAssertEqual(again.log.map(\.id), [], "older than 30 days")
         let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    /// NOTICE-5 (#180): read on one device is read in the log, once, and
+    /// no longer to be shown; handled by being answered, opened or
+    /// dismissed is read too, by moving on is not.
+    func testReadOnOneDeviceIsReadForAll() throws {
+        let center = NoticeCenter(file: file)
+        let first = try XCTUnwrap(center.update(sessions: [session(1, asked)], now: now).new.first)
+        let second = try XCTUnwrap(center.update(sessions: [session(1, asked), session(2, .done(said: nil))], now: now).new.first)
+        center.becameDue(first.id)
+        center.becameDue(second.id)
+        XCTAssertEqual(center.read([first.id]), [first.id])
+        XCTAssertEqual(center.read([first.id]), [], "read once")
+        XCTAssertNil(center.pending(first.id), "read: not to be shown")
+        XCTAssertEqual(center.untold(to: "phone").map(\.id), [second.id])
+        XCTAssertEqual(NoticeCenter(file: file).log.first { $0.id == first.id }?.read, true, "kept")
+
+        _ = center.handle(second.id, how: .opened, now: now)
+        XCTAssertEqual(center.log.first { $0.id == second.id }?.read, true)
+        let third = try XCTUnwrap(center.update(sessions: [session(1, asked), session(2, .done(said: nil)), session(3, asked)], now: now).new.first)
+        _ = center.update(sessions: [session(1, asked), session(2, .done(said: nil))], now: now)
+        XCTAssertEqual(center.log.first { $0.id == third.id }?.handled?.how, .movedOn)
+        XCTAssertNil(center.log.first { $0.id == third.id }?.read, "moved on is not read")
+    }
+
+    /// NOTICE-6 (#193): a notice that waits to be a notification is kept
+    /// waiting, with when its time comes, by a host that starts again; it
+    /// waits no longer once due, read or handled.
+    func testWhatWaitsIsKeptWhenTheHostStartsAgain() throws {
+        let center = NoticeCenter(file: file)
+        let stopped = try XCTUnwrap(center.report(PartFailure(part: .session, name: "build", at: now, restarted: false), now: now))
+        let other = try XCTUnwrap(center.report(PartFailure(part: .schedule, name: "nightly", at: now, restarted: false), now: now))
+        center.waits(stopped.id, until: now.addingTimeInterval(30))
+        center.waits(other.id, until: now.addingTimeInterval(20))
+        let again = NoticeCenter(file: file)
+        XCTAssertEqual(again.waiting.map(\.id), [other.id, stopped.id])
+        XCTAssertEqual(again.waiting.last?.until, now.addingTimeInterval(30))
+        again.becameDue(other.id)
+        XCTAssertEqual(again.waiting.map(\.id), [stopped.id])
+        _ = again.read([stopped.id])
+        XCTAssertEqual(again.waiting.map(\.id), [], "read: no longer waits")
     }
 }

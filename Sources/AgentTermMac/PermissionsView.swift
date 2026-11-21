@@ -12,6 +12,9 @@ import SwiftUI
 /// asks about by itself the first time they are used. Others are never
 /// asked: they have to be asked for here, or switched on in System Settings.
 enum Permission: String, CaseIterable, Identifiable {
+    /// The app's own notifications of what agents say (#180): first, as
+    /// the onboarding asks for it up front.
+    case notifications
     case accessibility
     case screenRecording
     case automation
@@ -29,6 +32,7 @@ enum Permission: String, CaseIterable, Identifiable {
         case .fullDiskAccess: return "Full Disk Access"
         case .microphone: return "Microphone"
         case .camera: return "Camera"
+        case .notifications: return "Notifications"
         }
     }
 
@@ -40,6 +44,7 @@ enum Permission: String, CaseIterable, Identifiable {
         case .fullDiskAccess: return "internaldrive"
         case .microphone: return "mic"
         case .camera: return "camera"
+        case .notifications: return "bell.badge"
         }
     }
 
@@ -53,10 +58,11 @@ enum Permission: String, CaseIterable, Identifiable {
             return "Lets agents read folders macOS protects, such as Mail, Messages and other apps' data. Most projects do not need it: Desktop, Documents and Downloads are asked about on their own."
         case .microphone: return "Voice dictation in Claude Code and Antigravity."
         case .camera: return "Only when a program in a session uses the camera."
+        case .notifications: return NoticeWords.permissionPurpose
         }
     }
 
-    enum Status { case granted, notGranted, unknown }
+    enum Status { case granted, notGranted, unknown, notKnown }
 
     var status: Status {
         switch self {
@@ -75,6 +81,12 @@ enum Permission: String, CaseIterable, Identifiable {
             return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? .granted : .notGranted
         case .camera:
             return AVCaptureDevice.authorizationStatus(for: .video) == .authorized ? .granted : .notGranted
+        case .notifications:
+            switch MacNotifications.permission {
+            case .authorized?, .provisional?: return .granted
+            case nil: return .notKnown
+            default: return .notGranted
+            }
         }
     }
 
@@ -88,6 +100,9 @@ enum Permission: String, CaseIterable, Identifiable {
         case .fullDiskAccess: pane = "Privacy_AllFiles"
         case .microphone: pane = "Privacy_Microphone"
         case .camera: pane = "Privacy_Camera"
+        case .notifications:
+            let id = Bundle.main.bundleIdentifier ?? ""
+            return URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(id)")
         }
         return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")
     }
@@ -120,6 +135,14 @@ enum Permission: String, CaseIterable, Identifiable {
                 openSettings()
                 done()
             }
+        case .notifications:
+            // macOS asks once; after that only System Settings changes it.
+            if MacNotifications.permission == .notDetermined {
+                MacNotifications.askPermission(then: done)
+            } else {
+                openSettings()
+                done()
+            }
         }
     }
 }
@@ -134,6 +157,7 @@ extension Permission {
         case .fullDiskAccess: return .indigo
         case .microphone: return .orange
         case .camera: return .green
+        case .notifications: return .red
         }
     }
 }
@@ -165,7 +189,8 @@ struct PermissionsView: View {
         .frame(maxWidth: 680, alignment: .top)
         .frame(maxWidth: .infinity)
         // The answer changes in System Settings, outside this app.
-        .onReceive(poll) { _ in refresh += 1 }
+        .onReceive(poll) { _ in MacNotifications.readPermission { refresh += 1 } }
+        .onAppear { MacNotifications.readPermission { refresh += 1 } }
     }
 }
 
@@ -201,7 +226,7 @@ private struct PermissionRow: View {
                 Button("Allow") { permission.request(then: changed) }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
-            case .unknown:
+            case .unknown, .notKnown:
                 Button("Settings") { permission.request(then: changed) }
                     .controlSize(.regular)
             }
@@ -219,6 +244,7 @@ private struct StatusPill: View {
             case .granted: return ("Allowed", .green)
             case .notGranted: return ("Not allowed", .secondary)
             case .unknown: return ("Asked per app", .secondary)
+            case .notKnown: return ("Not known", .secondary)
             }
         }()
         HStack(spacing: 4) {

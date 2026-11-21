@@ -255,16 +255,43 @@ happened; the Live Activity shows the host's state now (below).
   Mac not kept awake, usage not saved) are banners and Inbox items only.
 - **Who is told: every device, and every one sounds**: the Mac and each
   paired iPhone or iPad, whether someone is at the Mac or not. The host
-  makes each notice once for all of them. The session on a device's
-  screen is not told on that device: it is seen there.
+  makes each notice once for all of them. The session on an iPhone's or
+  iPad's screen is not told there: it is seen there. On the Mac no session
+  is left out, the one in front included (#180): being in front does not
+  make it seen, something the user does there does (choosing it, typing
+  into it, the notification).
+- **When it is a notification** (#180, decided by the owner on
+  2026-11-20): every notice is in each device's Inbox, and the Mac's
+  banner, at once; it is a notification on the Mac and on every iPhone or
+  iPad **at the same moment**, which the host says. An agent that is done
+  waits 30 seconds first, always; anything else waits 30 seconds while
+  someone is at the Mac, and is told at once otherwise. Handled or read
+  within those 30 seconds (the agent works again; opened, answered,
+  dismissed or read on some device), it is a notification nowhere. Short
+  turns that end one after the other do not buzz the phone each time. A
+  host that starts again within the wait still tells it once the wait is
+  over (#193).
 - **Handled on one, gone from all**: answered, opened or dismissed (from
   the banner, from Notification Center) on one device, or its agent moving
   on, and the notification goes from every other device.
+- **Read on one, read on all** (#180, replacing what #66 decided): a
+  notice read on one device (picked in the Inbox, its session opened, its
+  notification tapped, answered or dismissed) is read on every device, and
+  its notification goes from all of them. What is read while a device is
+  not connected is said to the host once it is.
 - **On the iPhone and the iPad**, iOS's own notification banner, also
-  with the app open; the app draws none of its own. While the app is
-  asleep, the released build is told through Apple's push service: "Also
+  with the app open; the app draws none of its own. While the app is in
+  the background or asleep, the released build is told through Apple's
+  push service only, never also over its connection, so nothing shows
+  twice (#190); back in front, what it was not told either way is shown
+  then. "Also
   While the App Is Closed", on by default, under "Tell me when an agent is
-  done or needs me". What it says is encrypted on the Mac for that device
+  done or needs me". While that one is off it is dimmed and shows off,
+  whatever it was set to, since nothing is shown while the app is closed
+  either; what it was set to is kept, and shown again once notifications
+  are turned on (#211). In a build with no push (a development build) it
+  shows off and dimmed too, whatever it was set to, and its footnote says
+  why (#212). What it says is encrypted on the Mac for that device
   alone; one that cannot be opened says "An agent needs you". A
   notification handled elsewhere while the app is asleep is taken back by
   a background push, which iOS limits and does not deliver to an app the
@@ -272,13 +299,21 @@ happened; the Live Activity shows the host's state now (below).
   once needs Apple's filtering entitlement, asked for on 2026-11-19.) The
   switch's footnote says when it does not work and why: a development
   build has none, the Mac has no relay, notifications are not allowed,
-  the relay could not be reached. The app asks iOS whether it may notify
-  once it is paired.
-- **On the Mac**, a banner while the app is in front, for a session other
-  than the one in front, which opens it; a macOS notification while the
-  app is not in front, with Reply and the choices as on the iPhone:
-  "Notify when an agent is done or needs you" in Settings > General, on by
-  default. The banner shows what the agent said on up to six lines; Show
+  the relay could not be reached. At its first launch, once the question
+  about reports is answered, the app's first screen asks only whether it
+  may notify (Allow Notifications, Not Now), not an onboarding like the
+  Mac's (#180). Not Now turns "Tell me when an agent is done or needs me"
+  off, as Settings then shows, and iOS is not asked, not when the phone
+  pairs either, until that switch is turned on again (#195, decided by the
+  owner). iOS asks once: what wants to know meanwhile (pairing, then the
+  pushes) waits for the user's answer, and is not told no while the
+  question is still on screen (#200).
+- **On the Mac**, a banner while the app is in front, which opens the
+  session; and a macOS notification, with the app in front or not (#180),
+  with Reply and the choices as on the iPhone: "Notify when an agent is
+  done or needs you" in Settings > General, on by default. macOS is asked
+  whether the app may notify in the onboarding's Permissions step, where
+  Notifications is one of the permissions listed. The banner shows what the agent said on up to six lines; Show
   All opens it out.
 - A notification for a question, or for a finished task, takes a short
   reply, written or dictated, sent as the next message; on the iPhone it
@@ -301,9 +336,9 @@ happened; the Live Activity shows the host's state now (below).
   release on the Mac, a session's size set by another device ("Use This
   Size").
 - **The Inbox** (#66, after #67) is each device's own history of what it
-  was told: kept after it is read, for 30 days. Read and deleted are that
-  device's alone; whether a notice was handled, and how (answered,
-  opened, dismissed, the agent moved on), is the same everywhere. An item
+  was told: kept after it is read, for 30 days. Deleted is that device's
+  alone; read (#180), and whether a notice was handled and how (answered,
+  opened, dismissed, the agent moved on), are the same everywhere. An item
   is deleted on its own, or the read ones, or all of them (asked first);
   one whose agent still waits for an answer is not deleted until it is
   answered. What was told while a device was asleep reaches its Inbox when
@@ -314,10 +349,15 @@ happened; the Live Activity shows the host's state now (below).
   item picked is shown in the middle, and is then read: what its agent
   said or asks, or what stopped, or, for one that is over, how it was
   handled. **Open** shows the session in Sessions; **Delete** (not for an
-  agent that waits) takes it out of this Mac's Inbox; **Next** shows the
-  item after it. On the iPhone and the iPad, what is unread or waits is at
-  the top of the Sessions list, with All, which opens the whole Inbox:
-  swiped to delete one, the menu for the read ones or all.
+  agent that waits) takes it out of this Mac's Inbox. On the iPhone and
+  the iPad, what is unread or waits is at the top of the Sessions list,
+  with All, which opens the whole Inbox: swiped to delete one, the menu for
+  the read ones or all. On both, an item touched or clicked shows that
+  item, all of it, with Open for its session; it never opens the session
+  by itself: an agent done whose session runs shows what its turn came to,
+  anything else what was said or asked, its choices, and how it was
+  handled. Each item of the list shows all of what was said, not its end
+  only (the owner's decisions, 2026-11-21).
 - **What a turn came to** (#71): an agent that is done shows, in the
   Inbox, what it was asked, what it answered, the commands it ran with
   their exit codes, and the files of its folder that changed while it
@@ -359,13 +399,23 @@ shows the host's state now rather than events.
   Activities, which the Mac sends through the relay of #66 on a path of its
   own, in the released build only: the counts and the names reach the
   relay and Apple in the clear, since iOS draws the activity from them.
-  The Mac starts it while the app is asleep, a burst of changes is one
+  The Mac starts it while the app is asleep, once: what changes after
+  that waits until the app is opened, rather than starting a second one
+  (#194, decided by the owner on 2026-11-21); a burst of changes is one
   update, and it is sent again every 15 minutes while agents work; one
-  that gets no update is shown as out of date. When every agent is done it
-  stays showing that, which stays true. Without push (a development
+  that gets no update is shown as out of date. **One activity is kept
+  between turns and only updated** (#180, decided by the owner on
+  2026-11-20): when every agent is done it shows that, and is ended only
+  once nothing has worked or waited for 15 minutes, leaving the last state,
+  which stays true; an iPhone that was connected then and goes away later
+  is sent the end when it goes (#192). A new turn within those 15 minutes updates it rather
+  than starting another, whose start through Apple comes with an alert. Without push (a development
   build), it goes out of date ten minutes after the app last updated it.
 - "Live Activity of the Mac's agents" in the iPhone's Settings turns it
-  off, apart from notifications.
+  off, apart from notifications. While iOS has Live Activities turned off
+  for the app (in the iPhone's Settings) the switch shows off and dimmed,
+  whatever it was set to, and the section's footnote says why (#212);
+  what it was set to is kept, and shown again once iOS allows them.
 
 ### Hooks and MCP (#129)
 
@@ -679,10 +729,17 @@ user sees.
 - **A Mac showing another Mac** (#147) has that Mac's browser as the iPhone
   has it: its pages in the Browser tab and beside its agents, each drawn
   from the pictures that Mac sends while it is shown, and used from here:
-  a click, scrolling, the keys and typing, ⌘V pasting what this Mac
-  copied, the address, back, forward, reload, stop, close, taking a page
+  a click, a double click, the pointer passing over the page (hover), a
+  drag, selecting text by dragging and ⌘C copying it to this Mac,
+  scrolling, the keys and typing, ⌘V pasting what this Mac copied, a right
+  click's menu (this Mac's: Copy, Open Link in New Tab, Copy Link Address,
+  Back, Forward, Reload; a page's own right-click menu is not shown), the
+  address, back, forward, reload, stop, close, taking a page
   from its agent and giving it back, and a new page of the user's (in that
-  Mac's default profile). What is done in a Mac's own Chromium (picking an
+  Mac's default profile). What the mouse, the keys and the wheel do reaches
+  that Mac in the order it was done, however slow the link: text typed
+  right after a click goes where the click put the caret, and a scroll
+  never passes the drag before it (#191, #199). What is done in a Mac's own Chromium (picking an
   element, Show As, finding, zooming, the developer tools, a page beside an
   agent) is on that Mac, and the page's menu says so.
 - **On the iPhone**, as on the Mac: an agent's own shells and pages are
@@ -708,7 +765,20 @@ user sees.
   in front there: with several profiles, in the one picked from its menu,
   or private; with one, in it, and a private one from its own menu. The
   user's pages open in a sheet. Picking an element to send to an agent
-  is the Mac's only (principle 1).
+  is the Mac's only (principle 1). What the iPhone asked of the page and
+  the Mac had not answered when the connection to it closes, or when
+  another Mac is picked, is answered at once as on the Mac: refused, in
+  words that name the Mac and say it may not have been done, under the
+  page or where opening it is said (#198). A page left open while the connection
+  is away says it asks nothing then, and is asked for again by itself when
+  the connection comes back, the line under it gone once the Mac answers
+  (#209); on the Mac, another Mac's page shown again with the connection
+  is asked for again too. What that Mac's host refuses of what the Mac
+  asked of its page by itself (the page shown again with the connection,
+  asked again at a new width, let go of as it goes) because that Mac's app
+  is not connected is not said in an alert: its pages go until that app
+  is back, and are asked for again then (the owner's decision,
+  2026-11-21, #210). A page the user opens is still refused in an alert.
 
 ### Usage
 
@@ -772,7 +842,9 @@ processor in use across all cores, memory in use (as a share, and as
 gigabytes of what is installed), network speed down and up, temperature,
 battery, and how long the Mac has been up. On the iPhone they are the
 figures of the Mac it is connected to, not the phone's own. They update
-every three seconds.
+every three seconds. On the Mac the line is there from the start, each
+figure shown as not known ("—") until the host's first come, so that
+nothing under it moves when they do (#206).
 
 The temperature is shown in Celsius or Fahrenheit, chosen in Settings >
 General on the Mac or in the iPhone's Settings tab. Like the other choices
@@ -920,7 +992,31 @@ panel.
   + Page and + Shell, which open one more for that agent: a page it lists
   and drives (the user's until it is given back), and a shell in its
   folder, which it lists and uses as one it opened itself. The Shells and
-  Browser rows have a + for one more of the user's. A tab is started from the header
+  Browser rows have a + for one more of the user's. A Shells tab splits as
+  an agent's area does (the owner's request, 2026-11-21): the two buttons
+  at the end of its row show a shell on the right and one below, the first
+  not on show, or a new one when none is left; the shell picked stays on
+  the left. A part waiting for its new shell takes that one only, once it
+  is in the row: not a shell the tab already had, nor one started
+  elsewhere meanwhile (File > New Shell, the iPhone); the right and below
+  can both wait, each for its own (#189). A launch the host refuses ends
+  that part's wait alone, and the refusal is said. The parts are parted and framed as an
+  agent's area's, and dragged the same; a click in a part, or its shell
+  picked in the row, puts the keyboard there, and a shell picked that is
+  not on show is shown in the part the keyboard is in. A shell's menu in
+  the row shows it on the left, on the right or below, and a shell
+  dragged from the row and dropped on a part is shown there; either turns
+  that part on, and one already shown in another part changes places with
+  it. A shell is never shown in two parts (#188): the left's shell moved
+  to a part that was off leaves the left the first shell not on show,
+  and with none the move is refused, the app saying why at once ("The
+  left always shows a shell, and this tab has none free to take this
+  one's place. Open another shell first."); a shell moved from the right
+  or below to a part that was off leaves the part it was in turned off;
+  the left's shell ended with every other one on show, the right's (else
+  the one below's) moves to the left. Turned off, a part's shell keeps
+  running and stays in the row. The Browser tab is not split; the split is not
+  kept when the app quits. A tab is started from the header
   (the agents, Shell, Browser) or the File and Browser menus. Command and
   a number (⌘1 to ⌘9) shows the tab in that place of the strip, ⌘⇧] and
   ⌘⇧[ the next and previous tab, and in one of the user's tabs ⌥⌘→ and
@@ -929,8 +1025,10 @@ panel.
   move about its area (Panes). ⌥⌘ and a number (⌥⌘1 to ⌥⌘9, View > Item
   1 in Group and on) picks that item of the row of the tab in front, left
   to right, an agent's row being the agent, its pages, its shells, with the
-  keyboard in it (#171); while ⌥ and ⌘ are held, each of the first nine
-  items shows its number. ⌘W closes what is shown, a session is ended.
+  keyboard in it (#171); each of the first nine items shows the keys
+  that pick it (⌥⌘1 and on) at its end, always, as each tab of the strip
+  shows its ⌘1 to ⌘9, its × taking their place under the pointer, and
+  its tooltip says them too (the owner's decision, 2026-11-21). ⌘W closes what is shown, a session is ended.
   An item's × closes it. **A tab's × closes all it holds** (#145): the
   Shells tab ends its shells ("End 2 shells?", asked first even for one),
   the Browser, Diffs and Files tabs close their pages, diffs and files
@@ -973,7 +1071,11 @@ panel.
   the agent's session, so picking another agent shows that one's. A shell
   or page picked in the row, in the list or from a notice is shown in its
   part, with the keyboard in it; the row marks what is on show, and
-  which of them has the keyboard. The dividers are dragged. The two
+  which of them has the keyboard. The parts are parted by a gutter
+  lighter than them, with a grip in its middle, which is dragged; the
+  part the keyboard is in is framed in the accent colour while more than
+  one part is shown, and a click in a part, the agent's included, puts
+  the keyboard and the frame there (the owner's request, 2026-11-21). The two
   buttons at the end of the agent's row hide the page and the shell
   beside it and show them again: hidden, a shell keeps running and a page
   stays open, both stay in the row and in the list, and picking one there
@@ -1230,14 +1332,21 @@ panel.
 A released build of either app can send two things to its developer
 through Google's Firebase: crash reports, and usage statistics, counts of
 which features are used. Never what a terminal shows, prompts, file names
-or folders. At its first launch such a build shows a screen of its own
-(#48), not an alert that could be taken for one of the system's: what
-each kind is, a switch for each, both on, and Continue. It cannot be
-closed any other way, and until it is answered nothing is sent, of
-either kind. Afterwards both switches are in Settings > Privacy on the
+or folders. At its first launch such a build asks it (#48), never in an
+alert that could be taken for one of the system's, and never as a second
+sheet over another (the owner's decision, 2026-11-21): on the Mac it is
+the Reports step of the onboarding, which shows at once while it is not
+answered, whatever else; on the iPhone it is the first part of the one
+first screen, before whether the app may notify. It says what each kind
+is, with a switch for each, both on; the step's Next (the Mac) or
+Continue (the iPhone) answers it. Until it is answered nothing is sent, of
+either kind, and an onboarding closed before it is asked again at the
+next launch. Afterwards both switches are in Settings > Privacy on the
 Mac and under Privacy in the iPhone's Settings tab, in the same words. A
 build from source and AgentTerm Dev have no service to send to: they show
-no screen and send nothing, whatever the switches say. `PRIVACY.md` says
+no screen and send nothing, and on both apps the two switches show off
+and dimmed, whatever they were set to, with a line that says why (#212);
+what they were set to is kept. `PRIVACY.md` says
 all of what is sent.
 
 ### Keeping the Mac awake
@@ -1329,6 +1438,13 @@ ships with, a banner says so, with the other host's path, and offers **Use
 This App's Host…**: the other host is stopped, after asking since its
 sessions end with it, and the app's own is started.
 
+Another copy's host is a program named `agenttermd`. When what listens on
+the port is any other program (a proxy in front of the host, say), the
+banner says instead that the port is in use by that program, by its name,
+and that it is not an AgentTerm host (#204). Nothing offers to stop it: the
+app never stops a program that is not an AgentTerm host, not even through
+Restart Host.
+
 ### A host that stopped
 
 A host that stops without being asked to (killed, by macOS or by another
@@ -1352,6 +1468,13 @@ has dismissed it on one device:
   stopping, how the last one ended when it knows, and offers Try Again.
 - A host the app starts that cannot start (its port is taken, for one)
   is said so at once, with the host's own words why, and Try Again.
+- While the Mac app is not connected to its host, or to the other Mac's,
+  a session asked for (File > New Shell or New <agent>, the menu bar's, a
+  worktree, an SSH host, resuming, a handoff) is not started, and the
+  window's notice says at once why and what to do
+  (`StateWords.notStarted`, #202); nothing waits to start later. A Shells
+  tab's part is not on screen then, since the window shows why it is not
+  connected in place of the tabs.
 
 A stop that was asked for (Restart Host, replacing another copy's host,
 logging out) is not reported.
@@ -1457,8 +1580,10 @@ edits here is not merged; saving overwrites it.
 - Pairing gives the iPhone a token of its own, kept in its Keychain. The Mac
   lists the paired devices, with when each last connected, and can remove
   one. A removed device is disconnected at once and has to pair again.
-- All remote traffic goes through Tailscale. AgentTerm does not run a relay
-  server and does not open a port on the local network.
+- All remote traffic between the devices goes through Tailscale, and
+  AgentTerm does not open a port on the local network. The one relay is that
+  of the iPhone's notifications through Apple, which passes on what it
+  cannot read (When an agent is done or needs you).
 - The pairing screen checks Tailscale on the Mac first. The code is shown only
   when Tailscale is installed, signed in and connected. Otherwise the screen
   shows what is missing (not installed, not signed in, or not connected) and

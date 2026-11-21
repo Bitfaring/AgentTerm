@@ -78,6 +78,12 @@ public final class HostServer {
         /// How long an agent's hooks and MCP server have to be heard from
         /// before its session says they are missing (#129). Tests shorten it.
         public var linkGrace: TimeInterval = 20
+        /// How long a notice that waits is kept from being a notification
+        /// (`Notice.pushWaits`). Tests shorten it.
+        public var pushWait: TimeInterval = Notice.pushWait
+        /// How long the Live Activity is kept, updated, with nothing
+        /// working or waiting (`LiveActivityRule.keptIdle`). Tests shorten it.
+        public var activityKeptIdle: TimeInterval = LiveActivityRule.keptIdle
         /// The relay that passes notices on to Apple for devices that are
         /// away (#66). Nil sends none: a development build, a test.
         public var pushRelay: URL?
@@ -173,6 +179,11 @@ public final class HostServer {
         var awaitingScreen: [SessionID: (attach: Int, output: [DataFrame])] = [:]
         /// A Mac app that says it is in front: someone is at the Mac.
         var inFront = false
+        /// A device that says its app went to the background
+        /// (`deviceInBackground`, #190): away, though iOS may keep its
+        /// connection open while it is suspended. What it is told goes
+        /// through Apple until it is in front again.
+        var inBackground = false
         /// Numbers the large messages sent in pieces.
         var nextMessage: UInt32 = 0
         /// The searches for text this client has going (#45), by its number.
@@ -628,6 +639,7 @@ public final class HostServer {
             writePromptsForServers()
             loadSchedules()
             loadHistoryMarks()
+            alertWaitingNotices()
             startAtLoginByDefault()
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + min(1, configuration.scheduleInterval), repeating: configuration.scheduleInterval)
@@ -1544,7 +1556,7 @@ public final class HostServer {
                 guard let self, let client = self.clients[id] else { return }
                 switch made {
                 case .failure(let error):
-                    self.send(.error("The worktree could not be made: \(error.localizedDescription)"), to: client)
+                    self.send(.error("The worktree could not be made: \(error.localizedDescription)", request: request.requestID), to: client)
                 case .success(let worktree):
                     if let problem { self.send(.error(problem), to: client) }
                     var inWorktree = request
@@ -1814,6 +1826,7 @@ public final class HostServer {
         client.attached.removeAll()
         if case .device(let id) = client.identity {
             broadcastDevices()
+            activityWentAway(id)
         }
         if browserProvider == client.id { setBrowserProvider(client, false) }
         // A device that goes no longer watches a page.
@@ -1869,15 +1882,62 @@ public final class HostServer {
         queue.asyncAfter(deadline: .now() + (force ? 0 : 3)) { [weak self] in self?.sendActivity() }
     }
 
+    private func endActivityIfIdle() {
+        guard let since = activityIdleSince, !activityEnded,
+            configuration.now().timeIntervalSince(since) >= configuration.activityKeptIdle
+        else { return }
+        updateActivity(force: true)
+    }
+
+    /// Since when nothing has worked or waited; nil while something does.
+    private var activityIdleSince: Date?
+    /// The activities were ended, after `activityKeptIdle` with nothing.
+    private var activityEnded = false
+    /// The devices that were away when the activities ended, or went away
+    /// since, and were sent the end (#192). One that was present then and
+    /// goes away later is sent it when it goes: its own wait may not run
+    /// out, since iOS suspends the app.
+    private var activityEndSent: Set<String> = []
+
     private func sendActivity() {
         activityPending = false
         let status = AgentsStatus.of(sessions: sessions.values.map(\.info).sorted { $0.id < $1.id }, failures: failures)
-        activityStatus = status
-        activitySentAt = configuration.now()
-        let mac = Host.current().localizedName ?? "Mac"
-        for device in push.activityDevices where !connectedDevices.contains(device) {
-            if let item = push.activity(status, mac: mac, to: device) { sendPush(item) }
+        let now = configuration.now()
+        if status.isActive {
+            activityIdleSince = nil
+            activityEnded = false
+            activityEndSent = []
+        } else if activityIdleSince == nil {
+            activityIdleSince = now
+            // Looked at again once it has been idle long enough to end.
+            queue.asyncAfter(deadline: .now() + configuration.activityKeptIdle + 0.05) { [weak self] in
+                self?.endActivityIfIdle()
+            }
         }
+        let decision = LiveActivityRule.decide(
+            enabled: true, status: status, idleSince: activityIdleSince, now: now, keptIdle: configuration.activityKeptIdle)
+        let end = decision != .show
+        // Ended once; nothing more until something works again.
+        if end && activityEnded { return }
+        activityEnded = end
+        activityStatus = status
+        activitySentAt = now
+        let mac = Host.current().localizedName ?? "Mac"
+        for device in push.activityDevices where !presentDevices.contains(device) {
+            if end { activityEndSent.insert(device) }
+            if let item = push.activity(status, end: end, mac: mac, to: device) { sendPush(item) }
+        }
+    }
+
+    /// A device went away, closed or in the background: when the
+    /// activities were ended while it was present, it is sent the end now,
+    /// once (#192).
+    private func activityWentAway(_ device: String) {
+        guard activityEnded, let status = activityStatus, !activityEndSent.contains(device), !presentDevices.contains(device),
+            push.activityDevices.contains(device)
+        else { return }
+        activityEndSent.insert(device)
+        if let item = push.activity(status, end: true, mac: Host.current().localizedName ?? "Mac", to: device) { sendPush(item) }
     }
 
     // MARK: Notices, on every device (#66)
@@ -1892,10 +1952,13 @@ public final class HostServer {
         }
     }
 
-    private var connectedDevices: Set<String> {
+    /// The devices connected with their app in front: the others are
+    /// away, and told through Apple (#66). A device whose app went to the
+    /// background is away though its connection may still be open (#190).
+    private var presentDevices: Set<String> {
         Set(
             clients.values.compactMap { client -> String? in
-                if case .device(let id) = client.identity { return id }
+                if case .device(let id) = client.identity, !client.inBackground { return id }
                 return nil
             })
     }
@@ -1906,23 +1969,76 @@ public final class HostServer {
         for notice in handled { tellHandled(notice) }
     }
 
-    /// A new notice: to every client that is told, once, and through Apple
-    /// to each registered device that is away.
+    /// A new notice: to every client's Inbox at once; a notification on
+    /// every device at once, or after `Notice.pushWait` when it waits and
+    /// is still not handled nor read by then (the owner's decision,
+    /// 2026-11-20).
     private func tellEveryone(_ notice: Notice) {
-        var reached: Set<String> = []
-        for client in clients.values where client.authenticated {
-            guard let key = noticeKey(of: client) else { continue }
+        for client in clients.values where client.authenticated && noticeKey(of: client) != nil {
             send(.notice(notice), to: client)
+        }
+        guard notice.alerts else { return }
+        let wait = notice.pushWaits(macInUse: macInUse) ? configuration.pushWait : 0
+        if wait <= 0 { return alert(notice.id) }
+        notices.waits(notice.id, until: configuration.now().addingTimeInterval(wait))
+        queue.asyncAfter(deadline: .now() + wait) { [weak self] in self?.alert(notice.id) }
+    }
+
+    /// On starting: what waited to be a notification when the last host
+    /// stopped is one now, or once the rest of its wait is over (#193).
+    private func alertWaitingNotices() {
+        let now = configuration.now()
+        for (id, until) in notices.waiting {
+            let rest = until.timeIntervalSince(now)
+            if rest <= 0 {
+                alert(id)
+            } else {
+                queue.asyncAfter(deadline: .now() + rest) { [weak self] in self?.alert(id) }
+            }
+        }
+    }
+
+    /// Its time has come: a notification on every device, over the
+    /// connection or, for a device that is away, through Apple: only that
+    /// way for one in the background (#190), so it is not shown twice.
+    private func alert(_ id: UInt64) {
+        guard let notice = notices.pending(id) else { return }
+        notices.becameDue(id)
+        var reached: Set<String> = []
+        for client in clients.values where client.authenticated && !client.inBackground {
+            guard let key = noticeKey(of: client), !reached.contains(key) else { continue }
+            send(.noticeAlert(id: id), to: client)
             reached.insert(key)
         }
-        for key in reached { notices.told(notice.id, to: key, throughApple: false) }
-        // Through Apple only what is a notification; the rest reaches the
-        // device's Inbox when it connects.
-        guard notice.alerts else { return }
-        for device in Set(push.targets.keys).subtracting(connectedDevices) {
+        for key in reached { notices.told(id, to: key, throughApple: false) }
+        for device in Set(push.targets.keys).subtracting(presentDevices) {
             guard let item = push.push(notice, to: device) else { continue }
-            notices.told(notice.id, to: device, throughApple: true)
+            notices.told(id, to: device, throughApple: true)
             sendPush(item)
+        }
+    }
+
+    /// What came due that this client was not shown, here or through
+    /// Apple: on connecting, and for a device back in front (#190).
+    private func tellUntold(_ client: Client) {
+        guard let key = noticeKey(of: client) else { return }
+        for notice in notices.untold(to: key) {
+            send(.noticeAlert(id: notice.id), to: client)
+            notices.told(notice.id, to: key, throughApple: false)
+        }
+    }
+
+    /// Read on a device: read on every one, and taken away from the
+    /// devices that had it through Apple and are away.
+    private func tellRead(_ ids: [UInt64]) {
+        guard !ids.isEmpty else { return }
+        for client in clients.values where client.authenticated && noticeKey(of: client) != nil {
+            send(.noticesRead(ids: ids), to: client)
+        }
+        for id in ids {
+            for device in notices.pushedTo(id) where !presentDevices.contains(device) {
+                if let item = push.takeBack(id, from: device) { sendPush(item) }
+            }
         }
     }
 
@@ -1933,7 +2049,7 @@ public final class HostServer {
         for client in clients.values where client.authenticated && noticeKey(of: client) != nil {
             send(.noticeHandled(id: notice.id, handled: handled), to: client)
         }
-        for device in notices.pushedTo(notice.id) where !connectedDevices.contains(device) {
+        for device in notices.pushedTo(notice.id) where !presentDevices.contains(device) {
             if let item = push.takeBack(notice.id, from: device) { sendPush(item) }
         }
     }
@@ -2033,7 +2149,7 @@ public final class HostServer {
                 // A shell for an agent, opened by the user in its group
                 // (#127): a shell only, for an agent that runs, in its folder.
                 guard request.command == nil, let owner = sessions[agent], owner.info.agent != nil else {
-                    send(.error("A shell can be opened only for an agent that runs."), to: client)
+                    send(.error("A shell can be opened only for an agent that runs.", request: request.requestID), to: client)
                     return
                 }
                 var shell = request
@@ -2108,6 +2224,11 @@ public final class HostServer {
         case .appInFront(let front):
             client.inFront = front
             updateMacInUse()
+        case .deviceInBackground(let away):
+            // A device's app: in the background it is away (#190).
+            guard client.inBackground != away, case .device(let device) = client.identity else { return }
+            client.inBackground = away
+            if away { activityWentAway(device) } else { tellUntold(client) }
         case .used:
             used(by: client)
         case .pushRegister(let registration):
@@ -2551,6 +2672,8 @@ public final class HostServer {
             push.setActivity(device: id, token: token, start: start)
         case .handleNotice(let id, let how):
             if let notice = notices.handle(id, how: how, now: configuration.now()) { tellHandled(notice) }
+        case .readNotices(let ids):
+            tellRead(notices.read(ids))
         }
     }
 
@@ -2992,12 +3115,9 @@ public final class HostServer {
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
         // The last 30 days, for its Inbox; then what it was not told of yet,
         // here or through Apple (#66).
-        if let key = noticeKey(of: client) {
+        if noticeKey(of: client) != nil {
             send(.noticeLog(notices.log), to: client)
-            for notice in notices.untold(to: key) {
-                send(.notice(notice), to: client)
-                notices.told(notice.id, to: key, throughApple: false)
-            }
+            tellUntold(client)
         }
         // What stopped before this client came, until someone has seen it.
         send(.failures(failures), to: client)
@@ -3199,7 +3319,8 @@ public final class HostServer {
                 queue: queue
             )
         } catch {
-            if let client { send(.error("\(error)"), to: client) }
+            // The refusal names the launch it answers (#189).
+            if let client { send(.error("\(error)", request: request.requestID), to: client) }
             return nil
         }
 
@@ -3240,7 +3361,8 @@ public final class HostServer {
             self?.sessionExited(id, status: status)
         }
 
-        if let client { attach(client, to: session, size: size) }
+        // The creator learns of its session with its request (#189).
+        if let client { attach(client, to: session, size: size, request: request.requestID) }
         broadcastSessions()
         // An agent that was not in use until now: ask its service right away.
         refreshAccountUsage(olderThan: Self.accountInterval)
@@ -3719,7 +3841,9 @@ public final class HostServer {
         for client in clients.values where client.authenticated { send(.agentShellsFaults(faults), to: client) }
     }
 
-    private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil, history: Int? = nil) {
+    /// `request`: the `CreateRequest.requestID` of the `create` that made
+    /// the session, for its creator (#189).
+    private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil, history: Int? = nil, request: Int? = nil) {
         client.attached.insert(session.info.id)
         // Watching is not using: this only sets the size if nobody else is attached.
         let changed = session.arbiter.update(client.id, size: size)
@@ -3729,7 +3853,7 @@ public final class HostServer {
             let size = session.info.size, mirror = session.mirror
             session.mirrorQueue.async { mirror.resize(size) }
         }
-        send(.attached(session.info), to: client)
+        send(.attached(session.info, request: request), to: client)
         let id = session.info.id
         if let have, have <= session.written, session.written - have <= session.scrollback.count {
             // A client that was here before, a phone after its network

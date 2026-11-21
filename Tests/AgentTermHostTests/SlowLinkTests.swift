@@ -120,7 +120,7 @@ final class SlowLinkTests: XCTestCase {
         var nearWelcomed = false
         near.onMessage = {
             if case .welcome = $0 { nearWelcomed = true }
-            if case .attached(let info) = $0 { session = info.id }
+            if case .attached(let info, _) = $0 { session = info.id }
         }
         near.onOutput = { _, data in produced += data.count }
         near.connect()

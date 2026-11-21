@@ -273,7 +273,15 @@ Host…, which asks first. It never restarts it by itself (decided by the
 owner on 2026-11-17), and a release that changes nothing of the host says
 nothing. A build outside an app bundle has no revision, and is not compared.
 
-The protocol version is 32 added `pushRegister`, `pushUnregister`, `pushState`, `handleNotice`,
+The protocol version is 36. 36 added `deviceInBackground`, which a
+device's app sends for going to the background and coming back, in place
+of the `appInFront` 35 had it send (#190), so that `appInFront` is only the
+Mac app's; and `CreateRequest.requestID`, a number the client picks for a
+launch, which the host gives back to that client alone in `attached`'s
+`request`, or in `error`'s `request` when it refuses the launch (#189). 35 had the iPhone send `appInFront` too, for whether its app is
+in the background (#190). 34 added the browser's `pointer`, `contextAt` and
+`copy`, and the result `context` (#147). 33 added `readNotices`, `noticesRead` and
+`noticeAlert`, and `Notice.read` (#180). 32 added `pushRegister`, `pushUnregister`, `pushState`, `handleNotice`,
 `liveActivity`, `noticeLog`, `notice` and `noticeHandled` (#66, #168). 15 in 0.7.0. It went up with each message that
 changed while the release was made (principle 6): 8 added `agentShellsFaults`
 and gave `agentShellResult`'s list of shells the asking agent's own (see
@@ -710,7 +718,10 @@ Every hook runs `agenttermd hook <agent> <event>`. It saves what it is told,
 with the agent, the event and the time, in the file the session's
 environment names (`AppChannel.eventsVariable`, each build's own, so that
 the other build's hooks leave this one's sessions alone):
-`events/session-<id>.json` in the usage folder. Every session has one, a
+`events/session-<id>.json` in the usage folder. A host started from inside
+a session of AgentTerm gives its sessions none of that session's own
+variables, of either build (`HostEnvironment.sessionsOwnVariables`, #207),
+only its own. Every session has one, a
 shell's too, for an agent typed in it. Outside a session of AgentTerm's it
 does nothing. The command is the same for every session because Codex
 trusts a hook by its command and asks again when it changes. For
@@ -939,9 +950,22 @@ no one is there) (NOTE-7). Every client is told `macInUse(Bool)`. Since
 
 **On the iPhone.** Since #66 iOS's own banner, in front as behind, for a
 session other than the one on screen (`AgentNotifications`, from the
-host's `notice`): the app asks iOS for a little more time when it leaves
-the front (`beginBackgroundTask`), during which the connection lives;
-after that, the host pushes. A question's or a finished task's notification has a text reply
+host's `noticeAlert`) while the app is in front. When it leaves the front
+it tells the host `deviceInBackground(true)`, and `deviceInBackground(false)`
+when it comes back, and says which on connecting (#190), a message of its
+own: `appInFront` is the Mac app's alone and says only whether someone is
+at the Mac (`updateMacInUse`), whoever sends it. iOS suspends an app in
+the background without closing its socket, so a phone asleep still counted
+as connected, was sent its notifications over a connection it did not
+read, and was not pushed to. A device in the background is away
+(`Client.inBackground`, `HostServer.presentDevices`): what comes due
+reaches it through Apple only, never also over the connection, so nothing
+shows twice, and its Live Activity is kept true through Apple; back in
+front it is told, as on connecting, what came due that it was not shown
+either way (`tellUntold`, `NoticeCenter.untold(to:)`). The app still asks
+iOS for a little more time when it leaves the front
+(`beginBackgroundTask`), during which the connection lives for what it
+shows in the Inbox. A question's or a finished task's notification has a text reply
 action that asks for the phone to be unlocked; the reply is sent as
 `answer(session:to:text:)`, naming the state it answers, and the host types
 it, then Return, only while the session is still in that state; else it
@@ -985,9 +1009,29 @@ says what it is (`hello`'s `kind`) is told; one that does not
 Mac's own app as `local`.
 
 - On connecting, after `sessions`: `noticeLog([Notice])`, the 30 days, for
-  the device's Inbox; then `notice(Notice)` for each one not handled that
-  it was not told of. A new notice is `notice` to every client at once,
-  and, when it `alerts`, a push to each registered device that is away.
+  the device's Inbox; then `noticeAlert(id:)` for each one due, not
+  handled nor read, that it was not shown yet. A new notice is `notice` to
+  every client at once, for the Inbox and the Mac's banner. When it
+  `alerts`, its time to be a notification comes at once, or after
+  `Notice.pushWait` (30 s, `Configuration.pushWait`) when
+  `Notice.pushWaits(macInUse:)` says so: a done agent always, anything else
+  while someone is at the Mac (#180, decided 2026-11-20). Then, if it is
+  still not handled nor read (`NoticeCenter.pending`), it is due
+  (`becameDue`). When it waits, when its time comes is kept in
+  `notices.json` (`NoticeCenter.waits`), and a host that starts again
+  alerts what still waits once the rest of the wait is over, or at once
+  when it is over already (`alertWaitingNotices`, #193): only a failure can still be
+  waiting then, since the host marks what agents asked as over. Due, it
+  is `noticeAlert(id:)` to every client in front and a push
+  to each registered device that is away, not connected or in the
+  background (#190), at the same moment.
+- **Read** (#180) is the host's too: `readNotices(ids:)` from a device marks
+  them read in the log (`Notice.read`, `NoticeCenter.read`), and every
+  client is told `noticesRead(ids:)`; each device that had one through
+  Apple and is away has it taken back (`gone`). Handled by being answered,
+  opened or dismissed is read too (`Notice.reads`); moved on is not. A
+  device keeps read in its `InboxBook` as well, and on `noticeLog` says what
+  it read while not connected (`InboxBook.readHere(notTold:)`).
 - A notice is handled once (`Notice.Handled`: answered, opened, dismissed,
   moved on): by `answer`, by `noticeSeen` for its session and state, by
   `handleNotice(id:how:)` (dismissed from a banner or Notification
@@ -995,14 +1039,36 @@ Mac's own app as `local`.
   when its agent's state changes or its session ends. Every client is told
   `noticeHandled(id:handled:)`; each device that had it through Apple and
   is away is sent a push that takes it back (`gone`).
-- Neither app works notices out any more: each shows what it is told.
-  The iPhone posts a notification for each (`AgentNotifications.post`,
-  content from `NoticeContent`, shared with the extension), named
-  `"<mac>-<notice id>"`, the name APNs gives a pushed one, and shows it in
-  front too (`willPresent` → banner, list, sound), except for the session
-  on screen, which it then sees. The Mac shows its banner while it is in
-  front and posts a macOS notification while it is not
-  (`MacNotifications`, `notifyOnMac`).
+- Neither app works notices out any more: each shows what it is told,
+  and posts a notification only on `noticeAlert`. The iPhone posts one
+  (`AgentNotifications.post`, content from `NoticeContent`, shared with the
+  extension), named `"<mac>-<notice id>"`, the name APNs gives a pushed
+  one, and shows it in front too (`willPresent` → banner, list, sound),
+  except for the session on screen, which it then sees. The Mac shows its
+  banner on `notice` and posts a macOS notification on `noticeAlert`, in
+  front too and for the session in front too (`MacNotifications`,
+  `willPresent` → banner, list, sound; `notifyOnMac`). On the Mac the
+  session in front is seen only when the user does something
+  (`hideNoticeOfTheSessionInFront`: choosing it, the app coming to the
+  front, Sessions shown), no longer when its agent's state changes.
+- **Permission to notify** (#180) is asked up front: on the Mac in the
+  onboarding's Permissions step (`Permission.notifications`,
+  `MacNotifications.askPermission`), on the iPhone as the second part of
+  its one first screen (`FirstLaunch`: `ReportingChoices` while
+  `TelemetryPreferences.needsAsking`, then `NotificationAsk` while
+  `PhoneModel.asksNotifications`, one cover, never two over each other),
+  once, while iOS was not asked (`AGENTTERM_ASK_NOTIFICATIONS` shows it to
+  a test). On the iPhone Not Now turns `notifyAgents` off (#195), and
+  `AgentNotifications.askOnce`, which pairing, posting and registering for
+  push go through, never asks iOS while it is off: iOS is asked when the
+  switch is turned on again. It goes by `PermissionAsk` (`AgentTermProtocol`):
+  the first caller has iOS asked, and every caller that comes while iOS's
+  question is open waits for its answer rather than read the settings,
+  which say "not determined" until then (#200); after it, the settings
+  are read. On the Mac the reporting question is the onboarding's Reports
+  step (`OnboardingView.Step.reports`, shown while
+  `Telemetry.shouldAskAboutCrashReports`; `AppModel.showOnboarding` starts
+  true then), answered by its Next.
 - **The Inbox** is the device's own `InboxBook` (`AgentTermProtocol`),
   kept in its preferences by the Mac on show: notices newest first, read or
   not, what was deleted here so that the log does not bring it back, 30
@@ -1071,12 +1137,31 @@ push-to-start token (iOS 17.2), kept with the device's registration. While
 the device is away, a change of `AgentsStatus` is sent 3 s later (a burst
 is one update) to the relay as `{activity: {token, event, state, mac}}`:
 `update` to the activity's token, `start` to the start token when there is
-none and an agent works or waits, `end` when none does; again every 15
-minutes while agents work (`refreshSummaries`). The relay sends
+none and an agent works or waits, `end` once none has for
+`LiveActivityRule.keptIdle` (15 minutes, `Configuration.activityKeptIdle`;
+#180): until then, with nothing working or waiting, it is an `update`
+showing so, and a new turn updates the same activity rather than starting
+one, whose start push must carry an alert; again every 15 minutes while
+agents work (`refreshSummaries`). The end is kept for each device
+(`activityEndSent`, #192): one that was present when the host's activity
+ended and goes away later, closed or in the background, before its own
+`keptIdle` ran out (iOS suspends the app, and its timer with it) is sent
+the end when it goes, once. An ended activity is gone: its token is
+forgotten with the end push (#194), and the next turn sends `start`.
+A device that was sent `start` is sent nothing more for its activity
+(`Target.activityStarted`), not a second `start`, which would show a
+second activity, until it gives its tokens again (`liveActivity`, which it
+sends on every connection): the decision of the owner, 2026-11-21, since
+the app learns the new activity's token only when it runs. Meanwhile the
+started activity shows the state it was started with and goes out of date
+at its `stale-date`. The app takes up the activity iOS shows each time it
+updates it (`takeUpShownActivity`): one the Mac started while it slept is
+watched for its token, and one that ended is let go, so that a new one is
+asked for rather than an ended one updated. The relay sends
 `apns-push-type: liveactivity` to the topic
 `com.manhpham.agentterm.push-type.liveactivity`, priority 5 (10 to
 start), with `stale-date` 30 minutes on and, for `end`, `dismissal-date`.
-While connected, the app updates the activity itself.
+While connected and in front, the app updates the activity itself.
 
 **On the Mac.** A banner over the window for a session that is not the one
 selected while the app is in front.
@@ -1132,8 +1217,11 @@ Another agent's session working in the same folder, or one inside or
 around it, at any moment of the turn makes it `shared`. A file changed in
 the moment between the prompt and the first look is taken for the folder
 as it was. The Mac shows it in `InboxDetail`; the iPhone in
-`TurnResultScreen`, a route of its own (`Route.result`), which the Inbox
-opens for a done item. Continue is the `answer` a notification's reply
+`TurnResultScreen`. Every item of the iPhone's Inbox opens `NoticeScreen`
+(`Route.notice`), as every item of the Mac's shows in `InboxDetail`:
+`TurnResultScreen` for an agent done whose session runs, the notice whole
+otherwise (`Notice.fullBody`, all of what was said; `body`, the last 300
+characters, is a notification's). Continue is the `answer` a notification's reply
 sends. A session also counts as seen when it
 becomes done while it is already in front: both apps look again when the
 list of sessions comes.
@@ -1145,9 +1233,10 @@ with `AgentsActivityAttributes` (`iOS/Shared`, in both targets): the Mac's
 name, and as content how many work and the names of those that wait and
 are done. The app starts, updates and ends it (`PhoneModel.updateLiveActivity`)
 whenever the sessions, the connection or `macInUse` change, as
-`LiveActivityRule.decide` says: shown while connected, no one at the Mac
-and an agent working or waiting; ended at once otherwise, but with the
-last state left showing when every agent is done. Its link,
+`LiveActivityRule.decide` says: shown while an agent works or waits, and
+for `keptIdle` after the last one stopped (#180), updated, not ended;
+ended after that with the last state left showing; ended at once when
+switched off. Its link,
 `<scheme>://session?id=<n>`, opens the session that waits. No push token is
 asked for: updates come from the app while iOS lets it run.
 
@@ -1544,7 +1633,10 @@ it, through shadow roots and frames of the same site; a frame of another
 site counts as a field), and the device's keyboard comes up for it; a
 `newTab` with the new tab's id (`opened`). What a device does to a page
 is done on the Mac in the order it was sent (`BrowserTab.deviceInput`
-chains them), since each answer is awaited in a task of its own. A page
+chains them), since each answer is awaited in a task of its own; so is
+what reads what that input made, a `copy` and a `contextAt`, which are
+not refused while the user has the tab as what acts is
+(`BrowserRequest.followsTheDevicesInput`, #191). A page
 no pane shows that takes the keyboard while it loads is not brought to
 the front, and the keyboard goes back where it was. The
 host keeps which devices watch which tab (`browserWatchers`), and asks the
@@ -1552,7 +1644,37 @@ app for a tab's pictures when its first watcher comes and stops it when
 its last goes, a device that goes included. The app sends each picture
 as a JPEG no wider than the device asked, with the size in CSS pixels of
 what the page shows (`browserFrame`); the host passes it to the
-watchers. While the Mac draws the page (`BrowserTab.isDrawn`: in a pane
+watchers. A Mac showing another Mac's page (#147, `RemotePageView`) draws
+those pictures and sends its mouse as `pointer` events in the page's CSS
+pixels: moved (a hover, and with the button held a drag, which selects
+text), pressed and released, each sent once the one before it is answered
+so that they keep their order, the moves made meanwhile kept to the latest;
+⌘C and a right click wait in the same queue, never kept to the latest,
+so that they read what the drag before them selected (#191); so do the
+keys, text typed and pasted, the wheel, a press by accessibility and the
+menu's Back, Forward and Reload, everything that follows the device's
+input on the Mac whose page it is (`followsTheDevicesInput`), so that
+text typed right after a click goes where the click's release put the
+caret and a scroll comes after the drag before it (#199). The queue is
+`PageInputQueue` (AgentTermProtocol): while one waits for its answer,
+moves are kept to the latest, scrolls added up and text typed joined,
+none dropped; a watch and a new tab, which follow no input, go at once.
+The Mac the browser runs on gives them to Chromium as
+`Input.dispatchMouseEvent`; a press takes an agent's page over, as a tap
+does, a move does not. A right click is not sent to Chromium, whose menu
+would open on that Mac: `contextAt` asks what is at the point (the link
+there, read with `document.elementFromPoint`, and the selection), and the
+viewing Mac shows its own menu with Chromium's words (`BrowserWords.PageMenu`):
+Copy, Open Link in New Tab, Copy Link Address, Back, Forward, Reload. ⌘C
+asks `copy`, the page's selection, or a field's, as text, and puts it on
+the viewing Mac's pasteboard. A page's own right-click menu, made by its
+script, is not shown from another Mac. What the viewing Mac asked and
+was not answered when the connection to that Mac closes is answered at
+once, refused, and said (`BrowserWords.otherMacClosed`: it may not have
+been done there); when the user switches to another Mac it is answered
+so without being said, and a page's view sends nothing more once its Mac
+is not the one on show (#196).
+While the Mac draws the page (`BrowserTab.isDrawn`: in a pane
 of a window on screen and not covered) the pictures are streamed
 (`Page.startScreencast`), about ten a second, each acknowledged a tenth
 of a second after it comes. While it does not, Chromium draws nothing to
@@ -1606,7 +1728,14 @@ meanwhile.
 whenever a tab changes and the host keeps and passes on, and asks
 `browserAsk(id:request:)` for a picture (`picture`, a JPEG) or to take a
 tab over or give it back; a device's request to act on a page is
-refused by the host.
+refused by the host. What the iPhone asked and was not answered is kept
+in a `BrowserAsks` (`AgentTermProtocol`) by the id it went with; when the
+connection closes, or is left for another Mac, a pairing or a Mac
+forgotten (`PhoneModel.disconnect`, after which that connection's
+`.closed` is not heard), each is answered at once, refused with the Mac's
+words (`BrowserWords.otherMacClosed`, as the Mac's #196), and said where
+its own refusal is said; an ask with no connection is refused at once
+(#198).
 
 ## Handoff
 
@@ -1808,6 +1937,46 @@ neither what has the keyboard nor, when one was picked, what its part
 shows. A click in a part puts the keyboard in it (`paneClicked`, by the
 frames `PaneFrameReader` reports for each part).
 
+**A Shells tab split in three** (the owner's request, 2026-11-21). What a
+split Shells tab of the user's shows is a `ShellSplit`
+(`AgentTermProtocol`, a pure value the Mac app keeps in `shellSplits`, by
+the group's tab, not kept when the app quits): the shell on the right, the
+one below, the dividers' shares, and the parts waiting for a new shell.
+The left shows the shell picked, the group's `groupShown`; every answer of
+`ShellSplit` takes that and the tab's shells, and none ever has a shell in
+two parts (#188). The left never shows a shell the right or below shows;
+`show` moves a shell to a part, changing places with what that part
+showed, and when the part was off fills the left from the shells not on
+show (refusing, with `ShellSplitWords.leftKeepsIt` said in the window's
+notice, when there are none) or turns off the right or below it leaves;
+`tidy`, after the tab's shells change, closes a part whose shell ended
+and gives the left the right's shell, else the one below's, when the
+left's ended with every other one on show. A part turned on with no shell
+left to show is a `Wait` for the shell launched for it, known by its
+identity (#189): the Mac numbers that launch (`AppModel.lastShellPartLaunch`,
+sent as `CreateRequest.requestID`), and the host gives the number back to
+it alone with the session it made, in `attached(_, request:)`, the message
+by which the creator learns of its new session, before the session is put
+in front. `ShellSplit.launched(request:shell:)` then names the wait's
+shell, which the part takes once it is in the row, put in front or not.
+So the right and below can wait at once, each for its own, and no other
+shell is taken: neither one the tab already had nor one new to the tab
+from elsewhere while the part waits (File > New Shell, the iPhone, a
+launch of the Mac's own without a number). A wait whose shell is named
+but is not in the tab (it ended before it was shown, or was started in
+another folder) ends in `tidy`. The host refuses a launch with
+`error(_, request:)`, its number in it, for a shell asked for an agent
+that does not run, a worktree it could not make and a program that did not
+start: that ends that part's wait alone (`stopWaiting(request:)`), and the
+refusal is said in the notice; an error without a number ends none. The
+waits all end when the connection goes; there is no timeout that ends
+them without a word. A part turned on while not
+connected does not wait at all: like every way of starting a session
+(`AppModel.canStartSessions`, #202), it is refused with
+`StateWords.notStarted` in the window's notice. That press cannot come
+from the window, which shows why it is not connected in place of the
+tabs; File > New Shell and the menu bar's can.
+
 ## A part that stopped
 
 A part of AgentTerm that stops without being asked to is reported to every
@@ -1860,7 +2029,8 @@ has it. Both apps word a report the same way (`PartFailure.headline`,
 sessions by name, written again when they change. It touches the file
 every few seconds, so its modification time is when the host was last
 known to be alive. A stop that was asked for (SIGTERM, SIGINT: Restart
-Host, replacing another copy's host, logging out) removes the marker before
+Host, replacing another copy's host, logging out; never a program that is
+not an `agenttermd`, `DaemonLauncher.isAHost`, #204) removes the marker before
 the clients' connections close. A host that is killed or crashes cannot.
 So a host that starts, once its port is its own, and finds a marker whose
 process no longer runs as a host knows the one before it died: it adds a

@@ -21,16 +21,54 @@ extension AppModel {
     // MARK: Another Mac's browser (#147)
 
     /// Asks the other Mac's browser, through its host, as the iPhone does;
-    /// what it refuses is said.
-    func askRemoteBrowser(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
+    /// what it refuses is said, apart from what `BrowserRefusal` leaves
+    /// unsaid of what the app asked by itself (#210): `byItself`, or any
+    /// ask of the pages listed before the connection came back.
+    func askRemoteBrowser(_ request: BrowserRequest, byItself: Bool = false, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
         guard isRemote, let connection else { return done(.refused(BrowserWords.noApp)) }
         let id = nextRemoteBrowserAsk
         nextRemoteBrowserAsk += 1
-        remoteBrowserAsks[id] = { [weak self] result in
-            if case .refused(let why) = result { self?.notice = why }
+        if byItself || remotePagesFromBefore { remoteBrowserAsksByItself[id] = request }
+        remoteBrowserAsks[id] = { result in
+            Self.noteRemoteBrowserAnswer(result)
             done(result)
         }
         connection.send(.browserAsk(id: id, request: request))
+    }
+
+    /// For a test, which cannot see a callback (#196): with
+    /// `AGENTTERM_BROWSER_ANSWERS` set, each answer an ask of the other
+    /// Mac's browser is given, a line each: "refused" and why, or what
+    /// else it was.
+    private static func noteRemoteBrowserAnswer(_ result: BrowserResult) {
+        guard let path = ProcessInfo.processInfo.environment["AGENTTERM_BROWSER_ANSWERS"] else { return }
+        let line: String
+        if case .refused(let why) = result { line = "refused \(why)" } else { line = "answered" }
+        let file = URL(fileURLWithPath: path)
+        let before = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        try? (before + line + "\n").write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    /// What the other Mac's browser answered.
+    func remoteBrowserAnswered(id: Int, result: BrowserResult) {
+        let byItself = remoteBrowserAsksByItself.removeValue(forKey: id)
+        guard let done = remoteBrowserAsks.removeValue(forKey: id) else { return }
+        if case .refused(let why) = result, byItself.map({ BrowserRefusal.isSaid(why, of: $0, byItself: true) }) ?? true { notice = why }
+        done(result)
+    }
+
+    /// The connection to the other Mac closed, or this Mac switched away
+    /// from it (#196): what waits for its browser is answered at once, as
+    /// not known to be done, and none waits for an answer that cannot
+    /// come. Said to the user only when it was not asked for: a switch is.
+    func refuseRemoteBrowserAsks(macName: String, tell: Bool) {
+        let waiting = remoteBrowserAsks
+        remoteBrowserAsks = [:]
+        remoteBrowserAsksByItself = [:]
+        guard !waiting.isEmpty else { return }
+        let why = BrowserWords.otherMacClosed(macName)
+        if tell { notice = why }
+        for (_, done) in waiting.sorted(by: { $0.key < $1.key }) { done(.refused(why)) }
     }
 
     /// Called once: what the browser's tabs do reaches the rest of the app.
@@ -547,7 +585,7 @@ extension AppModel {
             try await tab.emulate(device)
             done(device.map { "Shows the page as \($0.name)" } ?? "Shows the page as itself")
             return .text(device.map { "Tab \(tab.id) is shown as \($0.name)" + ($0.width > 0 ? ", \($0.width) × \($0.height)" : "") + "." } ?? "Tab \(tab.id) is shown as itself again.")
-        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles, .profile:
+        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles, .profile, .pointer, .contextAt, .copy:
             return .refused("That is not for this tab.")
         }
     }
@@ -556,8 +594,9 @@ extension AppModel {
     private func deviceRequest(_ request: BrowserRequest, inTurn: Bool = false) async -> BrowserResult {
         // What a device does to a page is done in the order it was sent:
         // each answer is awaited in a task of its own, and text typed and a
-        // Backspace after it must not change places.
-        if !inTurn, request.acts, let id = request.tab, let tab = browsers.tab(id: id) {
+        // Backspace after it must not change places, nor a drag and the
+        // copy of what it selected.
+        if !inTurn, request.followsTheDevicesInput, let id = request.tab, let tab = browsers.tab(id: id) {
             let before = tab.deviceInput
             let turn = Task { @MainActor [weak self] () -> BrowserResult in
                 _ = await before?.value
@@ -630,6 +669,33 @@ extension AppModel {
             if tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }
             tab.stop()
             return .text("Stopped.")
+        case .pointer(_, let event):
+            // The mouse of a Mac showing this page (#147): the user's, as a
+            // tap is. Only a press takes an agent's tab over: hovering over
+            // it as the pointer passes does not.
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            if event.kind == .pressed, tab.owner != nil, !tab.userHasIt { setUserHas(tab, true) }
+            do {
+                try await tab.devtools.pointer(event)
+                return event.kind == .released ? .touched(field: (try? await tab.devtools.fieldHasKeyboard()) ?? false) : .text("Done.")
+            } catch {
+                return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
+            }
+        case .contextAt(_, let x, let y):
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            do {
+                let (link, selection) = try await tab.devtools.context(x: x, y: y)
+                return .context(link: link, selection: selection)
+            } catch {
+                return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
+            }
+        case .copy:
+            guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+            do {
+                return .text(try await tab.devtools.context(x: nil, y: nil).selection)
+            } catch {
+                return .refused((error as? DevToolsSession.Failure)?.text ?? error.localizedDescription)
+            }
         case .emulate(_, let device):
             // As the Show As menu does on the Mac: the page stays its agent's.
             guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }

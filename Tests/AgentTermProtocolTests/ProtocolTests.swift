@@ -30,6 +30,21 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(MessageCoding.decode(ServerMessage.self, from: old), .welcome(version: 22, host: "Mac", release: nil, revision: nil))
     }
 
+    /// PUSH-13 (#190): a device's app going to the background and coming
+    /// back is a message of its own, `deviceInBackground`, not the Mac
+    /// app's `appInFront`, which says only that the Mac is in use.
+    func testADevicesAppInTheBackgroundIsAMessageOfItsOwn() {
+        for away in [true, false] {
+            let message = ClientMessage.deviceInBackground(away)
+            let wire = MessageCoding.encode(message)
+            XCTAssertEqual(MessageCoding.decode(ClientMessage.self, from: wire), message)
+            XCTAssertNotEqual(MessageCoding.decode(ClientMessage.self, from: wire), .appInFront(!away))
+        }
+        let sent = Data(#"{"deviceInBackground":{"_0":true}}"#.utf8)
+        XCTAssertEqual(MessageCoding.decode(ClientMessage.self, from: sent), .deviceInBackground(true))
+        XCTAssertEqual(MessageCoding.decode(ClientMessage.self, from: Data(#"{"appInFront":{"_0":true}}"#.utf8)), .appInFront(true))
+    }
+
     /// INBOX-2 (#67): what is in the Inbox, and in which order: the agents
     /// that wait, what stopped, then the agents done and not seen.
     func testWhatIsInTheInbox() {
@@ -59,13 +74,56 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(Inbox.item(after: nil, in: []))
     }
 
+    /// BROWSER-49 (#147): another Mac's mouse is a device's, about a tab;
+    /// a move, a press or a release acts on the page, asking what is at a
+    /// point or copying does not; and what is at a point comes back whole.
+    func testAnotherMacsMouseIsADevicesRequest() throws {
+        let pointer = BrowserRequest.pointer(tab: "7", event: PagePointer(kind: .released, x: 1, y: 2))
+        for request in [pointer, .contextAt(tab: "7", x: 1, y: 2), .copy(tab: "7")] {
+            XCTAssertTrue(request.isTheDevices, "\(request)")
+            XCTAssertEqual(request.tab, "7")
+        }
+        XCTAssertTrue(pointer.acts)
+        XCTAssertFalse(BrowserRequest.copy(tab: "7").acts)
+        XCTAssertFalse(BrowserRequest.contextAt(tab: "7", x: 1, y: 2).acts)
+        for result in [BrowserResult.context(link: "https://example.com/a b", selection: "chữ"), .context(link: nil, selection: "")] {
+            XCTAssertEqual(try JSONDecoder().decode(BrowserResult.self, from: try JSONEncoder().encode(result)), result)
+        }
+    }
+
+    /// BROWSER-50 (#191): a copy, and what is at a point, come after the
+    /// device's input before them, as what acts does, without acting: the
+    /// selection a drag made is read once the drag is done, and neither is
+    /// refused while the user has the tab. A look of an agent's waits for
+    /// nothing.
+    func testWhatReadsADragFollowsTheDevicesInput() {
+        let after: [BrowserRequest] = [
+            .pointer(tab: "7", event: PagePointer(kind: .moved, x: 1, y: 2, held: true)), .copy(tab: "7"), .contextAt(tab: "7", x: 1, y: 2),
+            .text(tab: "7", text: "a"), .press(tab: "7", key: "Backspace"), .tap(tab: "7", x: 1, y: 2), .scroll(tab: "7", ref: nil, x: 0, y: 10),
+        ]
+        for request in after { XCTAssertTrue(request.followsTheDevicesInput, "\(request)") }
+        for request: BrowserRequest in [.picture(tab: "7"), .watch(tab: "7", on: true, width: 300), .takeOver(tab: "7"), .snapshot(tab: "7", within: nil), .tabs] {
+            XCTAssertFalse(request.followsTheDevicesInput, "\(request)")
+        }
+        XCTAssertFalse(BrowserRequest.copy(tab: "7").acts)
+        XCTAssertFalse(BrowserRequest.contextAt(tab: "7", x: 1, y: 2).acts)
+    }
+
     func testClientMessagesRoundTrip() {
         let messages: [ClientMessage] = [
             .hello(token: "secret", client: "iPhone", kind: .iphone),
             .hello(token: "secret", client: "Studio"),
             .list,
+            .readNotices(ids: [3, 4]),
+            // A Mac's mouse on another Mac's page (#147).
+            .browserAsk(id: 1, request: .pointer(tab: "7", event: PagePointer(kind: .moved, x: 10.5, y: 20, held: true))),
+            .browserAsk(id: 2, request: .pointer(tab: "7", event: PagePointer(kind: .pressed, x: 1, y: 2, held: true, clicks: 2))),
+            .browserAsk(id: 3, request: .contextAt(tab: "7", x: 3, y: 4)),
+            .browserAsk(id: 4, request: .copy(tab: "7")),
             .agents(refresh: true),
             .create(CreateRequest(command: "claude", cwd: "/tmp", title: "Claude", size: TermSize(cols: 48, rows: 30))),
+            // A launch of the client's own, by its number (#189).
+            .create(CreateRequest(cwd: "/tmp", requestID: 7)),
             .attach(session: 7, size: TermSize(cols: 120, rows: 40)),
             .detach(session: 7),
             .resize(session: 7, size: TermSize(cols: 50, rows: 20)),
@@ -144,9 +202,12 @@ final class ProtocolTests: XCTestCase {
             .welcome(version: agenttermProtocolVersion, host: "Mac"),
             .welcome(version: agenttermProtocolVersion, host: "Mac", release: "0.10.0", revision: "1f3a9c0d2b4e6f70"),
             .sessions([info]),
+            .noticeAlert(id: 9),
+            .noticesRead(ids: [9, 10]),
             .agents([AgentInfo(id: "claude", name: "Claude Code", path: "/usr/local/bin/claude"), AgentInfo(id: "agy", name: "Antigravity", path: nil)]),
             .folders(["/Users/me/app"]),
             .attached(info),
+            .attached(info, request: 7),
             .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: true),
             .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: false, by: SizeDriver(name: "Manh's iPad", kind: .ipad)),
             .exited(session: 3, status: 130),
@@ -164,6 +225,7 @@ final class ProtocolTests: XCTestCase {
                     request: nil, reply: nil, startedAt: Date(timeIntervalSince1970: 1_800_000_000), endedAt: Date(timeIntervalSince1970: 1_800_000_001),
                     end: .stopped, commands: nil, changes: nil)),
             .error("nope"),
+            .error("nope", request: 7),
             .paired(device: "d-1", token: "t0ken"),
             .pairingCode(code: "c0de", expiresAt: Date(timeIntervalSince1970: 1_800_000_300)),
             .diff(path: "/Users/me/app", snapshot: DiffSnapshot(isRepository: true, branch: "main", files: [FileDiff(path: "a.txt", added: 1, deleted: 2, isUntracked: false, patch: "")])),
@@ -371,6 +433,14 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(LiveActivityRule.decide(enabled: false, status: working), .endNow, "switched off")
         let over = AgentsStatus.of(sessions: [session(1, .done(said: nil)), session(2, nil)], failures: [])
         XCTAssertEqual(LiveActivityRule.decide(enabled: true, status: over), .endShowingDone)
+        // Kept between turns (#180): updated while it has been over for
+        // less than `keptIdle`, ended after.
+        let now = Date()
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, status: over, idleSince: now.addingTimeInterval(-60), now: now), .show)
+        XCTAssertEqual(
+            LiveActivityRule.decide(enabled: true, status: over, idleSince: now.addingTimeInterval(-LiveActivityRule.keptIdle), now: now),
+            .endShowingDone)
+        XCTAssertEqual(LiveActivityRule.decide(enabled: false, status: over, idleSince: now, now: now), .endNow)
     }
 
     /// LIVE-3 (#168): the whole state, counted by kind, with the names of
@@ -483,7 +553,7 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNotEqual(CloseWords.groupAction(.files), "Close All Files", "the pane's own item")
     }
 
-    /// MCP-19: what is wrong with the agents' server, in words, and a cause
+    /// MCP-36: what is wrong with the agents' server, in words, and a cause
     /// this build does not know still read.
     func testAnAgentShellsFaultInWords() throws {
         let install = AgentShellsFault(cause: .signIn, agents: ["Codex"])

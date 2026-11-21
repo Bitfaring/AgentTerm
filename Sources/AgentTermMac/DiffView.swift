@@ -1023,7 +1023,7 @@ private struct PatchView: NSViewRepresentable {
         container.lineFragmentPadding = 10
         layout.addTextContainer(container)
 
-        let text = NSTextView(frame: .zero, textContainer: container)
+        let text = DiffTextView(frame: .zero, textContainer: container)
         text.isEditable = false
         text.isSelectable = true
         text.isRichText = false
@@ -1208,5 +1208,14 @@ private struct PatchView: NSViewRepresentable {
                 NSRect(x: 0, y: rect.minY + origin.y, width: width, height: rect.height).fill(using: .sourceOver)
             }
         }
+    }
+}
+
+/// A diff's text: given the keyboard asked for it before it was in the
+/// window, once it is there (#184).
+final class DiffTextView: NSTextView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        KeyboardTargets.arrived(self)
     }
 }

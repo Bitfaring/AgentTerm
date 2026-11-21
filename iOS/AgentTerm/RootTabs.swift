@@ -87,6 +87,10 @@ private struct SettingsTab: View {
     /// The Mac's own settings are changed only while it can be told: one
     /// changed while it cannot would be put back when it is reached again.
     private var online: Bool { model.status == .connected }
+    /// The Live Activity switch, as iOS lets it work (#212).
+    private var liveActivity: DependentSwitch {
+        DependentSwitch.liveActivity(stored: model.showsLiveActivity, allowed: model.liveActivitiesAllowed)
+    }
 
     /// One of the keep awake options, changed on the Mac as it is changed here.
     private func option<Value>(_ keyPath: WritableKeyPath<KeepAwakeOptions, Value>) -> Binding<Value> {
@@ -142,11 +146,16 @@ private struct SettingsTab: View {
                 Section {
                     Toggle("Tell me when an agent is done or needs me", isOn: $model.notifyAgents)
                         .accessibilityIdentifier("notify-agents")
-                    // Through Apple while the app is closed (#66).
-                    Toggle(PushWords.toggle, isOn: $model.pushAlso)
-                        .disabled(!model.notifyAgents)
+                    // Through Apple while the app is closed (#66): off while
+                    // the one above is, whatever it keeps (#211), and in a
+                    // build with no push (#212).
+                    let pushAlso = DependentSwitch.pushAlso(stored: model.pushAlso, notifications: model.notifyAgents, channel: AppChannel.current)
+                    Toggle(PushWords.toggle, isOn: Binding(get: { pushAlso.shown }, set: { model.pushAlso = $0 }))
+                        .disabled(!pushAlso.isEnabled)
                         .accessibilityIdentifier("push-also")
-                    Toggle(AgentsStatus.toggle, isOn: $model.showsLiveActivity)
+                    // Off while iOS has Live Activities off for the app (#212).
+                    Toggle(AgentsStatus.toggle, isOn: Binding(get: { liveActivity.shown }, set: { model.showsLiveActivity = $0 }))
+                        .disabled(!liveActivity.isEnabled)
                         .accessibilityIdentifier("live-activity")
                 } header: {
                     Text("Agents")
@@ -158,6 +167,7 @@ private struct SettingsTab: View {
                                 : "Once iOS puts the app to sleep, after a short while, nothing arrives until you open it again. "
                                     + (model.pushState?.footnote.map { $0 + " " } ?? ""))
                             + "Nothing is told while someone is at \(macName). What an agent said shows on the lock screen only if iOS shows previews there."
+                            + (liveActivity.stoppedBy.map { " " + $0 } ?? "")
                     )
                 }
 
@@ -204,12 +214,20 @@ private struct SettingsTab: View {
                 MacSettingsSection(macName: macName)
 
                 Section {
-                    Toggle(TelemetryPreferences.Wording.crashTitle, isOn: $privacy.crashReports)
-                    Toggle(TelemetryPreferences.Wording.usageTitle, isOn: $privacy.usageStatistics)
+                    // Off in a build with no reporting service, whatever they
+                    // keep (#212).
+                    let crash = DependentSwitch(stored: privacy.crashReports, stoppedBy: privacy.stoppedBy)
+                    let usage = DependentSwitch(stored: privacy.usageStatistics, stoppedBy: privacy.stoppedBy)
+                    Toggle(TelemetryPreferences.Wording.crashTitle, isOn: Binding(get: { crash.shown }, set: { privacy.crashReports = $0 }))
+                        .disabled(!crash.isEnabled)
+                        .accessibilityIdentifier("privacy-crash")
+                    Toggle(TelemetryPreferences.Wording.usageTitle, isOn: Binding(get: { usage.shown }, set: { privacy.usageStatistics = $0 }))
+                        .disabled(!usage.isEnabled)
+                        .accessibilityIdentifier("privacy-usage")
                 } header: {
                     Text("Privacy")
                 } footer: {
-                    Text(privacy.isAvailable ? TelemetryPreferences.Wording.usageDetail : TelemetryPreferences.Wording.unavailable)
+                    Text(privacy.stoppedBy ?? TelemetryPreferences.Wording.usageDetail)
                 }
 
                 // What only the phone has: the Mac it is looking at.

@@ -23,6 +23,11 @@ class MacUITestCase: XCTestCase {
     private(set) var app: MacDriver!
     private var host: Process?
     private var others: [Process] = []
+    /// Every app the test started, kept from the moment it starts: one whose
+    /// window never came stopped the set-up before it was the test's `app`,
+    /// and was left running; losing its host, it started one of its own
+    /// (#185).
+    private var launched: [MacDriver] = []
     private var clients: [AgentTermConnection] = []
 
     /// A port nothing else in a run uses.
@@ -66,6 +71,9 @@ class MacUITestCase: XCTestCase {
     }
 
     override func tearDown() {
+        // A failure here does not stop the tearing down half way, nor that
+        // of a subclass after it: what it started would be left running.
+        continueAfterFailure = true
         let environment = ProcessInfo.processInfo.environment
         let wanted = (testRun?.failureCount ?? 0) > 0 || environment["AGENTTERM_SHOT_ALWAYS"] != nil
         if wanted, let folder = environment["AGENTTERM_SHOT_DIR"], let app {
@@ -75,14 +83,96 @@ class MacUITestCase: XCTestCase {
         clients.forEach { $0.close() }
         clients = []
         app?.quit()
+        launched.forEach { $0.quit() }
+        launched = []
         // A host the app started by itself is not a child of this test.
         stopWhateverListens(on: port)
         for process in [host].compactMap({ $0 }) + others where process.isRunning {
             process.terminate()
             process.waitUntilExit()
         }
+        let left = endWhatOutlivedTheTest()
         if let root { try? FileManager.default.removeItem(at: root) }
         if app != nil { forgetPreferences() }
+        if !left.isEmpty { XCTFail("the test left these running, now ended: " + left.joined(separator: "; ")) }
+    }
+
+    /// TEST-9 (#203): nothing of a test outlives it. Once everything it
+    /// started was stopped, any program of this build still running with
+    /// the test's state folder is a fault of the test: most often a host the
+    /// app started by itself, on a port no one stops, because what the app
+    /// was connected to (a `SlowProxy`) was stopped before the app quit.
+    /// It is ended, and named for the test to fail.
+    private func endWhatOutlivedTheTest() -> [String] {
+        guard let root else { return [] }
+        var left = programsOfThisTest(root)
+        let deadline = Date().addingTimeInterval(10)
+        // What was just told to stop takes a moment to go.
+        while !left.isEmpty, Date() < deadline {
+            usleep(100_000)
+            left = programsOfThisTest(root)
+        }
+        guard !left.isEmpty else { return [] }
+        for program in left { kill(program.pid, SIGTERM) }
+        let killed = Date().addingTimeInterval(3)
+        while !programsOfThisTest(root).isEmpty, Date() < killed { usleep(100_000) }
+        for program in programsOfThisTest(root) { kill(program.pid, SIGKILL) }
+        return left.map { "\($0.pid) \($0.command)" }
+    }
+
+    /// The programs of this build (the folder `.build` the tests run from,
+    /// or the test's own folder) whose state folder is the test's. Nothing
+    /// else is looked into: the installed app and its host are not of this
+    /// build.
+    private func programsOfThisTest(_ root: URL) -> [(pid: pid_t, command: String)] {
+        let resolvedProducts = products.resolvingSymlinksInPath().path
+        let build = resolvedProducts.range(of: "/.build/").map { String(resolvedProducts[..<$0.upperBound]) } ?? resolvedProducts + "/"
+        let places = [build, root.resolvingSymlinksInPath().path + "/"]
+        let mark = root.lastPathComponent
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(count) + 64)
+        let found = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        var programs: [(pid: pid_t, command: String)] = []
+        for pid in pids.prefix(Int(max(found, 0))) where pid > 0 && pid != getpid() {
+            var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+            guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { continue }
+            let path = String(cString: buffer)
+            guard places.contains(where: { path.hasPrefix($0) }), let (arguments, environment) = Self.argumentsAndEnvironment(of: pid),
+                environment["AGENTTERM_STATE_DIR"]?.contains(mark) == true
+            else { continue }
+            programs.append((pid, ([path] + arguments.dropFirst()).joined(separator: " ")))
+        }
+        return programs
+    }
+
+    /// What a program was started with, as the kernel keeps it.
+    static func argumentsAndEnvironment(of pid: pid_t) -> ([String], [String: String])? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        let argc = Int(buffer.withUnsafeBytes { $0.load(as: Int32.self) })
+        var index = MemoryLayout<Int32>.size
+        // The executable's path, then the zeros that pad it.
+        while index < size, buffer[index] != 0 { index += 1 }
+        while index < size, buffer[index] == 0 { index += 1 }
+        func next() -> String? {
+            guard index < size else { return nil }
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            defer { index += 1 }
+            return String(decoding: buffer[start..<index], as: UTF8.self)
+        }
+        var arguments: [String] = []
+        for _ in 0..<argc { guard let argument = next() else { break }; arguments.append(argument) }
+        var environment: [String: String] = [:]
+        while let entry = next(), !entry.isEmpty {
+            guard let equals = entry.firstIndex(of: "=") else { continue }
+            environment[String(entry[..<equals])] = String(entry[entry.index(after: equals)...])
+        }
+        return (arguments, environment)
     }
 
     /// A picture of the window in the middle of a test, with `ALL_SHOTS`.
@@ -165,8 +255,15 @@ class MacUITestCase: XCTestCase {
         environment["AGENTTERM_STATE_DIR"] = state.path
         environment["AGENTTERM_PORT"] = String(appPort)
         environment["CFFIXED_USER_HOME"] = home.path
-        let driver = try MacDriver(executable: bundle.appendingPathComponent("Contents/MacOS/AgentTerm"), environment: environment)
+        let driver = try startDriver(executable: bundle.appendingPathComponent("Contents/MacOS/AgentTerm"), environment: environment)
         driver.wait(for: .id("mac-switcher"), timeout: 30)
+        return driver
+    }
+
+    /// Starts an app, kept to be quit when the test ends however it ends.
+    func startDriver(executable: URL, environment: [String: String]) throws -> MacDriver {
+        let driver = try MacDriver(executable: executable, environment: environment)
+        launched.append(driver)
         return driver
     }
 
@@ -463,12 +560,21 @@ class MacUITestCase: XCTestCase {
         return process
     }
 
+    /// This process's environment with none of AgentTerm's variables
+    /// (TEST-11, #207): the tests may be run from a session of the
+    /// installed app, whose own (its hooks' file, its MCP server's key) are
+    /// in it. What a test starts gets the `AGENTTERM_` variables the test
+    /// gives it, and no other.
+    static var withoutAgentTerms: [String: String] {
+        ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("AGENTTERM_") }
+    }
+
     /// This process's environment, with `home` as the home folder: the
     /// login shells the host starts, for sessions and to find the user's
     /// PATH, read their startup files from there, and none of those of the
     /// person running the tests (TEST-1).
     static func ownHome(_ home: URL) -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
+        var environment = withoutAgentTerms
         environment["HOME"] = home.path
         // zsh looks for its files here first, whatever HOME says.
         environment["ZDOTDIR"] = home.path
@@ -506,11 +612,15 @@ class MacUITestCase: XCTestCase {
         // Under a name of its own, the app keeps its preferences apart from
         // those of an AgentTerm someone runs from this build folder: macOS
         // files the preferences of a program without a bundle under its name.
-        let executable = products.appendingPathComponent(Self.appName)
+        // A release build of the app, for figures of the build users run
+        // (`RELEASE_APP=1 scripts/test-mac.sh`, #178): built beside the
+        // debug one, the host and the tests staying the debug build's.
+        let appProducts = ProcessInfo.processInfo.environment["AGENTTERM_RELEASE_APP"] != nil ? products.deletingLastPathComponent().appendingPathComponent("Release") : products
+        let executable = appProducts.appendingPathComponent(Self.appName)
         if !FileManager.default.fileExists(atPath: executable.path) {
-            try FileManager.default.createSymbolicLink(at: executable, withDestinationURL: products.appendingPathComponent("AgentTermMac"))
+            try FileManager.default.createSymbolicLink(at: executable, withDestinationURL: appProducts.appendingPathComponent("AgentTermMac"))
         }
-        let driver = try MacDriver(executable: executable, environment: environment)
+        let driver = try startDriver(executable: executable, environment: environment)
         driver.wait(for: .id("mac-switcher"), timeout: 20)
         return driver
     }
@@ -527,7 +637,7 @@ class MacUITestCase: XCTestCase {
         let process = Process()
         process.executableURL = products.appendingPathComponent("agenttermd")
         process.arguments = ["pairing-link", "--port", String(port), "--host", "127.0.0.1", "--name", name]
-        var environment = ProcessInfo.processInfo.environment
+        var environment = Self.withoutAgentTerms
         environment["AGENTTERM_STATE_DIR"] = state.path
         process.environment = environment
         let pipe = Pipe()

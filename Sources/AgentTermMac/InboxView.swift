@@ -72,19 +72,20 @@ private struct InboxRow: View {
                 .frame(width: 14)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
+                // All of what was said, not a few lines (the owner's
+                // decision, 2026-11-21).
                 Text(words.title)
                     .font(.system(size: 12.5, weight: item.read ? .regular : .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(words.why)
                     .font(.system(size: 11))
                     .foregroundStyle(words.waits ? Color.orange : .secondary)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let detail = words.detail {
                     Text(detail)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 0)
@@ -192,14 +193,6 @@ struct InboxDetail: View {
                 Button(InboxWords.deleteOne) { model.dismiss(item) }
                     .accessibilityIdentifier("inbox-dismiss")
             }
-            if model.inboxItems.count > 1 {
-                Button {
-                    model.pickNextInboxItem()
-                } label: {
-                    Label(Inbox.next, systemImage: "arrow.right")
-                }
-                .accessibilityIdentifier("inbox-next")
-            }
         }
     }
 
@@ -240,7 +233,7 @@ struct InboxDetail: View {
             section(nil, text: failure.details.isEmpty ? nil : failure.details, or: "")
         case .notice(let notice):
             // Over: as it was told, and how it was handled.
-            section(notice.state.map { $0.isWaiting ? Inbox.asks : Inbox.said }, text: notice.body.isEmpty ? nil : notice.body, or: "")
+            section(notice.state.map { $0.isWaiting ? Inbox.asks : Inbox.said }, text: notice.fullBody.isEmpty ? nil : notice.fullBody, or: "")
             if let handled = notice.handledWords { note(handled) }
         }
     }
@@ -453,7 +446,8 @@ private struct ItemWords {
         case .session(let info):
             title = (info.cwd as NSString).lastPathComponent + " · " + info.displayName
             why = model.agentName(info.agent ?? info.typedAgent ?? "shell") + " " + (item.notice?.why ?? "")
-            detail = item.notice?.detail.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            // All of it: `detail`, the end of it, is a notification's (#66).
+            detail = item.notice?.full.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             waits = info.state?.isWaiting == true
         case .failure(let failure):
             title = failure.headline()
@@ -463,7 +457,7 @@ private struct ItemWords {
         case .notice(let notice):
             title = notice.folder.isEmpty ? notice.title() : (notice.folder as NSString).lastPathComponent + " · " + notice.name
             why = [notice.agentNotice?.why, notice.handledWords].compactMap { $0 }.joined(separator: " · ")
-            detail = notice.body.isEmpty ? nil : notice.body
+            detail = notice.fullBody.isEmpty ? nil : notice.fullBody
             waits = false
         }
     }

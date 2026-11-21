@@ -17,6 +17,9 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# None of the installed app's variables reaches the tests (#207).
+source scripts/lib-own-environment.sh
+own_environment
 command -v xcodegen >/dev/null || { echo "test-both.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
 source scripts/lib-simulator.sh
 source scripts/lib-cleanup.sh
@@ -69,9 +72,10 @@ HTML
 HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" "$BIN/agenttermd" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 MAC=""
+PROXY=""
 cleanup() {
     local status=$?
-    stop_then_remove "$MAC $DAEMON" "$ROOT"
+    stop_then_remove "$MAC $PROXY $DAEMON" "$ROOT"
     defaults delete "$IDENTIFIER" >/dev/null 2>&1 || true
     exit "$status"
 }
@@ -117,7 +121,15 @@ part() {
 
 part "the Mac app first" swift test --skip-build --filter "AgentTermMacUITests.CrossTests/testPart1"
 
-export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$BIN/agenttermd" pairing-link --port "$PORT" --host 127.0.0.1 --name "First Mac")"
+# The iPhone reaches the host through a proxy the test can tell to hold
+# what the host sends, and to close the connection (#198).
+PROXY_PORT=$((PORT + 1))
+mkdir -p "$ROOT/proxy"
+python3 scripts/hold-proxy.py "$PROXY_PORT" "$PORT" "$ROOT/proxy" > "$STATE/proxy.log" 2>&1 &
+PROXY=$!
+for _ in $(seq 1 50); do nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null && break; sleep 0.1; done
+export TEST_RUNNER_AGENTTERM_PROXY_DIR="$ROOT/proxy"
+export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$BIN/agenttermd" pairing-link --port "$PROXY_PORT" --host 127.0.0.1 --name "First Mac")"
 export TEST_RUNNER_AGENTTERM_LAUNCH="Start Shell"
 export TEST_RUNNER_AGENTTERM_WITH_MAC=1
 part "the iPhone app, finding what the Mac did" "${XCODEBUILD[@]}" test-without-building -only-testing:AgentTermUITests/CrossTests

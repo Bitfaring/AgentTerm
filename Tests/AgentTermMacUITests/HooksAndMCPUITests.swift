@@ -120,6 +120,9 @@ final class HooksAndMCPUITests: MacUITestCase {
         app.wait(for: .id("onboarding-add-folder"))
         app.press(.id("onboarding-next"))
         app.wait(for: .containing("Permissions"))
+        // Notifications among them, asked here up front (#180).
+        app.wait(for: .containing("Tells you when an agent is done"))
+        shot("onboarding-permissions")
         app.press(.id("onboarding-next"))
         app.wait(for: .id("setup-claude"), timeout: 20)
         shot("onboarding-agents")
@@ -132,7 +135,7 @@ final class HooksAndMCPUITests: MacUITestCase {
         app.wait(for: .id("onboarding"), timeout: 30)
 
         // Every agent set up from it: not shown again.
-        app.press(.id("onboarding-step-3"))
+        app.press(.id("onboarding-step-4"))
         app.wait(for: .id("setup-all"), timeout: 20)
         app.press(.id("setup-all"))
         app.wait("both set up", timeout: 40) { self.label("setup-claude-Hooks") == "Hooks, added" && self.label("setup-codex-Hooks") == "Hooks, added" }
@@ -149,6 +152,29 @@ final class HooksAndMCPUITests: MacUITestCase {
         app.press(.id("onboarding-hide"))
         app.press(.id("onboarding-skip"))
         app.waitGone(.id("onboarding"))
+    }
+
+    /// ONBOARD-2: at the first launch of a build that reports, what may be
+    /// sent is a step of the onboarding, which shows at once, alone: never
+    /// two sheets one over the other (the owner's decision, 2026-11-21).
+    /// Its Next answers it; answered, it is not a step any more.
+    func testTheReportingQuestionIsAStepOfTheOnboarding() throws {
+        appEnvironment["AGENTTERM_REPORTING_PREVIEW"] = "agentterm-ui-test-\(UUID().uuidString)"
+        try relaunchApp()
+        app.wait(for: .id("onboarding"), timeout: 15)
+        app.press(.id("onboarding-next"))
+        app.wait(for: .id("reporting-choices"), timeout: 15)
+        // Long enough for the host to have said the agents miss their setup.
+        RunLoop.current.run(until: Date().addingTimeInterval(4))
+        XCTAssertEqual(app.all(.id("onboarding")).count, 1, "more than one onboarding")
+        shot("onboard-2-reports-step")
+        app.press(.id("onboarding-next"))
+        app.wait(for: .id("onboarding-add-folder"))
+        app.press(.id("onboarding-skip"))
+        app.waitGone(.id("onboarding"))
+        try relaunchApp()
+        app.wait(for: .id("onboarding"), timeout: 30)
+        XCTAssertFalse(app.exists(.id("onboarding-step-1")), "the reports step, once answered")
     }
 
     /// LINK-8 (#129): a shell opened with the key of a shell of the user's,

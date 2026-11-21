@@ -4,8 +4,11 @@ import SwiftUI
 
 /// A page of another Mac's browser (#147), as the iPhone shows one: the
 /// pictures that Mac sends while it is watched, drawn as wide as the pane,
-/// and what the mouse and the keyboard do sent there, by the same requests
-/// a device makes (`tap`, `scroll`, `press`, `text`).
+/// and what the mouse and the keyboard do sent there: the keys and the
+/// wheel by the same requests a device makes (`press`, `text`, `scroll`),
+/// the mouse by `pointer` (hover, click, drag, selecting text), a right
+/// click by a menu of this Mac's made from `contextAt`, ⌘C by `copy`. All
+/// of it in the order done, one at a time (`PageInputQueue`, #191, #199).
 struct RemotePageView: NSViewRepresentable {
     @ObservedObject var tab: BrowserTab
     let model: AppModel
@@ -13,7 +16,15 @@ struct RemotePageView: NSViewRepresentable {
     func makeNSView(context: Context) -> RemotePageNSView {
         let view = RemotePageNSView()
         view.tabID = tab.id
-        view.send = { [weak model] request in model?.askRemoteBrowser(request) }
+        view.project = tab.project
+        // Its Mac's page only: what is still in its queue once another Mac
+        // is on show is not sent to that one, whose tab may have its id (#196).
+        let mac = model.remote
+        view.send = { [weak model] request, byItself in if let model, model.remote == mac { model.askRemoteBrowser(request, byItself: byItself) } }
+        view.ask = { [weak model] request, done in
+            guard let model, model.remote == mac else { return done(.refused(BrowserWords.otherMacClosed(mac?.name ?? "the other Mac"))) }
+            model.askRemoteBrowser(request, done)
+        }
         return view
     }
 
@@ -27,7 +38,16 @@ struct RemotePageView: NSViewRepresentable {
 
 final class RemotePageNSView: NSView {
     var tabID = ""
-    var send: ((BrowserRequest) -> Void)?
+    var project = ""
+    /// Sends a request, and whether the app sent it by itself rather than
+    /// for something the user did (#210).
+    var send: ((BrowserRequest, _ byItself: Bool) -> Void)?
+    /// A request whose answer is wanted.
+    var ask: ((BrowserRequest, @escaping (BrowserResult) -> Void) -> Void)?
+    /// What the mouse, the keys and the wheel do, and what reads what they
+    /// did (⌘C, a right click), sent one at a time in their order: the next
+    /// once the last is answered (#191, #199).
+    private var inputQueue = PageInputQueue<(BrowserResult) -> Void>()
     var frameImage: (image: NSImage, width: Double, height: Double)?
     /// The width the pictures were asked at, in pixels; nil while not watched.
     private var watchedWidth: Int?
@@ -50,14 +70,18 @@ final class RemotePageNSView: NSView {
 
     private var pixelWidth: Int { max(320, Int(bounds.width * (window?.backingScaleFactor ?? 2))) }
 
+    /// Watched as the page is opened, which the user asked for; again at a
+    /// new width, and no longer as it goes, which the app does by itself
+    /// (#210).
     func watch(_ on: Bool) {
         guard !tabID.isEmpty else { return }
         if on {
+            let again = watchedWidth != nil
             watchedWidth = pixelWidth
-            send?(.watch(tab: tabID, on: true, width: pixelWidth))
+            send?(.watch(tab: tabID, on: true, width: pixelWidth), again)
         } else if watchedWidth != nil {
             watchedWidth = nil
-            send?(.watch(tab: tabID, on: false, width: 0))
+            send?(.watch(tab: tabID, on: false, width: 0), true)
         }
     }
 
@@ -89,17 +113,136 @@ final class RemotePageNSView: NSView {
         return (min(x, frame.width - 1), y)
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        // Hover: the page sees the pointer pass while the window is in front.
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    /// Sends a mouse event after what was done before it.
+    private func point(_ event: PagePointer) { input(.pointer(tab: tabID, event: event)) }
+
+    /// Sends what the mouse, the keys or the wheel did, or asks what reads
+    /// it, after what was done before it: what a drag selected is read once
+    /// its last move and its release are there (#191), text typed after a
+    /// click goes in once the click's release is there (#199).
+    private func input(_ request: BrowserRequest, _ done: ((BrowserResult) -> Void)? = nil) {
+        if let now = inputQueue.add(request, answer: done) { ask?(now.request, now.answer ?? { _ in }) }
+        sendNextInput()
+    }
+
+    private func sendNextInput() {
+        guard let ask, let item = inputQueue.next() else { return }
+        ask(item.request) { [weak self] result in
+            item.answer?(result)
+            DispatchQueue.main.async {
+                self?.inputQueue.answered()
+                self?.sendNextInput()
+            }
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard let point = pagePoint(event) else { return }
+        self.point(PagePointer(kind: .moved, x: point.x, y: point.y))
+    }
+
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         guard let point = pagePoint(event) else { return }
-        send?(.tap(tab: tabID, x: point.x, y: point.y))
+        self.point(PagePointer(kind: .moved, x: point.x, y: point.y))
+        self.point(PagePointer(kind: .pressed, x: point.x, y: point.y, held: true, clicks: event.clickCount))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let point = pagePoint(event) else { return }
+        // A drag: text selected, or something moved, as it is held.
+        self.point(PagePointer(kind: .moved, x: point.x, y: point.y, held: true))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let point = pagePoint(event) ?? clampedPoint(event)
+        guard let point else { return }
+        self.point(PagePointer(kind: .released, x: point.x, y: point.y, clicks: event.clickCount))
+    }
+
+    /// A point of the page for an event outside it, as a release after a
+    /// drag past its edge: brought to its nearest edge.
+    private func clampedPoint(_ event: NSEvent) -> (x: Double, y: Double)? {
+        guard let frame = frameImage else { return nil }
+        let point = convert(event.locationInWindow, from: nil)
+        return (min(max(0, Double(point.x / scale)), frame.width - 1), min(max(0, Double(point.y / scale)), frame.height - 1))
+    }
+
+    /// A right click: this Mac's own menu, made from what is at that point
+    /// there, never one opened on the Mac the browser runs on.
+    override func rightMouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        guard let point = pagePoint(event) else { return }
+        showMenu(at: point, location: convert(event.locationInWindow, from: nil))
+    }
+
+    /// The menu for a point of the page, at a point of this view.
+    private func showMenu(at point: (x: Double, y: Double), location: NSPoint) {
+        input(.contextAt(tab: tabID, x: point.x, y: point.y)) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self, case .context(let link, let selection) = result else { return }
+                self.showMenu(link: link, selection: selection, at: location)
+            }
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? { nil }
+
+    private func showMenu(link: String?, selection: String, at location: NSPoint) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func item(_ title: String, _ action: @escaping () -> Void) {
+            let item = NSMenuItem(title: title, action: #selector(PageMenuAction.run), keyEquivalent: "")
+            let target = PageMenuAction(action)
+            item.target = target
+            item.representedObject = target
+            menu.addItem(item)
+        }
+        if !selection.isEmpty {
+            item(BrowserWords.PageMenu.copy) { Self.putOnPasteboard(selection) }
+            menu.addItem(.separator())
+        }
+        if let link {
+            item(BrowserWords.PageMenu.openLink) { [weak self] in
+                guard let self else { return }
+                self.send?(.newTab(project: self.project, url: link, profile: nil, private: false), false)
+            }
+            item(BrowserWords.PageMenu.copyLink) { Self.putOnPasteboard(link) }
+            menu.addItem(.separator())
+        }
+        item(BrowserWords.PageMenu.back) { [weak self] in self.map { $0.input(.history(tab: $0.tabID, step: -1)) } }
+        item(BrowserWords.PageMenu.forward) { [weak self] in self.map { $0.input(.history(tab: $0.tabID, step: 1)) } }
+        item(BrowserWords.PageMenu.reload) { [weak self] in self.map { $0.input(.history(tab: $0.tabID, step: 0)) } }
+        menu.popUp(positioning: nil, at: location, in: self)
+    }
+
+    private static func putOnPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Edit > Copy, ⌘C: what is selected in the page there, on this Mac's
+    /// pasteboard, once the input before it is done there.
+    @objc func copy(_ sender: Any?) {
+        input(.copy(tab: tabID)) { result in
+            guard case .text(let text) = result, !text.isEmpty else { return }
+            DispatchQueue.main.async { Self.putOnPasteboard(text) }
+        }
     }
 
     override func scrollWheel(with event: NSEvent) {
         scrolled.width -= event.scrollingDeltaX / scale
         scrolled.height -= event.scrollingDeltaY / scale
         guard abs(scrolled.width) >= 24 || abs(scrolled.height) >= 24 || event.phase == .ended else { return }
-        send?(.scroll(tab: tabID, ref: nil, x: Double(scrolled.width), y: Double(scrolled.height)))
+        // After a drag before it, never past it (#199).
+        input(.scroll(tab: tabID, ref: nil, x: Double(scrolled.width), y: Double(scrolled.height)))
         scrolled = .zero
     }
 
@@ -112,8 +255,9 @@ final class RemotePageNSView: NSView {
     override func keyDown(with event: NSEvent) {
         // The app's shortcuts are the app's.
         if event.modifierFlags.contains(.command) { return super.keyDown(with: event) }
-        if let key = Self.keys[event.keyCode] { return send?(.press(tab: tabID, key: key)) ?? () }
-        if let text = event.characters, !text.isEmpty { send?(.text(tab: tabID, text: text)) }
+        // After the click before them, never before its release (#199).
+        if let key = Self.keys[event.keyCode] { return input(.press(tab: tabID, key: key)) }
+        if let text = event.characters, !text.isEmpty { input(.text(tab: tabID, text: text)) }
     }
 
     // For VoiceOver and anything else without a pointer: a picture of the
@@ -121,15 +265,33 @@ final class RemotePageNSView: NSView {
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .image }
     override func accessibilityLabel() -> String? { "The page, from the other Mac" }
-    override func accessibilityPerformPress() -> Bool {
+    /// The right click's menu, for what is in the middle of the page.
+    override func accessibilityPerformShowMenu() -> Bool {
         guard let frame = frameImage else { return false }
-        send?(.tap(tab: tabID, x: frame.width / 2, y: min(frame.height, Double(bounds.height / scale)) / 2))
+        let point = (x: frame.width / 2, y: min(frame.height, Double(bounds.height / scale)) / 2)
+        showMenu(at: point, location: NSPoint(x: point.x * scale, y: point.y * scale))
         return true
     }
 
-    /// Edit > Paste, ⌘V: what this Mac copied, typed into the page there.
+    override func accessibilityPerformPress() -> Bool {
+        // As a click: the keyboard, and Edit's commands, go to the page.
+        window?.makeFirstResponder(self)
+        guard let frame = frameImage else { return false }
+        input(.tap(tab: tabID, x: frame.width / 2, y: min(frame.height, Double(bounds.height / scale)) / 2))
+        return true
+    }
+
+    /// Edit > Paste, ⌘V: what this Mac copied, typed into the page there
+    /// after what was done before it.
     @objc func paste(_ sender: Any?) {
         guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
-        send?(.text(tab: tabID, text: text))
+        input(.text(tab: tabID, text: text))
     }
+}
+
+/// A menu item's action, kept by the item.
+private final class PageMenuAction: NSObject {
+    let action: () -> Void
+    init(_ action: @escaping () -> Void) { self.action = action }
+    @objc func run() { action() }
 }

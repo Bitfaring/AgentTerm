@@ -79,8 +79,9 @@ the source yourself sends nothing at all.
 - **Between your iPhone and your Mac.** The iPhone app connects only to the Mac you paired it with,
   over your local network or your own Tailscale network. The developer is not part of that
   connection. Tailscale is a separate service with its own privacy policy.
-- **Notifications through Apple (iPhone, released app).** While the iPhone app is asleep, your Mac
-  tells it that an agent is done or needs you through Apple's push service (APNs), by way of a small
+- **Notifications through Apple (iPhone, released app).** While the iPhone app is in the background
+  or asleep (it tells your Mac, over their own connection, when it goes to the background and comes
+  back), your Mac tells it that an agent is done or needs you through Apple's push service (APNs), by way of a small
   relay the developer runs on Cloudflare, which holds the key Apple asks for. What the notification
   says (the session's name, its folder, what the agent said or asks) is encrypted on your Mac with a
   key your iPhone made for that Mac alone, and only your iPhone can open it: the relay and Apple
@@ -88,10 +89,10 @@ the source yourself sends nothing at all.
   connects from. The relay keeps none of it. "Also While the App Is Closed" in the iPhone's
   Settings turns it off, and "Tell me when an agent is done or needs me" turns off all
   notifications; revoking the iPhone on the Mac forgets its token and key. When a notification was
-  handled on another device, the Mac asks the relay to take it back from the iPhone: that request
+  handled or read on another device, the Mac asks the relay to take it back from the iPhone: that request
   names the notification only. A build made from the source has no relay and sends nothing this way.
-- **The Live Activity through Apple (iPhone, released app).** While agents work, the Mac keeps the
-  iPhone's Live Activity up to date through the same relay and Apple. Unlike a notification it
+- **The Live Activity through Apple (iPhone, released app).** While agents work, and for 15 minutes
+  after the last one stops, the Mac keeps the iPhone's Live Activity up to date through the same relay and Apple. Unlike a notification it
   cannot be encrypted for the iPhone, because iOS draws it from what the push carries: how many
   agents work, wait, are done or stopped, and the names of the sessions that wait or are done. It
   never carries what an agent said. The relay keeps none of it. "Live Activity of the Mac's agents"
@@ -157,7 +158,8 @@ both switches are in **Settings > Privacy** on the Mac and under **Privacy** in 
 the iPhone app, and a change takes effect at once.
 
 **Builds that send nothing.** An app built from the source code, and the development build
-"AgentTerm Dev", contain no Firebase configuration and send nothing, whatever the switches say.
+"AgentTerm Dev", contain no Firebase configuration and send nothing. There both switches show off,
+dimmed, with a line that says why; what they were set to is kept.
 
 **Other.** If you install the iPhone app from TestFlight or the App Store, Apple may share crash
 reports and usage statistics with the developer if you have agreed to that in your device's

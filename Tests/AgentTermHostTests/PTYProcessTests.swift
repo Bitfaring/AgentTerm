@@ -24,7 +24,7 @@ final class PTYProcessTests: XCTestCase {
         let exited = expectation(description: "exit")
         var output = Data()
         var status: Int32 = -1
-        var environment = ProcessInfo.processInfo.environment
+        var environment = OwnEnvironment.withoutAgentTerms
         environment["LC_ALL"] = "en_US.UTF-8"
         let process = try PTYProcess(
             executable: executable, arguments: arguments,

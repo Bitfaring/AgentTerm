@@ -398,7 +398,7 @@ func takeControl(port: UInt16, size: TermSize, after wait: TimeInterval, typing 
                 print("took session \(session.id) at \(size.cols)x\(size.rows)")
                 DispatchQueue.main.asyncAfter(deadline: .now() + hold) { exit(0) }
             }
-        case .error(let text):
+        case .error(let text, _):
             fail(text)
         default:
             break
@@ -424,7 +424,7 @@ func printPairingLink(port: UInt16, host: String?, name: String?) -> Never {
             let info = PairingInfo(host: target ?? "127.0.0.1", port: port, code: code, name: name ?? Host.current().localizedName ?? "Mac")
             print(info.url.absoluteString)
             exit(0)
-        case .error(let text):
+        case .error(let text, _):
             fail(text)
         default:
             break

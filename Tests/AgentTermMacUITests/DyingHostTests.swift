@@ -78,6 +78,22 @@ final class HostThatCannotStartTests: MacUITestCase {
         app.wait(for: .containing("could not listen"))
         XCTAssertTrue(app.exists(.button("Try Again")))
     }
+
+    /// LAUNCH-8 (#202): a shell asked for while the app is not connected to
+    /// its host is not started, and the user is told at once why, and what
+    /// to do. Before the fix nothing happened and nothing was said beyond
+    /// the window's "could not be started". A Shells tab's part, turned on
+    /// with no shell free, takes the same way, but cannot be pressed while
+    /// not connected: the window shows why instead of the tabs.
+    func testANewShellWhileNotConnectedSaysWhyNothingStarted() throws {
+        app.wait(for: .containing("could not be started"), timeout: 30)
+        XCTAssertNil(app.first(.text(StateWords.notStarted("this Mac"))), "said before anything was asked")
+        app.menu(["File", "New Shell"])
+        app.wait(for: .text(StateWords.notStarted("this Mac")), timeout: 5)
+        shot("not-started")
+        app.press(.button("OK"))
+        app.waitGone(.text(StateWords.notStarted("this Mac")))
+    }
 }
 
 /// Holds a local port and closes every connection to it at once.

@@ -110,7 +110,7 @@ final class AgentStateTests: XCTestCase {
         try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
     }
 
-    /// AGENT-13 (#129): each agent's plugin, which `agenttermd setup` adds to
+    /// AGENT-5 (#129): each agent's plugin, which `agenttermd setup` adds to
     /// its own configuration, has its hooks, the one of its start among
     /// them, each running `agenttermd hook <agent> <event>`: the same
     /// command for every session, so that an agent that trusts a hook by
@@ -214,7 +214,7 @@ final class AgentStateTests: XCTestCase {
             "[mcp_servers.agentterm-dev]\ncommand = \"/x\"\nargs = [\"mcp\"]\nenv_vars = [\"AGENTTERM_MCP\"]\n\n# AgentTerm's hook (agentterm-dev), added\n[[hooks.Stop]]\n")
     }
 
-    /// SCHED-23 (#11, #129): a schedule's run of Antigravity trusts the
+    /// SCHED-36 (#11, #129): a schedule's run of Antigravity trusts the
     /// schedule's folder for that run, next to those the user trusts, whose
     /// settings are left as they are.
     func testAScheduledAntigravityTrustsItsFolderForThatRun() throws {
@@ -705,7 +705,7 @@ final class AgentStateHostTests: XCTestCase {
         // A reply to what it asked before is dropped, with a word.
         phone.connection.send(.answer(session: agent.id, to: .done(said: "earlier"), text: "go on"))
         waitUntil("the reply to be refused") {
-            phone.messages.contains { if case .error(let text) = $0 { return text.contains("moved on") } else { return false } }
+            phone.messages.contains { if case .error(let text, _) = $0 { return text.contains("moved on") } else { return false } }
         }
         XCTAssertEqual(phone.sessions.first?.state, waiting, "nothing was typed")
 

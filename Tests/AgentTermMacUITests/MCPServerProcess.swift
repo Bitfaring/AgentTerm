@@ -11,7 +11,7 @@ final class MCPServerProcess {
     init(tool: URL, variable: String, state: URL) throws {
         process.executableURL = tool
         process.arguments = ["mcp"]
-        var environment = ProcessInfo.processInfo.environment
+        var environment = MacUITestCase.withoutAgentTerms
         environment["AGENTTERM_MCP"] = variable
         environment["AGENTTERM_STATE_DIR"] = state.path
         process.environment = environment

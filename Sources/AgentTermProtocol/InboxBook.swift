@@ -29,10 +29,13 @@ public struct InboxBook: Codable, Equatable, Sendable {
     /// longer has is forgotten here too, deleted marks included.
     public mutating func take(_ notices: [Notice], log: Bool = false, now: Date = Date()) {
         for notice in notices where !deleted.contains(notice.id) {
+            // Read on some device is read here; never unread again.
+            let read = notice.read == true || notice.handled.map { Notice.reads($0.how) } == true
             if let index = entries.firstIndex(where: { $0.id == notice.id }) {
                 entries[index].notice = notice
+                if read { entries[index].read = true }
             } else {
-                entries.append(Entry(notice: notice, read: false))
+                entries.append(Entry(notice: notice, read: read))
             }
         }
         if log {
@@ -46,6 +49,26 @@ public struct InboxBook: Codable, Equatable, Sendable {
     public mutating func handled(_ id: UInt64, _ handled: Notice.Handled) {
         guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
         entries[index].notice.handled = handled
+        if Notice.reads(handled.how) { entries[index].read = true }
+    }
+
+    /// Read on another device.
+    public mutating func markRead(ids: [UInt64]) {
+        let ids = Set(ids)
+        for index in entries.indices where ids.contains(entries[index].id) { entries[index].read = true }
+    }
+
+    /// Read here and not, as far as the host's log says, on the host: what
+    /// to tell it once connected again.
+    public func readHere(notTold log: [Notice]) -> [UInt64] {
+        let readThere = Set(log.filter { $0.read == true }.map(\.id))
+        let known = Set(log.map(\.id))
+        return entries.filter { $0.read && known.contains($0.id) && !readThere.contains($0.id) }.map(\.id)
+    }
+
+    /// The unread ones of a session: what opening it reads.
+    public func unread(session: SessionID) -> [UInt64] {
+        entries.filter { !$0.read && $0.notice.session == session }.map(\.id)
     }
 
     public mutating func markRead(_ id: UInt64) {

@@ -90,7 +90,7 @@ final class HostDeathTests: XCTestCase {
         let process = Process()
         process.executableURL = executable
         process.arguments = ["--port", String(port), "--local-only", "--no-account-usage", "--home", home.path, "--agents", root.appendingPathComponent("agents").path]
-        var environment = ProcessInfo.processInfo.environment
+        var environment = OwnEnvironment.withoutAgentTerms
         environment["AGENTTERM_STATE_DIR"] = state.path
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice

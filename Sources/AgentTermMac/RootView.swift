@@ -5,7 +5,6 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var files: FilesModel
 
     var body: some View {
         HStack(spacing: 0) {
@@ -118,9 +117,33 @@ private struct WindowSheets: ViewModifier {
     }
 }
 
+/// Whether to save a file closed with changes: a modifier of its own, so
+/// that the window's other questions do not follow the open files, which
+/// change with every file opened (#178).
+private struct SaveQuestion: ViewModifier {
+    @EnvironmentObject private var files: FilesModel
+
+    private var saveQuestion: String {
+        let name = files.pendingClose.map { ($0 as NSString).lastPathComponent } ?? ""
+        return "Save changes to \"\(name)\"?"
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                saveQuestion,
+                isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
+                titleVisibility: .visible, presenting: files.pendingClose
+            ) { path in
+                Button("Save") { files.saveAndClose(path) }
+                Button("Don't Save", role: .destructive) { files.close(path) }
+                Button("Cancel", role: .cancel) {}
+            }
+    }
+}
+
 private struct WindowQuestions: ViewModifier {
     @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var files: FilesModel
 
     private var closeQuestion: String {
         guard let request = model.pendingCloseRequest else { return "" }
@@ -133,11 +156,6 @@ private struct WindowQuestions: ViewModifier {
     // inside the long chain of the window's sheets and dialogs each of them
     // is one more thing the compiler has to work out at once, and on a slow
     // machine it gives up.
-    private var saveQuestion: String {
-        let name = files.pendingClose.map { ($0 as NSString).lastPathComponent } ?? ""
-        return "Save changes to \"\(name)\"?"
-    }
-
     private var endQuestion: String { CloseWords.endQuestion(model.pendingEnd?.displayName ?? "this session") }
 
     /// An agent's shells and pages end with it (#145).
@@ -154,15 +172,7 @@ private struct WindowQuestions: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .confirmationDialog(
-                saveQuestion,
-                isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
-                titleVisibility: .visible, presenting: files.pendingClose
-            ) { path in
-                Button("Save") { files.saveAndClose(path) }
-                Button("Don't Save", role: .destructive) { files.close(path) }
-                Button("Cancel", role: .cancel) {}
-            }
+            .modifier(SaveQuestion())
             .confirmationDialog(
                 endQuestion,
                 isPresented: Binding(get: { model.pendingEnd != nil }, set: { if !$0 { model.pendingEnd = nil } }),
@@ -658,6 +668,33 @@ private struct AgentNoticeBanner: View {
     }
 }
 
+/// The program on the app's port is not an AgentTerm host (#204): said by
+/// its name, with nothing that would stop it.
+private struct PortInUseBanner: View {
+    let name: String
+    let port: UInt16
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(PortWords.inUse(port: port, by: name))
+                    .font(.system(size: 12, weight: .medium))
+                Text(PortWords.inUseDetail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("port-in-use")
+    }
+}
+
 private struct OtherHostBanner: View {
     @EnvironmentObject private var model: AppModel
     let path: String
@@ -771,8 +808,10 @@ private struct Banners: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        if let path = model.otherHost {
+        if case .otherCopysHost(let path) = model.otherHost {
             OtherHostBanner(path: path)
+        } else if case .otherProgram(let name, let port) = model.otherHost {
+            PortInUseBanner(name: name, port: port)
         } else if model.hostMatch != .same {
             HostVersionBanner(match: model.hostMatch)
         } else if let other = model.otherBuildOfHost {

@@ -20,6 +20,9 @@ enum Route: Hashable {
     case result(SessionID)
     /// All of the Inbox (#66).
     case inbox
+    /// One item of the Inbox, all of it: what touching it opens, as on the
+    /// Mac (the owner's decision, 2026-11-21).
+    case notice(UInt64)
     /// An agent's screen with one of its own shells ("s:<id>") or pages
     /// ("b:<id>") in front.
     case companion(agent: SessionID, item: String)
@@ -89,19 +92,32 @@ final class PhoneModel: ObservableObject {
     /// What the Mac answered about a tab: a picture of it, or why there is none.
     @Published private(set) var browserPictures: [String: Data] = [:]
     @Published private(set) var browserProblems: [String: String] = [:]
-    private var browserAsks: [Int: (BrowserResult) -> Void] = [:]
-    private var nextBrowserAsk = 1
+    private var browserAsks = BrowserAsks<(BrowserResult) -> Void>()
 
-    /// Asks the browser on the Mac, through its host.
+    /// Asks the browser on the Mac, through its host. With no connection,
+    /// nothing could answer it: refused at once (#198).
     func askBrowser(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
-        let id = nextBrowserAsk
-        nextBrowserAsk += 1
-        browserAsks[id] = done
-        connection?.send(.browserAsk(id: id, request: request))
+        guard let connection else { return done(.refused(BrowserWords.otherMacClosed(connectedMacName))) }
+        let id = browserAsks.add(done)
+        connection.send(.browserAsk(id: id, request: request))
     }
 
     func browserAnswered(id: Int, result: BrowserResult) {
-        browserAsks.removeValue(forKey: id)?(result)
+        browserAsks.answered(id)?(result)
+    }
+
+    /// The Mac the connection is to: the one being paired while pairing.
+    private var connectedMacName: String {
+        (isPairing ? pendingPairing?.name : pairing?.name) ?? "the Mac"
+    }
+
+    /// The connection closed, or was left for another Mac (#198, as the
+    /// Mac's #196): what waits for the Mac's browser cannot be answered by
+    /// it now, so each is answered at once, refused in the Mac's words, and
+    /// said where its own refusal is said (a page's problem, a sheet's).
+    private func refuseBrowserAsks() {
+        guard let closed = browserAsks.closed(mac: connectedMacName) else { return }
+        for done in closed.waiting { done(.refused(closed.why)) }
     }
 
     /// Asks for a picture of a tab as it is now.
@@ -138,11 +154,18 @@ final class PhoneModel: ObservableObject {
 
     @Published private(set) var browserFrames: [String: BrowserFrame] = [:]
 
+    /// The pages whose screen is open, watched again when the connection
+    /// comes back (#209): the Mac's watch ended with the connection.
+    private var watchedPages: Set<String> = []
+
     /// Starts or stops being sent a page's pictures, as wide as this
     /// screen's pixels.
     func watch(_ tab: String, _ on: Bool) {
+        if on { watchedPages.insert(tab) } else { watchedPages.remove(tab) }
         askBrowser(.watch(tab: tab, on: on, width: on ? 1290 : 0)) { [weak self] result in
-            if case .refused(let why) = result { self?.browserProblems[tab] = why }
+            // Watched again once the Mac is back: what was refused while it
+            // was not is no longer so (#198).
+            if case .refused(let why) = result { self?.browserProblems[tab] = why } else { self?.browserProblems[tab] = nil }
         }
         if !on { browserFrames[tab] = nil }
     }
@@ -618,7 +641,9 @@ final class PhoneModel: ObservableObject {
     private var retryScheduled = false
     /// Attempts to connect since the last time it worked.
     private var failedAttempts = 0
-    private var active = true
+    /// Whether the app is in front. One that iOS launched in the background
+    /// (for a push) is not (#190).
+    private var active = UIApplication.shared.applicationState != .background
 
     // MARK: Agents that finished or need an instruction (#22)
 
@@ -662,6 +687,42 @@ final class PhoneModel: ObservableObject {
         }
     }
 
+    // MARK: The first screen: may the app notify? (#180)
+
+    /// Shown once, at the first launch, while iOS was not asked yet: the
+    /// question alone, not an onboarding like the Mac's (the owner's
+    /// decision, 2026-11-20).
+    @Published private(set) var asksNotifications = false
+    static let notificationsAskedKey = "notifications.asked"
+
+    private func checkNotificationAsk() {
+        // A test sees it whatever iOS was told before (`AGENTTERM_ASK_NOTIFICATIONS`).
+        if ProcessInfo.processInfo.environment["AGENTTERM_ASK_NOTIFICATIONS"] != nil { return asksNotifications = true }
+        guard !UserDefaults.standard.bool(forKey: Self.notificationsAskedKey) else { return }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            let ask = settings.authorizationStatus == .notDetermined
+            Task { @MainActor [weak self] in self?.asksNotifications = ask }
+        }
+    }
+
+    /// Allowed, or not now: not shown again either way. Not now turns the
+    /// app's notifications off (the owner's decision, #195): the switch in
+    /// Settings shows it, and iOS is asked only once it is turned on.
+    func answerNotificationAsk(allow: Bool) {
+        UserDefaults.standard.set(true, forKey: Self.notificationsAskedKey)
+        guard allow else {
+            notifyAgents = false
+            asksNotifications = false
+            return
+        }
+        notifications.askOnce { _ in
+            Task { @MainActor [weak self] in
+                self?.asksNotifications = false
+                self?.updatePush()
+            }
+        }
+    }
+
     // MARK: Through Apple while the app is closed (#66)
 
     /// Whether to be told through Apple too: a switch under the one above.
@@ -685,8 +746,10 @@ final class PhoneModel: ObservableObject {
     /// What the switch's footnote says (principle 3): what holds it back,
     /// else what the Mac says.
     var pushState: PushState? {
-        guard notifyAgents, pushAlso else { return nil }
+        guard notifyAgents else { return nil }
+        // Said whatever the switch keeps, which shows off then (#212).
         if AppChannel.current != .release { return .unavailable(reason: PushWords.notInThisBuild) }
+        guard pushAlso else { return nil }
         if let pushProblem { return .unavailable(reason: pushProblem) }
         return hostPushState
     }
@@ -800,28 +863,41 @@ final class PhoneModel: ObservableObject {
         UserDefaults.standard.set(MessageCoding.encode(inbox), forKey: Self.inboxKey(mac))
     }
 
-    /// What the Mac told: into the Inbox, and a notification unless its
-    /// session is on screen, which is then seen.
+    /// What the Mac told: into the Inbox; seen at once when its session is
+    /// on screen. A notification only once the host says its time has come
+    /// (`alerted`).
     private func told(_ notice: Notice) {
         inbox.take([notice])
         saveInbox()
-        guard let mac = pairing?.id else { return }
-        if active, let session = notice.session, session == openSessionID {
-            sawNotice(of: session)
-            return
-        }
-        guard notifyAgents, notice.alerts else { return }
-        notifications.post(notice, mac: mac, macName: pairing?.name ?? "the Mac")
+        if active, let session = notice.session, session == openSessionID { sawNotice(of: session) }
+    }
+
+    /// Time to show it as a notification, at the same moment as the Mac:
+    /// unless it was read or handled, or its session is on screen.
+    private func alerted(_ id: UInt64) {
+        guard let mac = pairing?.id, let entry = inbox.entries.first(where: { $0.id == id }), !entry.read,
+            entry.notice.handled == nil, notifyAgents, entry.notice.alerts
+        else { return }
+        if active, let session = entry.notice.session, session == openSessionID { return sawNotice(of: session) }
+        notifications.post(entry.notice, mac: mac, macName: pairing?.name ?? "the Mac")
+    }
+
+    /// Read here: read on every device. Said to the Mac once connected,
+    /// if it is not now (`noticeLog`).
+    private func readHere(_ ids: [UInt64]) {
+        guard !ids.isEmpty else { return }
+        inbox.markRead(ids: ids)
+        saveInbox()
+        if let mac = pairing?.id { notifications.remove(mac: mac, notices: ids) }
+        if status == .connected { connection?.send(.readNotices(ids: ids)) }
     }
 
     private func readInbox(session: SessionID) {
-        inbox.markRead(session: session)
-        saveInbox()
+        readHere(inbox.unread(session: session))
     }
 
     func read(_ entry: InboxBook.Entry) {
-        inbox.markRead(entry.id)
-        saveInbox()
+        readHere([entry.id])
     }
 
     func delete(_ entry: InboxBook.Entry) {
@@ -863,13 +939,20 @@ final class PhoneModel: ObservableObject {
             updateLiveActivity()
         }
     }
-    private var liveActivity: Activity<AgentsActivityAttributes>? = Activity<AgentsActivityAttributes>.activities.first
+    /// Whether iOS lets the app show Live Activities, as it last said: the
+    /// switch shows off while it does not (#212).
+    @Published private(set) var liveActivitiesAllowed = ActivityAuthorizationInfo().areActivitiesEnabled
+    private var activityAllowedWatch: Task<Void, Never>?
+    private var liveActivity: Activity<AgentsActivityAttributes>? = PhoneModel.shownActivity
     /// Its push token, and the one that starts one, as iOS gave them: sent
     /// to the Mac, which keeps the activity true while the app is asleep
     /// (#168). The released build only: the development one has no push.
     private var activityToken: String?
     private var activityStartToken: String?
     private var activityWatch: Task<Void, Never>?
+    /// Since when nothing has worked or waited here; nil while something does.
+    private var activityIdleSince: Date?
+    private var activityIdleCheck: Task<Void, Never>?
     private var activityStartWatch: Task<Void, Never>?
 
     private static var activityPushes: Bool { AppChannel.current == .release }
@@ -878,14 +961,37 @@ final class PhoneModel: ObservableObject {
     /// or not (#168); updated here while connected, and by the Mac through
     /// Apple while the app is asleep. Left showing "done" when every agent
     /// is done; ended at once when switched off.
+    /// iOS turned Live Activities on or off for the app, in its Settings.
+    private func liveActivityAllowedChanged(_ allowed: Bool) {
+        guard allowed != liveActivitiesAllowed else { return }
+        liveActivitiesAllowed = allowed
+        updateLiveActivity()
+    }
+
     func updateLiveActivity() {
+        takeUpShownActivity()
         let enabled = showsLiveActivity && ActivityAuthorizationInfo().areActivitiesEnabled
         watchActivityStart(enabled)
         // Not connected, nothing is known here: what was shown stays, and
         // goes out of date by itself.
         guard status == .connected || !enabled else { return }
         let state = AgentsStatus.of(sessions: sessions, failures: failures)
-        let decision = LiveActivityRule.decide(enabled: enabled, status: state)
+        // Kept between turns, only updated (#180): ended once nothing has
+        // worked or waited for `LiveActivityRule.keptIdle`.
+        if state.isActive {
+            activityIdleSince = nil
+        } else if activityIdleSince == nil {
+            activityIdleSince = Date()
+            activityIdleCheck?.cancel()
+            activityIdleCheck = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(LiveActivityRule.keptIdle + 1))
+                guard !Task.isCancelled else { return }
+                await MainActor.run { self?.updateLiveActivity() }
+            }
+        }
+        let decision = LiveActivityRule.decide(enabled: enabled, status: state, idleSince: activityIdleSince)
+        // Nothing is started for a state with nothing in it.
+        if decision == .show, !state.isActive, liveActivity == nil { return }
         // Without push nothing keeps it true once the app sleeps.
         let content = ActivityContent(state: state, staleDate: Self.activityPushes ? nil : Date().addingTimeInterval(10 * 60))
         if decision == .show {
@@ -902,6 +1008,31 @@ final class PhoneModel: ObservableObject {
             sendActivityTokens()
             // Done is true and stays true; anything else could go stale.
             Task { await activity.end(content, dismissalPolicy: decision == .endShowingDone ? .default : .immediate) }
+        }
+    }
+
+    /// The activity iOS shows, not one that ended or was dismissed.
+    private static var shownActivity: Activity<AgentsActivityAttributes>? {
+        Activity<AgentsActivityAttributes>.activities.first { $0.activityState == .active || $0.activityState == .stale }
+    }
+
+    /// The Mac ends an activity and starts the next one through Apple
+    /// while the app sleeps (#194): one that ended is let go, so that a new
+    /// one is asked for rather than an ended one updated, and one the Mac
+    /// started is taken up, its token watched and given to the Mac,
+    /// rather than a second one asked for.
+    private func takeUpShownActivity() {
+        if let liveActivity, liveActivity.activityState == .active || liveActivity.activityState == .stale { return }
+        let shown = Self.shownActivity
+        guard shown?.id != liveActivity?.id else { return }
+        liveActivity = shown
+        activityToken = nil
+        if shown != nil {
+            watchActivityToken()
+        } else {
+            activityWatch?.cancel()
+            activityWatch = nil
+            sendActivityTokens()
         }
     }
 
@@ -968,15 +1099,13 @@ final class PhoneModel: ObservableObject {
 
     /// Opens what an Inbox item is about: a done agent's result, the
     /// session of one that asks. A failure is only read.
+    /// An item of the Inbox touched: read, and shown whole, whatever it is,
+    /// as the Mac shows the item picked (the owner's decision, 2026-11-21);
+    /// its session is opened from there.
     func open(_ entry: InboxBook.Entry) {
         read(entry)
-        guard let agent = entry.notice.agentNotice else { return }
-        guard sessions.contains(where: { $0.id == agent.session }) else {
-            message = PushWords.sessionEnded
-            return
-        }
         tab = "sessions"
-        if case .done = agent.state { path = [.result(agent.session)] } else { path = [.session(agent.session)] }
+        path = [.notice(entry.id)]
     }
 
     // MARK: The Inbox (#67)
@@ -1017,9 +1146,13 @@ final class PhoneModel: ObservableObject {
     }
 
     /// The app left the front: iOS lets it run a little longer, during
-    /// which the connection lives and a notification can still be made.
+    /// which the connection lives. The Mac is told, and tells this iPhone
+    /// through Apple from now on, as it does while the app sleeps (#190):
+    /// a suspended app's connection may stay open, and what is sent over
+    /// it is not seen until the app is in front again.
     func enteredBackground() {
         active = false
+        if status == .connected { connection?.send(.deviceInBackground(true)) }
         guard backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Agents") { [weak self] in
             guard let self else { return }
@@ -1039,6 +1172,7 @@ final class PhoneModel: ObservableObject {
         pairing = hosts.first { $0.id == last } ?? hosts.first
         loadInbox()
         notifications.model = self
+        checkNotificationAsk()
         pushTokenWatch = PushToken.shared.$token.receive(on: DispatchQueue.main).sink { [weak self] token in
             self?.deviceToken = token
             self?.updatePush()
@@ -1054,6 +1188,11 @@ final class PhoneModel: ObservableObject {
         #endif
         pushFailureWatch = PushToken.shared.$failure.receive(on: DispatchQueue.main).sink { [weak self] failure in
             if let failure { self?.pushProblem = PushWords.tokenRefused(failure) }
+        }
+        activityAllowedWatch = Task { [weak self] in
+            for await allowed in ActivityAuthorizationInfo().activityEnablementUpdates {
+                self?.liveActivityAllowedChanged(allowed)
+            }
         }
         if pairing != nil { connect() }
     }
@@ -1392,6 +1531,9 @@ final class PhoneModel: ObservableObject {
     /// Called when the app comes to the front.
     func resume() {
         active = true
+        // Changed in the iPhone's Settings while the app was away.
+        liveActivityAllowedChanged(ActivityAuthorizationInfo().areActivitiesEnabled)
+        if status == .connected { connection?.send(.deviceInBackground(false)) }
         if backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTask)
             backgroundTask = .invalid
@@ -1444,6 +1586,9 @@ final class PhoneModel: ObservableObject {
     private func disconnect() {
         connection?.close()
         connection = nil
+        // Its `.closed` is not heard once it is not the connection: what
+        // waited is answered here, for a switch, a pairing, a Mac forgotten.
+        refuseBrowserAsks()
         controller = nil
         foreignSize = nil
         path = []
@@ -1460,6 +1605,7 @@ final class PhoneModel: ObservableObject {
             break
         case .closed(let reason):
             connection = nil
+            refuseBrowserAsks()
             replaying = nil
             status = .offline(reason)
             if isPairing {
@@ -1505,6 +1651,8 @@ final class PhoneModel: ObservableObject {
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             status = .connected
+            // In front or in the background, from the start (#190).
+            connection?.send(.deviceInBackground(!active))
             for id in pendingDismissals { connection?.send(.handleNotice(id: id, how: .dismissed)) }
             pendingDismissals.removeAll()
             pushAsked = false
@@ -1517,6 +1665,9 @@ final class PhoneModel: ObservableObject {
             writingCommitMessage = []
             remoteWork.forgetAll()
             connection?.send(.agents(refresh: false))
+            // A page left open while the connection was away is watched
+            // again, as if opened now (#209).
+            for tab in watchedPages.sorted() { watch(tab, true) }
             // A Mac from before 0.4.0 does not know the request, and would
             // answer with an error for the user to wonder about.
             hostVersion = version
@@ -1599,9 +1750,20 @@ final class PhoneModel: ObservableObject {
             saveInbox()
             // What was handled while this iPhone was away goes from
             // Notification Center too.
-            if let mac = pairing?.id { notifications.remove(mac: mac, notices: list.filter { $0.handled != nil }.map(\.id)) }
+            if let mac = pairing?.id {
+                notifications.remove(mac: mac, notices: list.filter { $0.handled != nil || $0.read == true }.map(\.id))
+            }
+            // Read here while the Mac was not reached.
+            let unsaid = inbox.readHere(notTold: list)
+            if !unsaid.isEmpty { connection?.send(.readNotices(ids: unsaid)) }
         case .notice(let notice):
             told(notice)
+        case .noticeAlert(let id):
+            alerted(id)
+        case .noticesRead(let ids):
+            inbox.markRead(ids: ids)
+            saveInbox()
+            if let mac = pairing?.id { notifications.remove(mac: mac, notices: ids) }
         case .noticeHandled(let id, let handled):
             inbox.handled(id, handled)
             saveInbox()
@@ -1684,7 +1846,7 @@ final class PhoneModel: ObservableObject {
             syncSessionLayout()
         case .folders(let list):
             folders = list
-        case .attached(let info):
+        case .attached(let info, _):
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
             if openCreatedSession {
                 openCreatedSession = false
@@ -1757,7 +1919,7 @@ final class PhoneModel: ObservableObject {
             path = []
             tab = "sessions"
             entered = true
-        case .error(let text):
+        case .error(let text, _):
             if text == "invalid token" {
                 let name = pairing?.name ?? "The Mac"
                 forgetMac()
@@ -2422,7 +2584,8 @@ final class PhoneModel: ObservableObject {
 /// (#66) and the notification service extension makes the same ones.
 final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
     weak var model: PhoneModel?
-    private var asked = false
+    /// Whether iOS was asked, and who waits for its answer (#200).
+    private var permission = PermissionAsk<(Bool) -> Void>()
 
     override init() {
         super.init()
@@ -2447,14 +2610,26 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// Asks iOS, the first time, whether the app may notify; `done` is told
-    /// whether it may.
-    func askOnce(_ done: ((Bool) -> Void)? = nil) {
-        guard !asked else {
-            UNUserNotificationCenter.current().getNotificationSettings { settings in done?(settings.authorizationStatus == .authorized) }
-            return
+    /// whether it may. Never while the app's notifications are off (#195):
+    /// whatever asks, iOS is asked only once the user turns them on. What
+    /// asks while iOS's question is open is told its answer (#200), not the
+    /// settings, which say "not determined" until then.
+    @MainActor func askOnce(_ done: ((Bool) -> Void)? = nil) {
+        let done = done ?? { _ in }
+        switch permission.ask(done, switchedOn: model?.notifyAgents != false) {
+        case .refuse:
+            done(false)
+        case .wait:
+            break
+        case .readSettings:
+            UNUserNotificationCenter.current().getNotificationSettings { settings in done(settings.authorizationStatus == .authorized) }
+        case .request:
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                DispatchQueue.main.async {
+                    for waiting in self.permission.answered() { waiting(granted) }
+                }
+            }
         }
-        asked = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in done?(granted) }
     }
 
     /// Takes back what was posted of these notices: handled, here or on
@@ -2467,7 +2642,7 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
         center.removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 
-    func post(_ notice: Notice, mac: String, macName: String) {
+    @MainActor func post(_ notice: Notice, mac: String, macName: String) {
         askOnce()
         let identifier = PushNotice.identifier(mac: mac, notice: notice.id)
         let content: UNMutableNotificationContent

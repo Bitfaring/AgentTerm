@@ -106,11 +106,21 @@ final class TerminalContainerView: NSView {
             // Looking at a session is not using it: the Mac app shows every
             // session, including ones a phone is typing in. The size comes
             // here when the user types, or asks for it in the banner.
-            if focused || hadKeyboard { giveKeyboard() }
+            if focused {
+                giveKeyboard()
+            } else if hadKeyboard {
+                // Kept only if no terminal that is to have it waits for it:
+                // a split Shells tab's part turned on gives its new shell
+                // the keyboard, which the shell beside it, made again as
+                // the layout changed, took back otherwise.
+                giveKeyboard(onlyIfNoneWaits: true)
+            }
         } else if focused && !wasFocused {
             // Its pane took the keyboard.
             giveKeyboard()
         }
+        // No longer to have it: nothing waits for it here.
+        if !focused, !keptOnly { Self.waiting.remove(self) }
         wasFocused = focused
         self.foreignSize = foreignSize
         needsLayout = true
@@ -121,15 +131,31 @@ final class TerminalContainerView: NSView {
     /// puts in the window later, and the keyboard then went nowhere when the
     /// other's terminal left (PANE-16).
     private var keyboardWanted = false
+    /// The keyboard is wanted only because the terminal had it.
+    private var keptOnly = false
+    /// The containers whose terminal is to have the keyboard and has not
+    /// yet: one not in the window yet waits here.
+    private static let waiting = NSHashTable<TerminalContainerView>.weakObjects()
 
-    private func giveKeyboard() {
+    private func giveKeyboard(onlyIfNoneWaits: Bool = false) {
         keyboardWanted = true
+        keptOnly = onlyIfNoneWaits
+        if !onlyIfNoneWaits { Self.waiting.add(self) }
         DispatchQueue.main.async { [weak self] in self?.takeKeyboardIfInWindow() }
     }
 
     private func takeKeyboardIfInWindow() {
-        guard keyboardWanted, let terminal = controller?.view, terminal.superview === self, let window else { return }
+        guard keyboardWanted else { return }
+        if keptOnly, Self.waiting.allObjects.contains(where: { $0 !== self && $0.keyboardWanted }) {
+            keyboardWanted = false
+            return
+        }
+        guard let terminal = controller?.view, terminal.superview === self, let window else { return }
         keyboardWanted = false
+        Self.waiting.remove(self)
+        // Kept only while no other terminal has it since: one that took it
+        // first, as it was to, keeps it.
+        if keptOnly, let holder = (window.firstResponder as? NSView)?.enclosingTerminalContainer, holder !== self { return }
         window.makeFirstResponder(terminal)
     }
 
@@ -187,5 +213,17 @@ final class TerminalContainerView: NSView {
         frameLine.frame = bounds
         frameLine.path = outline
         frameLine.isHidden = false
+    }
+}
+
+extension NSView {
+    /// The terminal container this view is in, if it is in one.
+    fileprivate var enclosingTerminalContainer: TerminalContainerView? {
+        var view: NSView? = self
+        while let current = view {
+            if let container = current as? TerminalContainerView { return container }
+            view = current.superview
+        }
+        return nil
     }
 }

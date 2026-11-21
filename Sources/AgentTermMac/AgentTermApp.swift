@@ -23,8 +23,9 @@ struct AgentTermApp: App {
     var body: some Scene {
         Window(AppChannel.current.appName, id: "main") {
             RootView()
-                .modifier(CrashReportQuestion())
+                .modifier(MainWindowOpener())
                 .environmentObject(model)
+                .environmentObject(model.front)
                 .environmentObject(model.files)
                 .environmentObject(model.browsers)
                 .environmentObject(model.profiles)
@@ -67,13 +68,13 @@ struct AgentTermApp: App {
                 SaveCommand(files: model.files)
             }
             CommandMenu("Tab") {
-                TabCommands(model: model, files: model.files)
+                TabCommands(model: model, front: model.front, files: model.files)
             }
             CommandMenu("Browser") {
-                BrowserCommands(model: model)
+                BrowserCommands(model: model, front: model.front)
             }
             CommandGroup(after: .toolbar) {
-                GroupItemCommands(model: model)
+                GroupItemCommands(model: model, front: model.front)
             }
             CommandGroup(after: .sidebar) {
                 Button("Bigger Text") { model.changeFontSize(by: 1) }
@@ -180,22 +181,11 @@ private struct MenuBarMenu: View {
     }
 }
 
-/// Shown once, at the first launch of a build that can send anything
-/// (#48): what may be sent to the developer, a switch for each kind, both
-/// on, and Continue. The app's own sheet, not an alert that could be taken
-/// for a question of the system's. Until it is answered nothing is sent.
-private struct CrashReportQuestion: ViewModifier {
-    @StateObject private var preferences = TelemetryPreferences()
-
-    func body(content: Content) -> some View {
-        content.sheet(isPresented: $preferences.needsAsking) {
-            ReportingChoices(preferences: preferences)
-                .interactiveDismissDisabled()
-        }
-    }
-}
-
-private struct ReportingChoices: View {
+/// What may be sent to the developer (#48): a switch for each kind of
+/// report, both on. A step of the onboarding (the owner's decision,
+/// 2026-11-21), not a sheet of its own over it: answered by its Next, and
+/// until it is answered nothing is sent.
+struct ReportingChoices: View {
     @ObservedObject var preferences: TelemetryPreferences
 
     var body: some View {
@@ -209,15 +199,7 @@ private struct ReportingChoices: View {
             choice(TelemetryPreferences.Wording.crashTitle, TelemetryPreferences.Wording.questionDetail, $preferences.offersCrashReports, "reporting-crash")
             choice(TelemetryPreferences.Wording.usageTitle, TelemetryPreferences.Wording.usageDetail, $preferences.offersUsageStatistics, "reporting-usage")
             Text(TelemetryPreferences.Wording.screenFooter).font(.system(size: 11.5)).foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button(TelemetryPreferences.Wording.screenButton) { preferences.answer() }
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("reporting-continue")
-            }
         }
-        .padding(24)
-        .frame(width: 520)
         // A group of its own, so that what is in it keeps its own names.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reporting-choices")
@@ -612,7 +594,10 @@ struct PrivacySettingsView: View {
                 symbol: "hand.raised.fill", tint: .blue, title: "Privacy",
                 subtitle: "What \(AppChannel.current.appName) reports to its developer. Your terminals, prompts and files are never part of it.")
             SettingsCard {
-                Toggle(isOn: $preferences.crashReports) {
+                // Off in a build with no reporting service, whatever it
+                // keeps (#212).
+                let crash = DependentSwitch(stored: preferences.crashReports, stoppedBy: preferences.stoppedBy)
+                Toggle(isOn: Binding(get: { crash.shown }, set: { preferences.crashReports = $0 })) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(TelemetryPreferences.Wording.crashTitle).font(.system(size: 13, weight: .medium))
                         Text(TelemetryPreferences.Wording.questionDetail)
@@ -622,11 +607,13 @@ struct PrivacySettingsView: View {
                     }
                 }
                 .toggleStyle(.switch)
+                .disabled(!crash.isEnabled)
                 .accessibilityLabel(TelemetryPreferences.Wording.crashTitle)
                 .accessibilityIdentifier("privacy-crash")
             }
             SettingsCard {
-                Toggle(isOn: $preferences.usageStatistics) {
+                let usage = DependentSwitch(stored: preferences.usageStatistics, stoppedBy: preferences.stoppedBy)
+                Toggle(isOn: Binding(get: { usage.shown }, set: { preferences.usageStatistics = $0 })) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(TelemetryPreferences.Wording.usageTitle).font(.system(size: 13, weight: .medium))
                         Text(TelemetryPreferences.Wording.usageDetail)
@@ -636,11 +623,12 @@ struct PrivacySettingsView: View {
                     }
                 }
                 .toggleStyle(.switch)
+                .disabled(!usage.isEnabled)
                 .accessibilityLabel(TelemetryPreferences.Wording.usageTitle)
                 .accessibilityIdentifier("privacy-usage")
             }
-            if !preferences.isAvailable {
-                Label(TelemetryPreferences.Wording.unavailable, systemImage: "info.circle")
+            if let stoppedBy = preferences.stoppedBy {
+                Label(stoppedBy, systemImage: "info.circle")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -714,10 +702,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated { Chromium.shared.shutDown() }
     }
 
-    /// Opened again from the Dock or the Finder: back to a normal app.
+    /// Opened again from the Dock, Launchpad or the Finder: back to a
+    /// normal app, with its window. SwiftUI does not open a `Window` scene
+    /// again by itself once it was closed while the app stayed in the menu
+    /// bar, so the app showed nothing (#182).
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         NSApp.setActivationPolicy(.regular)
+        if !flag { MainWindow.open?() }
+        NSApp.activate(ignoringOtherApps: true)
         return true
+    }
+}
+
+/// The way to open the main window again from outside SwiftUI's views (the
+/// app's delegate), kept by the window when it is first shown.
+@MainActor
+enum MainWindow {
+    static var open: (() -> Void)?
+}
+
+/// Keeps `MainWindow.open`: SwiftUI's action, which still opens the window
+/// after it was closed.
+private struct MainWindowOpener: ViewModifier {
+    @Environment(\.openWindow) private var openWindow
+
+    func body(content: Content) -> some View {
+        content.onAppear { MainWindow.open = { openWindow(id: "main") } }
     }
 }
 
@@ -736,6 +746,8 @@ private struct SaveCommand: View {
 /// The tabs of the middle pane as menu items: sessions first, then files.
 private struct TabCommands: View {
     @ObservedObject var model: AppModel
+    /// What is in front, which its items follow (#178).
+    @ObservedObject var front: FrontState
     @ObservedObject var files: FilesModel
 
     private var names: [String] { model.visibleTabs.map(model.tabName) }
@@ -792,6 +804,8 @@ private struct TabCommands: View {
 /// The same keys for both: Option and Command with an arrow.
 private struct GroupItemCommands: View {
     @ObservedObject var model: AppModel
+    /// What is in front, which its items follow (#178).
+    @ObservedObject var front: FrontState
 
     private var area: Bool { model.agentAreaInFront != nil }
     private var several: Bool { model.paneLayout.focusedPane.front.map { model.members(of: $0).count > 1 } ?? false }
@@ -831,6 +845,8 @@ private struct GroupItemCommands: View {
 /// The browser's commands (#76), for the tab in front.
 private struct BrowserCommands: View {
     @ObservedObject var model: AppModel
+    /// What is in front, which its items follow (#178).
+    @ObservedObject var front: FrontState
 
     private var tab: BrowserTab? { model.browserInFront.flatMap { model.browsers.tab(forTab: $0) } }
 

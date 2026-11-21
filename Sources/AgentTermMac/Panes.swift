@@ -8,6 +8,8 @@ import SwiftUI
 enum PanePlace: Hashable {
     case pane(String)
     case part(agent: String, AgentAreaPart)
+    /// A part of a split Shells tab.
+    case shellPart(group: String, ShellPart)
     /// The page of a browser tab (#76).
     case page(String)
 }
@@ -217,6 +219,7 @@ extension AppModel {
     /// shell beside it: the one of them the keyboard is in.
     func shownMember(of group: String) -> String? {
         if TabID.holder(of: group) == nil, hasArea(group) { return focusedInner(agent: group, part: agentAreaFocus[group] ?? .agent) ?? group }
+        if isShellsSplit(group) { return shell(in: shellSplitFocus[group] ?? .main, of: group) }
         let list = members(of: group)
         if let shown = groupShown[group], list.contains(shown) { return shown }
         return list.first
@@ -350,6 +353,8 @@ extension AppModel {
         // shown, its last page closed or its last shell ended: the agent
         // has it. What the area remembered is kept for the next one.
         for (agent, focus) in agentAreaFocus where focus != .agent && !shownParts(of: agent).contains(focus) { agentAreaFocus[agent] = .agent }
+        // A split Shells tab's parts whose shell ended close.
+        tidyShellSplits()
         // A part shown alone that is no longer there: all of them again.
         for (agent, part) in agentAreaAlone where !hasArea(agent) || !shownParts(of: agent).contains(part) { agentAreaAlone[agent] = nil }
         // An item put in front before it was there, a file of another Mac
@@ -378,7 +383,11 @@ extension AppModel {
     private func place(_ item: String) {
         let group = stripTab(of: item)
         if TabID.holder(of: group) != nil {
-            if groupShown[group] != item { groupShown[group] = item }
+            if placeInShellSplit(item, group: group) {
+                // Shown in a part of the split Shells tab.
+            } else if groupShown[group] != item {
+                groupShown[group] = item
+            }
         } else {
             var part = AgentAreaPart.agent
             if group != item {
@@ -542,6 +551,12 @@ extension AppModel {
     /// or the part of an agent's area, it landed in.
     func paneClicked(at point: CGPoint) {
         guard place == .sessions else { return }
+        if let (place, _) = paneFrames.first(where: { if case .shellPart = $0.key { return $0.value.contains(point) } else { return false } }),
+            case .shellPart(let group, let part) = place
+        {
+            focusShellPart(part, of: group)
+            return
+        }
         let parts = paneFrames.filter { if case .part = $0.key { return $0.value.contains(point) } else { return false } }
         if let (place, _) = parts.first, case .part(let agent, let part) = place {
             guard let pane = paneLayout.pane(containing: agent) else { return }
