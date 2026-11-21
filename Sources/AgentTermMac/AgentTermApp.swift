@@ -594,7 +594,10 @@ struct PrivacySettingsView: View {
                 symbol: "hand.raised.fill", tint: .blue, title: "Privacy",
                 subtitle: "What \(AppChannel.current.appName) reports to its developer. Your terminals, prompts and files are never part of it.")
             SettingsCard {
-                Toggle(isOn: $preferences.crashReports) {
+                // Off in a build with no reporting service, whatever it
+                // keeps (#212).
+                let crash = DependentSwitch(stored: preferences.crashReports, stoppedBy: preferences.stoppedBy)
+                Toggle(isOn: Binding(get: { crash.shown }, set: { preferences.crashReports = $0 })) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(TelemetryPreferences.Wording.crashTitle).font(.system(size: 13, weight: .medium))
                         Text(TelemetryPreferences.Wording.questionDetail)
@@ -604,11 +607,13 @@ struct PrivacySettingsView: View {
                     }
                 }
                 .toggleStyle(.switch)
+                .disabled(!crash.isEnabled)
                 .accessibilityLabel(TelemetryPreferences.Wording.crashTitle)
                 .accessibilityIdentifier("privacy-crash")
             }
             SettingsCard {
-                Toggle(isOn: $preferences.usageStatistics) {
+                let usage = DependentSwitch(stored: preferences.usageStatistics, stoppedBy: preferences.stoppedBy)
+                Toggle(isOn: Binding(get: { usage.shown }, set: { preferences.usageStatistics = $0 })) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(TelemetryPreferences.Wording.usageTitle).font(.system(size: 13, weight: .medium))
                         Text(TelemetryPreferences.Wording.usageDetail)
@@ -618,11 +623,12 @@ struct PrivacySettingsView: View {
                     }
                 }
                 .toggleStyle(.switch)
+                .disabled(!usage.isEnabled)
                 .accessibilityLabel(TelemetryPreferences.Wording.usageTitle)
                 .accessibilityIdentifier("privacy-usage")
             }
-            if !preferences.isAvailable {
-                Label(TelemetryPreferences.Wording.unavailable, systemImage: "info.circle")
+            if let stoppedBy = preferences.stoppedBy {
+                Label(stoppedBy, systemImage: "info.circle")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -122,6 +122,22 @@ final class TelemetryTests: XCTestCase {
         telemetry.record(.appOpen)
     }
 
+    /// TEL-5 (#212): in a build with no service, Settings > Privacy is told
+    /// what stops its switches, by which they show off, and what they keep
+    /// stays; a build with one has nothing stopping them.
+    func testWithNoServiceThePrivacySwitchesAreToldWhatStopsThem() {
+        TelemetrySettings(usageStatistics: true, crashReports: true).save(to: defaults)
+        let telemetry = Telemetry()
+        telemetry.start(sink: nil, defaults: defaults)
+        let preferences = TelemetryPreferences(telemetry: telemetry)
+        XCTAssertEqual(preferences.stoppedBy, TelemetryPreferences.Wording.unavailable, "the Privacy switches are not told the build has no service")
+        XCTAssertTrue(preferences.crashReports && preferences.usageStatistics, "what the switches keep was not kept")
+
+        let served = Telemetry()
+        served.start(sink: Recorder(), defaults: defaults)
+        XCTAssertNil(TelemetryPreferences(telemetry: served).stoppedBy)
+    }
+
     func testEventsCarryOnlyWordsFromAFixedSet() {
         XCTAssertEqual(TelemetryEvent.Agent(id: "codex"), .codex)
         XCTAssertEqual(TelemetryEvent.Agent(id: nil), .shell)

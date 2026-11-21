@@ -289,7 +289,9 @@ happened; the Live Activity shows the host's state now (below).
   done or needs me". While that one is off it is dimmed and shows off,
   whatever it was set to, since nothing is shown while the app is closed
   either; what it was set to is kept, and shown again once notifications
-  are turned on (#211). What it says is encrypted on the Mac for that device
+  are turned on (#211). In a build with no push (a development build) it
+  shows off and dimmed too, whatever it was set to, and its footnote says
+  why (#212). What it says is encrypted on the Mac for that device
   alone; one that cannot be opened says "An agent needs you". A
   notification handled elsewhere while the app is asleep is taken back by
   a background push, which iOS limits and does not deliver to an app the
@@ -410,7 +412,10 @@ shows the host's state now rather than events.
   than starting another, whose start through Apple comes with an alert. Without push (a development
   build), it goes out of date ten minutes after the app last updated it.
 - "Live Activity of the Mac's agents" in the iPhone's Settings turns it
-  off, apart from notifications.
+  off, apart from notifications. While iOS has Live Activities turned off
+  for the app (in the iPhone's Settings) the switch shows off and dimmed,
+  whatever it was set to, and the section's footnote says why (#212);
+  what it was set to is kept, and shown again once iOS allows them.
 
 ### Hooks and MCP (#129)
 
@@ -1334,7 +1339,9 @@ either kind, and an onboarding closed before it is asked again at the
 next launch. Afterwards both switches are in Settings > Privacy on the
 Mac and under Privacy in the iPhone's Settings tab, in the same words. A
 build from source and AgentTerm Dev have no service to send to: they show
-no screen and send nothing, whatever the switches say. `PRIVACY.md` says
+no screen and send nothing, and on both apps the two switches show off
+and dimmed, whatever they were set to, with a line that says why (#212);
+what they were set to is kept. `PRIVACY.md` says
 all of what is sent.
 
 ### Keeping the Mac awake

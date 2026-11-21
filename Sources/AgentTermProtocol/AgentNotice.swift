@@ -193,6 +193,8 @@ public struct AgentsStatus: Codable, Hashable, Sendable {
     /// The words of its switch and of the activity (principle 9).
     public static let title = "Agents on"
     public static let toggle = "Live Activity of the Mac's agents"
+    /// Beside the switch while iOS stops it (#212).
+    public static let notAllowed = "Live Activities are turned off for AgentTerm in the iPhone's Settings."
 }
 
 /// When the iPhone shows the Live Activity of the agents on a Mac (#168,

@@ -158,7 +158,8 @@ both switches are in **Settings > Privacy** on the Mac and under **Privacy** in 
 the iPhone app, and a change takes effect at once.
 
 **Builds that send nothing.** An app built from the source code, and the development build
-"AgentTerm Dev", contain no Firebase configuration and send nothing, whatever the switches say.
+"AgentTerm Dev", contain no Firebase configuration and send nothing. There both switches show off,
+dimmed, with a line that says why; what they were set to is kept.
 
 **Other.** If you install the iPhone app from TestFlight or the App Store, Apple may share crash
 reports and usage statistics with the developer if you have agreed to that in your device's

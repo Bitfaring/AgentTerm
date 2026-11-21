@@ -269,22 +269,39 @@ public struct DisplaySettings: Codable, Equatable, Sendable {
 
 /// A switch that stands for something only while the switch it depends on
 /// is on, as "Also While the App Is Closed" under the app's notifications
-/// (#211). While that one is off it shows off, whatever it keeps
-/// (principle 3), and cannot be changed; what it keeps is the user's own
-/// and stays, to be shown again once that one is on.
+/// (#211), and only while the system and the build let it work (#212).
+/// While either stops it, it shows off, whatever it keeps (principle 3),
+/// and cannot be changed; what it keeps is the user's own and stays, to be
+/// shown again once nothing stops it.
 public struct DependentSwitch: Equatable, Sendable {
     /// What the user chose for it, as it is kept.
     public var stored: Bool
     /// Whether the switch it depends on is on.
     public var dependsOn: Bool
+    /// What stops it in the system or the build (#212), in words for the
+    /// user shown beside it; nil while nothing does.
+    public var stoppedBy: String?
 
-    public init(stored: Bool, dependsOn: Bool) {
+    public init(stored: Bool, dependsOn: Bool = true, stoppedBy: String? = nil) {
         self.stored = stored
         self.dependsOn = dependsOn
+        self.stoppedBy = stoppedBy
     }
 
     /// What the switch shows.
-    public var shown: Bool { dependsOn && stored }
+    public var shown: Bool { isEnabled && stored }
     /// Whether it can be changed from the screen.
-    public var isEnabled: Bool { dependsOn }
+    public var isEnabled: Bool { dependsOn && stoppedBy == nil }
+
+    /// The iPhone's "Also While the App Is Closed": under the app's
+    /// notifications, and only in the released build, the one with push.
+    public static func pushAlso(stored: Bool, notifications: Bool, channel: AppChannel) -> DependentSwitch {
+        DependentSwitch(stored: stored, dependsOn: notifications, stoppedBy: channel == .release ? nil : PushWords.notInThisBuild)
+    }
+
+    /// The iPhone's Live Activity switch: only while iOS lets the app show
+    /// Live Activities (`ActivityAuthorizationInfo.areActivitiesEnabled`).
+    public static func liveActivity(stored: Bool, allowed: Bool) -> DependentSwitch {
+        DependentSwitch(stored: stored, stoppedBy: allowed ? nil : AgentsStatus.notAllowed)
+    }
 }

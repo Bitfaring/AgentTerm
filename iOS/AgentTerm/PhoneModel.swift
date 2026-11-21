@@ -746,8 +746,10 @@ final class PhoneModel: ObservableObject {
     /// What the switch's footnote says (principle 3): what holds it back,
     /// else what the Mac says.
     var pushState: PushState? {
-        guard notifyAgents, pushAlso else { return nil }
+        guard notifyAgents else { return nil }
+        // Said whatever the switch keeps, which shows off then (#212).
         if AppChannel.current != .release { return .unavailable(reason: PushWords.notInThisBuild) }
+        guard pushAlso else { return nil }
         if let pushProblem { return .unavailable(reason: pushProblem) }
         return hostPushState
     }
@@ -937,6 +939,10 @@ final class PhoneModel: ObservableObject {
             updateLiveActivity()
         }
     }
+    /// Whether iOS lets the app show Live Activities, as it last said: the
+    /// switch shows off while it does not (#212).
+    @Published private(set) var liveActivitiesAllowed = ActivityAuthorizationInfo().areActivitiesEnabled
+    private var activityAllowedWatch: Task<Void, Never>?
     private var liveActivity: Activity<AgentsActivityAttributes>? = PhoneModel.shownActivity
     /// Its push token, and the one that starts one, as iOS gave them: sent
     /// to the Mac, which keeps the activity true while the app is asleep
@@ -955,6 +961,13 @@ final class PhoneModel: ObservableObject {
     /// or not (#168); updated here while connected, and by the Mac through
     /// Apple while the app is asleep. Left showing "done" when every agent
     /// is done; ended at once when switched off.
+    /// iOS turned Live Activities on or off for the app, in its Settings.
+    private func liveActivityAllowedChanged(_ allowed: Bool) {
+        guard allowed != liveActivitiesAllowed else { return }
+        liveActivitiesAllowed = allowed
+        updateLiveActivity()
+    }
+
     func updateLiveActivity() {
         takeUpShownActivity()
         let enabled = showsLiveActivity && ActivityAuthorizationInfo().areActivitiesEnabled
@@ -1175,6 +1188,11 @@ final class PhoneModel: ObservableObject {
         #endif
         pushFailureWatch = PushToken.shared.$failure.receive(on: DispatchQueue.main).sink { [weak self] failure in
             if let failure { self?.pushProblem = PushWords.tokenRefused(failure) }
+        }
+        activityAllowedWatch = Task { [weak self] in
+            for await allowed in ActivityAuthorizationInfo().activityEnablementUpdates {
+                self?.liveActivityAllowedChanged(allowed)
+            }
         }
         if pairing != nil { connect() }
     }
@@ -1513,6 +1531,8 @@ final class PhoneModel: ObservableObject {
     /// Called when the app comes to the front.
     func resume() {
         active = true
+        // Changed in the iPhone's Settings while the app was away.
+        liveActivityAllowedChanged(ActivityAuthorizationInfo().areActivitiesEnabled)
         if status == .connected { connection?.send(.deviceInBackground(false)) }
         if backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTask)
