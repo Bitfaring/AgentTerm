@@ -1,51 +1,42 @@
 import Foundation
 
-/// A memory of an agent (#220): a file it keeps for itself and reads again,
-/// its instructions for a folder or for the user, or a note it saved from an
-/// earlier session. Only a file the host knows an agent to read is one
-/// (`AgentMemories` on the host), and only one that exists.
+/// A memory of an agent (#220): a note the agent saved by itself for a
+/// folder, which it reads again in its later sessions there. Only a file
+/// the host knows an agent to keep as its memory is one (`AgentMemories` on
+/// the host), and only one that exists. An agent's instructions, which a
+/// person writes for it (`CLAUDE.md`, `AGENTS.md`), are not memories.
 public struct AgentMemory: Codable, Equatable, Identifiable, Sendable {
-    public enum Scope: String, Codable, Sendable {
-        /// Read in one folder.
-        case folder
-        /// The user's own: read in every folder.
-        case user
-    }
-
     /// Where the file is on the Mac, links on the way resolved: what is
     /// read, written and moved to the Trash.
     public var path: String
-    /// What it is called in a list: where it is inside its folder or under
-    /// the agent's own folder ("CLAUDE.md", ".claude/rules/style.md").
+    /// What it is called in a list: the file's name ("MEMORY.md").
     public var name: String
-    /// The ids of the agents that read it, in the host's order. A file that
-    /// several read, such as `AGENTS.md`, is one memory naming them all.
-    public var agents: [String]
-    public var scope: Scope
-    /// The folder it is a memory of; nil for the user's own.
+    /// The id of the agent that saved it and reads it.
+    public var agent: String
+    /// The folder it is a memory of; nil when that is not known: its
+    /// agent names the folder in a way that cannot be turned back into a
+    /// path, and nothing else it keeps tells it.
     public var folder: String?
-    /// Its agent writes it by itself, as Claude Code does the notes it
-    /// keeps for a folder; the others are written by the user, or by an
-    /// agent when it is asked to.
-    public var writtenByAgent: Bool
+    /// What its agent calls the folder, as it wrote it
+    /// ("-Users-me-Dev-app"): shown when the folder is not known.
+    public var project: String
     public var modifiedAt: Date
     /// In bytes.
     public var size: Int
 
     public var id: String { path }
 
-    public init(path: String, name: String, agents: [String], scope: Scope, folder: String? = nil, writtenByAgent: Bool = false, modifiedAt: Date, size: Int) {
+    public init(path: String, name: String, agent: String, folder: String?, project: String, modifiedAt: Date, size: Int) {
         self.path = path
         self.name = name
-        self.agents = agents
-        self.scope = scope
+        self.agent = agent
         self.folder = folder
-        self.writtenByAgent = writtenByAgent
+        self.project = project
         self.modifiedAt = modifiedAt
         self.size = size
     }
 
-    /// One group of a list of memories: a folder's, or the user's own.
+    /// One group of a list of memories: an agent's, as History's groups are.
     public struct Group: Equatable, Identifiable, Sendable {
         public var id: String
         public var title: String
@@ -58,36 +49,16 @@ public struct AgentMemory: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    /// The id of the group of the user's own memories, in both lists.
-    public static let userGroup = "user"
-
-    /// The side panel's and the folder's screen's two groups: the folder's
-    /// memories, then the user's own. A group with none is left out.
-    public static func groups(_ memories: [AgentMemory], ofFolder folder: String) -> [Group] {
-        let own = memories.filter { $0.scope == .folder && $0.folder == folder }
-        let user = memories.filter { $0.scope == .user }
-        var groups: [Group] = []
-        if !own.isEmpty { groups.append(Group(id: "folder:" + folder, title: MemoryWords.thisFolder, memories: own)) }
-        if !user.isEmpty { groups.append(Group(id: userGroup, title: MemoryWords.yours, memories: user)) }
-        return groups
-    }
-
-    /// The place's groups: each folder's memories under the folder's name,
-    /// in the order the folders are listed in, then the user's own. A group
-    /// with none is left out.
-    public static func groups(_ memories: [AgentMemory], folders: [String]) -> [Group] {
-        var order = folders
-        for memory in memories where memory.scope == .folder {
-            if let folder = memory.folder, !order.contains(folder) { order.append(folder) }
+    /// The memories grouped by agent in the order given, as History groups
+    /// its conversations, each group's in the order the host listed them.
+    /// An agent with none has no group.
+    public static func groups(_ memories: [AgentMemory], agentNames: [(id: String, name: String)]) -> [Group] {
+        var known = agentNames
+        for memory in memories where !known.contains(where: { $0.id == memory.agent }) { known.append((memory.agent, memory.agent)) }
+        return known.compactMap { agent in
+            let own = memories.filter { $0.agent == agent.id }
+            return own.isEmpty ? nil : Group(id: "agent:" + agent.id, title: agent.name, memories: own)
         }
-        var groups: [Group] = []
-        for folder in order {
-            let own = memories.filter { $0.scope == .folder && $0.folder == folder }
-            if !own.isEmpty { groups.append(Group(id: "folder:" + folder, title: (folder as NSString).lastPathComponent, memories: own)) }
-        }
-        let user = memories.filter { $0.scope == .user }
-        if !user.isEmpty { groups.append(Group(id: userGroup, title: MemoryWords.yours, memories: user)) }
-        return groups
     }
 }
 
@@ -103,19 +74,99 @@ public struct AgentMemoryContent: Codable, Equatable, Sendable {
     }
 }
 
+/// A memory's text taken apart for its preview (#220): the front matter an
+/// agent opens a note with, and the Markdown under it. Claude Code's notes
+/// begin with a block between two lines of `---` that names the note, says
+/// what it is about and keeps ids of its own; drawn as Markdown it is
+/// noise. Read by lines, leniently: what cannot be read is left out, never
+/// a failure, and a text with no such block is all body.
+public struct MemoryText: Equatable, Sendable {
+    /// What the note is about, in a line: its `description`.
+    public var description: String?
+    /// Its `name`.
+    public var name: String?
+    /// What kind of note it is: `metadata.type`, or a top-level `type`.
+    public var type: String?
+    /// When its agent last changed it: `modified`, under `metadata` or at the top.
+    public var modified: Date?
+    /// The text without its front matter: all of it when it has none.
+    public var body: String
+    /// Whether the text opened with a front matter block.
+    public private(set) var hasFrontMatter = false
+
+    public init(_ text: String) {
+        body = text
+        // Front matter only when the first line is exactly `---` and a later one closes it.
+        // A Windows line end is one character to Swift, which a split at "\n" would not see.
+        let lines = text.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard lines.first == "---", let end = lines.dropFirst().firstIndex(of: "---") else { return }
+        body = lines[(end + 1)...].joined(separator: "\n")
+        hasFrontMatter = true
+        var inMetadata = false
+        var top: [String: String] = [:]
+        var metadata: [String: String] = [:]
+        for line in lines[1..<end] {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let indented = line.hasPrefix("  ") || line.hasPrefix("\t")
+            let key = line[..<colon].trimmingCharacters(in: .whitespaces)
+            var value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            if value.count >= 2, let first = value.first, first == value.last, first == "\"" || first == "'" { value = String(value.dropFirst().dropLast()) }
+            if indented {
+                if inMetadata, metadata[key] == nil { metadata[key] = value }
+            } else {
+                inMetadata = key == "metadata" && value.isEmpty
+                if !inMetadata, top[key] == nil { top[key] = value }
+            }
+        }
+        func filled(_ value: String?) -> String? { value.flatMap { $0.isEmpty ? nil : $0 } }
+        description = filled(top["description"])
+        name = filled(top["name"])
+        type = filled(metadata["type"]) ?? filled(top["type"])
+        modified = (filled(metadata["modified"]) ?? filled(top["modified"])).flatMap(Self.date)
+    }
+
+    /// What a reader wants of the front matter, a line each as a name and
+    /// what it is, for the top of the preview on both apps: the note's
+    /// name when it is not its file's (`fileName` without `.md`), its type
+    /// and when it changed. The description is shown by itself, as the
+    /// note's summary; ids the agent keeps for itself are not shown.
+    public func facts(fileName: String) -> [(name: String, value: String)] {
+        var facts: [(String, String)] = []
+        let file = fileName.hasSuffix(".md") ? String(fileName.dropLast(3)) : fileName
+        if let name, name != file { facts.append(("Name", name)) }
+        if let type { facts.append(("Type", type)) }
+        if let modified { facts.append(("Changed", modified.formatted(date: .abbreviated, time: .shortened))) }
+        return facts.map { (name: $0.0, value: $0.1) }
+    }
+
+    /// ISO 8601, with or without fractions of a second.
+    private static func date(_ text: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: text) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: text)
+    }
+}
+
 /// Every sentence about the agents' memory that the user reads (#220), the
 /// same on the Mac and the iPhone, and what the host answers a request it
 /// refuses with.
 public enum MemoryWords {
     public static let title = "Memory"
-    public static let thisFolder = "This Folder"
-    public static let yours = "Yours, for Every Folder"
 
     public static let loadingList = "Reading the memories…"
     public static let loadingOne = "Reading the memory…"
-    public static let selectFolder = "Select a folder to see the agents' memory of it."
-    public static let noneInFolder = "None of the files the agents read as their memory is in this folder, or among your own."
-    public static let noneAnywhere = "None of the files the agents read as their memory is in a folder listed here, or among your own."
+    public static let selectFolder = "Select a folder to see what the agents saved about it."
+    public static let noneInFolder = "No agent has saved a memory of this folder yet."
+    public static let noneAnywhere = "No agent has saved a memory on this Mac yet."
+    public static let folderNotKnown = "Folder not known"
+
+    /// The folder a memory is about, short, for a row: its name, or that
+    /// it is not known, with what its agent calls it.
+    public static func folder(of memory: AgentMemory) -> String {
+        memory.folder.map { ($0 as NSString).lastPathComponent } ?? folderNotKnown + ": " + memory.project
+    }
     public static let choose = "Choose a memory"
     public static let chooseWhy = "Read it, change it, or delete it."
 
@@ -123,26 +174,11 @@ public enum MemoryWords {
     public static let revert = "Revert"
     public static let delete = "Delete…"
     public static let unsaved = "Changed, not saved"
+    /// Said in the preview, where nothing is typed: a memory is changed as text.
+    public static let changeAsText = "Show as Text to change it."
 
     /// "1 memory", "4 memories".
     public static func count(_ count: Int) -> String { count == 1 ? "1 memory" : "\(count) memories" }
-
-    /// "Claude Code", "Claude Code and Codex", "Claude Code, Codex and Copilot CLI".
-    public static func names(of agents: [String], agentNames: [(id: String, name: String)]) -> String {
-        let names = agents.map { id in agentNames.first { $0.id == id }?.name ?? id }
-        guard names.count > 1, let last = names.last else { return names.first ?? "" }
-        return names.dropLast().joined(separator: ", ") + " and " + last
-    }
-
-    /// Who reads it: "Read by Claude Code and Codex".
-    public static func readers(of memory: AgentMemory, agentNames: [(id: String, name: String)]) -> String {
-        "Read by " + names(of: memory.agents, agentNames: agentNames)
-    }
-
-    /// Who writes it, when its agent does by itself: "Written by Claude Code itself".
-    public static func writer(of memory: AgentMemory, agentNames: [(id: String, name: String)]) -> String? {
-        memory.writtenByAgent ? "Written by " + names(of: memory.agents, agentNames: agentNames) + " itself" : nil
-    }
 
     /// "1.2 KB", "340 bytes".
     public static func size(_ bytes: Int) -> String {
@@ -151,27 +187,9 @@ public enum MemoryWords {
         return String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
     }
 
-    /// What is not shown, and why: said under both lists, so that what is
-    /// listed is not taken for all an agent remembers (principle 5).
-    public struct Note: Equatable, Identifiable, Sendable {
-        /// The agent it is about; nil for all of them.
-        public var agent: String?
-        public var text: String
-        public var id: String { agent ?? "all" }
-    }
-
-    public static let notShownTitle = "Not shown"
-
-    public static let notShown: [Note] = [
-        Note(agent: "codex", text: "What Codex saves by itself is not known: only its instructions are listed."),
-        Note(agent: "agy", text: "What Antigravity saves by itself is not known: only its rules are listed."),
-        Note(agent: "copilot", text: "Copilot CLI keeps what it saves by itself on GitHub, not in a file: only its instructions are listed."),
-        Note(agent: nil, text: "Files in the folders above a folder or inside it are not listed, though an agent may read them too."),
-    ]
-
     // MARK: What the host refuses with
 
-    public static let notAMemory = "That is not a file AgentTerm knows an agent to read as its memory, or it is no longer there: nothing was done."
+    public static let notAMemory = "That is not a file AgentTerm knows an agent to keep as its memory, or it is no longer there: nothing was done."
     public static let gone = "That memory is no longer there."
     public static let notText = "That memory is not text, or is too large to open: it was left as it is."
 
@@ -188,17 +206,17 @@ public enum MemoryWords {
 }
 
 /// What is asked before a memory is deleted (#220): once, since it goes to
-/// the Trash, saying which agents read it.
+/// the Trash, saying whose it is and of which folder.
 public struct DeleteMemoryQuestion: Equatable, Sendable {
     public var title: String
     public var message: String
     public var confirm: String
 
-    public init(_ memory: AgentMemory, agentNames: [(id: String, name: String)]) {
-        let readers = MemoryWords.names(of: memory.agents, agentNames: agentNames)
+    public init(_ memory: AgentMemory, agentName: String) {
         title = "Delete “\(memory.name)”?"
+        let about = memory.folder.map { "“\(($0 as NSString).lastPathComponent)”" } ?? "a folder that is not known (\(memory.project))"
         message =
-            "\(readers) \(memory.agents.count == 1 ? "reads" : "read") it\(memory.scope == .user ? " in every folder" : ""), and will no longer have it. The file is moved to the Trash of the Mac, from where it can be put back."
+            "\(agentName) saved it about \(about), and will no longer have it. The file is moved to the Trash of the Mac, from where it can be put back."
         confirm = "Delete Memory"
     }
 }

@@ -126,8 +126,8 @@ final class HistoryAndTabsTests: MacUITestCase {
     /// HIST-24 (#50): History's list is wider than the other places'; a
     /// search looks at the titles only when asked; conversations are picked
     /// and deleted together, and then every one on the Mac is, each time
-    /// after two questions, Antigravity's as the others' (#222; #219:
-    /// none kept for being pinned).
+    /// after two questions, Antigravity's kept (#219: none for being
+    /// pinned).
     func testConversationsAreSearchedByTitleAndDeletedTogether() throws {
         let history = home.appendingPathComponent(".claude/projects/" + project.path.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())
         try [
@@ -140,7 +140,7 @@ final class HistoryAndTabsTests: MacUITestCase {
         try #"{"type":"user","cwd":"\#(demo)","message":{"role":"user","content":"tidy the demo"}}"#.appending("\n").write(
             to: other.appendingPathComponent("c-3.jsonl"), atomically: true, encoding: .utf8)
         // One of Antigravity, which keeps its list in a file of its own:
-        // taken out of it when every one is deleted (#222).
+        // never deleted here.
         let cache = home.appendingPathComponent(".gemini/antigravity-cli/cache")
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
         let uri = URL(fileURLWithPath: demo).absoluteString
@@ -191,8 +191,8 @@ final class HistoryAndTabsTests: MacUITestCase {
         XCTAssertFalse(app.exists(.containing("was deleted")), "told what the rows going say")
         XCTAssertTrue(FileManager.default.fileExists(atPath: other.appendingPathComponent("c-3.jsonl").path))
 
-        // Every one on the Mac, Antigravity's too (#222), and no row
-        // offers Pin to keep one (#219).
+        // Every one on the Mac: Antigravity's stays, and no row offers Pin
+        // to keep another (#219).
         XCTAssertFalse(app.offers("Pin", on: .id("conversation-c-1")), "a row still offers Pin")
         app.wait(for: .id("conversation-conv-1"))
         app.press(.id("history-select"))
@@ -203,14 +203,14 @@ final class HistoryAndTabsTests: MacUITestCase {
         app.press(.button("Delete Every Conversation"))
         app.waitGone(.id("conversation-c-3"), timeout: 15)
         app.waitGone(.id("conversation-c-1"), timeout: 15)
-        app.waitGone(.id("conversation-conv-1"), timeout: 15)
-        // All of them went: nothing is said of one kept.
-        XCTAssertFalse(app.exists(.containing("could not be deleted")), "one was kept")
+        app.wait(for: .containing("1 was kept: a session is having it, it is Antigravity's, or it could not be deleted."))
+        app.wait(for: .id("conversation-conv-1"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: history.appendingPathComponent("c-1.jsonl").path))
         XCTAssertEqual(
-            Set(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".Trash-of-the-tests").path)), ["c-1.jsonl", "c-2.jsonl", "c-3.jsonl", "conv-1"])
+            Set(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".Trash-of-the-tests").path)), ["c-1.jsonl", "c-2.jsonl", "c-3.jsonl"])
         let list = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: cache.appendingPathComponent("conversation_metadata.json"))) as? [String: Any])
-        XCTAssertEqual((list["conversations"] as? [String: Any])?.count, 0, "Antigravity's is still in its list")
+        XCTAssertEqual((list["conversations"] as? [String: Any])?.count, 1, "Antigravity's list was written to")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: brain.appendingPathComponent("transcript_full.jsonl").path), "what Antigravity keeps of it was moved")
     }
 
     /// The width an element has on the screen.

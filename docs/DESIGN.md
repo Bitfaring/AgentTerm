@@ -680,7 +680,7 @@ projects does not list every project's conversations as its own:
 |---|---|---|---|
 | Claude Code | `~/.claude/projects/<folder>/<session>.jsonl` | newest `ai-title` line, else the first prompt | `claude --resume <id>` |
 | Codex | `~/.codex/sessions/**/rollout-*.jsonl` (first line has id and directory) | first prompt, from `~/.codex/history.jsonl` | `codex resume <id>` |
-| Antigravity | `~/.gemini/antigravity-cli/cache/conversation_metadata.json` | its `Title` | `agy --conversation <id>` |
+| Antigravity | `~/.gemini/antigravity-cli/conversation_summaries.db` (SQLite, since 1.0.16), and `cache/conversation_metadata.json` of an earlier version | its `title`, else its `preview` | `agy --conversation <id>` |
 | Copilot CLI | `~/.copilot/session-state/<id>/workspace.yaml` | its `name`, else the first prompt | `copilot --resume=<id>` |
 
 None of these are documented formats, so every reader treats missing or
@@ -690,63 +690,99 @@ the first 256 KB and the last 64 KB are read. Session ids are put on a command
 line that a shell runs, so ids with anything but letters, digits, `-`, `_` and
 `.` are dropped.
 
+### Antigravity's store
+
+Antigravity 1.5.12 keeps the list of its conversations in a SQLite store,
+`conversation_summaries.db`, and writes no `cache/conversation_metadata.json`
+(#224). `AntigravityStore` reads the store with the system's SQLite
+(`import SQLite3`, no dependency added). What was found on 2026-11-21 in a
+copy of the store of a home that 1.5.12 made, without starting a session:
+
+- Its table `conversation_summaries` has a row for each conversation, of 21
+  columns. History takes five: `conversation_id` (the id `agy --conversation`
+  takes, and the name of `conversations/<id>.db`, `brain/<id>/` and
+  `annotations/<id>.pbtxt`), `title`, `preview`, `last_modified_time` (text,
+  as `2026-11-20 01:02:03.123456+07:00`) and `workspace_uris` (text, a JSON
+  list of `file://` addresses). The others are not read, among them
+  `parent_conversation_id`, `nesting_depth`, `agent_name`, `source`,
+  `status`, `step_count` and `raw_summary` (a protobuf). Beside the table
+  are a search index (`conversations_fts`, FTS5), `search_schema_version` and
+  `conversation_parents`.
+- The transcript is where it was: `brain/<id>/.system_generated/logs/transcript_full.jsonl`
+  and `transcript.jsonl`, lines with `source`, `type`, `content`,
+  `created_at`, `status`, `step_index`, and for a model's line `model` and
+  its tokens. `AgentTranscript` reads them as before.
+- The store is in SQLite's write-ahead mode (its header says so; its
+  changelog says it checkpoints when it exits). With no Antigravity running
+  only the one file is there, without `-wal` and `-shm`.
+
+How it is opened, and why: read-only, by its address with `immutable=1`.
+Tried with the system's SQLite 3.54.0 on a copy: a read-only connection of
+the ordinary kind does not read such a file at all ("unable to open database
+file"), and one that may write makes `-wal` and `-shm` beside it and takes
+locks in them, which Antigravity's own checkpoint then has to wait behind.
+With `immutable=1` SQLite reads the one file, makes nothing in Antigravity's
+folder and takes no lock, so nothing AgentTerm does can hold Antigravity up
+or change what it keeps. The price is that what Antigravity has written to
+its `-wal` and not yet brought into the store is not seen: a conversation of
+a session still running may be listed late, or with the title and time it had
+before. Reading without a lock, the file is looked at before and after (its
+size, time and number): when it changed, or SQLite could not read it, it is
+read again, three times in a tenth of a second, and then given up, never
+waited on.
+
+When the store is there and not read, or its table has not the five columns,
+nothing is guessed from it: its conversations are not listed, and
+`AgentHistory.antigravityProblem` gives the reason in words ("Antigravity's
+conversations are not listed: its database of them could not be read. …").
+No message of the protocol carries that sentence to the apps yet, so it is
+not shown: that is still to be decided (#224).
+
+A folder brought over from an earlier version may hold the earlier list
+beside the store; whether Antigravity leaves it there was not seen, since
+the one home looked at was made new by 1.5.12, whose binary still names the
+file. Both are read. A conversation that both have is listed once, as the
+store says, since the store is what the Antigravity in use reads and writes;
+one only the earlier list has is listed from it.
+
+Not established, since each needs a session of a signed-in Antigravity:
+whether a row with a `parent_conversation_id` (a subagent's, a swarm
+worker's) is one Antigravity's own `/resume` lists, so every row with a
+title or a preview is listed; how long a running Antigravity leaves a new
+conversation in its `-wal`; and from which version on the earlier list is
+no longer written.
+
 ### Deleting a conversation
 
 Deleting (`AgentHistory.delete`) moves the agent's own record to the Trash
 (`FileBrowser.trash`), whatever a client names being looked up again and
 kept to the agent's folder: Claude Code's and Codex's file, Copilot CLI's
-folder. Antigravity has no file for each: one list holds them all. So its
-list, `~/.gemini/antigravity-cli/cache/conversation_metadata.json`, is the
-one file of an agent's that AgentTerm rewrites (#222), and it does so in the
-narrowest way it can:
+folder.
 
-- The file is read and checked first: a JSON object whose `conversations` is
-  an object of objects, the conversation among them. Anything else is refused
-  with the reason and nothing is written, so that a format of a later
-  Antigravity is never rewritten by a reader that does not know it.
-- Only the bytes of the one entry are taken out (`JSONMembers.removing`),
-  with the comma that goes with it. A JSON library that reads and writes the
-  whole would order the keys, space them and write the numbers its own way;
-  this leaves every other byte, known to AgentTerm or not, as Antigravity
-  wrote it. What comes of it is read again as JSON and must be what was
-  there without that entry and nothing else, or it is refused.
-- It is written whole to a file beside the list, given the list's
-  permissions, and moved into its place with `rename`, so a reader sees the
-  old list or the new one. If the list changed between the reading and the
-  moving, Antigravity wrote it meanwhile: it is not written over, and it
-  says to try again.
-- Then what is that one conversation's and no other's is moved to the Trash:
-  `brain/<id>/`, `conversations/<id>.db` (with `-wal` and `-shm`) and
-  `annotations/<id>.pbtxt`, each only when it is there. The list goes first
-  and the Trash after: everything that can be refused is refused before
-  anything is moved, and when the Trash fails the list is put back as it
-  was. The other way round, a list that could not be rewritten would leave a
-  conversation listed whose record is in the Trash, where the host cannot
-  take it back from.
+A conversation of Antigravity is never deleted, whichever of its two lists
+it was read from (#224, and #222, which was not done). Antigravity has no
+file for each conversation: its store holds them all, with the search index
+made from them, and AgentTerm never writes to that store, nor to the earlier
+list, `history.jsonl` or `cache/last_conversations.json`. Taking a
+conversation's files away while its row stays would leave it listed with
+nothing behind it. So it is refused in words, "Antigravity keeps its
+conversations in a store of its own, which AgentTerm does not write to: this
+one is deleted in Antigravity.", and when several are deleted together
+Antigravity's are among those kept, which the question says before and the
+answer after (`DeleteConversationsQuestion`).
 
-What was found in Antigravity 1.5.12 on 2026-11-21, by reading what it keeps
-and what its binary and `agy changelog` say, without starting a session:
+What was found in Antigravity 1.5.12 on 2026-11-21 about deleting, by reading
+what it keeps and what its binary and `agy changelog` say, without starting
+a session:
 
-- Since 1.0.4 a conversation's steps are a SQLite file,
-  `conversations/<id>.db`, and since 1.0.16 the list Antigravity itself
-  shows comes from a SQLite store, `conversation_summaries.db` (a row for
-  each conversation, and an index for its search), which it brings in step
-  with the `conversations` folder as it runs. A conversation is also named
-  by `annotations/<id>.pbtxt` (its title), `presence/<id>.lock`, lines of
-  `history.jsonl`, `cache/last_conversations.json` (the last one of each
-  folder) and `jetbox_summaries_proto.pb`.
-- A home that 1.5.12 made new, with one conversation had in it, has no
-  `cache/conversation_metadata.json` at all, though the binary still names
-  that file. There History lists nothing of Antigravity, and so offers
-  nothing of it to delete.
+- A conversation is named by its row in `conversation_summaries.db` and the
+  index beside it, `conversations/<id>.db` (its steps, SQLite since 1.0.4),
+  `brain/<id>/`, `annotations/<id>.pbtxt` (its title), `presence/<id>.lock`,
+  lines of `history.jsonl`, `cache/last_conversations.json` (the last one of
+  each folder) and `jetbox_summaries_proto.pb`.
 - Deleting in Antigravity itself (F4 in the list of `/resume`) removes the
   conversation's SQLite file, its annotation since 1.1.24, and its subagents
   and their worktrees since 1.4.8, as its changelog says.
-- Not tried, since it needs a session of a signed-in Antigravity: whether
-  it accepts a `conversation_metadata.json` rewritten from outside, whether
-  it writes its own over it, and whether its SQLite store brings back a
-  conversation whose row is still there. AgentTerm does not write to that
-  store, to `history.jsonl` or to `last_conversations.json`.
 
 The Mac app calls this directly, since it runs where the files are. The
 iPhone asks the host with `history`, `resume` and `handoff`. For `resume` the
@@ -756,87 +792,89 @@ client only ever names a conversation and never supplies a path or command.
 
 ## The agents' memory
 
-`AgentMemories` (in `AgentTermHost`) lists the files an agent keeps for
-itself and reads again (#220): its instructions for a folder, the user's own
-for every folder, and the notes it saves by itself. The list is a table in
-the code, `AgentMemories.inFolder` and `AgentMemories.ofUser`, and holds
-only what was established of each agent at the version in use (principle 5).
-A file that is not there is not listed, and nothing is added.
+`AgentMemories` (in `AgentTermHost`) lists what an agent saves by itself
+for a folder and reads again in its later sessions there (#220). As the
+owner narrowed it (2026-11-21), memory is only that: the instructions a
+person writes for an agent (`CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules`,
+`AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`, and each
+agent's own under the user's home) are the folder's and the user's files,
+and are never listed, read, written or deleted through Memory. Only what
+was established of each agent at the version in use is listed (principle
+5). A file that is not there is not listed, and nothing is added.
 
-| File | Read by | How it was established |
+| Agent | What it saves by itself | How it was established |
 |---|---|---|
-| `CLAUDE.md`, `.claude/rules/*.md` in the folder | Claude Code, Copilot CLI | Claude Code 2.1.330: its own text names them, and its `--help` names "CLAUDE.md auto-discovery"; a session of it in this repository is given the folder's `CLAUDE.md`. Copilot CLI 1.0.114: `copilot instruction list` run in a folder of its own, with a `COPILOT_HOME` of its own, lists them |
-| `CLAUDE.local.md`, `.claude/CLAUDE.md` in the folder | Claude Code | Claude Code 2.1.330: its own text names them. Copilot CLI 1.0.114 does not list them |
-| `AGENTS.md` in the folder | Codex, Antigravity, Copilot CLI | Codex 0.170.0: its own text (`core/src/agents_md.rs`, "AGENTS.md instructions"). Antigravity 1.5.12: its own text ("Paths: `GEMINI.md`, `AGENTS.md`, `.agents/rules/*.md`"). Copilot CLI: listed by `copilot instruction list`, and `--no-custom-instructions` in its `--help` names it |
-| `AGENTS.override.md` in the folder | Codex | Codex 0.170.0: its own text names it beside `AGENTS.md`. Copilot CLI does not list it |
-| `GEMINI.md` in the folder | Antigravity, Copilot CLI | Antigravity 1.5.12: its own text. Copilot CLI: listed by `copilot instruction list` |
-| `.agents/rules/*.md` in the folder | Antigravity | Antigravity 1.5.12: its own text |
-| `.github/copilot-instructions.md`, `.github/instructions/*.instructions.md` in the folder | Copilot CLI | listed by `copilot instruction list` |
-| `~/.claude/projects/<folder>/memory/*.md`, `MEMORY.md` first | Claude Code, which writes them by itself | Claude Code 2.1.330: `--help` names "auto-memory" and "memory paths"; the folders are on this Mac, beside the folder's conversations; a session of it in this repository is given its `MEMORY.md`. `<folder>` is named as for History (`AgentHistory.claudeProjectName`) |
-| `~/.claude/CLAUDE.md`, `~/.claude/rules/*.md` | Claude Code | Claude Code 2.1.330: its own text ("your user-level memory file", `~/.claude/rules/`) |
-| `~/.codex/AGENTS.md`, `~/.codex/AGENTS.override.md` | Codex | Codex 0.170.0: its own text (`codex-home/src/instructions`, "global") |
-| `~/.gemini/GEMINI.md`, `~/.gemini/AGENTS.md`, the same two under `~/.gemini/config/`, `~/.gemini/config/rules/*.md` | Antigravity | Antigravity 1.5.12: its own text (its notes of changes name each as "global rules") |
-| `~/.copilot/copilot-instructions.md`, `~/.copilot/instructions/*.instructions.md` | Copilot CLI | `copilot help config` ("personal custom instructions"), and listed by `copilot instruction list` |
+| Claude Code 2.1.330 | `~/.claude/projects/<folder>/memory/*.md`, `MEMORY.md` first, listed | its `--help` names "auto-memory" and "memory paths"; the folders are on this Mac, beside the folder's conversations; a session of it in this repository is given its `MEMORY.md`. `<folder>` is named as for History (`AgentHistory.claudeProjectName`) |
+| Codex 0.170.0 | not known, nothing listed | its own text names files under a `memories` folder (`MEMORY.md`, `memory_summary.md`), and `~/.codex/memories_1.sqlite` is on this Mac, but no such folder is: where it writes them was not established |
+| Antigravity 1.5.12 | not known, nothing listed | nothing it writes by itself was established; its `/learn` adds to its rules, which are instructions |
+| Copilot CLI 1.0.114 | on GitHub, not in a file, nothing listed | `copilot help config` says so of its `memory` setting |
 
 "Its own text" is what the program installed on the Mac holds, read with
-`strings`: no session of an agent was started for this, and nothing of the
-user's own was read. What was not established is not listed, and both apps
-say so under the list (`MemoryWords.notShown`):
+`strings`; no session of an agent was started for this, and nothing of the
+user's own was read. What is not known of Codex, Antigravity and Copilot
+CLI is written here only: the apps no longer say it under the list, as
+the owner asked (2026-11-22), and say one short line when a list is empty.
+Whether an agent that is running reads a memory again once it was changed,
+or only at its next session, was not tried: the apps say nothing of it.
 
-- **Codex** names files of its own under a `memories` folder in its text
-  (`MEMORY.md`, `memory_summary.md`), and keeps `~/.codex/memories_1.sqlite`;
-  no such folder was on the Mac, so where it writes them is not known.
-- **Antigravity**: nothing it writes by itself was established, beyond that
-  its `/learn` adds to the rules above.
-- **Copilot CLI** keeps what it saves by itself on GitHub, as `copilot help
-  config` says of its `memory` setting: not in a file the app could show.
-- **Folders above and inside.** Claude Code also reads its files in the
-  folders above the one it runs in (its own text says so, and a session in
-  this repository is given the `CLAUDE.md` of the folder above), and
-  Copilot CLI those at the root of the repository (`copilot instruction
-  list`, run in a folder inside one); what the others read above was not
-  established. Only the folder's own are listed, as History lists only the
-  folder's own conversations.
-- Whether an agent that is running reads a memory again once it was
-  changed, or only at its next session, was not tried: the apps say nothing
-  of it.
+**Every memory on the Mac, and its folder.** As History lists every
+conversation on the Mac, `AgentMemories.allMemories` lists the notes of
+every project under `~/.claude/projects`, whether or not the app lists
+that folder. Claude Code names a project by the folder with every
+character that is no letter or digit as "-", which cannot be turned back
+into a path ("apps-web" is `apps/web` as well as `apps-web`). So the
+folder is found as History finds it: from the `cwd` a conversation of that
+project recorded (`claudeFolder(of:in:)`: the project's newest five
+conversations, the first lines of each, taking a `cwd` only when the
+project's name is that folder's). When none tells it, `AgentMemory.folder`
+is nil and the row says "Folder not known" with the project's name as
+Claude Code wrote it (`AgentMemory.project`); the memory is read, changed
+and deleted as any other. A project with an empty `memory` lists nothing
+and is not looked into. For one folder, `memories(of:)` takes the project
+of that folder's own name, as `AgentHistory.conversations(in:)` does for
+its conversations: the side panel and the iPhone's folder show that only.
 
-One file is one memory. A file several agents read names them all, in the
-host's order of agents; a file reached under two names, `CLAUDE.md` a link
-to `AGENTS.md`, is one memory under the file's own name. A memory is given
-by its real path, links resolved, and a file that a link leads to outside
-the folder it is looked for under (the folder, or the user's home for the
-user's own and for Claude Code's notes) is not listed.
+A memory (`AgentMemory`) has its path, its file's name, its agent, the
+folder it is about and its project. It is given by its real path, links
+resolved; a note that a link leads to outside the folder of notes is not
+listed, nor are notes whose folder is a link to outside the user's home.
 
 **The path check.** `readMemory`, `writeMemory` and `deleteMemory` carry a
-path and the folder it was listed for (nil for the user's own). The host
-lists that folder's memories again and does it only to a file in that
-list, compared after `..` is taken out of what the client sent
-(`AgentMemories.memory(at:folder:)`): a client never has the host read,
-write or trash a path of its choosing, as it does with the Files tab's
-messages, which take any path and so were not used here. `writeMemory`
-also carries the date the file had when the client read it; when the file
-has another date now, nothing is written and `memoryRefused` says so in
-words. A write replaces the file all at once (`Data.write(.atomic)`); a
-delete is `FileBrowser.trash`, the Trash of the Mac, or `AGENTTERM_TRASH_DIR`
-in a test. What is refused is answered at once: `memoryRead` with its
-`problem` for a read, `memoryRefused` for a write or a delete, both in
-`MemoryWords`' sentences; `memoryDeleted` goes to every device.
+path only. The host lists every memory again and does it only to a file
+in that list, compared after `..` is taken out of what the client sent
+(`AgentMemories.memory(at:)`): so only a note, by its real path, in the
+`memory` folder of one of Claude Code's projects. A client never has the
+host read, write or trash a path of its choosing, as it does with the
+Files tab's messages, which take any path and so were not used here. A
+folder's `CLAUDE.md` sent through these messages is refused as any other
+path that is not listed. `writeMemory` also carries the date the file had
+when the client read it; when the file has another date now, nothing is
+written and `memoryRefused` says so in words. A write replaces the file
+all at once (`Data.write(.atomic)`); a delete is `FileBrowser.trash`, the
+Trash of the Mac, or `AGENTTERM_TRASH_DIR` in a test. What is refused is
+answered at once: `memoryRead` with its `problem` for a read,
+`memoryRefused` for a write or a delete, both in `MemoryWords`' sentences;
+`memoryDeleted` goes to every device.
 
-Nothing is listed or read before the user opens Memory, in the bar at the
-left or in the side panel; the list is asked for again every 15 seconds
-while it is shown and the app is in front, as History's is, and on the
-iPhone when it is opened or pulled down. So there is no switch for it in
-Settings (principle 4). The words, the grouping (`AgentMemory.groups`) and
-the question before a delete (`DeleteMemoryQuestion`) are in
-`AgentTermProtocol/AgentMemory.swift`, for both apps (principle 9). On the
-Mac, `MemoryStore` keeps the two lists, what was read, and what was changed
-and not saved, by path, with the date each change began from; `MemoryView`
-shows them as History is shown: `MemorySidebar` and `MemoryDetail` in the
-place, `MemoryView(ofFolder: true)` in the side panel with a sheet over
-Sessions. Both apps go through the host for all of it, this Mac's too. On
-the iPhone, `MemoryList` is the fourth tab of `FolderScreen` and
-`MemoryScreen` the sheet a memory is read, changed and deleted in.
+Nothing is listed or read before the user opens Memory; the list is asked
+for again every 15 seconds while it is shown and the Mac app is in front,
+as History's is, and on the iPhone when it is opened or pulled down. So
+there is no switch for it in Settings (principle 4). The words, the
+grouping by agent as History groups (`AgentMemory.groups`) and the
+question before a delete (`DeleteMemoryQuestion`) are in
+`AgentTermProtocol/AgentMemory.swift`, for both apps (principle 9).
+
+Memory is where History is, on both apps. On the Mac, `MemoryStore` keeps
+the two lists, what was read, and what was changed and not saved, by path,
+with the date each change began from; `MemoryView` shows them as
+`HistoryView` does: `MemorySidebar` and `MemoryDetail` in the place of the
+bar at the left, every memory on the Mac, each row naming its folder, and
+`MemoryView(ofFolder: true)` in the side panel, the folder on show's, with
+a sheet over Sessions. On the iPhone, `MemoryList(folder:)` is used as
+`HistoryList(folder:)` is: with nil in a tab of `RootTabs` beside History,
+every memory on the Mac, and with the folder as the fourth tab of
+`FolderScreen`; `MemoryScreen` is the sheet a memory is read, changed and
+deleted in. Both apps go through the host for all of it, this Mac's too.
 
 ## Session names
 
@@ -1186,7 +1224,7 @@ Mac's own app as `local`.
 - On connecting, after `sessions`: `noticeLog([Notice])`, the 30 days, for
   the device's Inbox; then `noticeAlert(id:)` for each one due, not
   handled nor read, that it was not shown yet. A new notice is `notice` to
-  every client at once, for the Inbox and the Mac's banner. When it
+  every client at once, for the Inbox and the Mac's floating notice. When it
   `alerts`, its time to be a notification comes at once, or after
   `Notice.pushWait` (30 s, `Configuration.pushWait`) when
   `Notice.pushWaits(macInUse:)` says so: a done agent always, anything else
@@ -1209,7 +1247,7 @@ Mac's own app as `local`.
   it read while not connected (`InboxBook.readHere(notTold:)`).
 - A notice is handled once (`Notice.Handled`: answered, opened, dismissed,
   moved on): by `answer`, by `noticeSeen` for its session and state, by
-  `handleNotice(id:how:)` (dismissed from a banner or Notification
+  `handleNotice(id:how:)` (dismissed from a floating notice or Notification
   Center, `customDismissAction`), by `dismissFailure` for a failure's, or
   when its agent's state changes or its session ends. Every client is told
   `noticeHandled(id:handled:)`; each device that had it through Apple and
@@ -1220,7 +1258,7 @@ Mac's own app as `local`.
   extension), named `"<mac>-<notice id>"`, the name APNs gives a pushed
   one, and shows it in front too (`willPresent` → banner, list, sound),
   except for the session on screen, which it then sees. The Mac shows its
-  banner on `notice` and posts a macOS notification on `noticeAlert`, in
+  floating notice on `notice` and posts a macOS notification on `noticeAlert`, in
   front too and for the session in front too (`MacNotifications`,
   `willPresent` → banner, list, sound; `notifyOnMac`). On the Mac the
   session in front is seen only when the user does something
@@ -1338,10 +1376,40 @@ asked for rather than an ended one updated. The relay sends
 start), with `stale-date` 30 minutes on and, for `end`, `dismissal-date`.
 While connected and in front, the app updates the activity itself.
 
-**On the Mac.** A banner over the window for a session that is not the one
-selected while the app is in front.
+**On the Mac.** The agents' notices float over the middle of the window
+(#225). Until 0.14.0 a notice was a banner in the middle column's
+`VStack`, above the terminals: it took its height from them, so the
+terminal in front lost two or three rows while it showed and got them
+back when it went, its text moved, and the agent was told a new size each
+time. Now `MiddleColumn` draws `FloatingNoticeStack` as an
+`.overlay(alignment: .top)` on the `ZStack` of the terminals and the
+place shown over them: an overlay is laid out in the room of what it is
+over and gives it none of its own, which is why the terminal keeps its
+size. It is inside the middle column only, under the banners of what
+stopped (`Banners`, still in the flow), and not over the toolbar, the
+list or the side panel. The stack is 560 points wide at most
+(`FloatingNoticeStack.width`), each notice a card (`FloatingNoticeCard`,
+the banner's content and buttons) on an opaque background with a shadow.
+Nothing but the cards is drawn, so the pointer reaches the terminal
+around them; a stack taller than the middle is put in a scroll view
+(`ViewThatFits`), which only then takes the pointer over its column.
 
-A banner is dropped when its session comes to the front (#60): on the Mac
+Which notices are on show is `FloatingNotices` (`AgentTermProtocol`), a
+value with no clock of its own: `show(_:id:at:)` for each `notice` the
+host tells (the same number again takes its own place; another of the
+same session takes that session's; an eleventh takes the place of the
+oldest that does not wait, or of the oldest), `remove(ids:)` for
+`noticesRead` and `noticeHandled`, `remove(session:)` when its session is
+opened or comes to the front, `keep(where:)` with each list of sessions,
+`hover(_:_:at:)` from the card's `onHover`, and `expire(at:)`. One of an
+agent that is done has `goes`, 10 seconds on (`FloatingNotices.stays`;
+`AGENTTERM_NOTICE_SECONDS` for the tests); one that waits, or is under
+the pointer, has none. `AppModel.floatingNotices` holds it and keeps one
+timer for `nextGoes`; a notice that goes by itself tells the host
+nothing, and stays unread in the Inbox. The app posts an accessibility
+announcement for each notice shown while VoiceOver is on.
+
+A notice is dropped when its session comes to the front (#60): on the Mac
 when the session is selected with Sessions shown and the app in front of
 the others (`selectedSession`, `show(_:)`, and when the app becomes
 active: a session chosen in a window behind another app's is not before

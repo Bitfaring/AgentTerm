@@ -173,6 +173,8 @@ public final class HostServer {
         /// What the device said it is (#157); nil when it did not.
         var kind: DeviceKind?
         var identity: DeviceRegistry.Identity?
+        /// Told already that an agent's history could not be read (#224).
+        var toldOfUnreadHistory = false
         var attached: Set<SessionID> = []
         /// Sessions whose screen is being written out for this client, with
         /// the output that came since, sent once the screen is.
@@ -1388,7 +1390,7 @@ public final class HostServer {
     /// Several conversations deleted at once (#50): those named, or every
     /// one on the host when `ids` is nil. Never one a session is having,
     /// whose agent may be writing to it; one `AgentHistory.delete` refuses
-    /// is kept too. Antigravity's are deleted as the others' are (#222).
+    /// is kept too, as every one of Antigravity is.
     private func deleteConversations(_ ids: [String]?, for client: Client) {
         let home = configuration.home
         let inSession = Set(sessions.values.compactMap { session in session.info.conversationID.map { (session.info.agent ?? "") + ":" + $0 } })
@@ -2528,11 +2530,20 @@ public final class HostServer {
             let home = configuration.home
             work(
                 for: client,
-                {
-                    path.map { AgentHistory.conversations(in: $0, home: home) } ?? AgentHistory.allConversations(home: home)
+                { () -> (conversations: [Conversation], problem: String?) in
+                    let conversations = path.map { AgentHistory.conversations(in: $0, home: home) } ?? AgentHistory.allConversations(home: home)
+                    return (conversations, AgentHistory.antigravityProblem(home: home))
                 }
-            ) { server, client, conversations in
-                server.send(.history(path: path, conversations: conversations), to: client)
+            ) { server, client, found in
+                server.send(.history(path: path, conversations: found.conversations), to: client)
+                // A store of Antigravity's that cannot be read is said, not
+                // left as conversations that are simply missing (#224,
+                // principle 3): once to each client for as long as it is
+                // connected, since the list is asked for again and again.
+                if let problem = found.problem, !client.toldOfUnreadHistory {
+                    client.toldOfUnreadHistory = true
+                    server.send(.error(problem), to: client)
+                }
             }
         case .historyOlder(let path, let before):
             let home = configuration.home
@@ -4004,32 +4015,31 @@ public final class HostServer {
 extension HostServer {
     /// Lists, reads, writes and deletes the agents' memories. Whatever path
     /// a client sends, `AgentMemories` does it only to a file it lists
-    /// itself for the folder asked about; what it refuses is said at once.
+    /// itself; what it refuses is said at once.
     private func memory(_ message: ClientMessage, for client: Client) {
         let home = configuration.home
         switch message {
         case .memories(let path):
-            let listed = folders
-            work(for: client, { path.map { AgentMemories.memories(of: $0, home: home) } ?? AgentMemories.memories(ofEvery: listed, home: home) }) {
+            work(for: client, { path.map { AgentMemories.memories(of: $0, home: home) } ?? AgentMemories.allMemories(home: home) }) {
                 server, client, list in
                 server.send(.memories(path: path, list: list), to: client)
             }
-        case .readMemory(let path, let folder):
-            work(for: client, { AgentMemories.read(path, folder: folder, home: home) }) { server, client, result in
+        case .readMemory(let path):
+            work(for: client, { AgentMemories.read(path, home: home) }) { server, client, result in
                 switch result {
                 case .success(let content): server.send(.memoryRead(path: path, content: content, problem: nil), to: client)
                 case .failure(let refusal): server.send(.memoryRead(path: path, content: nil, problem: refusal.description), to: client)
                 }
             }
-        case .writeMemory(let path, let folder, let text, let seen):
-            work(for: client, { AgentMemories.write(text, to: path, folder: folder, seen: seen, home: home) }) { server, client, result in
+        case .writeMemory(let path, let text, let seen):
+            work(for: client, { AgentMemories.write(text, to: path, seen: seen, home: home) }) { server, client, result in
                 switch result {
                 case .success(let memory): server.send(.memorySaved(memory), to: client)
                 case .failure(let refusal): server.send(.memoryRefused(path: path, problem: refusal.description), to: client)
                 }
             }
-        case .deleteMemory(let path, let folder):
-            work(for: client, { AgentMemories.delete(path, folder: folder, home: home) }) { server, client, result in
+        case .deleteMemory(let path):
+            work(for: client, { AgentMemories.delete(path, home: home) }) { server, client, result in
                 switch result {
                 case .success(let memory):
                     for other in server.clients.values where other.authenticated { server.send(.memoryDeleted(path: memory.path), to: other) }

@@ -289,17 +289,19 @@ public struct DeleteConversationsQuestion: Equatable, Sendable {
         } else {
             title = count == nil ? "Delete every conversation on this Mac?" : "Delete \(them)?"
             message =
-                "This deletes the agents' own records of \(count == 1 ? "it" : "them"), not only the rows here. One a session is having stays."
+                "This deletes the agents' own records of \(count == 1 ? "it" : "them"), not only the rows here. One a session is having stays, as do Antigravity's, which are deleted in Antigravity."
             confirm = "Delete…"
         }
     }
 
-    /// Said once they were deleted: how many, and how many were kept. One
-    /// of Antigravity is deleted as the others are (#222).
+    /// Said once they were deleted: how many, and how many were kept:
+    /// one a session is having, one of Antigravity, whose store AgentTerm
+    /// does not write to (#224), and one whose file could not be moved.
     public static func done(deleted: Int, kept: Int) -> String {
         let gone = deleted == 1 ? "1 conversation was deleted." : "\(deleted) conversations were deleted."
         guard kept > 0 else { return gone }
-        return gone + " \(kept) \(kept == 1 ? "was kept: a session is having it, or it" : "were kept: a session is having them, or they") could not be deleted."
+        return gone
+            + " \(kept) \(kept == 1 ? "was kept: a session is having it, it is Antigravity's, or it" : "were kept: a session is having them, they are Antigravity's, or they") could not be deleted."
     }
 }
 

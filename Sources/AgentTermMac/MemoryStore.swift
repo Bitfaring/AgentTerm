@@ -14,10 +14,10 @@ final class MemoryStore: ObservableObject {
         case problem(String)
     }
 
-    /// Every listed folder's memories and the user's own, as Memory lists
+    /// Every memory on the Mac, as Memory lists
     /// them. `nil` while loading.
     @Published private(set) var all: [AgentMemory]?
-    /// The folder on show's and the user's own, as the side panel lists
+    /// The folder on show's, as the side panel lists
     /// them. `nil` while loading.
     @Published private(set) var ofFolder: [AgentMemory]?
     /// Memories as they were read, by path.
@@ -87,7 +87,7 @@ final class MemoryStore: ObservableObject {
     // MARK: One memory
 
     func read(_ memory: AgentMemory) {
-        send?(.readMemory(path: memory.path, folder: memory.folder))
+        send?(.readMemory(path: memory.path))
     }
 
     /// The text on show: what was changed, or what was read.
@@ -125,14 +125,14 @@ final class MemoryStore: ObservableObject {
         guard let text = drafts[memory.path], let seen = bases[memory.path] else { return }
         saving[memory.path] = text
         refused[memory.path] = nil
-        send?(.writeMemory(path: memory.path, folder: memory.folder, text: text, seen: seen))
+        send?(.writeMemory(path: memory.path, text: text, seen: seen))
     }
 
     /// Asked once: it goes to the Trash.
     func deleteConfirmed() {
         guard let asked = deleting else { return }
         deleting = nil
-        send?(.deleteMemory(path: asked.path, folder: asked.folder))
+        send?(.deleteMemory(path: asked.path))
     }
 
     // MARK: From the host
@@ -202,7 +202,6 @@ final class MemoryStore: ObservableObject {
                 guard old.path == memory.path else { return old }
                 var new = memory
                 new.folder = old.folder
-                new.scope = old.scope
                 return new
             }
         }

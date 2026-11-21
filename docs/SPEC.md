@@ -278,8 +278,8 @@ happened; the Live Activity shows the host's state now (below).
   make it seen, something the user does there does (choosing it, typing
   into it, the notification).
 - **When it is a notification** (#180, decided by the owner on
-  2026-11-20): every notice is in each device's Inbox, and the Mac's
-  banner, at once; it is a notification on the Mac and on every iPhone or
+  2026-11-20): every notice is in each device's Inbox, and floats over the
+  Mac's window, at once; it is a notification on the Mac and on every iPhone or
   iPad **at the same moment**, which the host says. An agent that is done
   waits 30 seconds first, always; anything else waits 30 seconds while
   someone is at the Mac, and is told at once otherwise. Handled or read
@@ -289,7 +289,7 @@ happened; the Live Activity shows the host's state now (below).
   host that starts again within the wait still tells it once the wait is
   over (#193).
 - **Handled on one, gone from all**: answered, opened or dismissed (from
-  the banner, from Notification Center) on one device, or its agent moving
+  the Mac's floating notice, from Notification Center) on one device, or its agent moving
   on, and the notification goes from every other device.
 - **Read on one, read on all** (#180, replacing what #66 decided): a
   notice read on one device (picked in the Inbox, its session opened, its
@@ -331,12 +331,36 @@ happened; the Live Activity shows the host's state now (below).
   pushes) waits for the user's answer, and is not told no while the
   question is still on screen (#200).
 - **On the Mac**, a banner while the app is in front, which opens the
-  session; and a macOS notification, with the app in front or not (#180),
+  session and floats over the window (below); and a macOS notification, with the app in front or not (#180),
   with Reply and the choices as on the iPhone: "Notify when an agent is
   done or needs you" in Settings > General, on by default. macOS is asked
   whether the app may notify in the onboarding's Permissions step, where
-  Notifications is one of the permissions listed. The banner shows what the agent said on up to six lines; Show
+  Notifications is one of the permissions listed. The notice shows what the agent said on up to six lines; Show
   All opens it out.
+- **The Mac's notice of an agent floats** (#225, decided by the owner on
+  2026-11-22): it is drawn over the content of the window's middle, at
+  its top, in the centre, 560 points wide at most, and takes no room: the
+  terminal under it keeps its size and its text does not move when a
+  notice shows or goes. It does not cover the toolbar, the list at the
+  left or the side panel, and what is around it can be clicked and typed
+  into as before. Each notice is a card with what the agent said, **Show
+  All**, **Open** and **Dismiss**; touching it opens its session.
+  - One of an agent that is **done stays 10 seconds**, then goes by
+    itself; it is still in the Inbox, unread, and no device is told it
+    was seen. One of an agent that **waits** (a question, a permission)
+    stays until it is answered, opened or dismissed. While the pointer is
+    over a notice it does not go; its 10 seconds start again when the
+    pointer leaves.
+  - **Several are stacked**, the newest on top, **10 at most**, one for a
+    session. An eleventh takes the place of the oldest that does not
+    wait; when all ten wait, of the oldest, which stays in the Inbox.
+  - Handled, read or seen on another device, or its agent moving on, a
+    notice goes from the stack as the banner did.
+  - VoiceOver says a notice when it appears, and reaches its buttons.
+  - **What stopped does not float**: the host that stopped, an older
+    host, another copy's host, a port in use, a part that failed and the
+    states of the connection stay banners fixed at the top, which take
+    their room, until they are over or closed (principle 3).
 - A notification for a question, or for a finished task, takes a short
   reply, written or dictated, sent as the next message; on the iPhone it
   asks for the phone to be unlocked first. A question's choices are
@@ -1351,20 +1375,19 @@ panel.
       **Copy**, which copies it as it was written (#50).
     - **Delete…** deletes the agent's own record of the conversation,
       after two questions: its file is moved to the Trash of the Mac. A
-      conversation a session is having is not deleted. Antigravity keeps
-      one list of all its conversations: one of its own is taken out of
-      that list, and what Antigravity keeps of it is moved to the Trash,
-      from where it can be put back (#222). When the list cannot be
-      read, or is not written the way AgentTerm knows, it is refused with
-      the reason, the list left as it is and nothing moved.
+      conversation a session is having is not deleted; Antigravity's
+      cannot be, and it says why: Antigravity keeps its conversations in
+      a store of its own, which AgentTerm reads (History lists them from
+      it, and they are read, resumed and handed off as the others) and
+      does not write to, so one of them is deleted in Antigravity (#224).
     - **Select**, above the list, picks conversations to delete together
       (#50): a click ticks one instead of opening it, and **Delete N…**
       deletes those picked after two questions. In History, not in a
       folder's list, **Delete All…** deletes every conversation on the Mac,
       after two questions too. Either way one a session is having stays,
-      as does one that could not be deleted; Antigravity's are deleted
-      as the others' are (#222). How many were kept is said, and nothing
-      more when none was. **Done** ends the picking.
+      as do Antigravity's and one that could not be deleted; how many
+      were kept is said, and nothing more when none was. **Done** ends
+      the picking.
     - **Show Older Conversations**, at the end of a full list, brings the
       next 200.
 
@@ -1373,71 +1396,85 @@ panel.
 
 ### The agents' memory
 
-An agent keeps what it is told to remember, and what it wrote down by
-itself, in files: its instructions for a folder, the user's own for every
-folder, and the notes it saved from earlier sessions. They change how it
-behaves in every later session. **Memory** shows them, to be read, changed
-and deleted (#220). It is not about the processor or the memory of the Mac.
+Some agents save notes by themselves, about a folder, and read them again
+in every later session there: what they learned of the project, what they
+were told to do differently. **Memory** shows these notes, to be read,
+changed and deleted (#220). It is where History is, on both apps, and made
+as History is. It is not about the processor or the memory of the Mac.
 
-- **What is a memory.** Only a file AgentTerm knows an agent to read, and
-  only one that exists: in a folder, `CLAUDE.md`, `CLAUDE.local.md`,
-  `.claude/CLAUDE.md` and `.claude/rules/*.md` (Claude Code), `AGENTS.md`
-  and `AGENTS.override.md` (Codex), `GEMINI.md`, `AGENTS.md` and
-  `.agents/rules/*.md` (Antigravity), `.github/copilot-instructions.md`,
-  `.github/instructions/*.instructions.md`, `AGENTS.md`, `CLAUDE.md`,
-  `GEMINI.md` and `.claude/rules/*.md` (Copilot CLI), and the notes Claude
-  Code writes by itself for the folder, `memory/MEMORY.md` first; the
-  user's own, under `~/.claude`, `~/.codex`, `~/.gemini` and `~/.copilot`.
-  `docs/DESIGN.md` has the whole list and how each was found. A file
-  several agents read is one memory that names them all. Nothing is called
-  an agent's memory that it is not known to read.
-- **What is not shown is said**, under each list: what Codex and
-  Antigravity save by themselves is not known; Copilot CLI keeps what it
-  saves on GitHub, not in a file; files in the folders above a folder or
-  inside it are not listed, though an agent may read them too.
-- **Memory**, the place in the bar at the left: the memories of every
-  folder in the list, each folder a group under its name, then **Yours,
-  for Every Folder**. Its list is wide, as History's is. One picked is
-  shown in the middle of the window.
-- **Memory** of the side panel: the memories of the folder on show, **This
-  Folder**, and the user's own, **Yours, for Every Folder**, as two groups.
-  One picked is shown in a sheet over Sessions; Sessions stays.
-- **A row** says the file's name inside its folder (`~/…` for the user's
-  own), which agents read it ("Read by Claude Code and Copilot CLI"), when
-  it changed, "Written by Claude Code itself" for what an agent writes by
-  itself, and "Changed, not saved" while it has a change that is not
+- **What is a memory.** Only what an agent saved by itself, in a file
+  AgentTerm knows it to keep, and only one that exists: today the notes
+  Claude Code keeps for a folder, `MEMORY.md`, their index, first.
+  `docs/DESIGN.md` says how that was found.
+- **What is not.** The instructions a person writes for an agent,
+  `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, rules and the like, in a folder or
+  under the user's home, are files of the folder and the user: they are
+  not listed in Memory, and nothing there reads, changes or deletes them.
+  They are opened as any file, in Files.
+- **Memory**, the place in the bar at the left, after History: every
+  memory on the Mac, whatever folder it is about and whether or not that
+  folder is in the app's list, as History has every conversation on the
+  Mac. They are under their agent as History's conversations are, each
+  row naming its folder; one whose folder the agent's files do not tell
+  says "Folder not known" with the name the agent gave it, and is read,
+  changed and deleted as the others. Its list is wide, as History's is.
+  One picked is shown in the middle of the window.
+- **Nothing is explained under a list.** A list with no memory says one
+  short line, as History's does: "No agent has saved a memory on this Mac
+  yet.", or "No agent has saved a memory of this folder yet." in a
+  folder's. What is not known of the other agents is in `docs/DESIGN.md`,
+  not in the app.
+- **Memory** of the side panel, after History and Files: the memories of
+  the folder on show only, under their agent. One picked is shown in a
+  sheet over Sessions; Sessions stays.
+- **A row** says the file's name, when it changed, in the place its
+  folder, and "Changed, not saved" while it has a change that is not
   saved; its tip is where the file is.
-- **A memory** is shown whole: who reads it, when it changed and its size,
-  its name, where it is, and its text in the app's own editor.
-  **Preview Markdown** shows it with its Markdown rendered and **Show as
-  Text** as it is written, the words History uses; the choice is kept.
+- **A memory** is shown whole: its agent, when it changed and its size,
+  its name, its folder, where the file is, and its text in the app's own
+  editor. **Preview Markdown** shows it with its Markdown rendered and
+  **Show as Text** as it is written, the words History uses; the choice is
+  kept.
+- **A note's front matter.** A note Claude Code writes opens with a block
+  between two lines of `---`. In the preview it is not drawn as text:
+  what it says the note is about comes first, then its type and when it
+  changed (its name too when that is not the file's), and only the rest
+  is rendered; the ids it keeps are not shown. Show as Text has the whole
+  file as written.
+- **Changed as text only.** In Show as Text the note is in the editor and
+  is typed into at once, with no step before, as a file of the Files tab
+  is. In the preview nothing is typed and there is no Save: it says "Show
+  as Text to change it.", and shows a change not saved yet as it would
+  look.
 - **Changed.** The text is changed in the editor and written with **Save**
-  to the file the agents read, all at once; **Revert** drops the change and
+  to the file its agent reads, all at once; **Revert** drops the change and
   reads the file again. Nothing is written before Save, and a change is
   kept while the app runs when another memory is looked at. A file that
   changed on the Mac after it was read is not written over: the Mac says
   so with the memory, and Revert reads it again.
 - **Deleted.** **Delete…**, on the memory or in its row's menu, asks first:
-  "Delete “CLAUDE.md”?", which agents read it, and that the file is moved
-  to the Trash of the Mac, from where it can be put back. Every device is
-  told and drops its row.
-- **Not more.** A memory is not added, and not moved between a folder's
-  and the user's own. AgentTerm never changes or deletes one by itself.
-- **Refused in words.** A file that is not in the Mac's own list for the
-  folder is not read, written or deleted, whatever a device asks; a memory
-  that is gone, is not text or could not be written says so at once.
+  "Delete “MEMORY.md”?", which agent saved it and about which folder, and
+  that the file is moved to the Trash of the Mac, from where it can be put
+  back. Every device is told and drops its row.
+- **Not more.** A memory is not added and not moved to another folder.
+  AgentTerm never changes or deletes one by itself.
+- **Refused in words.** A file that is not in the Mac's own list of
+  memories is not read, written or deleted, whatever a device asks, the
+  folder's `CLAUDE.md` as any other; a memory that is gone, is not text or
+  could not be written says so at once.
 - **When it is read.** Only while Memory is open, in the place or the
   panel: asked for when it is opened, and again every 15 seconds while it
   is shown and the app is in front. When a running agent reads a changed
   memory again is its own matter and is not known here.
-- **On the iPhone** the folder's screen has **Memory** as its fourth tab,
-  beside Git, History and Files: the folder's memories and the user's own
-  as the same two groups, with the same rows and what is not shown under
-  them; pulled down, it is read again. One picked opens in a sheet: read,
-  with **Preview Markdown** and **Show as Text**, changed in the iPhone's
-  editor with **Save** and **Revert**, and deleted with the same question.
-  Closing with a change that is not saved asks first. The iPhone has no
-  list of every folder's memories: each folder's screen has its own.
+- **On the iPhone** Memory is where History is: a tab **Memory** beside
+  History, with every memory on the Mac, each row naming its folder, and
+  **Memory** as the fourth tab of a folder's screen, beside Git, History
+  and Files, with that folder's only. Both are under their agent, with
+  the same short line when there is none; pulled down, they are read
+  again. One picked opens in a sheet: read, with **Preview Markdown** and
+  **Show as Text**, changed in the iPhone's editor with **Save** and
+  **Revert**, and deleted with the same question. Closing with a change
+  that is not saved asks first.
 
 ### What the app reports
 
@@ -1717,10 +1754,10 @@ The app opens on **Macs**, the list of the Macs it is paired with, each with
 whether it is connected and how many sessions it has. Picking one goes into
 that Mac; pairing another adds it to the list, and holding a Mac forgets it.
 
-Inside a Mac there are four tabs, the places of the Mac's bar but the
+Inside a Mac there are five tabs, the places of the Mac's bar but the
 Inbox: **Sessions** (the Inbox when it holds something, how the Mac is
 doing, then the folders and their sessions), **History**
-(every conversation on the Mac), **Schedules** (as the Mac's Schedules
+(every conversation on the Mac), **Memory** (every memory the agents saved on the Mac, #220), **Schedules** (as the Mac's Schedules
 shows them, #50) and **Settings**, in the order of the Mac's Settings: General
 (keeping the Mac awake with its options, the temperature's unit), Git
 (commit messages, diffs), Privacy, then the Mac itself (switching to

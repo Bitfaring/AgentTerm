@@ -44,16 +44,15 @@ the source yourself sends nothing at all.
   you browse, edit, stage or commit from the app. When an agent's turn begins and ends, it also looks at
   the folder with git, on your Mac, to show what changed during the turn; Settings > Git > "Show what
   each turn came to" turns this off.
-- **The agents' memory.** When you open Memory, in the Mac app or in a folder's screen on the iPhone,
-  AgentTerm looks on your Mac for the files Claude Code, Codex, Antigravity and Copilot CLI read as
-  their instructions and notes: in your project folders (such as `CLAUDE.md`, `AGENTS.md`,
-  `GEMINI.md`, `.github/copilot-instructions.md`), in those agents' own folders under your home
-  (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.copilot`), and the notes Claude Code keeps for a folder.
-  It reads their names, sizes and dates, and the text of one when you open it. These go only to the
-  app on your Mac and to a paired device that opens Memory, over the connection between your own
-  devices; nothing of them leaves your Mac otherwise. AgentTerm does not look for them before you
-  open Memory, and changes or deletes one only when you save a change or confirm a delete; a deleted
-  file goes to the Trash of your Mac.
+- **The agents' memory.** When you open Memory, in the Mac app or on the iPhone, AgentTerm looks on
+  your Mac for the notes an agent saved by itself about your folders, whether or not a folder is
+  in AgentTerm's list: today those Claude Code keeps under `~/.claude/projects`. To name the folder
+  a note is about, it reads where a conversation kept beside the note says it ran. It reads their names, sizes and dates, and the text of one
+  when you open it. These go only to the app on your Mac and to a paired device that opens Memory,
+  over the connection between your own devices; nothing of them leaves your Mac otherwise.
+  AgentTerm does not look for them before you open Memory, and changes or deletes one only when you
+  save a change or confirm a delete; a deleted file goes to the Trash of your Mac. The instructions
+  you write for an agent, such as `CLAUDE.md`, are not part of Memory.
 - **Conversation history.** The History tab reads the files that Claude Code, Codex, Antigravity and
   Copilot CLI already keep on your Mac. When an agent's turn ends, AgentTerm reads the end of that
   agent's file for the turn, to show the commands it ran (the same switch turns it off). What it shows

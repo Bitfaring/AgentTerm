@@ -430,6 +430,152 @@ final class SessionTests: MacUITestCase {
         app.waitGone(.containing("needs permission"))
     }
 
+    /// How long a notice of a done agent floats, for the tests that are
+    /// about that time (NOTE-20) or that read one for longer than it stays.
+    override func beforeTheAppStarts() throws {
+        if name.contains("GoesAfterItsTime") { appEnvironment[FloatingNotices.staysVariable] = "4" }
+        if name.contains("OpensOutToAll") || name.contains("LeavesTheTerminalItsSize") || name.contains("AreStacked") {
+            appEnvironment[FloatingNotices.staysVariable] = "120"
+        }
+    }
+
+    /// A stand-in for Claude Code that tells its hooks it is done, so many
+    /// seconds after it starts.
+    private func standInDone(_ name: String, after seconds: Int, said: String) throws -> URL {
+        let folder = root.appendingPathComponent("stand-in-\(name)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let script = folder.appendingPathComponent("claude")
+        let event = #"{"hook_event_name":"Stop","last_assistant_message":"\#(said)"}"#
+        try "#!/bin/sh\nsleep \(seconds)\nprintf '%s' '\(event)' | '\(hostExecutable.path)' hook claude Stop\nexec sleep 600\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    /// NOTE-18 (#225): an agent's notice floats over the terminal and takes
+    /// no room from it: the session in front has the same rows, and its
+    /// terminal the same place, before the notice shows, while it is on
+    /// show and after it is dismissed. Before the change the notice was a
+    /// banner above the terminal, which lost its height while it showed.
+    func testAFloatingNoticeLeavesTheTerminalItsSize() throws {
+        let phone = try device()
+        let script = try standInDone("build", after: 10, said: "The build passes.")
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "build")))
+        wait("the agent's session") { phone.sessions.count == 1 }
+        let agent = try XCTUnwrap(phone.sessions.first?.id)
+        bringAppToFront()
+        app.press(.id("session-\(agent)"))
+        app.wait(for: .id("terminal-\(agent)"))
+        func rows() -> Int? { phone.sessions.first { $0.id == agent }?.size.rows }
+        func place() -> CGRect? { app.frame(of: .id("terminal-\(agent)")) }
+        // The size the Mac shows it at, once it has settled.
+        var before = rows()
+        wait("the terminal's size to settle", timeout: 8) {
+            Thread.sleep(forTimeInterval: 1)
+            defer { before = rows() }
+            return before != nil && before == rows()
+        }
+        let rowsBefore = try XCTUnwrap(rows())
+        let placeBefore = try XCTUnwrap(place())
+        XCTAssertFalse(app.exists(.id("floating-notice-\(agent)")), "the agent was done before its terminal was measured")
+
+        // Done: its notice shows, the session in front as any other (#180).
+        app.wait(for: .id("floating-notice-\(agent)"), timeout: 20)
+        app.wait(for: .containing("is done"))
+        app.wait(for: .containing("The build passes."))
+        // Long enough for a new size to reach the host, if there were one.
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertEqual(rows(), rowsBefore, "the terminal changed size when the notice showed")
+        XCTAssertEqual(place(), placeBefore, "the terminal moved when the notice showed")
+        // Over the terminal, at its top, in the centre of the middle.
+        let card = try XCTUnwrap(app.frame(of: .id("floating-notice-\(agent)")))
+        XCTAssertTrue(placeBefore.insetBy(dx: -20, dy: -20).contains(card), "the notice is not over the terminal: \(card) in \(placeBefore)")
+        XCTAssertEqual(card.midX, placeBefore.midX, accuracy: 4, "the notice is not in the centre of the middle")
+        XCTAssertLessThanOrEqual(card.width, 560)
+        shot("floating-notice")
+
+        app.press(.id("floating-notice-dismiss-\(agent)"))
+        app.waitGone(.id("floating-notice-\(agent)"))
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertEqual(rows(), rowsBefore, "the terminal changed size when the notice went")
+        XCTAssertEqual(place(), placeBefore, "the terminal moved when the notice went")
+    }
+
+    /// NOTE-19 (#225): two agents done are two notices, each a card with
+    /// its own buttons, the newest on top; one dismissed leaves the other.
+    func testTheNoticesOfTwoAgentsAreStacked() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        phone.send(.create(CreateRequest(command: try standInDone("tests", after: 3, said: "All tests pass.").path, cwd: project.path, title: "tests")))
+        phone.send(.create(CreateRequest(command: try standInDone("docs", after: 7, said: "The docs are written.").path, cwd: project.path, title: "docs")))
+        wait("the agents' sessions") { phone.sessions.count == 3 }
+        let tests = try XCTUnwrap(phone.sessions.first { $0.title == "tests" }?.id)
+        let docs = try XCTUnwrap(phone.sessions.first { $0.title == "docs" }?.id)
+        bringAppToFront()
+        app.press(.id("session-\(shell)"))
+
+        app.wait(for: .id("floating-notice-\(tests)"), timeout: 20)
+        app.wait(for: .id("floating-notice-\(docs)"), timeout: 20)
+        XCTAssertNotNil(app.first(.id("floating-notice-\(tests)")), "the first notice went when the second came")
+        XCTAssertTrue(app.exists(.containing("All tests pass.")) && app.exists(.containing("The docs are written.")))
+        for session in [tests, docs] {
+            XCTAssertNotNil(app.first(.id("floating-notice-open-\(session)")), "a notice without its Open")
+            XCTAssertNotNil(app.first(.id("floating-notice-dismiss-\(session)")), "a notice without its Dismiss")
+        }
+        // The newest on top: accessibility counts from the top of the screen.
+        wait("the notices in their places") {
+            guard let older = self.app.frame(of: .id("floating-notice-\(tests)")), let newer = self.app.frame(of: .id("floating-notice-\(docs)")) else { return false }
+            return newer.maxY <= older.minY
+        }
+        shot("floating-notices-stacked")
+
+        app.press(.id("floating-notice-dismiss-\(docs)"))
+        app.waitGone(.id("floating-notice-\(docs)"))
+        XCTAssertNotNil(app.first(.id("floating-notice-\(tests)")), "dismissing one notice took the other")
+        // Open shows the other's session, and its notice goes.
+        app.press(.id("floating-notice-open-\(tests)"))
+        app.wait(for: .id("terminal-\(tests)"))
+        app.waitGone(.id("floating-notice-\(tests)"))
+    }
+
+    /// NOTE-20 (#225): a notice of an agent that is done goes by itself
+    /// after its time (10 seconds; 4 here, `AGENTTERM_NOTICE_SECONDS`) and
+    /// is still in the Inbox; one of an agent that waits is still there
+    /// after that time.
+    func testADoneNoticeGoesAfterItsTimeAndOneThatWaitsStays() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        let asks = try standInAgent(
+            "asks", hook: "PermissionRequest", event: #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make deploy"}}"#)
+        phone.send(.create(CreateRequest(command: asks.path, cwd: project.path, title: "deploy")))
+        phone.send(.create(CreateRequest(command: try standInDone("tests", after: 3, said: "All tests pass.").path, cwd: project.path, title: "tests")))
+        wait("the agents' sessions") { phone.sessions.count == 3 }
+        let deploy = try XCTUnwrap(phone.sessions.first { $0.title == "deploy" }?.id)
+        let tests = try XCTUnwrap(phone.sessions.first { $0.title == "tests" }?.id)
+        bringAppToFront()
+        app.press(.id("session-\(shell)"))
+
+        app.wait(for: .id("floating-notice-\(deploy)"), timeout: 20)
+        app.wait(for: .id("floating-notice-\(tests)"), timeout: 20)
+        let shown = Date()
+        // Gone by itself, not before its time.
+        app.waitGone(.id("floating-notice-\(tests)"), timeout: 15)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(shown), 2, "the notice went before its time")
+        XCTAssertEqual(phone.sessions.first { $0.id == tests }?.unseen, true, "a notice that went by itself was seen")
+        app.wait(for: .containing("Inbox, 2 items"))
+        // The one that waits: still there after that time again.
+        Thread.sleep(forTimeInterval: 6)
+        XCTAssertNotNil(app.first(.id("floating-notice-\(deploy)")), "a notice of an agent that waits went by itself")
+        XCTAssertTrue(app.exists(.containing("needs permission")))
+        // And the done one is in the Inbox.
+        app.press(.id("place-inbox"))
+        app.wait(for: .id(phone.inboxRow(tests)))
+    }
+
     func testStartingSessionsAndFindingThemAgainAfterReopeningTheApp() throws {
         let phone = try device()
         // SES-2: a shell from the launch buttons.

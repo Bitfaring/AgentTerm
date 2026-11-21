@@ -3,38 +3,41 @@ import AgentTermProtocol
 import AgentTermTerminal
 import SwiftUI
 
-/// The agents' memory of a folder (#220), as the Mac's side panel shows
-/// it: the folder's memories and the user's own, as two groups. One is
-/// read, changed and deleted in a sheet, as on the Mac.
+/// What the agents saved by themselves (#220), of one folder only, or
+/// every memory on the Mac when `folder` is nil (the Memory tab), one
+/// section per agent: where History is, and as History is. One is read,
+/// changed and deleted in a sheet, as on the Mac.
 struct MemoryList: View {
     @EnvironmentObject private var model: PhoneModel
-    let folder: String
+    let folder: String?
     @State private var selected: AgentMemory?
     @State private var collapsed: Set<String> = []
     @State private var deleting: AgentMemory?
 
-    private var agentNames: [(id: String, name: String)] { model.agents.map { ($0.id, $0.name) } }
-    private var groups: [AgentMemory.Group] { AgentMemory.groups(model.memories[folder] ?? [], ofFolder: folder) }
+    private var showsAll: Bool { folder == nil }
+    private var key: String { showsAll ? "" : (folder ?? "") }
+    private var groups: [AgentMemory.Group] {
+        AgentMemory.groups(model.memories[key] ?? [], agentNames: model.agents.map { ($0.id, $0.name) })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.memories[folder] != nil {
+            if model.memories[key] != nil {
                 HStack(spacing: 14) {
                     Text(MemoryWords.count(groups.reduce(0) { $0 + $1.memories.count }))
                         .font(.footnote).foregroundStyle(.secondary).lineLimit(1).accessibilityIdentifier("memory-summary")
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 22)
-                .padding(.bottom, 8)
+                .padding(.vertical, 8)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 18) {
                         if groups.isEmpty {
-                            Text(MemoryWords.noneInFolder)
+                            Text(showsAll ? MemoryWords.noneAnywhere : MemoryWords.noneInFolder)
                                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.top, 40)
                                 .accessibilityIdentifier("memory-none")
                         }
                         ForEach(groups) { group in groupView(group) }
-                        notShown
                     }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 24)
@@ -59,7 +62,7 @@ struct MemoryList: View {
 
     private func groupView(_ group: AgentMemory.Group) -> some View {
         let expanded = !collapsed.contains(group.id)
-        let own = group.id == AgentMemory.userGroup
+        let agent = String(group.id.dropFirst("agent:".count))
         return VStack(alignment: .leading, spacing: 8) {
             Button {
                 if expanded { collapsed.insert(group.id) } else { collapsed.remove(group.id) }
@@ -68,7 +71,7 @@ struct MemoryList: View {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.secondary)
-                    Image(systemName: own ? "person" : "folder").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                    Image(systemName: AgentStyle.symbol(for: agent)).font(.system(size: 12, weight: .semibold)).foregroundStyle(AgentStyle.accent(for: agent))
                     Text(group.title).font(.subheadline.weight(.semibold))
                     Spacer(minLength: 0)
                 }
@@ -77,7 +80,6 @@ struct MemoryList: View {
             .buttonStyle(.plain)
             .padding(.horizontal, 6)
             .accessibilityLabel("\(group.title), \(MemoryWords.count(group.memories.count)), \(expanded ? "expanded" : "collapsed")")
-            .accessibilityIdentifier(own ? "memory-group-user" : "memory-group-folder")
             if expanded { card(group.memories) }
         }
     }
@@ -89,7 +91,7 @@ struct MemoryList: View {
                 Button {
                     selected = memory
                 } label: {
-                    MemoryRow(memory: memory, agentNames: agentNames)
+                    MemoryRow(memory: memory, showsFolder: showsAll)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("memory-" + memory.name)
@@ -108,28 +110,15 @@ struct MemoryList: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
     }
 
-    /// What is not listed, and why: an agent whose memory is not known is
-    /// said to be so, under the list, as on the Mac.
-    private var notShown: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(MemoryWords.notShownTitle).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            ForEach(MemoryWords.notShown) { note in
-                Text(note.text).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.horizontal, 6)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("memory-not-shown")
-    }
-
     private func load() {
-        model.loadMemories(folder)
+        model.loadMemories(showsAll ? nil : folder)
     }
 }
 
 private struct MemoryRow: View {
     let memory: AgentMemory
-    let agentNames: [(id: String, name: String)]
+    /// In the list of everything, each row says which folder it is about.
+    let showsFolder: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -139,18 +128,15 @@ private struct MemoryRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 HStack(spacing: 5) {
-                    ForEach(memory.agents, id: \.self) { agent in
-                        Circle().fill(AgentStyle.accent(for: agent)).frame(width: 6, height: 6)
-                    }
-                    Text(MemoryWords.readers(of: memory, agentNames: agentNames)).lineLimit(1)
-                    Text("·")
                     Text(memoryRelativeTime(memory.modifiedAt)).lineLimit(1)
+                    if showsFolder {
+                        Text("·")
+                        Image(systemName: "folder").font(.system(size: 10))
+                        Text(MemoryWords.folder(of: memory)).lineLimit(1)
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                if let writer = MemoryWords.writer(of: memory, agentNames: agentNames) {
-                    Text(writer).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.right")
@@ -170,7 +156,7 @@ private func memoryRelativeTime(_ date: Date) -> String {
     return formatter.localizedString(for: date, relativeTo: Date())
 }
 
-/// One memory, whole: who reads it, where it is and when it changed, and
+/// One memory, whole: whose it is, of which folder, where it is and when it changed, and
 /// its text, as it is written, to be changed and saved, or with its
 /// Markdown rendered. As on the Mac.
 struct MemoryScreen: View {
@@ -190,12 +176,11 @@ struct MemoryScreen: View {
     /// Its Markdown rendered, in History's words for the two, as on the Mac.
     @AppStorage("memoryMarkdown") private var markdown = false
 
-    private var agentNames: [(id: String, name: String)] { model.agents.map { ($0.id, $0.name) } }
+    private var agentName: String { model.agents.first { $0.id == memory.agent }?.name ?? memory.agent }
     /// As it is now: saved, its date and size change.
     private var current: AgentMemory {
         guard var read = model.memoryContents[memory.path]?.memory else { return memory }
         read.folder = memory.folder
-        read.scope = memory.scope
         return read
     }
     private var isDirty: Bool { base != nil && text != base?.text }
@@ -220,7 +205,9 @@ struct MemoryScreen: View {
                 .accessibilityIdentifier("memory-close")
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if isDirty {
+                // A memory is changed as text only: Save is with the
+                // editor, not in the preview, where nothing is typed.
+                if isDirty, !markdown {
                     if isSaving {
                         ProgressView()
                     } else {
@@ -271,26 +258,24 @@ struct MemoryScreen: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                ForEach(current.agents, id: \.self) { agent in
-                    Circle().fill(AgentStyle.accent(for: agent)).frame(width: 7, height: 7)
-                }
-                Text(MemoryWords.readers(of: current, agentNames: agentNames)).font(.footnote.weight(.semibold))
+                Circle().fill(AgentStyle.accent(for: current.agent)).frame(width: 7, height: 7)
+                Text(agentName).font(.footnote.weight(.semibold))
+                Text("· " + memoryRelativeTime(current.modifiedAt) + " · " + MemoryWords.size(current.size))
+                    .font(.footnote).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("memory-readers")
-            Label(current.path, systemImage: current.scope == .user ? "person" : "folder")
+            Label(MemoryWords.folder(of: current), systemImage: "folder")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .accessibilityIdentifier("memory-folder")
+            Text(current.path)
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .truncationMode(.head)
                 .textSelection(.enabled)
                 .accessibilityIdentifier("memory-path")
-            Text("Changed " + memoryRelativeTime(current.modifiedAt) + " · " + MemoryWords.size(current.size))
-                .font(.caption).foregroundStyle(.secondary)
-            if let writer = MemoryWords.writer(of: current, agentNames: agentNames) {
-                Text(writer).font(.caption).foregroundStyle(.secondary)
-            }
             HStack(spacing: 14) {
                 Button {
                     markdown.toggle()
@@ -298,10 +283,14 @@ struct MemoryScreen: View {
                     Label(markdown ? ConversationDetails.showAsText : ConversationDetails.previewMarkdown, systemImage: markdown ? "text.alignleft" : "doc.richtext")
                 }
                 .accessibilityIdentifier("memory-markdown")
-                if isDirty {
+                if isDirty, !markdown {
                     Button(MemoryWords.revert) { revert() }
                         .accessibilityIdentifier("memory-revert")
+                }
+                if isDirty {
                     Text(MemoryWords.unsaved).foregroundStyle(Color.orange).accessibilityIdentifier("memory-unsaved")
+                } else if markdown {
+                    Text(MemoryWords.changeAsText).foregroundStyle(.secondary).fontWeight(.regular).accessibilityIdentifier("memory-change-as-text")
                 }
                 Spacer(minLength: 0)
             }
@@ -323,16 +312,50 @@ struct MemoryScreen: View {
         } else if base == nil {
             LoadingView(MemoryWords.loadingOne) { model.readMemory(memory) }
         } else if markdown {
+            // A note's front matter is not Markdown: what a reader wants of
+            // it comes first, quietly, then only the body is rendered, as on the Mac.
+            let parts = MemoryText(text)
+            let facts = parts.facts(fileName: memory.name)
             ScrollView {
-                MarkdownText(text, size: 15)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
+                VStack(alignment: .leading, spacing: 12) {
+                    if let description = parts.description {
+                        Text(description)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("memory-description")
+                    }
+                    if !facts.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(facts, id: \.name) { fact in
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(fact.name).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
+                                    Text(fact.value).textSelection(.enabled)
+                                    Spacer(minLength: 0)
+                                }
+                            }
+                        }
+                        .font(.footnote)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
+                        .accessibilityIdentifier("memory-facts")
+                    }
+                    MarkdownText(parts.body, size: 15)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("memory-preview")
         } else {
             // The iPhone's own editor, as a file of the Files tab has.
+            // Framed, so that it is seen to be a field that is typed into,
+            // which the preview is not (the owner, 2026-11-22).
             CodeEditor(text: $text, path: memory.path)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.24), lineWidth: 1))
+                .padding(8)
                 .accessibilityIdentifier("memory-text")
         }
     }
@@ -371,7 +394,7 @@ struct DeleteMemoryAsk: ViewModifier {
     @Binding var asked: AgentMemory?
 
     private var question: DeleteMemoryQuestion? {
-        asked.map { DeleteMemoryQuestion($0, agentNames: model.agents.map { ($0.id, $0.name) }) }
+        asked.map { asked in DeleteMemoryQuestion(asked, agentName: model.agents.first { $0.id == asked.agent }?.name ?? asked.agent) }
     }
 
     func body(content: Content) -> some View {

@@ -154,6 +154,32 @@ final class AgentTranscriptTests: XCTestCase {
         XCTAssertEqual(copilot.files, ["README.md"])
     }
 
+    /// HIST-27 (#224): a conversation listed from Antigravity's SQLite
+    /// store is read from the transcript Antigravity 1.5.12 writes beside
+    /// it, whose lines have the keys seen on 2026-11-21.
+    func testAConversationOfAntigravitysStoreIsRead() throws {
+        let id = "5d0c1a52-0d0e-4b7c-9a43-1f2e3d4c5b6a"
+        try AntigravityStoreFixture.make(
+            in: home, rows: [.init(id: id, title: "Plan the release", modified: "2026-11-20 01:02:03.123456+07:00", workspaces: ["file:///Users/me/Dev/my.app"])])
+        try write(
+            ".gemini/antigravity-cli/brain/\(id)/.system_generated/logs/transcript_full.jsonl",
+            [
+                #"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-11-19T18:00:00Z","content":"<USER_REQUEST>\nplan the release\n</USER_REQUEST>\n<ADDITIONAL_METADATA>the time</ADDITIONAL_METADATA>"}"#,
+                #"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-19T18:00:30Z","content":"Three steps.","model":"gemini-4-pro","input_tokens":100,"cache_read_tokens":900,"output_tokens":20}"#,
+            ])
+        let conversation = try XCTUnwrap(AgentHistory.conversation(agent: "agy", sessionID: id, cwd: project, home: home.path), "not found again by its id")
+        let details = AgentHistory.details(of: conversation)
+        XCTAssertEqual(details.entries.map { "\($0.kind.rawValue): \($0.text)" }, ["user: plan the release", "agent: Three steps."])
+        XCTAssertEqual(details.inputTokens, 1000)
+        XCTAssertEqual(details.outputTokens, 20)
+        XCTAssertEqual(details.duration, 30)
+        XCTAssertNil(details.files, "Antigravity's record does not say which files were written")
+        // Found by what was said in it, as any other.
+        var hits: [HistoryHit] = []
+        AgentHistory.search("three steps", in: [conversation], isCancelled: { false }) { hits.append($0) }
+        XCTAssertEqual(hits.map(\.count), [1])
+    }
+
     /// HIST-13: searching finds a conversation by its title and by what
     /// was said in it, whatever the case, with a piece of the text around
     /// the words and how often they are there; not by what a tool
@@ -190,8 +216,8 @@ final class AgentTranscriptTests: XCTestCase {
 
     /// HIST-14: deleting a conversation moves its agent's record to the
     /// Trash, so it is no longer listed; only a file an agent keeps
-    /// conversations in is ever touched. Antigravity's, which is taken
-    /// out of a list, is HIST-26 (#222).
+    /// conversations in is ever touched; Antigravity's is refused with
+    /// what to do instead.
     func testAConversationIsDeletedToTheTrash() throws {
         let conversation = try claude("s1", claudeLines)
         let file = try XCTUnwrap(conversation.source)
@@ -217,9 +243,8 @@ final class AgentTranscriptTests: XCTestCase {
         XCTAssertNil(AgentHistory.delete(copilot, home: home.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent(".copilot/session-state/p1").path))
 
-        // Antigravity's is no longer refused for being Antigravity's (#222):
-        // one named outside its folder is, as any forged one.
         let antigravity = Conversation(agent: "agy", sessionID: "g1", title: "t", updatedAt: Date(), cwd: project, source: home.appendingPathComponent(".gemini/x.jsonl").path)
-        XCTAssertEqual(AgentHistory.delete(antigravity, home: home.path), "That is not a conversation of Antigravity.")
+        XCTAssertEqual(AgentHistory.delete(antigravity, home: home.path), AgentHistory.antigravityNotDeleted)
+        XCTAssertTrue(AgentHistory.antigravityNotDeleted.hasSuffix("this one is deleted in Antigravity."))
     }
 }

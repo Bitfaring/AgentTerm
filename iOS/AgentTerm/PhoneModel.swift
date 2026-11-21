@@ -488,7 +488,7 @@ final class PhoneModel: ObservableObject {
 
     /// The last notice the Mac was told is seen, so it is told once.
     private var noticeSeenTold: (session: SessionID, state: AgentState)?
-    /// The tab in front: "sessions", "history" or "settings".
+    /// The tab in front: "sessions", "history", "memory", "schedules" or "settings".
     @Published var tab = "sessions"
     /// A folder's uncommitted changes, by folder. Without the diffs.
     @Published private(set) var diffs: [String: DiffSnapshot] = [:]
@@ -2376,8 +2376,8 @@ final class PhoneModel: ObservableObject {
 
     // MARK: Memory (#220)
 
-    /// The agents' memories of a folder and the user's own, as the Mac
-    /// listed them, by folder; none for a folder until it answered.
+    /// The agents' memories, as the Mac listed them, by the list they are
+    /// for (a folder, "" for every one on the Mac); none until it answered.
     @Published private(set) var memories: [String: [AgentMemory]] = [:]
     /// Memories as they were read, by path, and why one could not be.
     @Published private(set) var memoryContents: [String: AgentMemoryContent] = [:]
@@ -2388,13 +2388,14 @@ final class PhoneModel: ObservableObject {
     /// device: a screen that shows one closes.
     @Published private(set) var deletedMemories: Set<String> = []
 
-    /// Asked when the folder's Memory is opened or pulled down, never by itself.
-    func loadMemories(_ folder: String) {
+    /// Asked when Memory is opened or pulled down, never by itself.
+    /// `folder` nil loads every memory on the Mac.
+    func loadMemories(_ folder: String?) {
         connection?.send(.memories(path: folder))
     }
 
     func readMemory(_ memory: AgentMemory) {
-        connection?.send(.readMemory(path: memory.path, folder: memory.folder))
+        connection?.send(.readMemory(path: memory.path))
     }
 
     /// Writes a memory's text. `seen` is the date the file had when the
@@ -2407,12 +2408,12 @@ final class PhoneModel: ObservableObject {
             return
         }
         savingMemories[memory.path] = text
-        connection?.send(.writeMemory(path: memory.path, folder: memory.folder, text: text, seen: seen))
+        connection?.send(.writeMemory(path: memory.path, text: text, seen: seen))
     }
 
     /// Moves a memory to the Mac's Trash, once the user was asked.
     func deleteMemory(_ memory: AgentMemory) {
-        connection?.send(.deleteMemory(path: memory.path, folder: memory.folder))
+        connection?.send(.deleteMemory(path: memory.path))
     }
 
     private func forgetMemories() {
@@ -2430,7 +2431,6 @@ final class PhoneModel: ObservableObject {
                 guard old.path == memory.path else { return old }
                 var new = memory
                 new.folder = old.folder
-                new.scope = old.scope
                 return new
             }
         }

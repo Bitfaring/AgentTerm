@@ -5,10 +5,10 @@ import AgentTermTerminal
 import Combine
 import SwiftUI
 
-/// The agents' memory (#220), shown as History is: every listed folder's
-/// and the user's own in Memory, each folder a group; the folder on show's
-/// and the user's own in the side panel, as two groups, where picking one
-/// shows it in a sheet.
+/// The agents' memory (#220), what each saved by itself, shown as History
+/// is: every one on the Mac in Memory, each row naming its folder; the
+/// folder on show's only, in the side panel, where picking one shows it in
+/// a sheet. Grouped by agent, as History is.
 struct MemoryView: View {
     @EnvironmentObject private var model: AppModel
     /// The side panel's: the folder on show's only.
@@ -31,9 +31,7 @@ private struct MemoryList: View {
 
     private var listed: [AgentMemory]? { ofFolder ? store.ofFolder : store.all }
     private var groups: [AgentMemory.Group] {
-        guard let listed else { return [] }
-        if ofFolder { return model.panelFolder.map { AgentMemory.groups(listed, ofFolder: $0) } ?? [] }
-        return AgentMemory.groups(listed, folders: model.folders.map(\.path))
+        AgentMemory.groups(listed ?? [], agentNames: memoryAgentNames)
     }
 
     private var summary: String {
@@ -82,18 +80,12 @@ private struct MemoryList: View {
             placeholder(MemoryWords.selectFolder)
         } else if listed == nil {
             LoadingView(MemoryWords.loadingList)
+        } else if groups.isEmpty {
+            placeholder(ofFolder ? MemoryWords.noneInFolder : MemoryWords.noneAnywhere)
+                .accessibilityIdentifier(ofFolder ? "memory-none-folder" : "memory-none")
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
-                    if groups.isEmpty {
-                        Text(ofFolder ? MemoryWords.noneInFolder : MemoryWords.noneAnywhere)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(24)
-                            .frame(maxWidth: .infinity)
-                            .accessibilityIdentifier(ofFolder ? "memory-none-folder" : "memory-none")
-                    }
                     ForEach(groups) { group in
                         let expanded = !collapsed.contains(group.id)
                         MemoryGroupHeader(group: group, expanded: expanded)
@@ -102,34 +94,14 @@ private struct MemoryList: View {
                             }
                         if expanded {
                             ForEach(group.memories) { memory in
-                                MemoryRow(memory: memory, store: store, inSheet: ofFolder)
+                                MemoryRow(memory: memory, store: store, showsFolder: !ofFolder, inSheet: ofFolder)
                             }
                         }
                     }
-                    notShown
                 }
                 .padding(6)
             }
         }
-    }
-
-    /// What is not listed, and why: an agent whose memory is not known is
-    /// said to be so, under the list.
-    private var notShown: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(MemoryWords.notShownTitle).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.secondary)
-            ForEach(MemoryWords.notShown) { note in
-                Text(note.text)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.top, 14)
-        .padding(.bottom, 8)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier(ofFolder ? "memory-not-shown-folder" : "memory-not-shown")
     }
 
     private func placeholder(_ text: String) -> some View {
@@ -142,10 +114,12 @@ private struct MemoryList: View {
     }
 }
 
-/// A group's title: a folder, or the user's own.
+/// A group's title: an agent with its mark, as History's groups have.
 private struct MemoryGroupHeader: View {
     let group: AgentMemory.Group
     let expanded: Bool
+
+    private var agent: String { String(group.id.dropFirst("agent:".count)) }
 
     var body: some View {
         HStack(spacing: 7) {
@@ -153,7 +127,7 @@ private struct MemoryGroupHeader: View {
                 .font(.system(size: 8, weight: .bold))
                 .foregroundStyle(.secondary)
                 .frame(width: 12)
-            Image(systemName: group.id == AgentMemory.userGroup ? "person" : "folder").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+            Image(systemName: Theme.symbol(for: agent)).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.accent(for: agent))
             Text(group.title).font(.system(size: 12, weight: .semibold))
             Spacer(minLength: 0)
         }
@@ -163,7 +137,6 @@ private struct MemoryGroupHeader: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(group.title), \(MemoryWords.count(group.memories.count)), \(expanded ? "expanded" : "collapsed")")
-        .accessibilityIdentifier(group.id == AgentMemory.userGroup ? "memory-group-user" : "memory-group-folder")
         .accessibilityAddTraits(.isButton)
     }
 }
@@ -171,6 +144,8 @@ private struct MemoryGroupHeader: View {
 private struct MemoryRow: View {
     let memory: AgentMemory
     @ObservedObject var store: MemoryStore
+    /// In the list of everything, each row says which folder it is about.
+    var showsFolder = false
     /// The side panel's: picked, it opens in a sheet over Sessions.
     var inSheet = false
     @State private var hovering = false
@@ -190,7 +165,7 @@ private struct MemoryRow: View {
     private var selected: Bool { !inSheet && store.selection?.path == memory.path }
     private var fill: Color { selected ? Color.white.opacity(0.11) : (hovering ? Self.hoverFill : .clear) }
     private var place: String { (memory.path as NSString).abbreviatingWithTildeInPath }
-    private var readers: String { MemoryWords.readers(of: memory, agentNames: memoryAgentNames) }
+    private var folderName: String { MemoryWords.folder(of: memory) }
 
     private func pick() {
         if inSheet { store.panelMemory = memory } else { store.selection = memory }
@@ -204,18 +179,17 @@ private struct MemoryRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 HStack(spacing: 5) {
-                    ForEach(memory.agents, id: \.self) { agent in
-                        Circle().fill(Theme.accent(for: agent)).frame(width: 6, height: 6)
-                    }
-                    Text(readers).lineLimit(1)
-                    Text("·")
                     Text(when)
+                    if showsFolder {
+                        Text("·")
+                        Image(systemName: "folder").font(.system(size: 9))
+                        Text(folderName)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
-                if let writer = MemoryWords.writer(of: memory, agentNames: memoryAgentNames) {
-                    Text(writer).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
-                }
                 if store.isChanged(memory) {
                     Text(MemoryWords.unsaved).font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.orange)
                 }
@@ -234,7 +208,7 @@ private struct MemoryRow: View {
         }
         .help(place)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(memory.name), \(readers), \(place)")
+        .accessibilityLabel(showsFolder ? "\(memory.name), \(folderName)" : memory.name)
         .accessibilityIdentifier("memory-" + memory.name)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { pick() }
@@ -242,7 +216,7 @@ private struct MemoryRow: View {
     }
 }
 
-/// Memory's list, every listed folder's memories and the user's own.
+/// Memory's list, every memory on the Mac.
 struct MemorySidebar: View {
     var body: some View {
         VStack(spacing: 0) {
@@ -286,7 +260,7 @@ private struct MemoryPicked: View {
     }
 }
 
-/// One memory, whole: who reads it, where it is and when it changed, and
+/// One memory, whole: whose it is, of which folder, where it is and when it changed, and
 /// its text, as it is written, to be changed and saved, or with its
 /// Markdown rendered. In Memory's middle, or in a sheet over Sessions when
 /// picked in the side panel.
@@ -327,42 +301,48 @@ struct MemoryCard: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                ForEach(memory.agents, id: \.self) { agent in
-                    Circle().fill(Theme.accent(for: agent)).frame(width: 8, height: 8)
-                }
-                Text(MemoryWords.readers(of: memory, agentNames: memoryAgentNames)).font(.system(size: 12, weight: .semibold))
+                Circle().fill(Theme.accent(for: memory.agent)).frame(width: 8, height: 8)
+                Text(memoryAgentNames.first { $0.id == memory.agent }?.name ?? memory.agent).font(.system(size: 12, weight: .semibold))
                 Text("· " + memory.modifiedAt.formatted(.relative(presentation: .named)) + " · " + MemoryWords.size(memory.size))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("memory-readers")
             Text(memory.name)
                 .font(.system(size: 18, weight: .semibold))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
-            Label((memory.path as NSString).abbreviatingWithTildeInPath, systemImage: memory.scope == .user ? "person" : "folder")
+            Label(memory.folder.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? MemoryWords.folder(of: memory), systemImage: "folder")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+                .accessibilityIdentifier("memory-folder")
+            Text((memory.path as NSString).abbreviatingWithTildeInPath)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .textSelection(.enabled)
                 .accessibilityIdentifier("memory-path")
-            if let writer = MemoryWords.writer(of: memory, agentNames: memoryAgentNames) {
-                Text(writer).font(.system(size: 12)).foregroundStyle(.secondary)
-            }
         }
     }
 
     private var buttons: some View {
         HStack(spacing: 10) {
-            Button(MemoryWords.save) { store.save(memory) }
-                .buttonStyle(.borderedProminent)
-                .disabled(!changed)
-                .help(changed ? "Write the change to the file the agents read" : "Nothing was changed")
-                .accessibilityIdentifier("memory-save")
+            // A memory is changed as text only: Save and Revert are with
+            // the editor, and not in the preview, where nothing is typed.
+            if !markdown {
+                Button(MemoryWords.save) { store.save(memory) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!changed)
+                    .help(changed ? "Write the change to the file its agent reads" : "Type in the text below to change it")
+                    .accessibilityIdentifier("memory-save")
+                if changed {
+                    Button(MemoryWords.revert) { store.revert(memory) }
+                        .help("Drop the change and read the memory again")
+                        .accessibilityIdentifier("memory-revert")
+                }
+            }
             if changed {
-                Button(MemoryWords.revert) { store.revert(memory) }
-                    .help("Drop the change and read the memory again")
-                    .accessibilityIdentifier("memory-revert")
                 Text(MemoryWords.unsaved).font(.system(size: 11)).foregroundStyle(Color.orange)
                     .accessibilityIdentifier("memory-unsaved")
             }
@@ -373,6 +353,10 @@ struct MemoryCard: View {
             }
             .help(markdown ? "Show the memory as it is written, to change it" : "Show the memory with its Markdown rendered")
             .accessibilityIdentifier("memory-markdown")
+            if markdown {
+                Text(MemoryWords.changeAsText).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    .accessibilityIdentifier("memory-change-as-text")
+            }
             Spacer(minLength: 0)
             // In view, not in a menu: there is room for it here.
             Button(MemoryWords.delete, role: .destructive) {
@@ -387,10 +371,37 @@ struct MemoryCard: View {
 
     @ViewBuilder private var text: some View {
         if markdown {
+            // A note's front matter is not Markdown: what a reader wants of
+            // it comes first, quietly, then only the body is rendered.
+            let parts = MemoryText(store.text(of: memory) ?? "")
+            let facts = parts.facts(fileName: memory.name)
             ScrollView {
-                MarkdownText(store.text(of: memory) ?? "", size: 13)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
+                VStack(alignment: .leading, spacing: 12) {
+                    if let description = parts.description {
+                        Text(description)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("memory-description")
+                    }
+                    if !facts.isEmpty {
+                        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 4) {
+                            ForEach(facts, id: \.name) { fact in
+                                GridRow {
+                                    Text(fact.name).foregroundStyle(.secondary)
+                                    Text(fact.value).textSelection(.enabled)
+                                }
+                            }
+                        }
+                        .font(.system(size: 12))
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("memory-facts")
+                    }
+                    MarkdownText(parts.body, size: 13)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
             }
             .frame(minHeight: 240, maxHeight: .infinity)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.03)))
@@ -405,6 +416,9 @@ struct MemoryCard: View {
             .id(memory.path)
             .frame(minHeight: 240, maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            // Framed, so that it is seen to be a field that is typed into,
+            // which the preview beside it is not (the owner, 2026-11-22).
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.24), lineWidth: 1))
             .accessibilityIdentifier("memory-text")
         }
     }
@@ -439,7 +453,7 @@ struct MemoryWindow: ViewModifier {
     @ObservedObject var store: MemoryStore
 
     private var question: DeleteMemoryQuestion? {
-        store.deleting.map { DeleteMemoryQuestion($0, agentNames: memoryAgentNames) }
+        store.deleting.map { asked in DeleteMemoryQuestion(asked, agentName: memoryAgentNames.first { $0.id == asked.agent }?.name ?? asked.agent) }
     }
 
     func body(content: Content) -> some View {

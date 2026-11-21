@@ -413,8 +413,8 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case deleteConversation(agent: String, sessionID: String, cwd: String)
     /// Deletes several conversations at once (#50): those named by
     /// `Conversation.id`, or every conversation on the host when `ids` is
-    /// nil, but never one a session is having, or one that
-    /// `AgentHistory.delete` refuses. Sent once the user was asked
+    /// nil, but never one a session is having, or one
+    /// of Antigravity (`AgentHistory.delete`). Sent once the user was asked
     /// twice (`DeleteConversationsQuestion`). Each one deleted is told to
     /// every device with `conversationDeleted`; the sender then gets
     /// `conversationsDeleted`.
@@ -545,24 +545,23 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Merges, opens a pull request for, or throws away a worktree, and
     /// removes it (but for a pull request), its branch too when asked.
     case finishWorktree(folder: String, path: String, finish: WorktreeFinish, deleteBranch: Bool)
-    /// Asks for the agents' memories (#220): those of a folder and the
-    /// user's own, or, when `path` is nil, those of every folder the host
-    /// lists and the user's own. Sent when Memory is opened, never by
-    /// itself. Answered with `memories`.
+    /// Asks for the agents' memories (#220), what each saved by itself: of
+    /// a folder, or, when `path` is nil, every one on the host, whatever
+    /// folder it is about, as `history` does. Sent when Memory is opened,
+    /// never by itself. Answered with `memories`.
     case memories(path: String?)
-    /// Reads a memory. `folder` is the folder it was listed for, nil for
-    /// one of the user's own: the host reads only a file it lists itself
-    /// for that folder, whatever `path` says. Answered with `memoryRead`.
-    case readMemory(path: String, folder: String?)
+    /// Reads a memory. The host reads only a file it lists itself as a
+    /// memory, whatever `path` says. Answered with `memoryRead`.
+    case readMemory(path: String)
     /// Replaces a memory's text. `seen` is the date the file had when the
     /// client read it: when the file changed since, nothing is written and
     /// `memoryRefused` says so. Answered with `memorySaved`, or with
     /// `memoryRefused`.
-    case writeMemory(path: String, folder: String?, text: String, seen: Date)
+    case writeMemory(path: String, text: String, seen: Date)
     /// Moves a memory to the Mac's Trash. Sent only after the user was
     /// asked. Answered with `memoryDeleted` to every device, or with
     /// `memoryRefused`.
-    case deleteMemory(path: String, folder: String?)
+    case deleteMemory(path: String)
 }
 
 extension ClientMessage {
@@ -662,7 +661,7 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case historySearchEnded(search: Int)
     case conversationDeleted(id: String)
     /// What came of `deleteConversations`: how many were deleted, and how
-    /// many were kept (having a session, or not deleted).
+    /// many were kept (having a session, Antigravity's, or failed).
     case conversationsDeleted(deleted: Int, kept: Int)
     /// Where a conversation was written out as a file, on the host.
     case conversationExported(id: String, path: String)
@@ -789,8 +788,8 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// given, and why it could not be done, when it could not.
     case searchEnded(search: Int, truncated: Bool, problem: String?)
     /// The agents' memories (#220), as `ClientMessage.memories` asked: a
-    /// folder's and the user's own, or every listed folder's when `path`
-    /// is nil. Only files that exist.
+    /// folder's, or every one on the host when `path` is nil. Only files
+    /// that exist.
     case memories(path: String?, list: [AgentMemory])
     /// A memory as it was read. `content` is nil when it could not be: it
     /// is gone, is not one the host lists, or is not text, as `problem` says.

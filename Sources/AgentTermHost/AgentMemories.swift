@@ -2,172 +2,110 @@
 import AgentTermProtocol
 import Foundation
 
-/// The agents' memory (#220): the files each agent keeps for itself and
-/// reads again, its instructions for a folder or for the user, and the notes
-/// it saved from earlier sessions.
+/// The agents' memory (#220): the notes an agent saves by itself for a
+/// folder and reads again in its later sessions there.
 ///
 /// Only what was established of each agent at the version in use is here
 /// (principle 5; `docs/DESIGN.md`, "The agents' memory", says how and with
-/// which version): a file no agent is known to read is not a memory, and
-/// what an agent keeps elsewhere, or where it is not known to keep it, is
-/// said to be not shown (`MemoryWords.notShown`), not guessed.
+/// which version): today that is Claude Code's notes. What another agent
+/// keeps elsewhere, or is not known to keep, is not listed and not
+/// guessed. An agent's instructions, which a person writes for it
+/// (`CLAUDE.md`, `AGENTS.md`), are not its memory and are never listed,
+/// read, written or deleted here.
 ///
 /// Reading, writing and deleting take a path from a client, and do it only
-/// to a file this lists itself for the folder asked about.
+/// to a file this lists itself.
 public enum AgentMemories {
-    /// Where an agent reads from: a file, or the files of a folder that end
-    /// in `suffix`, relative to the folder or to the user's home.
-    struct Place {
-        var path: String
-        /// For a folder of files: what their names end in. Nil for one file.
-        var suffix: String?
-        var agents: [String]
-    }
-
-    /// In the folder itself. Established with Claude Code 2.1.330,
-    /// Codex 0.170.0, Antigravity 1.5.12 and Copilot CLI 1.0.114.
-    static let inFolder: [Place] = [
-        Place(path: "CLAUDE.md", agents: ["claude", "copilot"]),
-        Place(path: "CLAUDE.local.md", agents: ["claude"]),
-        Place(path: ".claude/CLAUDE.md", agents: ["claude"]),
-        Place(path: ".claude/rules", suffix: ".md", agents: ["claude", "copilot"]),
-        Place(path: "AGENTS.md", agents: ["codex", "agy", "copilot"]),
-        Place(path: "AGENTS.override.md", agents: ["codex"]),
-        Place(path: "GEMINI.md", agents: ["agy", "copilot"]),
-        Place(path: ".agents/rules", suffix: ".md", agents: ["agy"]),
-        Place(path: ".github/copilot-instructions.md", agents: ["copilot"]),
-        Place(path: ".github/instructions", suffix: ".instructions.md", agents: ["copilot"]),
-    ]
-
-    /// Under the user's home: read in every folder.
-    static let ofUser: [Place] = [
-        Place(path: ".claude/CLAUDE.md", agents: ["claude"]),
-        Place(path: ".claude/rules", suffix: ".md", agents: ["claude"]),
-        Place(path: ".codex/AGENTS.md", agents: ["codex"]),
-        Place(path: ".codex/AGENTS.override.md", agents: ["codex"]),
-        Place(path: ".gemini/GEMINI.md", agents: ["agy"]),
-        Place(path: ".gemini/AGENTS.md", agents: ["agy"]),
-        Place(path: ".gemini/config/GEMINI.md", agents: ["agy"]),
-        Place(path: ".gemini/config/AGENTS.md", agents: ["agy"]),
-        Place(path: ".gemini/config/rules", suffix: ".md", agents: ["agy"]),
-        Place(path: ".copilot/copilot-instructions.md", agents: ["copilot"]),
-        Place(path: ".copilot/instructions", suffix: ".instructions.md", agents: ["copilot"]),
-    ]
-
-    /// No more files of one folder of rules or notes than this.
-    private static let maxFilesPerPlace = 200
+    /// No more notes of one folder than this.
+    private static let maxFilesPerFolder = 200
 
     // MARK: Listing
 
-    /// The memories of a folder, then the user's own. Blocks on file
-    /// access, so call it off the main thread. `home` is replaceable for tests.
+    /// Every memory on the Mac, whatever folder it is about, as History
+    /// lists every conversation. Blocks on file access, so call it off the
+    /// main thread. `home` is replaceable for tests.
+    public static func allMemories(home: String = NSHomeDirectory()) -> [AgentMemory] {
+        claude(nil, URL(fileURLWithPath: home, isDirectory: true).standardizedFileURL)
+    }
+
+    /// The memories of one folder: those its agent keeps under that
+    /// folder's own name, as History's conversations of a folder are.
     public static func memories(of folder: String, home: String = NSHomeDirectory()) -> [AgentMemory] {
-        merged(user(home: home) + own(of: folder, home: home))
+        claude(folder, URL(fileURLWithPath: home, isDirectory: true).standardizedFileURL)
     }
 
-    /// The memories of each of these folders, then the user's own.
-    public static func memories(ofEvery folders: [String], home: String = NSHomeDirectory()) -> [AgentMemory] {
-        merged(user(home: home) + folders.flatMap { own(of: $0, home: home) })
+    // MARK: Claude Code
+
+    /// `~/.claude/projects/<project>/memory/*.md`: the notes Claude Code
+    /// writes by itself for a folder, with their index `MEMORY.md` first
+    /// (Claude Code 2.1.330). `<project>` is the folder with every
+    /// character that is no letter or digit as "-", which cannot be turned
+    /// back into a path: for a folder that is asked for, its own name is
+    /// looked up; for every project (`folder` nil), the folder is the one a
+    /// conversation of that project recorded (`cwd`), as History finds it,
+    /// and is not known, nil, when none tells it.
+    ///
+    /// A note is given by its real path; one that a link leads out of the
+    /// folder of notes is not this agent's memory and is left out, as are
+    /// notes whose folder is a link to outside the home.
+    private static func claude(_ folder: String?, _ home: URL) -> [AgentMemory] {
+        let projects = home.appendingPathComponent(".claude/projects", isDirectory: true)
+        let realHome = home.resolvingSymlinksInPath().path
+        let names: [String]
+        if let folder {
+            names = [AgentHistory.claudeProjectName(for: URL(fileURLWithPath: folder, isDirectory: true).standardizedFileURL.path)]
+        } else {
+            names = ((try? FileManager.default.contentsOfDirectory(atPath: projects.path)) ?? [])
+                .filter { !$0.hasPrefix(".") }
+                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        }
+        return names.flatMap { project -> [AgentMemory] in
+            let notes = projects.appendingPathComponent(project + "/memory", isDirectory: true)
+            let within = notes.resolvingSymlinksInPath().path
+            guard within.hasPrefix(realHome.hasSuffix("/") ? realHome : realHome + "/") else { return [] }
+            let files = ((try? FileManager.default.contentsOfDirectory(atPath: notes.path)) ?? [])
+                .filter { $0.hasSuffix(".md") && !$0.hasPrefix(".") }
+                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+                .prefix(maxFilesPerFolder)
+            // Only a project that has notes is looked into for its folder.
+            guard !files.isEmpty else { return [] }
+            let about = folder ?? claudeFolder(of: project, in: projects)
+            let found = files.compactMap { name -> AgentMemory? in
+                let file = notes.appendingPathComponent(name).resolvingSymlinksInPath()
+                guard file.path.hasPrefix(within.hasSuffix("/") ? within : within + "/"),
+                    let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
+                    values.isRegularFile == true, let modified = values.contentModificationDate
+                else { return nil }
+                return AgentMemory(
+                    path: file.path, name: name, agent: "claude", folder: about, project: project, modifiedAt: modified, size: values.fileSize ?? 0)
+            }
+            return found.filter { $0.name == "MEMORY.md" } + found.filter { $0.name != "MEMORY.md" }
+        }
     }
 
-    /// The user's own memories only.
-    public static func memoriesOfUser(home: String = NSHomeDirectory()) -> [AgentMemory] {
-        merged(user(home: home))
-    }
+    /// No more of a project's conversations than this are asked for its folder.
+    private static let conversationsAsked = 5
 
-    /// A file found in a place, and whether it was reached through a link.
-    private struct Found {
-        var memory: AgentMemory
-        var viaLink: Bool
-    }
-
-    /// One file is one memory, whoever reads it and by whichever name: the
-    /// agents of two entries for the same file are put together, in the
-    /// host's order of agents, under the file's own name rather than a
-    /// link's. The first entry is kept, and the user's own come first here,
-    /// so that a file both the user's own and in a folder (the home folder
-    /// listed as a folder) is the user's. Given back with the folders'
-    /// first, then the user's own.
-    private static func merged(_ found: [Found]) -> [AgentMemory] {
-        var order: [String] = []
-        var byPath: [String: Found] = [:]
-        for entry in found {
-            let path = entry.memory.path
-            if var known = byPath[path] {
-                for agent in entry.memory.agents where !known.memory.agents.contains(agent) { known.memory.agents.append(agent) }
-                if known.viaLink, !entry.viaLink, known.memory.scope == entry.memory.scope {
-                    known.memory.name = entry.memory.name
-                    known.viaLink = false
-                }
-                byPath[path] = known
-            } else {
-                order.append(path)
-                byPath[path] = entry
+    /// The folder a project of Claude Code is about: the `cwd` one of its
+    /// conversations recorded, the newest first, when it is a folder this
+    /// project's name stands for. Nil when no conversation tells it: the
+    /// name alone cannot ("apps-web" is "apps/web" as well as "apps-web").
+    static func claudeFolder(of project: String, in projects: URL) -> String? {
+        let directory = projects.appendingPathComponent(project, isDirectory: true)
+        let urls = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let newest = urls.filter { $0.pathExtension == "jsonl" }
+            .map { ($0, (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast) }
+            .sorted { $0.1 > $1.1 }
+            .prefix(conversationsAsked)
+        let needle = Data("\"cwd\"".utf8)
+        for (url, _) in newest {
+            // A conversation's first lines name where it ran.
+            for line in AgentHistory.read(url, head: 256 * 1024).split(separator: 0x0a).prefix(200) where line.range(of: needle) != nil {
+                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any], let cwd = object["cwd"] as? String else { continue }
+                if AgentHistory.claudeProjectName(for: cwd) == project { return cwd }
             }
         }
-        let known = AgentDetector.known.map(\.id)
-        let all = order.compactMap { byPath[$0]?.memory }.map { memory -> AgentMemory in
-            var memory = memory
-            memory.agents.sort { (known.firstIndex(of: $0) ?? known.count) < (known.firstIndex(of: $1) ?? known.count) }
-            return memory
-        }
-        return all.filter { $0.scope == .folder } + all.filter { $0.scope == .user }
-    }
-
-    private static func user(home: String) -> [Found] {
-        let root = URL(fileURLWithPath: home, isDirectory: true).standardizedFileURL
-        let real = root.resolvingSymlinksInPath().path
-        // Named from the home, as the folder's are from the folder.
-        return ofUser.flatMap { files(of: $0, under: root, within: real, scope: .user, folder: nil) }.map { found in
-            var found = found
-            found.memory.name = "~/" + found.memory.name
-            return found
-        }
-    }
-
-    private static func own(of folder: String, home: String) -> [Found] {
-        let root = URL(fileURLWithPath: folder, isDirectory: true).standardizedFileURL
-        let real = root.resolvingSymlinksInPath().path
-        var found = inFolder.flatMap { files(of: $0, under: root, within: real, scope: .folder, folder: folder) }
-        // What Claude Code writes by itself for the folder: its notes, with
-        // their index `MEMORY.md` first.
-        let homeURL = URL(fileURLWithPath: home, isDirectory: true).standardizedFileURL
-        let notes = Place(path: ".claude/projects/" + AgentHistory.claudeProjectName(for: root.path) + "/memory", suffix: ".md", agents: ["claude"])
-        let written = files(of: notes, under: homeURL, within: homeURL.resolvingSymlinksInPath().path, scope: .folder, folder: folder, writtenByAgent: true, namedFrom: "memory")
-        found += written.filter { $0.memory.name == "memory/MEMORY.md" } + written.filter { $0.memory.name != "memory/MEMORY.md" }
-        return found
-    }
-
-    /// The files of a place that exist, as memories. A file is given by its
-    /// real path; one that a link leads out of `real`, the folder it is
-    /// looked for under, is not a memory of that folder and is left out.
-    private static func files(
-        of place: Place, under root: URL, within real: String, scope: AgentMemory.Scope, folder: String?, writtenByAgent: Bool = false, namedFrom: String? = nil
-    ) -> [Found] {
-        let at = root.appendingPathComponent(place.path)
-        var candidates: [(url: URL, name: String)] = []
-        if let suffix = place.suffix {
-            let names = ((try? FileManager.default.contentsOfDirectory(atPath: at.path)) ?? [])
-                .filter { $0.hasSuffix(suffix) && !$0.hasPrefix(".") }
-                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-                .prefix(maxFilesPerPlace)
-            candidates = names.map { (at.appendingPathComponent($0), (namedFrom ?? place.path) + "/" + $0) }
-        } else {
-            candidates = [(at, place.path)]
-        }
-        return candidates.compactMap { candidate in
-            let file = candidate.url.resolvingSymlinksInPath()
-            guard file.path.hasPrefix(real.hasSuffix("/") ? real : real + "/"),
-                let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
-                values.isRegularFile == true, let modified = values.contentModificationDate
-            else { return nil }
-            // The file itself a link, whatever the folders on the way are.
-            let isLink = (try? candidate.url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
-            let memory = AgentMemory(
-                path: file.path, name: candidate.name, agents: place.agents, scope: scope, folder: folder, writtenByAgent: writtenByAgent,
-                modifiedAt: modified, size: values.fileSize ?? 0)
-            return Found(memory: memory, viaLink: isLink)
-        }
+        return nil
     }
 
     // MARK: One memory
@@ -178,25 +116,25 @@ public enum AgentMemories {
         public init(_ description: String) { self.description = description }
     }
 
-    /// The memory a client names, found again among those listed for the
-    /// folder it names (the user's own when nil): whatever path a client
-    /// sends, only a file listed here is read, written or deleted.
-    public static func memory(at path: String, folder: String?, home: String = NSHomeDirectory()) -> AgentMemory? {
+    /// The memory a client names, found again among every memory listed
+    /// here: whatever path a client sends, only a file that is one of
+    /// those, a note in the `memory` folder of one of Claude Code's
+    /// projects, is read, written or deleted.
+    public static func memory(at path: String, home: String = NSHomeDirectory()) -> AgentMemory? {
         let wanted = URL(fileURLWithPath: path).standardizedFileURL.path
-        let listed = folder.map { memories(of: $0, home: home) } ?? memoriesOfUser(home: home)
-        return listed.first { $0.path == wanted }
+        return allMemories(home: home).first { $0.path == wanted }
     }
 
-    public static func read(_ path: String, folder: String?, home: String = NSHomeDirectory()) -> Result<AgentMemoryContent, Refusal> {
-        guard let memory = memory(at: path, folder: folder, home: home) else { return .failure(Refusal(MemoryWords.notAMemory)) }
+    public static func read(_ path: String, home: String = NSHomeDirectory()) -> Result<AgentMemoryContent, Refusal> {
+        guard let memory = memory(at: path, home: home) else { return .failure(Refusal(MemoryWords.notAMemory)) }
         guard case .text(let text) = FileBrowser.read(memory.path) else { return .failure(Refusal(MemoryWords.notText)) }
         return .success(AgentMemoryContent(memory: memory, text: text))
     }
 
     /// Replaces a memory's text, all at once. Refused, nothing written,
     /// when the file is not as the client last saw it (`seen`, its date).
-    public static func write(_ text: String, to path: String, folder: String?, seen: Date, home: String = NSHomeDirectory()) -> Result<AgentMemory, Refusal> {
-        guard let memory = memory(at: path, folder: folder, home: home) else { return .failure(Refusal(MemoryWords.notAMemory)) }
+    public static func write(_ text: String, to path: String, seen: Date, home: String = NSHomeDirectory()) -> Result<AgentMemory, Refusal> {
+        guard let memory = memory(at: path, home: home) else { return .failure(Refusal(MemoryWords.notAMemory)) }
         // Dates travel as seconds with a fraction: the same to the millisecond.
         guard abs(memory.modifiedAt.timeIntervalSince(seen)) < 0.001 else { return .failure(Refusal(MemoryWords.changedMeanwhile(memory.name))) }
         do {
@@ -204,13 +142,13 @@ public enum AgentMemories {
         } catch {
             return .failure(Refusal(MemoryWords.notWritten(memory.name, reason: error.localizedDescription)))
         }
-        guard let written = self.memory(at: memory.path, folder: folder, home: home) else { return .failure(Refusal(MemoryWords.gone)) }
+        guard let written = self.memory(at: memory.path, home: home) else { return .failure(Refusal(MemoryWords.gone)) }
         return .success(written)
     }
 
     /// Moves a memory to the Trash. The memory it was when done, or why not.
-    public static func delete(_ path: String, folder: String?, home: String = NSHomeDirectory()) -> Result<AgentMemory, Refusal> {
-        guard let memory = memory(at: path, folder: folder, home: home) else { return .failure(Refusal(MemoryWords.notAMemory)) }
+    public static func delete(_ path: String, home: String = NSHomeDirectory()) -> Result<AgentMemory, Refusal> {
+        guard let memory = memory(at: path, home: home) else { return .failure(Refusal(MemoryWords.notAMemory)) }
         do {
             try FileBrowser.trash(memory.path)
             return .success(memory)
