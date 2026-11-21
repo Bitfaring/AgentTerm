@@ -646,6 +646,42 @@ final class RemoteMacTests: MacUITestCase {
         shot("watched-again")
     }
 
+    /// REMOTE-31 (#210): the other Mac's host restarts, this Mac is back on
+    /// it before that Mac's app is, and that app comes back later as the
+    /// browser. The page on show says why it waits, not that it loads, and
+    /// is watched again once that app is back, without being opened again.
+    func testAPageOfTheOtherMacIsWatchedAgainWhenItsAppIsBack() throws {
+        try startOtherMac()
+        func provide(_ browser: Device) {
+            browser.send(.browserProvider(true))
+            browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        }
+        func watched(_ browser: Device) -> Bool {
+            browser.messages.contains { if case .browserCall(_, _, .watch("7", true, _)) = $0 { return true } else { return false } }
+        }
+        let first = try device("Mac", state: otherState, port: otherPort)
+        provide(first)
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        wait("the page watched", timeout: 15) { watched(first) }
+
+        // That Mac's host restarts; this Mac is back on it first.
+        killHost(on: otherPort)
+        try startHost(state: otherState, home: otherHome, port: otherPort)
+        app.wait(for: .containing("The host on Other Mac stopped unexpectedly"), timeout: 30)
+        // Its pages go with its app: none is shown as loading meanwhile.
+        app.waitGone(.id("remote-page"), timeout: 15)
+        shot("app-not-back")
+        // That Mac's app comes back, with its page.
+        let second = try device("Mac", state: otherState, port: otherPort)
+        provide(second)
+        wait("the page watched again once that Mac's app is back", timeout: 20) { watched(second) }
+        app.wait(for: .id("remote-page"), timeout: 15)
+        shot("app-back")
+    }
+
     /// REMOTE-19: the other Mac's host dies and is started again there.
     /// This Mac says so in words, rather than showing an empty list.
     func testWhenTheOtherMacsHostDiesThisMacSaysWhatEnded() throws {
