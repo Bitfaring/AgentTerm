@@ -309,6 +309,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | LAUNCH-4 | No SSH configuration | Open the app | There is no SSH menu | M |
 | LAUNCH-5 | A `Host` line with a comment after it | The host reads the configuration | The words of the comment are not hosts | H |
 | LAUNCH-6 | The Mac app, Antigravity not installed | Its button in the header; Look Again; Install in a New Shell | A sheet with its maker's command and page; still not found, and why that may be; a shell with the command typed at its prompt, not run (the test ends it without pressing Return) | M |
+| LAUNCH-8 (#202) | The Mac app not connected to its host: the app's port held by something that is not a host, as HOST-7 | File > New Shell | Nothing is started; the window's notice says at once `StateWords.notStarted` (why, and to start it again once connected), and OK closes it. Before the fix nothing happened and nothing was said beyond the window's "could not be started". The same check stands before every way of starting a session (New <agent>, the menu bar's, a worktree, SSH, resuming, a handoff, a Shells tab's part turned on with no shell free); the part cannot be pressed while not connected, since the window then shows why in place of the tabs, so no test turns it on | M |
 | LAUNCH-7 | Each of the four agents, and one AgentTerm does not know | Its guide | Its maker's macOS command as read on the maker's page on 2026-11-15, another way where there is one, an https page; none for the unknown one; the words of the title, the message and the help | U |
 
 ### Handoff

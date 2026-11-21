@@ -207,6 +207,12 @@ public enum StateWords {
         "Check that Tailscale is connected on this device and on \(mac), and that AgentTerm is open there."
     }
     public static let tryAgain = "Try Again"
+    /// A shell, an agent or anything else that starts a session asked for
+    /// while the app is not connected to the host (#202): nothing is
+    /// started, nothing waits, and this is said at once.
+    public static func notStarted(_ mac: String) -> String {
+        "Nothing was started: AgentTerm is not connected to the host on \(mac). Start it again once it is connected; the window says why it is not."
+    }
 
     public static func versionTitle(_ match: ProtocolMatch, mac: String) -> String {
         match == .hostOlder ? "AgentTerm on \(mac) is from an older release" : "This app is older than AgentTerm on \(mac)"

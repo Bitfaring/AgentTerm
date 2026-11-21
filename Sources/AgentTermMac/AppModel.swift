@@ -808,7 +808,7 @@ final class AppModel: ObservableObject {
 
     /// Opens `ssh <host>` in a new session.
     func connectSSH(_ host: String) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         lastError = nil
         selectNextAttached = true
         Telemetry.shared.record(.sessionStart(agent: .init(id: nil)))
@@ -2059,9 +2059,23 @@ final class AppModel: ObservableObject {
 
     // MARK: Actions
 
+    /// Whether a session can be started now. While the app is not
+    /// connected to the host it cannot: the user is told at once why, and
+    /// nothing waits for a session that will not come (#202, principle 3).
+    /// Every way of starting one asks this first: File > New Shell and New
+    /// <agent>, the menu bar's, a Shells tab's part, a worktree, SSH,
+    /// resuming, a handoff.
+    func canStartSessions() -> Bool {
+        guard status == .connected else {
+            notice = StateWords.notStarted(macName)
+            return false
+        }
+        return true
+    }
+
     /// Starts an agent, or a plain shell when `agent` is nil, in the selected folder.
     func launch(_ agent: AgentInfo?) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         lastError = nil
         selectNextAttached = true
         let size = startingSize
@@ -2073,7 +2087,7 @@ final class AppModel: ObservableObject {
     /// folder, under it, and the agent sees and uses it as one it opened
     /// itself.
     func newShell(besideAgent agentTab: String) {
-        guard status == .connected, let agent = session(forTab: agentTab), agent.agent != nil else { return }
+        guard canStartSessions(), let agent = session(forTab: agentTab), agent.agent != nil else { return }
         lastError = nil
         selectNextAttached = true
         Telemetry.shared.record(.sessionStart(agent: .init(id: nil)))
@@ -2086,7 +2100,7 @@ final class AppModel: ObservableObject {
     /// From the worktree bar's sheet (#43) the branch is named and the
     /// branch it starts from picked; the sheet says what the question asks.
     func launchInWorktree(_ agent: AgentInfo?, branch: String? = nil, from: String? = nil, confirmed: Bool = false) {
-        guard status == .connected, let folder = selectedFolder else { return }
+        guard canStartSessions(), let folder = selectedFolder else { return }
         if !confirmed, let diff, !(diff.staged.isEmpty && diff.unstaged.isEmpty) {
             worktreeQuestion = agent.map { .agent($0) } ?? .shell
             return
@@ -2119,7 +2133,7 @@ final class AppModel: ObservableObject {
     /// run: the user reads it there and presses Return, or does not. The
     /// app runs nothing it fetched by itself (CLAUDE.md, principle 2).
     func installInNewShell(_ guide: AgentInstallGuide) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         lastError = nil
         selectNextAttached = true
         installGuide = nil
@@ -2440,7 +2454,7 @@ final class AppModel: ObservableObject {
     /// `folder` is where the receiving agent starts: the conversation's own
     /// folder, or another one to carry the work over to.
     func handoff(_ conversation: Conversation, to target: AgentInfo, plan: Handoff.Plan, prompt: String, note: String, in folder: String? = nil) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         Telemetry.shared.record(
             .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
         let size = startingSize
@@ -2486,7 +2500,7 @@ final class AppModel: ObservableObject {
     }
 
     func handoffOnRemote(_ conversation: Conversation, to target: AgentInfo, plan: String, prompt: String?, note: String, in folder: String?) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         Telemetry.shared.record(
             .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
         selectNextAttached = true
@@ -2502,7 +2516,7 @@ final class AppModel: ObservableObject {
     /// (#150): the host makes it, writes the handoff file there and starts
     /// `target` in it; what fails is said as any handoff's.
     func handoffInNewWorktree(_ conversation: Conversation, to target: AgentInfo, branch: String?, from: String?) {
-        guard status == .connected, let folder = panelFolder else { return }
+        guard canStartSessions(), let folder = panelFolder else { return }
         Telemetry.shared.record(.handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: true))
         selectNextAttached = true
         beginStarting("Handing off to \(target.name)…")
@@ -2572,7 +2586,7 @@ final class AppModel: ObservableObject {
 
     /// Reopens a past conversation in its agent, in a new session.
     func resume(_ conversation: Conversation) {
-        guard status == .connected else { return }
+        guard canStartSessions() else { return }
         lastError = nil
         selectNextAttached = true
         let size = startingSize

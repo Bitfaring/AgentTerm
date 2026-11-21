@@ -50,8 +50,12 @@ extension AppModel {
         case .waiting:
             // None left to show: a new one, which goes there once it is in
             // the row (#189). The part waits until then, or until the host
-            // says the launch failed or goes, either of which is said.
-            guard status == .connected else { return }
+            // says the launch failed or goes, either of which is said. Not
+            // connected, nothing is started and the part does not wait:
+            // that is said at once (#202). The tab is not on screen while
+            // not connected (CenterView shows why instead), so its part
+            // buttons cannot be pressed then; the check is kept all the same.
+            guard canStartSessions() else { return }
             shellSplits[group] = split
             launch(nil)
         }

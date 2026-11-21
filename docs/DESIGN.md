@@ -1950,7 +1950,12 @@ taken. There is no request id in `CreateRequest`, so a shell new to the
 tab from elsewhere while a part waits (File > New Shell, the iPhone) is
 taken as well. The waits end when the host sends an error (a launch it
 refused, said in the notice) and when the connection goes; there is no
-timeout that ends them without a word.
+timeout that ends them without a word. A part turned on while not
+connected does not wait at all: like every way of starting a session
+(`AppModel.canStartSessions`, #202), it is refused with
+`StateWords.notStarted` in the window's notice. That press cannot come
+from the window, which shows why it is not connected in place of the
+tabs; File > New Shell and the menu bar's can.
 
 ## A part that stopped
 

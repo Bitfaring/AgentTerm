@@ -1439,6 +1439,13 @@ has dismissed it on one device:
   stopping, how the last one ended when it knows, and offers Try Again.
 - A host the app starts that cannot start (its port is taken, for one)
   is said so at once, with the host's own words why, and Try Again.
+- While the Mac app is not connected to its host, or to the other Mac's,
+  a session asked for (File > New Shell or New <agent>, the menu bar's, a
+  worktree, an SSH host, resuming, a handoff) is not started, and the
+  window's notice says at once why and what to do
+  (`StateWords.notStarted`, #202); nothing waits to start later. A Shells
+  tab's part is not on screen then, since the window shows why it is not
+  connected in place of the tabs.
 
 A stop that was asked for (Restart Host, replacing another copy's host,
 logging out) is not reported.
