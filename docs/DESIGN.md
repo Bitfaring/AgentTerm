@@ -1610,7 +1610,12 @@ viewing Mac shows its own menu with Chromium's words (`BrowserWords.PageMenu`):
 Copy, Open Link in New Tab, Copy Link Address, Back, Forward, Reload. ⌘C
 asks `copy`, the page's selection, or a field's, as text, and puts it on
 the viewing Mac's pasteboard. A page's own right-click menu, made by its
-script, is not shown from another Mac.
+script, is not shown from another Mac. What the viewing Mac asked and
+was not answered when the connection to that Mac closes is answered at
+once, refused, and said (`BrowserWords.otherMacClosed`: it may not have
+been done there); when the user switches to another Mac it is answered
+so without being said, and a page's view sends nothing more once its Mac
+is not the one on show (#196).
 While the Mac draws the page (`BrowserTab.isDrawn`: in a pane
 of a window on screen and not covered) the pictures are streamed
 (`Page.startScreencast`), about ten a second, each acknowledged a tenth

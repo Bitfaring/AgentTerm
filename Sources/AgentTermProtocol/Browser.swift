@@ -558,6 +558,13 @@ public enum BrowserWords {
     public static let onTheOtherMac =
         "Picking an element, Show As, finding, zooming and the developer tools are on the Mac whose page it is."
 
+    /// What waited for another Mac's browser when the connection to that
+    /// Mac closed (#196): answered at once, and whether it was done there
+    /// is not known.
+    public static func otherMacClosed(_ mac: String) -> String {
+        "The connection to \(mac) closed before its browser answered, so what was asked of its page may not have been done. Try again once \(mac) is back."
+    }
+
     /// + Page beside an agent of another Mac's (#147): a device opens the
     /// user's pages only.
     public static let besideAgentOnTheOtherMac =

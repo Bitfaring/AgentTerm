@@ -116,6 +116,38 @@ final class RemoteMacTests: MacUITestCase {
         app.wait(for: .id("browser-8"), timeout: 15)
     }
 
+    /// REMOTE-25 (#196): what this Mac asked of the other Mac's browser,
+    /// still not answered when the connection to that Mac closes, is
+    /// answered at once and said, with why: it was left waiting, and
+    /// nothing said so.
+    func testWhatWaitsForTheOtherMacsBrowserIsAnsweredWhenTheConnectionCloses() throws {
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        func calls() -> [(id: Int, request: BrowserRequest)] {
+            browser.messages.compactMap { if case .browserCall(let id, _, let request) = $0 { return (id, request) } else { return nil } }
+        }
+        wait("the page watched", timeout: 15) { calls().contains { if case .watch("7", true, _) = $0.request { return true } else { return false } } }
+        for call in calls() { browser.send(.browserReply(id: call.id, result: .text("Watching tab 7."))) }
+
+        // ⌘C asked there, and not answered by that Mac's browser.
+        app.press(.id("remote-page"))
+        app.menu(["Edit", "Copy"])
+        wait("the selection asked for", timeout: 15) { calls().contains { if case .copy("7") = $0.request { return true } else { return false } } }
+        XCTAssertNil(app.first(.containing(BrowserWords.otherMacClosed("Other Mac"))), "said before the connection closed")
+
+        // The connection closes, as when that Mac's host stops.
+        killHost(on: otherPort)
+        app.wait(for: .containing(BrowserWords.otherMacClosed("Other Mac")), timeout: 20)
+        shot("remote-browser-gone")
+        app.press(.button("OK"))
+    }
+
     func testPairingShowsTheOtherMacAndWorkingOnItChangesItsDisk() throws {
         try startOtherMac()
         // REMOTE-1.

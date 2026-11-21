@@ -1468,6 +1468,9 @@ final class AppModel: ObservableObject {
         let old = connection
         connection = nil
         old?.close()
+        // What waited for the Mac left is answered, not said: the user
+        // switched (#196).
+        refuseRemoteBrowserAsks(macName: remote?.name ?? "the other Mac", tell: false)
         remote = mac
         UserDefaults.standard.set(mac?.id, forKey: Self.currentMacKey)
         forgetHostState()
@@ -1487,7 +1490,6 @@ final class AppModel: ObservableObject {
         // on show (#76).
         browsers.closeAll()
         remoteTabs = []
-        remoteBrowserAsks = [:]
         pendingRemotePage = nil
         browserInFront = nil
         folders = []
@@ -1649,6 +1651,9 @@ final class AppModel: ObservableObject {
             wasConnected = false
             stoppingHost = false
             connection = nil
+            // What waited for the other Mac's browser cannot be answered
+            // by it now: answered at once, and said (#196).
+            if let remote { refuseRemoteBrowserAsks(macName: remote.name, tell: true) }
             files.connectionLost()
             search.connectionLost()
             historyStore.reset()
@@ -1790,7 +1795,7 @@ final class AppModel: ObservableObject {
             hostSaysMacInUse = inUse
         case .browserAnswer(let id, let result):
             // What the other Mac's browser answered (#147).
-            remoteBrowserAsks.removeValue(forKey: id)?(result)
+            remoteBrowserAnswered(id: id, result: result)
         case .agentShellResult, .agentBrowserResult:
             // For `agenttermd mcp`.
             break

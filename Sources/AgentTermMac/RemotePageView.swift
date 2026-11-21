@@ -16,8 +16,14 @@ struct RemotePageView: NSViewRepresentable {
         let view = RemotePageNSView()
         view.tabID = tab.id
         view.project = tab.project
-        view.send = { [weak model] request in model?.askRemoteBrowser(request) }
-        view.ask = { [weak model] request, done in model?.askRemoteBrowser(request, done) }
+        // Its Mac's page only: what is still in its queue once another Mac
+        // is on show is not sent to that one, whose tab may have its id (#196).
+        let mac = model.remote
+        view.send = { [weak model] request in if let model, model.remote == mac { model.askRemoteBrowser(request) } }
+        view.ask = { [weak model] request, done in
+            guard let model, model.remote == mac else { return done(.refused(BrowserWords.otherMacClosed(mac?.name ?? "the other Mac"))) }
+            model.askRemoteBrowser(request, done)
+        }
         return view
     }
 

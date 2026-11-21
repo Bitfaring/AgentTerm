@@ -26,11 +26,28 @@ extension AppModel {
         guard isRemote, let connection else { return done(.refused(BrowserWords.noApp)) }
         let id = nextRemoteBrowserAsk
         nextRemoteBrowserAsk += 1
-        remoteBrowserAsks[id] = { [weak self] result in
-            if case .refused(let why) = result { self?.notice = why }
-            done(result)
-        }
+        remoteBrowserAsks[id] = done
         connection.send(.browserAsk(id: id, request: request))
+    }
+
+    /// What the other Mac's browser answered.
+    func remoteBrowserAnswered(id: Int, result: BrowserResult) {
+        guard let done = remoteBrowserAsks.removeValue(forKey: id) else { return }
+        if case .refused(let why) = result { notice = why }
+        done(result)
+    }
+
+    /// The connection to the other Mac closed, or this Mac switched away
+    /// from it (#196): what waits for its browser is answered at once, as
+    /// not known to be done, and none waits for an answer that cannot
+    /// come. Said to the user only when it was not asked for: a switch is.
+    func refuseRemoteBrowserAsks(macName: String, tell: Bool) {
+        let waiting = remoteBrowserAsks
+        remoteBrowserAsks = [:]
+        guard !waiting.isEmpty else { return }
+        let why = BrowserWords.otherMacClosed(macName)
+        if tell { notice = why }
+        for (_, done) in waiting.sorted(by: { $0.key < $1.key }) { done(.refused(why)) }
     }
 
     /// Called once: what the browser's tabs do reaches the rest of the app.
