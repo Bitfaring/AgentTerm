@@ -190,8 +190,8 @@ final class AgentTranscriptTests: XCTestCase {
 
     /// HIST-14: deleting a conversation moves its agent's record to the
     /// Trash, so it is no longer listed; only a file an agent keeps
-    /// conversations in is ever touched; Antigravity's is refused with
-    /// what to do instead.
+    /// conversations in is ever touched. Antigravity's, which is taken
+    /// out of a list, is HIST-26 (#222).
     func testAConversationIsDeletedToTheTrash() throws {
         let conversation = try claude("s1", claudeLines)
         let file = try XCTUnwrap(conversation.source)
@@ -217,7 +217,9 @@ final class AgentTranscriptTests: XCTestCase {
         XCTAssertNil(AgentHistory.delete(copilot, home: home.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent(".copilot/session-state/p1").path))
 
+        // Antigravity's is no longer refused for being Antigravity's (#222):
+        // one named outside its folder is, as any forged one.
         let antigravity = Conversation(agent: "agy", sessionID: "g1", title: "t", updatedAt: Date(), cwd: project, source: home.appendingPathComponent(".gemini/x.jsonl").path)
-        XCTAssertTrue(try XCTUnwrap(AgentHistory.delete(antigravity, home: home.path)).hasPrefix("Antigravity keeps its list"))
+        XCTAssertEqual(AgentHistory.delete(antigravity, home: home.path), "That is not a conversation of Antigravity.")
     }
 }

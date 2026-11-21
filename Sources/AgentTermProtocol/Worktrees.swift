@@ -121,7 +121,42 @@ public enum WorktreeWords {
     public static func noMatch(_ search: String) -> String { "No worktree matches “\(search.trimmingCharacters(in: .whitespaces))”." }
     public static let newHelp = "A new branch in a new worktree, with an agent or a shell started there"
     public static let actions = "Worktree Actions"
-    public static func actionsHelp(_ worktree: WorktreeInfo) -> String { "Merge \(worktree.chipTitle), open a pull request for it, or throw it away" }
+    public static func actionsHelp(_ worktree: WorktreeInfo) -> String {
+        worktree.missing
+            ? "Throw away \(worktree.chipTitle), whose folder is gone" : "Merge \(worktree.chipTitle), open a pull request for it, or throw it away"
+    }
+}
+
+/// One thing "⋯" on a worktree's row does to it (#217).
+public enum WorktreeAction: Hashable, Sendable {
+    case merge, pullRequest, throwAway
+}
+
+extension WorktreeInfo {
+    /// What "⋯" on its row holds, in its order, the same on both apps
+    /// (#217, the owner's decision of 2026-11-21): nothing for the folder's
+    /// own, which has no "⋯"; Throw Away… alone for one whose folder is
+    /// missing, where there is nothing to merge from or push; all three for
+    /// any other.
+    public var rowActions: [WorktreeAction] {
+        if isMain { return [] }
+        if missing { return [.throwAway] }
+        return [.merge, .pullRequest, .throwAway]
+    }
+
+    /// Whether Merge is on: it has commits the folder's branch has not, and
+    /// nothing that is not committed.
+    public var canMerge: Bool { rowActions.contains(.merge) && changed == 0 && ahead > 0 }
+
+    /// Whether Open a Pull Request is on, the same on both apps (#217, the
+    /// owner's decision of 2026-11-21): on the row of the worktree on show
+    /// only, and when its branch has somewhere to be pushed to, which the
+    /// changes read of it say (`hasRemote`: a remote to push to, or an
+    /// upstream). Of another row that is not known, and the entry is off
+    /// rather than guessed.
+    public func canOpenPullRequest(onShow: Bool, hasRemote: Bool) -> Bool {
+        rowActions.contains(.pullRequest) && onShow && hasRemote
+    }
 }
 
 extension WorktreeInfo {

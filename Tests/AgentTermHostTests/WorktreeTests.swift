@@ -56,6 +56,106 @@ final class WorktreeTests: XCTestCase {
         XCTAssertEqual(list.first?.branch, "main")
     }
 
+    /// A repository with the project as its submodule `sub`, committed, and
+    /// the submodule able to commit. Returns the submodule's folder.
+    private func parentWithSubmodule() throws -> (parent: URL, sub: URL) {
+        let parent = root.appendingPathComponent("parent")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        git("init", "-q", "-b", "main", in: parent)
+        git("config", "user.name", "Test", in: parent)
+        git("config", "user.email", "test@example.com", in: parent)
+        git("config", "commit.gpgsign", "false", in: parent)
+        git("-c", "protocol.file.allow=always", "submodule", "add", "-q", project.path, "sub", in: parent)
+        git("commit", "-q", "-m", "sub", in: parent)
+        let sub = parent.appendingPathComponent("sub")
+        git("config", "user.name", "Test", in: sub)
+        git("config", "user.email", "test@example.com", in: sub)
+        git("config", "commit.gpgsign", "false", in: sub)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sub.appendingPathComponent("a.txt").path), "the submodule is checked out")
+        return (parent, sub)
+    }
+
+    /// WT-21 (#216): a worktree of a submodule is made under the
+    /// submodule's own folder, as any repository's, listed after the
+    /// submodule's folder, and is a change neither of the submodule nor of
+    /// the repository it is in; what is committed in it merges back, and
+    /// its folder and branch go with it.
+    func testASubmodulesWorktreeIsMadeListedAndMergedBack() throws {
+        let (parent, sub) = try parentWithSubmodule()
+        let made = try GitWorktrees.create(in: sub.path, agent: "claude", branch: nil)
+        XCTAssertEqual(made.branch, "agentterm/claude-1")
+        XCTAssertEqual(made.directory, sub.appendingPathComponent(".agentterm/worktrees/agentterm/claude-1").path)
+        let worktree = URL(fileURLWithPath: made.directory)
+        XCTAssertEqual(try String(contentsOf: worktree.appendingPathComponent("a.txt"), encoding: .utf8), "one\n")
+
+        var list = GitWorktrees.list(folder: sub.path)
+        XCTAssertEqual(list.map(\.path), [sub.path, made.directory])
+        XCTAssertEqual(list.map(\.branch), ["main", "agentterm/claude-1"])
+        XCTAssertEqual(list.map(\.isMain), [true, false])
+        XCTAssertEqual(list.map(\.missing), [false, false])
+        XCTAssertEqual(list.last?.isAgentTerm, true)
+        // Listed the same from inside the worktree, the submodule's folder first.
+        XCTAssertEqual(GitWorktrees.list(folder: made.directory).map(\.branch), ["main", "agentterm/claude-1"])
+        // Not a change of the submodule, nor of the repository it is in.
+        XCTAssertEqual(git("status", "--porcelain", in: sub), "")
+        XCTAssertEqual(GitDiff.snapshot(directory: sub.path).files.map(\.path), [])
+        XCTAssertEqual(git("status", "--porcelain", in: parent), "")
+        XCTAssertEqual(GitDiff.snapshot(directory: parent.path).files.map(\.path), [])
+
+        // Not merged while not committed; committed, it is ahead by one.
+        try write("a.txt", "one\nthe worktree's\n", in: worktree)
+        list = GitWorktrees.list(folder: sub.path)
+        XCTAssertEqual(list[1].changed, 1)
+        XCTAssertEqual(list[0].changed, 0, "the submodule's own folder has no change of the worktree's")
+        XCTAssertThrowsError(try GitWorktrees.finish(folder: sub.path, path: made.directory, finish: .merge, deleteBranch: true))
+        git("commit", "-qam", "the worktree's", in: worktree)
+        list = GitWorktrees.list(folder: sub.path)
+        XCTAssertEqual(list[1].ahead, 1)
+        XCTAssertEqual(list[1].changed, 0)
+        XCTAssertEqual(git("status", "--porcelain", in: parent), "", "a commit on the worktree's branch moves nothing of the submodule")
+
+        XCTAssertEqual(
+            try GitWorktrees.finish(folder: sub.path, path: made.directory, finish: .merge, deleteBranch: true), "Merged agentterm/claude-1 and removed its worktree.")
+        XCTAssertEqual(try String(contentsOf: sub.appendingPathComponent("a.txt"), encoding: .utf8), "one\nthe worktree's\n")
+        XCTAssertEqual(git("log", "-1", "--format=%s", in: sub), "the worktree's")
+        XCTAssertEqual(git("rev-parse", "--abbrev-ref", "HEAD", in: sub), "main")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: made.directory), "removed")
+        XCTAssertEqual(git("branch", "--list", "agentterm/claude-1", in: sub), "", "its branch too, as asked")
+        XCTAssertEqual(GitWorktrees.list(folder: sub.path).map(\.path), [sub.path])
+        // The submodule is at another commit now, which is all its repository sees.
+        XCTAssertEqual(git("status", "--porcelain", in: parent), "M sub")
+        XCTAssertEqual(git("-C", sub.path, "status", "--porcelain"), "")
+    }
+
+    /// WT-21 (#216): a submodule's worktree is thrown away with what is in
+    /// it and with its branch, and one whose folder is gone too.
+    func testASubmodulesWorktreeIsThrownAway() throws {
+        let (parent, sub) = try parentWithSubmodule()
+        let made = try GitWorktrees.create(in: sub.path, agent: "codex", branch: "work")
+        XCTAssertEqual(made.directory, sub.appendingPathComponent(".agentterm/worktrees/work").path)
+        try write("a.txt", "not committed\n", in: URL(fileURLWithPath: made.directory))
+        try write("new.txt", "not committed either\n", in: URL(fileURLWithPath: made.directory))
+        XCTAssertEqual(GitWorktrees.list(folder: sub.path).last?.changed, 2)
+        XCTAssertEqual(git("status", "--porcelain", in: parent), "")
+
+        XCTAssertEqual(try GitWorktrees.finish(folder: sub.path, path: made.directory, finish: .discard, deleteBranch: true), "Removed the worktree and its branch.")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: made.directory))
+        XCTAssertEqual(git("branch", "--list", "work", in: sub), "", "its branch too, as asked")
+        XCTAssertEqual(try String(contentsOf: sub.appendingPathComponent("a.txt"), encoding: .utf8), "one\n")
+
+        // Its folder gone before it is thrown away, the branch kept.
+        let gone = try GitWorktrees.create(in: sub.path, agent: "codex", branch: "gone")
+        try FileManager.default.removeItem(atPath: gone.directory)
+        let list = GitWorktrees.list(folder: sub.path)
+        XCTAssertEqual(list.map(\.path), [sub.path, gone.directory])
+        XCTAssertEqual(list.map(\.missing), [false, true])
+        XCTAssertEqual(try GitWorktrees.finish(folder: sub.path, path: gone.directory, finish: .discard, deleteBranch: false), "Removed the worktree.")
+        XCTAssertEqual(GitWorktrees.list(folder: sub.path).map(\.path), [sub.path])
+        XCTAssertNotEqual(git("branch", "--list", "gone", in: sub), "", "the branch stays when not asked")
+        XCTAssertEqual(git("status", "--porcelain", in: parent), "")
+        XCTAssertEqual(git("status", "--porcelain", in: sub), "")
+    }
+
     /// WT-1: a worktree on a branch of its own, cut from the current commit,
     /// inside the project, bringing nothing along, which git does not see.
     func testANewWorktreeIsACleanCheckoutOnABranchOfItsOwn() throws {
@@ -200,6 +300,35 @@ final class WorktreeTests: XCTestCase {
         XCTAssertTrue(list[1].inUse, "a session runs in a folder inside it")
         XCTAssertTrue(list[2].missing)
         XCTAssertTrue(FileManager.default.fileExists(atPath: project.path), "nothing is removed by listing")
+    }
+
+    /// WT-19 (#217): a worktree whose folder is gone is thrown away all the
+    /// same, which is all its row offers: git forgets it, and its branch
+    /// goes when asked and stays when not.
+    func testAWorktreeWhoseFolderIsGoneIsThrownAway() throws {
+        let made = URL(fileURLWithPath: try GitWorktrees.create(in: project.path, agent: "claude", branch: nil).directory)
+        let byHand = root.appendingPathComponent("by-hand")
+        git("worktree", "add", "-q", "-b", "by-hand", byHand.path)
+        try FileManager.default.removeItem(at: made)
+        try FileManager.default.removeItem(at: byHand)
+        // Listed in git's order, by the path git has for each.
+        func listed(_ branch: String) throws -> WorktreeInfo { try XCTUnwrap(GitWorktrees.list(folder: project.path).first { $0.branch == branch }, "\(branch) is not listed") }
+        XCTAssertEqual(Set(GitWorktrees.list(folder: project.path).map(\.branch)), ["main", "agentterm/claude-1", "by-hand"])
+        XCTAssertTrue(try listed("agentterm/claude-1").missing)
+        XCTAssertTrue(try listed("by-hand").missing)
+
+        // With its branch, as asked.
+        XCTAssertEqual(
+            try GitWorktrees.finish(folder: project.path, path: try listed("agentterm/claude-1").path, finish: .discard, deleteBranch: true),
+            "Removed the worktree and its branch.")
+        XCTAssertEqual(GitWorktrees.list(folder: project.path).map(\.branch), ["main", "by-hand"])
+        XCTAssertEqual(git("branch", "--list", "agentterm/claude-1"), "", "its branch too, as asked")
+
+        // Keeping its branch.
+        XCTAssertEqual(try GitWorktrees.finish(folder: project.path, path: try listed("by-hand").path, finish: .discard, deleteBranch: false), "Removed the worktree.")
+        XCTAssertEqual(GitWorktrees.list(folder: project.path).map(\.branch), ["main"])
+        XCTAssertNotEqual(git("branch", "--list", "by-hand"), "", "the branch stays when not asked")
+        XCTAssertFalse(git("worktree", "list", "--porcelain").contains("prunable"), "git still knows of a worktree that is gone")
     }
 
     /// WT-9: what watches a worktree sees its branches change in the

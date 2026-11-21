@@ -126,8 +126,8 @@ final class HistoryAndTabsTests: MacUITestCase {
     /// HIST-24 (#50): History's list is wider than the other places'; a
     /// search looks at the titles only when asked; conversations are picked
     /// and deleted together, and then every one on the Mac is, each time
-    /// after two questions, Antigravity's kept (#219: none for being
-    /// pinned).
+    /// after two questions, Antigravity's as the others' (#222; #219:
+    /// none kept for being pinned).
     func testConversationsAreSearchedByTitleAndDeletedTogether() throws {
         let history = home.appendingPathComponent(".claude/projects/" + project.path.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())
         try [
@@ -140,12 +140,16 @@ final class HistoryAndTabsTests: MacUITestCase {
         try #"{"type":"user","cwd":"\#(demo)","message":{"role":"user","content":"tidy the demo"}}"#.appending("\n").write(
             to: other.appendingPathComponent("c-3.jsonl"), atomically: true, encoding: .utf8)
         // One of Antigravity, which keeps its list in a file of its own:
-        // never deleted here.
+        // taken out of it when every one is deleted (#222).
         let cache = home.appendingPathComponent(".gemini/antigravity-cli/cache")
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
         let uri = URL(fileURLWithPath: demo).absoluteString
         try #"{"conversations":{"conv-1":{"is_internal":false,"summary":{"Title":"Plan the release","UpdatedAt":"2026-11-10T17:00:22Z","WorkspaceURIs":["\#(uri)"]}}}}"#
             .write(to: cache.appendingPathComponent("conversation_metadata.json"), atomically: true, encoding: .utf8)
+        let brain = home.appendingPathComponent(".gemini/antigravity-cli/brain/conv-1/.system_generated/logs")
+        try FileManager.default.createDirectory(at: brain, withIntermediateDirectories: true)
+        try #"{"type":"USER_INPUT","source":"USER_EXPLICIT","content":"plan the release"}"#.appending("\n").write(
+            to: brain.appendingPathComponent("transcript_full.jsonl"), atomically: true, encoding: .utf8)
 
         app.press(.id("place-history"))
         app.wait(for: .id("conversation-c-3"), timeout: 20)
@@ -187,8 +191,8 @@ final class HistoryAndTabsTests: MacUITestCase {
         XCTAssertFalse(app.exists(.containing("was deleted")), "told what the rows going say")
         XCTAssertTrue(FileManager.default.fileExists(atPath: other.appendingPathComponent("c-3.jsonl").path))
 
-        // Every one on the Mac: Antigravity's stays, and no row offers Pin
-        // to keep another (#219).
+        // Every one on the Mac, Antigravity's too (#222), and no row
+        // offers Pin to keep one (#219).
         XCTAssertFalse(app.offers("Pin", on: .id("conversation-c-1")), "a row still offers Pin")
         app.wait(for: .id("conversation-conv-1"))
         app.press(.id("history-select"))
@@ -199,11 +203,14 @@ final class HistoryAndTabsTests: MacUITestCase {
         app.press(.button("Delete Every Conversation"))
         app.waitGone(.id("conversation-c-3"), timeout: 15)
         app.waitGone(.id("conversation-c-1"), timeout: 15)
-        app.wait(for: .containing("1 was kept: having a session, or of Antigravity."))
-        app.wait(for: .id("conversation-conv-1"))
+        app.waitGone(.id("conversation-conv-1"), timeout: 15)
+        // All of them went: nothing is said of one kept.
+        XCTAssertFalse(app.exists(.containing("could not be deleted")), "one was kept")
         XCTAssertFalse(FileManager.default.fileExists(atPath: history.appendingPathComponent("c-1.jsonl").path))
         XCTAssertEqual(
-            Set(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".Trash-of-the-tests").path)), ["c-1.jsonl", "c-2.jsonl", "c-3.jsonl"])
+            Set(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".Trash-of-the-tests").path)), ["c-1.jsonl", "c-2.jsonl", "c-3.jsonl", "conv-1"])
+        let list = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: cache.appendingPathComponent("conversation_metadata.json"))) as? [String: Any])
+        XCTAssertEqual((list["conversations"] as? [String: Any])?.count, 0, "Antigravity's is still in its list")
     }
 
     /// The width an element has on the screen.

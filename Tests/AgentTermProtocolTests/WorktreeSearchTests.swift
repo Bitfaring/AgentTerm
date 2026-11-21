@@ -11,6 +11,7 @@ final class WorktreeSearchTests: XCTestCase {
         isAgentTerm: true)
     private let elsewhere = WorktreeInfo(path: "/code/Review-Copy", branch: "feature/Parser", isMain: false)
     private let detached = WorktreeInfo(path: "/code/bisecting", branch: nil, isMain: false)
+    private let gone = WorktreeInfo(path: "/code/gone", branch: "old", isMain: false, ahead: 4, missing: true)
     private var all: [WorktreeInfo] { [own, made, elsewhere, detached] }
 
     func testAnEmptySearchListsEveryWorktreeInItsOrder() {
@@ -55,5 +56,37 @@ final class WorktreeSearchTests: XCTestCase {
         XCTAssertEqual(WorktreeWords.newTitle, "New Worktree")
         XCTAssertEqual(WorktreeWords.throwAway, "Throw Away…")
         XCTAssertEqual(WorktreeWords.actionsHelp(made), "Merge agentterm/claude-1, open a pull request for it, or throw it away")
+        XCTAssertEqual(WorktreeWords.actionsHelp(gone), "Throw away old, whose folder is gone")
+    }
+
+    /// WT-19 (#217): what "⋯" on a row holds, the same on both apps: none
+    /// for the folder's own, Throw Away… alone for one whose folder is
+    /// missing, all three for any other.
+    func testWhatARowsMenuHolds() {
+        XCTAssertEqual(own.rowActions, [], "the folder's own has no menu")
+        XCTAssertEqual(made.rowActions, [.merge, .pullRequest, .throwAway])
+        XCTAssertEqual(elsewhere.rowActions, [.merge, .pullRequest, .throwAway])
+        XCTAssertEqual(detached.rowActions, [.merge, .pullRequest, .throwAway])
+        XCTAssertEqual(gone.rowActions, [.throwAway], "nothing to merge from or push where the folder is missing")
+    }
+
+    /// WT-19 (#217): a pull request is opened for the worktree on show
+    /// only, and only when its branch has somewhere to be pushed to.
+    func testAPullRequestIsForTheWorktreeOnShowOnly() {
+        XCTAssertTrue(made.canOpenPullRequest(onShow: true, hasRemote: true))
+        XCTAssertFalse(made.canOpenPullRequest(onShow: false, hasRemote: true), "another row's, though its changes were read")
+        XCTAssertFalse(made.canOpenPullRequest(onShow: true, hasRemote: false), "nowhere to push to")
+        XCTAssertFalse(made.canOpenPullRequest(onShow: false, hasRemote: false))
+        XCTAssertFalse(own.canOpenPullRequest(onShow: true, hasRemote: true), "the folder's own has no menu")
+        XCTAssertFalse(gone.canOpenPullRequest(onShow: true, hasRemote: true), "a missing one is only thrown away")
+    }
+
+    /// Merge is on for commits the folder's branch has not, all committed.
+    func testWhenAWorktreeCanBeMerged() {
+        XCTAssertFalse(made.canMerge, "it has changes that are not committed")
+        XCTAssertTrue(WorktreeInfo(path: "/code/done", branch: "done", isMain: false, ahead: 2).canMerge)
+        XCTAssertFalse(elsewhere.canMerge, "nothing ahead")
+        XCTAssertFalse(gone.canMerge)
+        XCTAssertFalse(own.canMerge)
     }
 }

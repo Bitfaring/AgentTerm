@@ -37,6 +37,7 @@ DEVICE="$SIM_UDID"
 echo "Testing on $SIM_NAME ($SIM_UDID)."
 PORT=7798
 SECOND_PORT=7799
+ports_must_be_free "$PORT" "$SECOND_PORT"
 STATE="$(mktemp -d)"
 SECOND_STATE="$(mktemp -d)"
 LOG="$(mktemp)"
@@ -121,7 +122,10 @@ GONE_WATCH=$!
 TAKEOVER_PID=""
 cleanup() {
     local status=$?
-    stop_then_remove "$DAEMON $SECOND_DAEMON $GONE_WATCH $TAKEOVER_PID" "$STATE" "$SECOND_STATE"
+    stop_then_remove "$DAEMON $SECOND_DAEMON $GONE_WATCH $TAKEOVER_PID"
+    # Whatever else is on the hosts' ports or runs from their folders (#221).
+    stop_what_is_left "$PORT $SECOND_PORT" "$STATE" "$SECOND_STATE"
+    stop_then_remove "" "$STATE" "$SECOND_STATE"
     exit "$status"
 }
 trap cleanup EXIT

@@ -218,6 +218,198 @@ final class AgentHistoryTests: XCTestCase {
         XCTAssertTrue(history("/nonexistent/place").isEmpty)
     }
 
+    // MARK: Deleting a conversation of Antigravity (#222)
+
+    private let antigravity = ".gemini/antigravity-cli"
+
+    /// Antigravity's list as it is written here: three conversations, and
+    /// keys AgentTerm does not know, at the top and inside an entry, with
+    /// numbers and spacing a JSON library would write another way.
+    private let antigravityList = """
+        {
+          "format_version": 3,
+          "conversations": {
+            "conv-1": {"is_internal": false, "summary": {"Title": "Plan the release", "UpdatedAt": "2026-11-10T17:00:22Z", "WorkspaceURIs": ["file:///Users/me/Dev/my.app"]}},
+            "conv-2": {"is_internal": false, "summary": {"Title": "Write the parser", "UpdatedAt": "2026-11-11T17:00:22Z", "WorkspaceURIs": ["file:///Users/me/Dev/my.app"]}, "x_unknown": {"ratio": 1.50, "big": 12345678901234567890}},
+            "conv-3": {"is_internal": false, "x_kept": [1,  2, {"a": null}], "summary": {"Title": "Tidy \\"the\\" README", "UpdatedAt": "2026-11-12T17:00:22Z", "WorkspaceURIs": ["file:///Users/me/Dev/my.app"]}}
+          },
+          "x_future": {"conversations": {"conv-2": "not the list"}, "order": ["conv-2", "conv-1"]}
+        }
+
+        """
+
+    private var antigravityListFile: URL { home.appendingPathComponent("\(antigravity)/cache/conversation_metadata.json") }
+
+    /// A home with Antigravity's list and what it keeps of each
+    /// conversation, and a trash of the test's own.
+    private func antigravityHome(list: String? = nil) throws -> URL {
+        let trash = home.appendingPathComponent("trash")
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        setenv(FileBrowser.trashVariable, trash.path, 1)
+        addTeardownBlock { unsetenv(FileBrowser.trashVariable) }
+        try FileManager.default.createDirectory(at: antigravityListFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try (list ?? antigravityList).write(to: antigravityListFile, atomically: true, encoding: .utf8)
+        for id in ["conv-1", "conv-2", "conv-3"] {
+            try write("\(antigravity)/brain/\(id)/.system_generated/logs/transcript_full.jsonl", [#"{"type":"USER_INPUT","source":"USER_EXPLICIT","content":"said in \#(id)"}"#])
+            try write("\(antigravity)/conversations/\(id).db", ["steps of \(id)"])
+            try write("\(antigravity)/annotations/\(id).pbtxt", ["title: \"\(id)\""])
+        }
+        return trash
+    }
+
+    /// Every file under the test's home, with what it holds.
+    private func everything() throws -> [String: Data] {
+        var files: [String: Data] = [:]
+        let root = home.resolvingSymlinksInPath()
+        for case let url as URL in FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])! {
+            if (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true {
+                files[String(url.resolvingSymlinksInPath().path.dropFirst(root.path.count))] = try Data(contentsOf: url)
+            }
+        }
+        return files
+    }
+
+    private func listed(_ id: String) throws -> Conversation {
+        try XCTUnwrap(history().first { $0.agent == "agy" && $0.sessionID == id })
+    }
+
+    /// HIST-26 (#222): a conversation of Antigravity is deleted: its entry
+    /// is taken out of Antigravity's list, what Antigravity keeps of that
+    /// one conversation is moved to the Trash, and everything else the
+    /// list holds stays byte for byte as it was.
+    func testAConversationOfAntigravityIsDeletedFromItsListAndToTheTrash() throws {
+        let trash = try antigravityHome()
+        let base = home.appendingPathComponent(antigravity)
+        XCTAssertEqual(Set(history().map(\.sessionID)), ["conv-1", "conv-2", "conv-3"])
+
+        XCTAssertNil(AgentHistory.delete(try listed("conv-2"), home: home.path))
+
+        // The list: the one line gone, nothing else touched.
+        let wanted = antigravityList.split(separator: "\n", omittingEmptySubsequences: false).filter { !$0.contains(#""conv-2": {"is_internal""#) }.joined(separator: "\n")
+        XCTAssertEqual(try String(contentsOf: antigravityListFile, encoding: .utf8), wanted)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: antigravityListFile)) as? [String: Any], "no longer JSON")
+        let before = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(antigravityList.utf8)) as? NSDictionary)
+        let entries = try XCTUnwrap(root["conversations"] as? [String: Any])
+        XCTAssertEqual(Set(entries.keys), ["conv-1", "conv-3"])
+        XCTAssertEqual(root["format_version"] as? Int, 3)
+        XCTAssertEqual(root["x_future"] as? NSDictionary, before["x_future"] as? NSDictionary, "an unknown key at the top changed")
+        for kept in ["conv-1", "conv-3"] {
+            XCTAssertEqual(entries[kept] as? NSDictionary, (before["conversations"] as? NSDictionary)?[kept] as? NSDictionary, "\(kept) changed")
+        }
+        XCTAssertEqual((entries["conv-3"] as? [String: Any])?["x_kept"] as? NSArray, [1, 2, ["a": NSNull()]], "an unknown key in an entry changed")
+        // Nothing left beside the list by the rewriting.
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: antigravityListFile.deletingLastPathComponent().path), ["conversation_metadata.json"])
+
+        // What was that one conversation's is in the Trash, the others' is not.
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: trash.path)), ["conv-2", "conv-2.db", "conv-2.pbtxt"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: trash.appendingPathComponent("conv-2/.system_generated/logs/transcript_full.jsonl").path))
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: base.appendingPathComponent("brain").path)), ["conv-1", "conv-3"])
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: base.appendingPathComponent("conversations").path)), ["conv-1.db", "conv-3.db"])
+        XCTAssertEqual(Set(history().map(\.sessionID)), ["conv-1", "conv-3"], "still listed")
+
+        // The last of the list, then the only one left: still JSON each time.
+        XCTAssertNil(AgentHistory.delete(try listed("conv-3"), home: home.path))
+        XCTAssertEqual(Set(history().map(\.sessionID)), ["conv-1"])
+        XCTAssertNil(AgentHistory.delete(try listed("conv-1"), home: home.path))
+        let emptied = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: antigravityListFile)) as? [String: Any], "no longer JSON")
+        XCTAssertEqual(emptied["conversations"] as? NSDictionary, [:])
+        XCTAssertEqual(emptied["x_future"] as? NSDictionary, before["x_future"] as? NSDictionary)
+        XCTAssertEqual(emptied["format_version"] as? Int, 3)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: base.appendingPathComponent("brain").path), [])
+    }
+
+    /// HIST-26 (#222): refused when Antigravity's list cannot be read, and
+    /// nothing is rewritten or moved.
+    func testAConversationOfAntigravityIsNotDeletedWhenItsListCannotBeRead() throws {
+        let trash = try antigravityHome()
+        let conversation = try listed("conv-2")
+        // Not there at all.
+        try FileManager.default.removeItem(at: antigravityListFile)
+        var before = try everything()
+        XCTAssertTrue(try XCTUnwrap(AgentHistory.delete(conversation, home: home.path)).hasPrefix("Antigravity's list of conversations could not be read, so nothing was deleted"))
+        XCTAssertEqual(try everything(), before)
+        // There, and not JSON: cut off while it was written.
+        try String(antigravityList.prefix(200)).write(to: antigravityListFile, atomically: true, encoding: .utf8)
+        before = try everything()
+        XCTAssertTrue(try XCTUnwrap(AgentHistory.delete(conversation, home: home.path)).hasPrefix("Antigravity's list of conversations is not written the way AgentTerm knows"))
+        XCTAssertEqual(try everything(), before)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: trash.path), [])
+    }
+
+    /// HIST-26 (#222): refused when the list has a shape AgentTerm does
+    /// not know, so that a later format is never rewritten.
+    func testAConversationOfAntigravityIsNotDeletedWhenItsListHasAnotherShape() throws {
+        let entry = #"{"is_internal": false, "summary": {"Title": "Write the parser", "UpdatedAt": "2026-11-11T17:00:22Z", "WorkspaceURIs": ["file:///Users/me/Dev/my.app"]}}"#
+        let trash = try antigravityHome()
+        let conversation = try listed("conv-2")
+        for other in [
+            // The conversations as a list, not by their ids.
+            #"{"conversations": [{"id": "conv-2", "summary": {"Title": "Write the parser"}}]}"#,
+            // An entry that is not an object.
+            #"{"conversations": {"conv-2": \#(entry), "conv-9": "elsewhere"}}"#,
+            // No conversations at the top; the list one level down.
+            #"{"version": 4, "data": {"conversations": {"conv-2": \#(entry)}}}"#,
+            // Not an object at all.
+            #"[{"conversations": {"conv-2": \#(entry)}}]"#,
+            // The same key twice: which one Antigravity reads is not known.
+            #"{"conversations": {"conv-2": \#(entry)}, "conversations": {"conv-2": \#(entry), "conv-1": \#(entry)}}"#,
+        ] {
+            try other.write(to: antigravityListFile, atomically: true, encoding: .utf8)
+            let before = try everything()
+            XCTAssertTrue(
+                try XCTUnwrap(AgentHistory.delete(conversation, home: home.path), "deleted from \(other)").hasPrefix("Antigravity's list of conversations is not written the way AgentTerm knows"),
+                other)
+            XCTAssertEqual(try everything(), before, other)
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: trash.path), [])
+    }
+
+    /// HIST-26 (#222): one that is not in the list is said to be gone
+    /// already, and only what is under Antigravity's own folder is ever
+    /// touched, whatever a client names.
+    func testAConversationOfAntigravityThatIsNotInItsListIsSaidToBeGone() throws {
+        let trash = try antigravityHome()
+        var conversation = try listed("conv-2")
+        let before = try everything()
+        conversation.sessionID = "conv-9"
+        conversation.source = nil
+        XCTAssertEqual(AgentHistory.delete(conversation, home: home.path), "It is gone from Antigravity's list already.")
+        XCTAssertEqual(try everything(), before)
+
+        // Forged: a file elsewhere, another conversation's folder, an id that leaves the folder.
+        try write("notes.jsonl", ["mine"])
+        let untouched = try everything()
+        var forged = try listed("conv-2")
+        forged.source = home.appendingPathComponent("notes.jsonl").path
+        XCTAssertEqual(AgentHistory.delete(forged, home: home.path), "That is not a conversation of Antigravity.")
+        forged.source = home.appendingPathComponent("\(antigravity)/brain/conv-1/.system_generated/logs/transcript_full.jsonl").path
+        XCTAssertEqual(AgentHistory.delete(forged, home: home.path), "That is not a conversation of Antigravity.")
+        forged.source = home.appendingPathComponent("\(antigravity)/brain/conv-2/../../../../notes.jsonl").path
+        XCTAssertEqual(AgentHistory.delete(forged, home: home.path), "That is not a conversation of Antigravity.")
+        for id in ["..", ".", "a/b", ""] {
+            forged = Conversation(agent: "agy", sessionID: id, title: "t", updatedAt: Date(), cwd: project, source: nil)
+            XCTAssertEqual(AgentHistory.delete(forged, home: home.path), "That is not a conversation of Antigravity.", id)
+        }
+        XCTAssertEqual(try everything(), untouched)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: trash.path), [])
+    }
+
+    /// HIST-26 (#222): when what is the conversation's cannot be moved to
+    /// the Trash, the list is put back as it was, and it says so.
+    func testAntigravitysListIsPutBackWhenTheTrashFails() throws {
+        _ = try antigravityHome()
+        let conversation = try listed("conv-2")
+        // A Trash that cannot be: a folder under what is a file.
+        try write("a-file", ["not a folder"])
+        setenv(FileBrowser.trashVariable, home.appendingPathComponent("a-file/trash").path, 1)
+        let before = try everything()
+        let said = try XCTUnwrap(AgentHistory.delete(conversation, home: home.path))
+        XCTAssertTrue(said.hasPrefix("It could not be moved to the Trash: "), said)
+        XCTAssertTrue(said.hasSuffix(" Antigravity's list was put back as it was."), said)
+        XCTAssertEqual(try everything(), before)
+        XCTAssertEqual(Set(history().map(\.sessionID)), ["conv-1", "conv-2", "conv-3"])
+    }
+
     func testDatesWithAnyFractionParse() {
         XCTAssertNotNil(AgentHistory.parseDate("2026-11-11T04:32:36Z"))
         XCTAssertNotNil(AgentHistory.parseDate("2026-11-11T04:32:36.5Z"))

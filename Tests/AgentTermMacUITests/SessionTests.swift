@@ -1,4 +1,5 @@
 import AgentTermProtocol
+import ApplicationServices
 import XCTest
 
 /// Starting sessions from the Mac app, and what it shows of the Mac.
@@ -556,5 +557,84 @@ final class SessionTests: MacUITestCase {
         app.press(.button("SSH"))
         app.wait(for: .button("build-server"), menus: true)
         XCTAssertFalse(app.nodes(menus: true).contains { $0.title.contains("internal") }, "a pattern is offered as a host")
+    }
+}
+
+/// LAUNCH-9 (#223): with the four agents installed, the buttons in the
+/// middle of an empty folder are seven, and do not fit in one row beside
+/// the side panel.
+final class LaunchButtonsTests: MacUITestCase {
+    /// Stand-ins for the two agents the other tests leave not installed.
+    /// They are only listed here, never started.
+    override func beforeTheHostStarts() throws {
+        for name in ["agy", "copilot"] {
+            let file = root.appendingPathComponent("agents").appendingPathComponent(name)
+            try "#!/bin/sh\nexit 0\n".write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
+    }
+
+    private static let titles = ["Claude Code", "Codex", "Antigravity", "Copilot CLI", "Shell", "Browser", "SSH"]
+
+    /// Where each button of the middle is: the one under the sentence, not
+    /// the header's of the same name.
+    private func middleButtons() -> [String: CGRect] {
+        guard let sentence = app.frame(of: .containing("Start an agent in this folder.")) else { return [:] }
+        var found: [String: CGRect] = [:]
+        for title in Self.titles {
+            found[title] = app.all(.button(title)).compactMap { MacDriver.frame($0.element) }.first { $0.minY >= sentence.maxY }
+        }
+        return found
+    }
+
+    /// The app's window at its smallest, 940 × 540, which is asked for by
+    /// name: nothing here relies on the window refusing a smaller one.
+    private func shrinkTheWindow() throws -> CGRect {
+        var value: CFTypeRef?
+        AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.pid), kAXMainWindowAttribute as CFString, &value)
+        let window = try XCTUnwrap(value.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }, "the app has no main window")
+        var wanted = CGSize(width: 940, height: 540)
+        let size = try XCTUnwrap(AXValueCreate(.cgSize, &wanted))
+        XCTAssertEqual(AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, size), .success, "the window was not resized")
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        return try XCTUnwrap(MacDriver.frame(window))
+    }
+
+    /// LAUNCH-9 (#223): each of the seven keeps its label whole on one
+    /// line, with the side panel open and the window at its smallest: as
+    /// wide as in a wide window, as tall as the shortest, inside the
+    /// window and over no other. Before the fix they were squeezed into
+    /// one row and their labels broke inside words ("Antigra/vity").
+    func testTheLaunchButtonsOfAnEmptyFolderKeepTheirLabelsOnOneLine() throws {
+        app.wait(for: .text("project, folder"), timeout: 15)
+        app.press(.id("folder-\(project.path)"))
+        app.wait(for: .containing("Start an agent in this folder."), timeout: 15)
+        app.wait("the seven buttons in the middle", timeout: 20) { self.middleButtons().count == Self.titles.count }
+        // As the window opens, each as wide as its label asks.
+        let wide = middleButtons()
+
+        app.press(.button("Git"))
+        app.wait(for: .id("worktree-picker"), timeout: 15)
+        let window = try shrinkTheWindow()
+        XCTAssertEqual(window.width, 940, accuracy: 1, "the window is not at its smallest width")
+        XCTAssertTrue(app.exists(.id("worktree-picker")), "the side panel is no longer open")
+        app.wait("the seven buttons still in the middle", timeout: 15) { self.middleButtons().count == Self.titles.count }
+        let narrow = middleButtons()
+        shot("launch-buttons")
+
+        let oneLine = try XCTUnwrap(narrow.values.map(\.height).min())
+        XCTAssertLessThan(oneLine, 44, "no button is one line tall")
+        for title in Self.titles {
+            let frame = try XCTUnwrap(narrow[title], "\(title) has no button in the middle")
+            // A second line would add its height, about 16 points; a menu's button may differ from a plain one by a point or two.
+            XCTAssertLessThan(frame.height, oneLine + 6, "\(title) takes more than one line: \(frame)")
+            XCTAssertEqual(frame.width, wide[title]?.width ?? 0, accuracy: 0.5, "\(title) is squeezed, its label cut or broken: \(frame)")
+            XCTAssertTrue(window.contains(frame), "\(title) is cut by the window \(window): \(frame)")
+            for other in Self.titles where other != title {
+                XCTAssertFalse(frame.intersects(narrow[other] ?? .null), "\(title) is over \(other)")
+            }
+        }
+        // They do not fit in one row there: on more than one, then.
+        XCTAssertGreaterThan(Set(narrow.values.map { $0.minY.rounded() }).count, 1, "seven buttons in one row of a window \(window.width) wide")
     }
 }

@@ -158,10 +158,12 @@ says names the device it runs on.
   worktree: merge its branch into the folder's
   and remove it (with its branch, for one AgentTerm made), open a pull
   request with `gh`, or throw it away, which asks first and says what is
-  not merged; the folder's own row has none. A pull request is offered
-  when the worktree's branch is known to have a remote to be pushed to,
-  which its changes say: on the Mac that is the worktree on show, on the
-  iPhone one whose changes were read. A merge that conflicts is
+  not merged; the folder's own row has none. A pull request can be opened
+  from the row of the worktree on show only, when its branch has a remote
+  to be pushed to, which its changes say; on every other row the entry is
+  off (#217). A worktree whose folder is missing has Throw Away… alone,
+  which makes git forget it, with its branch when asked (#217). Both are
+  the same on the Mac and on the iPhone. A merge that conflicts is
   left in the folder to be resolved and continued, or aborted, as any
   other, and the worktree is kept. A worktree a session runs in is not
   removed.
@@ -938,7 +940,10 @@ under 20% that is not charging turns amber.
   installer by itself. **Look Again** has the agents looked for again; once
   it is found, the sheet says so and starts it. Everywhere else, the menus,
   the empty folder's buttons and the iPhone, list the agents that are
-  installed only.
+  installed only. The buttons in the middle of an empty folder keep each
+  label whole on one line: when they do not fit in one row, with the four
+  agents and the side panel open, they go onto a second, centred as the
+  first (#223).
 - An **SSH** menu lists the hosts of the Mac's `~/.ssh/config`, the files it
   includes too, and opens `ssh <host>` as a session with one click. Entries
   that are patterns (`*`, `?`, `!`) are not hosts and are left out. The menu
@@ -982,8 +987,8 @@ conversation over to a neighbouring project.
 
 Like a code editor: a bar of places at the left edge, then three panes. The
 bar has the window's places, as the iPhone has its tabs: **Sessions**,
-**Inbox** (with how many items it holds), **History** and **Schedules** at
-its top, **Settings** (⌘,) at its foot. The
+**Inbox** (with how many items it holds), **History**, **Memory** and
+**Schedules** at its top, **Settings** (⌘,) at its foot. The
 place shown is marked; pressing it again hides its list, and pressing it
 once more shows it. The toolbar follows the panes: the launch buttons for
 the agents are in the middle, followed by the pairing button, which is filled so it
@@ -1126,7 +1131,8 @@ panel.
   the place it is dropped in, pinned among the pinned. Tab groups, with
   their names and colors, were taken away (#127): the user's shells,
   pages, diffs and files are each held in one tab instead.
-- **Right: side panel**, with three tabs, Git, History and Files. The panel can be hidden. It is there in Sessions only, and so is its button: in History, Schedules and Settings what is in the middle is what the window is about.
+- **Right: side panel**, with four tabs, Git, History, Files and Memory (see
+  "The agents' memory"). The panel can be hidden. It is there in Sessions only, and so is its button: in History, Schedules and Settings what is in the middle is what the window is about.
   - **History** of the panel: the conversations each agent had in the
     selected folder only; conversations that ran in a subfolder belong to
     that subfolder. One picked there is shown in a sheet over Sessions, with
@@ -1345,20 +1351,93 @@ panel.
       **Copy**, which copies it as it was written (#50).
     - **Delete…** deletes the agent's own record of the conversation,
       after two questions: its file is moved to the Trash of the Mac. A
-      conversation a session is having is not deleted; Antigravity's
-      cannot be, and it says why.
+      conversation a session is having is not deleted. Antigravity keeps
+      one list of all its conversations: one of its own is taken out of
+      that list, and what Antigravity keeps of it is moved to the Trash,
+      from where it can be put back (#222). When the list cannot be
+      read, or is not written the way AgentTerm knows, it is refused with
+      the reason, the list left as it is and nothing moved.
     - **Select**, above the list, picks conversations to delete together
       (#50): a click ticks one instead of opening it, and **Delete N…**
       deletes those picked after two questions. In History, not in a
       folder's list, **Delete All…** deletes every conversation on the Mac,
       after two questions too. Either way one a session is having stays,
-      as do Antigravity's; how many were kept is said, and nothing more
-      when none was. **Done** ends the picking.
+      as does one that could not be deleted; Antigravity's are deleted
+      as the others' are (#222). How many were kept is said, and nothing
+      more when none was. **Done** ends the picking.
     - **Show Older Conversations**, at the end of a full list, brings the
       next 200.
 
     History's list is wider than the other places' lists, for the titles
     and what a search found in them (#50); it can be made wider still.
+
+### The agents' memory
+
+An agent keeps what it is told to remember, and what it wrote down by
+itself, in files: its instructions for a folder, the user's own for every
+folder, and the notes it saved from earlier sessions. They change how it
+behaves in every later session. **Memory** shows them, to be read, changed
+and deleted (#220). It is not about the processor or the memory of the Mac.
+
+- **What is a memory.** Only a file AgentTerm knows an agent to read, and
+  only one that exists: in a folder, `CLAUDE.md`, `CLAUDE.local.md`,
+  `.claude/CLAUDE.md` and `.claude/rules/*.md` (Claude Code), `AGENTS.md`
+  and `AGENTS.override.md` (Codex), `GEMINI.md`, `AGENTS.md` and
+  `.agents/rules/*.md` (Antigravity), `.github/copilot-instructions.md`,
+  `.github/instructions/*.instructions.md`, `AGENTS.md`, `CLAUDE.md`,
+  `GEMINI.md` and `.claude/rules/*.md` (Copilot CLI), and the notes Claude
+  Code writes by itself for the folder, `memory/MEMORY.md` first; the
+  user's own, under `~/.claude`, `~/.codex`, `~/.gemini` and `~/.copilot`.
+  `docs/DESIGN.md` has the whole list and how each was found. A file
+  several agents read is one memory that names them all. Nothing is called
+  an agent's memory that it is not known to read.
+- **What is not shown is said**, under each list: what Codex and
+  Antigravity save by themselves is not known; Copilot CLI keeps what it
+  saves on GitHub, not in a file; files in the folders above a folder or
+  inside it are not listed, though an agent may read them too.
+- **Memory**, the place in the bar at the left: the memories of every
+  folder in the list, each folder a group under its name, then **Yours,
+  for Every Folder**. Its list is wide, as History's is. One picked is
+  shown in the middle of the window.
+- **Memory** of the side panel: the memories of the folder on show, **This
+  Folder**, and the user's own, **Yours, for Every Folder**, as two groups.
+  One picked is shown in a sheet over Sessions; Sessions stays.
+- **A row** says the file's name inside its folder (`~/…` for the user's
+  own), which agents read it ("Read by Claude Code and Copilot CLI"), when
+  it changed, "Written by Claude Code itself" for what an agent writes by
+  itself, and "Changed, not saved" while it has a change that is not
+  saved; its tip is where the file is.
+- **A memory** is shown whole: who reads it, when it changed and its size,
+  its name, where it is, and its text in the app's own editor.
+  **Preview Markdown** shows it with its Markdown rendered and **Show as
+  Text** as it is written, the words History uses; the choice is kept.
+- **Changed.** The text is changed in the editor and written with **Save**
+  to the file the agents read, all at once; **Revert** drops the change and
+  reads the file again. Nothing is written before Save, and a change is
+  kept while the app runs when another memory is looked at. A file that
+  changed on the Mac after it was read is not written over: the Mac says
+  so with the memory, and Revert reads it again.
+- **Deleted.** **Delete…**, on the memory or in its row's menu, asks first:
+  "Delete “CLAUDE.md”?", which agents read it, and that the file is moved
+  to the Trash of the Mac, from where it can be put back. Every device is
+  told and drops its row.
+- **Not more.** A memory is not added, and not moved between a folder's
+  and the user's own. AgentTerm never changes or deletes one by itself.
+- **Refused in words.** A file that is not in the Mac's own list for the
+  folder is not read, written or deleted, whatever a device asks; a memory
+  that is gone, is not text or could not be written says so at once.
+- **When it is read.** Only while Memory is open, in the place or the
+  panel: asked for when it is opened, and again every 15 seconds while it
+  is shown and the app is in front. When a running agent reads a changed
+  memory again is its own matter and is not known here.
+- **On the iPhone** the folder's screen has **Memory** as its fourth tab,
+  beside Git, History and Files: the folder's memories and the user's own
+  as the same two groups, with the same rows and what is not shown under
+  them; pulled down, it is read again. One picked opens in a sheet: read,
+  with **Preview Markdown** and **Show as Text**, changed in the iPhone's
+  editor with **Save** and **Revert**, and deleted with the same question.
+  Closing with a change that is not saved asks first. The iPhone has no
+  list of every folder's memories: each folder's screen has its own.
 
 ### What the app reports
 
@@ -1692,7 +1771,7 @@ button at the top right of Sessions goes back to the list of Macs.
   folder only, as on the Mac; every conversation is in the History tab; both
   searched, grouped and filtered, a conversation read as a transcript
   ("Read the Transcript") and deleted as on the Mac (#46). **Files**: see
-  Files above.
+  Files above. **Memory**: see "The agents' memory" above.
 - A conversation can be resumed in its agent, or handed off to another
   installed agent. The handoff sheet shows the prompt the agent will start
   with, which can be edited and reset, and takes optional instructions. Both

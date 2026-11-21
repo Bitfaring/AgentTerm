@@ -96,12 +96,11 @@ private struct WorktreeList: View {
         close()
     }
 
-    /// Whether a pull request can be opened for a worktree: its branch has
-    /// somewhere to be pushed to. That is known of the worktree on show
-    /// only, whose changes are read; of another it is not known, and the
-    /// entry is off rather than guessed.
+    /// Whether a pull request can be opened for a worktree: the one on show
+    /// only, whose changes are read and say whether its branch has
+    /// somewhere to be pushed to. The rule is the iPhone's too.
     private func canOpenPullRequest(_ worktree: WorktreeInfo) -> Bool {
-        worktree.path == shown.path && (model.diff?.pushRemote != nil || model.diff?.upstream != nil)
+        worktree.canOpenPullRequest(onShow: worktree.path == shown.path, hasRemote: model.diff?.pushRemote != nil || model.diff?.upstream != nil)
     }
 
     var body: some View {
@@ -224,13 +223,21 @@ private struct WorktreeRow: View {
             .accessibilityIdentifier("worktree-chip-" + worktree.chipTitle)
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
             .accessibilityAction { pick() }
-            if !worktree.isMain {
+            // None for the folder's own; Throw Away… alone for one whose folder is missing.
+            if !worktree.rowActions.isEmpty {
                 Menu {
-                    Button(WorktreeWords.merge(into: main)) { finish(.merge) }
-                        .disabled(worktree.changed > 0 || worktree.ahead == 0)
-                    Button(WorktreeWords.pullRequest) { finish(.pullRequest) }
-                        .disabled(!canOpenPullRequest)
-                    Button(WorktreeWords.throwAway, role: .destructive, action: discard)
+                    ForEach(worktree.rowActions, id: \.self) { action in
+                        switch action {
+                        case .merge:
+                            Button(WorktreeWords.merge(into: main)) { finish(.merge) }
+                                .disabled(!worktree.canMerge)
+                        case .pullRequest:
+                            Button(WorktreeWords.pullRequest) { finish(.pullRequest) }
+                                .disabled(!canOpenPullRequest)
+                        case .throwAway:
+                            Button(WorktreeWords.throwAway, role: .destructive, action: discard)
+                        }
+                    }
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
                 }

@@ -22,7 +22,7 @@ struct RootView: View {
             if model.showSidebar {
                 // History's list of conversations is the place's own and
                 // reads better wide (#50); the others' lists are narrow.
-                let wide = model.place == .history
+                let wide = model.place == .history || model.place == .memory
                 PlaceList()
                     .frame(minWidth: wide ? 340 : 210, idealWidth: wide ? 420 : 250, maxWidth: wide ? 640 : 380)
             }
@@ -204,6 +204,7 @@ private struct WindowQuestions: ViewModifier {
                 Text("The branch does not follow a branch on a remote yet. It is pushed as \(push.remote)/\(push.branch), which it follows from then on.")
             }
             .modifier(DeleteConversationQuestions(store: model.historyStore))
+            .modifier(MemoryWindow(store: model.memoryStore))
             .modifier(CloseGroupQuestion())
     }
 }
@@ -328,6 +329,8 @@ struct BrowserLaunch: View {
                         .foregroundStyle(Theme.accent(for: "browser"))
                     Text("Browser")
                         .font(.system(size: large ? 13 : 12, weight: .medium))
+                        .lineLimit(large ? 1 : nil)
+                        .fixedSize(horizontal: large, vertical: false)
                     Image(systemName: "chevron.down")
                         .font(.system(size: large ? 9 : 8, weight: .bold))
                         .foregroundStyle(.secondary)
@@ -375,6 +378,8 @@ struct SSHMenu: View {
                         .foregroundStyle(Theme.accent(for: "ssh"))
                     Text("SSH")
                         .font(.system(size: large ? 13 : 12, weight: .medium))
+                        .lineLimit(large ? 1 : nil)
+                        .fixedSize(horizontal: large, vertical: false)
                     Image(systemName: "chevron.down")
                         .font(.system(size: large ? 9 : 8, weight: .bold))
                         .foregroundStyle(.secondary)
@@ -452,8 +457,11 @@ struct LaunchButton: View {
                         .font(.system(size: large ? 12 : 10.5, weight: .semibold))
                         .foregroundStyle(.secondary)
                 } else {
+                    // In the middle of an empty folder, whole and on one line (#223).
                     Text(title)
                         .font(.system(size: large ? 13 : 12, weight: .medium))
+                        .lineLimit(large ? 1 : nil)
+                        .fixedSize(horizontal: large, vertical: false)
                 }
             }
             .opacity(notInstalled ? 0.6 : 1)
@@ -777,6 +785,7 @@ private struct PlaceList: View {
         case .sessions: SidebarView()
         case .inbox: InboxList()
         case .history: HistorySidebar()
+        case .memory: MemorySidebar()
         case .schedules: SchedulesSidebar()
         case .settings: SettingsSections()
         }
@@ -856,6 +865,7 @@ private struct PlaceInTheMiddle: View {
         case .sessions: EmptyView()
         case .inbox: InboxDetail().background(Theme.canvas)
         case .history: ConversationDetail()
+        case .memory: MemoryDetail()
         case .schedules: SchedulesView().background(Theme.canvas)
         case .settings: SettingsPane()
         }
@@ -928,6 +938,48 @@ struct ForeignSizeBanner: View {
     }
 }
 
+/// Lays its views out in a row, each as wide as it asks to be, and goes on
+/// in a row below when the next does not fit; every row is centred. A view
+/// is never squeezed: a label in it stays whole, on its one line (#223).
+struct CenteredRows: Layout {
+    var spacing: CGFloat = 10
+
+    /// The rows for a width: which views are in each, and what each takes.
+    private func rows(of subviews: Subviews, in width: CGFloat) -> [(items: [(index: Int, size: CGSize)], size: CGSize)] {
+        var rows: [(items: [(index: Int, size: CGSize)], size: CGSize)] = []
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            if let last = rows.indices.last, rows[last].size.width + spacing + size.width <= width {
+                rows[last].items.append((index, size))
+                rows[last].size.width += spacing + size.width
+                rows[last].size.height = max(rows[last].size.height, size.height)
+            } else {
+                // The first of a row is in it however wide: it has no row to go on to.
+                rows.append(([(index, size)], size))
+            }
+        }
+        return rows
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(of: subviews, in: proposal.width ?? .infinity)
+        let height = rows.reduce(0) { $0 + $1.size.height } + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: rows.map(\.size.width).max() ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(of: subviews, in: bounds.width) {
+            var x = bounds.midX - row.size.width / 2
+            for item in row.items {
+                subviews[item.index].place(at: CGPoint(x: x, y: y + row.size.height / 2), anchor: .leading, proposal: .unspecified)
+                x += item.size.width + spacing
+            }
+            y += row.size.height + spacing
+        }
+    }
+}
+
 struct WelcomeView: View {
     @EnvironmentObject private var model: AppModel
 
@@ -951,7 +1003,10 @@ struct WelcomeView: View {
                     .controlSize(.large)
                     .keyboardShortcut(.defaultAction)
             }
-            HStack(spacing: 10) {
+            // In rows, not one row: seven buttons do not fit beside an open
+            // side panel, and squeezed into one their labels broke inside
+            // words (#223).
+            CenteredRows(spacing: 10) {
                 ForEach(model.installedAgents) { agent in
                     LaunchButton(title: agent.name, id: agent.id, large: true) { model.launch(agent) }
                         .contextMenu { WorktreeLaunchItem(agent: agent) }

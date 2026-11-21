@@ -96,12 +96,14 @@ final class HistoryTests: XCTestCase {
     }
 
     /// HIST-24 (#50): the two questions before several conversations are
-    /// deleted, those picked or every one, and what is said after.
+    /// deleted, those picked or every one, and what is said after; none
+    /// of it says Antigravity's are kept (#222).
     func testTheQuestionsBeforeSeveralConversationsAreDeleted() {
         XCTAssertEqual(DeleteConversationsQuestion(count: 1, again: false).title, "Delete 1 conversation?")
         XCTAssertEqual(DeleteConversationsQuestion(count: 3, again: false).title, "Delete 3 conversations?")
         let asked = DeleteConversationsQuestion(count: 3, again: false).message
-        XCTAssertTrue(asked.contains("One a session is having stays, as do Antigravity's"))
+        XCTAssertTrue(asked.hasSuffix("One a session is having stays."))
+        XCTAssertFalse(asked.contains("Antigravity"), "it says Antigravity's stay, which are deleted as the others are (#222)")
         XCTAssertFalse(asked.lowercased().contains("pinned"), "it speaks of pinned ones, which are gone (#219)")
         XCTAssertEqual(DeleteConversationsQuestion(count: nil, again: false).title, "Delete every conversation on this Mac?")
         XCTAssertEqual(DeleteConversationsQuestion(count: 1, again: true).confirm, "Delete Conversation")
@@ -109,6 +111,8 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(DeleteConversationsQuestion(count: nil, again: true).confirm, "Delete Every Conversation")
         XCTAssertTrue(DeleteConversationsQuestion(count: nil, again: true).message.contains("every conversation on this Mac can no longer be resumed"))
         XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 1, kept: 0), "1 conversation was deleted.")
-        XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 0, kept: 1), "0 conversations were deleted. 1 was kept: having a session, or of Antigravity.")
+        XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 0, kept: 1), "0 conversations were deleted. 1 was kept: a session is having it, or it could not be deleted.")
+        XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 2, kept: 2), "2 conversations were deleted. 2 were kept: a session is having them, or they could not be deleted.")
+        XCTAssertFalse(DeleteConversationsQuestion.done(deleted: 2, kept: 2).contains("Antigravity"))
     }
 }

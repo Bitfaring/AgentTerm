@@ -97,12 +97,12 @@ private struct WorktreesSheet: View {
         close()
     }
 
-    /// Whether a pull request can be opened for a worktree: its branch has
-    /// somewhere to be pushed to, which its changes say once they were
-    /// read. Of one whose changes were not read it is not known, and the
-    /// entry is off rather than guessed.
+    /// Whether a pull request can be opened for a worktree: the one on show
+    /// only, whose changes are read and say whether its branch has
+    /// somewhere to be pushed to. The rule is the Mac's too.
     private func canOpenPullRequest(_ worktree: WorktreeInfo) -> Bool {
-        model.diffs[worktree.path]?.pushRemote != nil || model.diffs[worktree.path]?.upstream != nil
+        let diff = model.diffs[worktree.path]
+        return worktree.canOpenPullRequest(onShow: worktree.path == shown.path, hasRemote: diff?.pushRemote != nil || diff?.upstream != nil)
     }
 
     var body: some View {
@@ -164,13 +164,21 @@ private struct WorktreesSheet: View {
             .accessibilityLabel("\(worktree.chipTitle), \(worktree.chipHelp)")
             .accessibilityIdentifier("worktree-chip-" + worktree.chipTitle)
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-            if !worktree.isMain {
+            // None for the folder's own; Throw Away… alone for one whose folder is missing.
+            if !worktree.rowActions.isEmpty {
                 Menu {
-                    Button(WorktreeWords.merge(into: list.first)) { finish(worktree, .merge, deleteBranch: worktree.isAgentTerm) }
-                        .disabled(worktree.changed > 0 || worktree.ahead == 0)
-                    Button(WorktreeWords.pullRequest) { finish(worktree, .pullRequest, deleteBranch: false) }
-                        .disabled(!canOpenPullRequest(worktree))
-                    Button(WorktreeWords.throwAway, role: .destructive) { discarding = worktree }
+                    ForEach(worktree.rowActions, id: \.self) { action in
+                        switch action {
+                        case .merge:
+                            Button(WorktreeWords.merge(into: list.first)) { finish(worktree, .merge, deleteBranch: worktree.isAgentTerm) }
+                                .disabled(!worktree.canMerge)
+                        case .pullRequest:
+                            Button(WorktreeWords.pullRequest) { finish(worktree, .pullRequest, deleteBranch: false) }
+                                .disabled(!canOpenPullRequest(worktree))
+                        case .throwAway:
+                            Button(WorktreeWords.throwAway, role: .destructive) { discarding = worktree }
+                        }
+                    }
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold)).frame(width: 30, height: 30)
                 }

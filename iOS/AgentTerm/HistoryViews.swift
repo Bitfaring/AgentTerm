@@ -36,17 +36,14 @@ struct TranscriptScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button(role: .destructive) {
-                        deleting = conversation
-                    } label: {
-                        Label("Delete…", systemImage: "trash")
-                    }
+                // In view, not in a menu: it is all there is here (#219), as on the Mac.
+                Button(role: .destructive) {
+                    deleting = conversation
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Label("Delete…", systemImage: "trash")
                 }
-                .accessibilityLabel("More")
-                .accessibilityIdentifier("conversation-more")
+                .accessibilityLabel("Delete…")
+                .accessibilityIdentifier("conversation-delete")
             }
         }
         .task(id: conversation.id) { model.readConversation(conversation) }

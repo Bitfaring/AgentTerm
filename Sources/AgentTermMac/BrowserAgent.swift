@@ -276,14 +276,14 @@ extension AppModel {
     /// Whether a picture is taken of a tab's page once it stands still:
     /// where it has more pixels than what is streamed, and taking it leaves
     /// what the Mac shows of the page as it is, the page shown as itself or
-    /// as a device with the pixels of the screen it is on.
-    /// `AGENTTERM_STILLS_OF_ANY_PAGE`, set, has one taken of a page shown
-    /// as any device, to try what it does to the Mac's (#100, #107).
+    /// as a device with the pixels of the screen it is on. A page shown as
+    /// a device of other pixels than the screen's stays as streamed: a
+    /// picture taken of it shakes the Mac's page (#100), which the owner
+    /// decided against (2026-11-21, #107).
     private static func takesStills(of tab: BrowserTab) -> Bool {
         guard let screen = tab.container.window.map({ Double($0.backingScaleFactor) }) else { return false }
         let device = tab.emulating.flatMap { $0.width > 0 && $0.height > 0 ? $0.scale : nil }
         guard PageStills.isSharper(device: device, screen: screen) else { return false }
-        if ProcessInfo.processInfo.environment["AGENTTERM_STILLS_OF_ANY_PAGE"].map({ !$0.isEmpty }) ?? false { return true }
         return PageStills.leavesThePageAsItIs(device: device, screen: screen)
     }
 

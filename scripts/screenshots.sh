@@ -48,6 +48,7 @@ PORT=7790
 # The demo project's page, as a development server serves it, which the
 # agent opens in AgentTerm's browser.
 WEB_PORT=7791
+ports_must_be_free "$PORT" "$WEB_PORT"
 # Not in the temporary folder: its path has a symbolic link in it, and a
 # file is shown by its place in the project, which it is not found to be in
 # when the two are named differently.
@@ -194,7 +195,12 @@ WEB=$!
 MAC=""
 cleanup() {
     local status=$?
-    stop_then_remove "$MAC $DAEMON $WEB" "$ROOT"
+    # The app first, and gone before its host is stopped: an app that
+    # loses its host starts the one in its bundle (#221).
+    stop_then_remove "$MAC"
+    stop_then_remove "$DAEMON $WEB"
+    stop_what_is_left "$PORT $WEB_PORT" "$ROOT"
+    stop_then_remove "" "$ROOT"
     defaults delete "$IDENTIFIER" >/dev/null 2>&1 || true
     [ -n "${DEVICE:-}" ] && xcrun simctl status_bar "$DEVICE" clear 2>/dev/null || true
     [ -n "${IPAD_DEVICE:-}" ] && xcrun simctl status_bar "$IPAD_DEVICE" clear 2>/dev/null || true
@@ -227,7 +233,7 @@ if [ -n "$DO_MAC" ]; then
     # opens when the stand-in agents say they are not set up (#155): asked
     # not to show, in this copy's own preferences.
     defaults write "$IDENTIFIER" onboarding.hidden -bool true
-    HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_NO_SYSTEM_NOTIFICATIONS=1 "$APP/AgentTerm" > "$STATE/mac.log" 2>&1 &
+    HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_NO_SYSTEM_NOTIFICATIONS=1 AGENTTERM_LOCAL_ONLY=1 "$APP/AgentTerm" > "$STATE/mac.log" 2>&1 &
     MAC=$!
     AGENTTERM_SHOTS_PID="$MAC" part "the Mac app's pictures" swift test --skip-build --filter "AgentTermMacUITests.ScreenshotTests/testPart1"
     kill "$MAC" 2>/dev/null || true
@@ -287,7 +293,7 @@ if [ -n "$DO_IPHONE$DO_IPAD" ]; then
     [ -z "$DO_IPAD" ] || pictures_on "$IPAD_DEVICE" "iPad" "$SHOTS/ipad"
     # Started again once the terminals' pictures are taken, so that no
     # session was at the Mac's size for them; the agent opens its page.
-    HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_NO_SYSTEM_NOTIFICATIONS=1 "$APP/AgentTerm" > "$STATE/mac.log" 2>&1 &
+    HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_NO_SYSTEM_NOTIFICATIONS=1 AGENTTERM_LOCAL_ONLY=1 "$APP/AgentTerm" > "$STATE/mac.log" 2>&1 &
     MAC=$!
     part "the agent's page" swift test --skip-build --filter "AgentTermMacUITests.ScreenshotTests/testPart3"
     [ -z "$DO_IPHONE" ] || page_on "$DEVICE" "iPhone" "$SHOTS/ios" "iPhone 16 Pro Max"

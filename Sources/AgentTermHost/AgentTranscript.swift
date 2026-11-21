@@ -320,6 +320,9 @@ extension AgentHistory {
     /// Moves a conversation's record to the Trash, so that its agent no
     /// longer has it. Nil when done, or why it was not.
     public static func delete(_ conversation: Conversation, home: String = NSHomeDirectory()) -> String? {
+        // Antigravity keeps one list for all its conversations, not a file
+        // for each: its own way (#222).
+        if conversation.agent == "agy" { return deleteOfAntigravity(conversation, home: home) }
         guard let source = conversation.source else { return "This conversation has no file of its own to delete." }
         // As real paths, the folder a file is in resolved rather than the
         // file, which may be gone: a link on the way would otherwise make
@@ -340,8 +343,6 @@ extension AgentHistory {
             // Its folder: the events, and what names the conversation.
             guard path.hasPrefix(home + "/.copilot/session-state/"), path.hasSuffix("/events.jsonl") else { return "That is not a conversation of Copilot." }
             target = (path as NSString).deletingLastPathComponent
-        case "agy":
-            return "Antigravity keeps its list of conversations in a file of its own, which AgentTerm does not rewrite: this one is deleted in Antigravity."
         default:
             return "Conversations of this agent cannot be deleted here."
         }
@@ -351,6 +352,237 @@ extension AgentHistory {
             return nil
         } catch {
             return "It could not be moved to the Trash: \(error.localizedDescription)"
+        }
+    }
+}
+
+// MARK: Deleting a conversation of Antigravity (#222)
+
+extension AgentHistory {
+    private static let notOfAntigravity = "That is not a conversation of Antigravity."
+    private static let antigravityListUnknown =
+        "Antigravity's list of conversations is not written the way AgentTerm knows, so it was left as it is: delete this one in Antigravity."
+
+    /// Takes a conversation out of Antigravity's list,
+    /// `cache/conversation_metadata.json`, and moves what Antigravity keeps
+    /// of that one conversation to the Trash: its folder under `brain`, its
+    /// steps under `conversations` and its title under `annotations`
+    /// (Antigravity 1.5.12). Nil when done, or why it was not.
+    ///
+    /// The list is the one file of an agent's that AgentTerm rewrites. Only
+    /// the bytes of the one entry are taken out, so that everything else it
+    /// holds stays as Antigravity wrote it, and it is refused, nothing
+    /// written, whenever the file is not of the shape known here.
+    private static func deleteOfAntigravity(_ conversation: Conversation, home: String) -> String? {
+        let id = conversation.sessionID
+        // As real paths, as for the other agents: only what is under
+        // Antigravity's own folder, whatever a client sends.
+        let base = URL(fileURLWithPath: home, isDirectory: true).resolvingSymlinksInPath().path + "/.gemini/antigravity-cli"
+        guard isSafeIdentifier(id), id != ".", id != ".." else { return notOfAntigravity }
+        if let source = conversation.source {
+            let file = URL(fileURLWithPath: source).standardizedFileURL
+            let path = file.deletingLastPathComponent().resolvingSymlinksInPath().appendingPathComponent(file.lastPathComponent).path
+            guard path.hasPrefix(base + "/brain/\(id)/") else { return notOfAntigravity }
+        }
+        let list = URL(fileURLWithPath: base + "/cache/conversation_metadata.json")
+        guard list.resolvingSymlinksInPath().path == list.path else { return notOfAntigravity }
+        // What is this conversation's and no other's.
+        var own: [String] = []
+        for (folder, name) in [("conversations", id + ".db"), ("conversations", id + ".db-wal"), ("conversations", id + ".db-shm"), ("annotations", id + ".pbtxt"), ("brain", id)] {
+            let path = base + "/" + folder + "/" + name
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            guard URL(fileURLWithPath: base + "/" + folder).resolvingSymlinksInPath().path == base + "/" + folder else { return notOfAntigravity }
+            own.append(path)
+        }
+
+        let before: Data
+        do {
+            before = try Data(contentsOf: list)
+        } catch {
+            return "Antigravity's list of conversations could not be read, so nothing was deleted: \(reason(error)) Delete this one in Antigravity."
+        }
+        guard let root = (try? JSONSerialization.jsonObject(with: before)) as? [String: Any], let entries = root["conversations"] as? [String: Any],
+            entries.values.allSatisfy({ $0 is [String: Any] })
+        else { return antigravityListUnknown }
+        guard entries[id] != nil else { return "It is gone from Antigravity's list already." }
+        // Read again as any JSON reader would, what was written must be
+        // what was there without the one entry, and nothing else: if it is
+        // not, the file is not what the cutting took it for.
+        var wanted = root
+        wanted["conversations"] = entries.filter { $0.key != id }
+        guard let after = JSONMembers.removing(id, fromObject: "conversations", of: before),
+            let written = (try? JSONSerialization.jsonObject(with: after)) as? [String: Any], (written as NSDictionary).isEqual(to: wanted)
+        else { return antigravityListUnknown }
+
+        // The list first, the Trash after. Everything that can be refused
+        // is refused before anything is moved, and the time between
+        // reading the list and replacing it, in which Antigravity might
+        // write its own, is as short as it can be. When the Trash then
+        // fails, the list is put back as it was. The other way round, a
+        // list that could not be rewritten would leave a conversation
+        // listed whose record is in the Trash, and nothing here can take
+        // it back out of there.
+        do {
+            try replace(list, holding: before, with: after)
+        } catch {
+            return "Antigravity's list of conversations could not be rewritten, so nothing was deleted: \(reason(error))"
+        }
+        do {
+            for path in own { try FileBrowser.trash(path) }
+            return nil
+        } catch {
+            let problem = "It could not be moved to the Trash: \(reason(error))"
+            do {
+                try replace(list, holding: after, with: before)
+                return problem + " Antigravity's list was put back as it was."
+            } catch {
+                return problem + " It is out of Antigravity's list, and what is left of it is in \(base)."
+            }
+        }
+    }
+
+    /// Why it failed, in words: an error of the host's own says them itself.
+    private static func reason(_ error: Error) -> String {
+        (error as? FileBrowserError)?.description ?? error.localizedDescription
+    }
+
+    /// Replaces a file that still holds `expected`: written whole beside
+    /// it, then moved into its place, which a reader sees as the old file
+    /// or the new one and never as a part of either.
+    private static func replace(_ file: URL, holding expected: Data, with data: Data) throws {
+        let beside = file.deletingLastPathComponent().appendingPathComponent(".\(file.lastPathComponent).agentterm-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: beside) }
+        try data.write(to: beside)
+        if let permissions = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] {
+            try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: beside.path)
+        }
+        // Its agent wrote it meanwhile: that is not written over.
+        guard try Data(contentsOf: file) == expected else {
+            throw FileBrowserError.failed("Antigravity changed it meanwhile. Try again.")
+        }
+        guard rename(beside.path, file.path) == 0 else {
+            throw FileBrowserError.failed(String(cString: strerror(errno)))
+        }
+    }
+}
+
+/// Where the members of a JSON object are in its bytes, so that one can be
+/// taken out and every other byte left as it was written: a JSON library
+/// that reads and writes the whole would order the keys, space them and
+/// write the numbers its own way.
+enum JSONMembers {
+    struct Member {
+        let key: String
+        /// Its key's opening quote.
+        let start: Int
+        let value: Int
+        /// After its value.
+        let end: Int
+    }
+
+    /// `data` without the member `key` of the object that is the member
+    /// `name` of the top object; nil when it is not there or the bytes are
+    /// not read as that.
+    static func removing(_ key: String, fromObject name: String, of data: Data) -> Data? {
+        var bytes = [UInt8](data)
+        // A key written twice is not read here: which of the two its
+        // owner reads is not known.
+        guard let top = members(of: bytes, objectAt: skipSpace(bytes, 0)), top.members.filter({ $0.key == name }).count == 1,
+            let object = top.members.first(where: { $0.key == name }), let inside = members(of: bytes, objectAt: object.value),
+            inside.members.filter({ $0.key == key }).count == 1, let index = inside.members.firstIndex(where: { $0.key == key })
+        else { return nil }
+        let member = inside.members[index]
+        if index + 1 < inside.members.count {
+            // Up to the next one, which takes its place.
+            bytes.removeSubrange(member.start..<inside.members[index + 1].start)
+        } else if index > 0 {
+            // The last: with the comma before it.
+            bytes.removeSubrange(inside.members[index - 1].end..<member.end)
+        } else {
+            // The only one: an empty object is left.
+            bytes.removeSubrange((object.value + 1)..<inside.close)
+        }
+        return Data(bytes)
+    }
+
+    /// The members of the object that opens at `open`, and where it closes.
+    static func members(of bytes: [UInt8], objectAt open: Int) -> (members: [Member], close: Int)? {
+        guard open < bytes.count, bytes[open] == UInt8(ascii: "{") else { return nil }
+        var found: [Member] = []
+        var index = skipSpace(bytes, open + 1)
+        if index < bytes.count, bytes[index] == UInt8(ascii: "}") { return ([], index) }
+        while true {
+            guard let keyEnd = endOfString(bytes, index),
+                let key = (try? JSONSerialization.jsonObject(with: Data(bytes[index..<keyEnd]), options: .fragmentsAllowed)) as? String
+            else { return nil }
+            let colon = skipSpace(bytes, keyEnd)
+            guard colon < bytes.count, bytes[colon] == UInt8(ascii: ":") else { return nil }
+            let value = skipSpace(bytes, colon + 1)
+            guard let end = endOfValue(bytes, value) else { return nil }
+            found.append(Member(key: key, start: index, value: value, end: end))
+            let next = skipSpace(bytes, end)
+            guard next < bytes.count else { return nil }
+            if bytes[next] == UInt8(ascii: "}") { return (found, next) }
+            guard bytes[next] == UInt8(ascii: ",") else { return nil }
+            index = skipSpace(bytes, next + 1)
+        }
+    }
+
+    private static let space: Set<UInt8> = [0x20, 0x09, 0x0A, 0x0D]
+
+    private static func skipSpace(_ bytes: [UInt8], _ from: Int) -> Int {
+        var index = from
+        while index < bytes.count, space.contains(bytes[index]) { index += 1 }
+        return index
+    }
+
+    /// After the string that opens at `from`.
+    private static func endOfString(_ bytes: [UInt8], _ from: Int) -> Int? {
+        guard from < bytes.count, bytes[from] == UInt8(ascii: "\"") else { return nil }
+        var index = from + 1
+        while index < bytes.count {
+            if bytes[index] == UInt8(ascii: "\\") {
+                index += 2
+            } else if bytes[index] == UInt8(ascii: "\"") {
+                return index + 1
+            } else {
+                index += 1
+            }
+        }
+        return nil
+    }
+
+    /// After the value that begins at `from`, whatever it is.
+    private static func endOfValue(_ bytes: [UInt8], _ from: Int) -> Int? {
+        guard from < bytes.count else { return nil }
+        switch bytes[from] {
+        case UInt8(ascii: "\""):
+            return endOfString(bytes, from)
+        case UInt8(ascii: "{"), UInt8(ascii: "["):
+            var depth = 0
+            var index = from
+            while index < bytes.count {
+                switch bytes[index] {
+                case UInt8(ascii: "\""):
+                    guard let end = endOfString(bytes, index) else { return nil }
+                    index = end
+                    continue
+                case UInt8(ascii: "{"), UInt8(ascii: "["):
+                    depth += 1
+                case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                    depth -= 1
+                    if depth == 0 { return index + 1 }
+                default:
+                    break
+                }
+                index += 1
+            }
+            return nil
+        default:
+            // A number or a word: up to what ends it.
+            var index = from
+            while index < bytes.count, !space.contains(bytes[index]), ![UInt8(ascii: ","), UInt8(ascii: "}"), UInt8(ascii: "]")].contains(bytes[index]) { index += 1 }
+            return index > from ? index : nil
         }
     }
 }
