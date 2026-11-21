@@ -902,6 +902,9 @@ final class BrowserUITests: MacUITestCase {
     /// viewing Mac now sends them in order (`PageInputQueueTests`); this is
     /// the host keeping that order, which it already did
     /// (`followsTheDevicesInput`): it was not seen failing before the fix.
+    /// With text and scrolls taken out of `followsTheDevicesInput`, the
+    /// text was seen to go in before the click (the field empty); the
+    /// scroll was not seen to pass the drag.
     func testTextRightAfterAClickAndAScrollRightAfterADragKeepTheirOrder() throws {
         let folder = root.appendingPathComponent("order")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -952,7 +955,14 @@ final class BrowserUITests: MacUITestCase {
         ]
         let typed = send(.text(tab: tab, text: "typed"))
         if case .refused(let why)? = answer(typed) { XCTFail(why) }
-        XCTAssertTrue(evaluate("document.getElementById('field').value").contains("typed"), "the text reached the page before the click put the caret in the field")
+        // The press took the agent's tab over for the user, and the agent
+        // is refused the page until it is given back: given back, to read it.
+        func readAsTheAgent(_ script: String) -> String {
+            if case .refused(let why)? = answer(send(.giveBack(tab: tab))) { XCTFail(why) }
+            return evaluate(script)
+        }
+        // A string comes back as JSON.
+        XCTAssertEqual(readAsTheAgent("document.getElementById('field').value"), "\"typed\"", "the text reached the page before the click put the caret in the field")
 
         // A drag across the line, then a scroll at once, then what it selected.
         let from = line.x + 20, to = line.right - 20
@@ -969,7 +979,8 @@ final class BrowserUITests: MacUITestCase {
         guard case .text(let copied)? = answer(copy) else { return XCTFail("no text copied") }
         XCTAssertEqual(copied.trimmingCharacters(in: .whitespaces), "alpha beta gamma delta", "the scroll was done before the drag")
         if case .refused(let why)? = answer(scrolled) { XCTFail(why) }
-        wait("the page scrolled") { (Double(evaluate("window.scrollY").filter { "0123456789.".contains($0) }) ?? 0) > 0 }
+        _ = readAsTheAgent("0")
+        wait("the page scrolled") { (Double(evaluate("window.scrollY")) ?? 0) > 0 }
         for id in sent { if case .refused(let why)? = answer(id) { XCTFail(why) } }
     }
 

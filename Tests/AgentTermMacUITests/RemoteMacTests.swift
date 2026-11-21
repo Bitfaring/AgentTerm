@@ -183,9 +183,15 @@ final class RemoteMacTests: MacUITestCase {
         browser.send(.browserFrame(tab: "7", jpeg: jpeg, width: 400, height: 200))
 
         // Drawn: white, against the dark the view shows before a picture.
-        let page = try XCTUnwrap(app.frame(of: .id("remote-page")))
+        // Looked for well inside the picture, 100 points down, and where
+        // the view is read each time: the page moves 24 points down within
+        // a second of being shown, and accessibility tells of it later
+        // still, so a point 20 points down was in the picture at one look
+        // and above it at the next (MacUITestCase.wait looks twice).
         wait("the picture drawn", timeout: 15) {
-            guard let color = self.app.color(at: CGPoint(x: page.minX + 20, y: page.minY + 20))?.usingColorSpace(.sRGB) else { return false }
+            guard let page = self.app.frame(of: .id("remote-page")),
+                let color = self.app.color(at: CGPoint(x: page.midX, y: page.minY + 100))?.usingColorSpace(.sRGB)
+            else { return false }
             return color.redComponent > 0.7 && color.greenComponent > 0.7 && color.blueComponent > 0.7
         }
 
