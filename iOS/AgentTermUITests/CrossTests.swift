@@ -195,5 +195,50 @@ final class CrossTests: XCTestCase {
         app.buttons["Close Tab"].tap()
         XCTAssertTrue(open.waitForExistence(timeout: 10))
         XCTAssertFalse(asPhone.exists, "the closed page is still listed")
+
+        try closedWhileTheMacsBrowserIsAsked(app, page: rows.firstMatch)
+    }
+
+    /// REMOTE-28 (#198): the page opened, and what it asks of the Mac's
+    /// browser held back (the proxy of `scripts/test-both.sh` holds what
+    /// the host sends); then the connection closes. The ask is answered at
+    /// once, refused in the Mac's words (`BrowserWords.otherMacClosed`),
+    /// on the page's problem line. Before the fix it waited for an answer
+    /// that could not come, and nothing was said. Once the Mac is back and
+    /// the page is opened again, it is watched again and the line goes.
+    private func closedWhileTheMacsBrowserIsAsked(_ app: XCUIApplication, page: XCUIElement) throws {
+        let control = URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_PROXY_DIR"], "run through scripts/test-both.sh"))
+        func touch(_ name: String) { FileManager.default.createFile(atPath: control.appendingPathComponent(name).path, contents: nil) }
+        func remove(_ name: String) { try? FileManager.default.removeItem(at: control.appendingPathComponent(name)) }
+        func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: control.appendingPathComponent(name).path) }
+        XCTAssertTrue(page.waitForExistence(timeout: 10), "the agent's page is not listed")
+        // What the host sends is held from here: the page's watch, asked
+        // as its screen opens, is not answered.
+        touch("hold")
+        remove("asked")
+        page.tap()
+        XCTAssertTrue(app.segmentedControls["agent-parts"].waitForExistence(timeout: 10), "the page's screen did not open")
+        let deadline = Date().addingTimeInterval(10)
+        while !exists("asked"), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        XCTAssertTrue(exists("asked"), "nothing of the phone's went to the host while held")
+        let problem = app.staticTexts["browser-problem"]
+        XCTAssertFalse(problem.exists, "a problem said before the connection closed: \(problem.exists ? problem.label : "")")
+        // The connection closes, and stays closed until the test has seen.
+        touch("close")
+        XCTAssertTrue(problem.waitForExistence(timeout: 15), "nothing said when the connection closed with the page's watch waiting")
+        XCTAssertTrue(problem.label.contains("The connection to First Mac closed before its browser answered"), problem.label)
+        capture("10-browser-ask-closed")
+        // The Mac back, and the page opened again: watched again, the line
+        // goes.
+        remove("close")
+        remove("hold")
+        let reconnecting = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Reconnecting to'")).firstMatch
+        XCTAssertTrue(reconnecting.waitForNonExistence(timeout: 40), "not connected again")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(page.waitForExistence(timeout: 10), "the agent's page is not listed")
+        page.tap()
+        XCTAssertTrue(app.segmentedControls["agent-parts"].waitForExistence(timeout: 10), "the page's screen did not open")
+        XCTAssertTrue(problem.waitForNonExistence(timeout: 20), "the problem stayed once the page was watched again: \(problem.exists ? problem.label : "")")
+        app.navigationBars.buttons.firstMatch.tap()
     }
 }
