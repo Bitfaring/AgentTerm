@@ -534,7 +534,7 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNotEqual(CloseWords.groupAction(.files), "Close All Files", "the pane's own item")
     }
 
-    /// MCP-19: what is wrong with the agents' server, in words, and a cause
+    /// MCP-36: what is wrong with the agents' server, in words, and a cause
     /// this build does not know still read.
     func testAnAgentShellsFaultInWords() throws {
         let install = AgentShellsFault(cause: .signIn, agents: ["Codex"])

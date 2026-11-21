@@ -48,7 +48,7 @@ final class GitTests: MacUITestCase {
         wait("the message the stand-in wrote", timeout: 30) { self.app.value(of: .text("Commit message")) == "feat: written by the stand-in claude" }
         XCTAssertEqual(git("log", "--oneline", in: project).split(separator: "\n").count, 1, "writing the message committed")
 
-        // GIT-3: the message can be changed, and Commit commits what is staged.
+        // GIT-3a: the message can be changed, and Commit commits what is staged.
         app.write("docs: a guide, and a second line", into: .text("Commit message"), confirm: true)
         app.press(.containing("Commit 2 Files"))
         wait("the commit") { self.git("log", "-1", "--format=%s", in: self.project) == "docs: a guide, and a second line" }
@@ -455,7 +455,7 @@ final class GitTests: MacUITestCase {
         app.wait(for: .button("Unstage notes.txt"))
         app.write("fix: will be refused", into: .text("Commit message"), confirm: true)
         app.press(.containing("Commit 1 File"))
-        // GIT-3: git's own words, and nothing lost.
+        // GIT-3b: git's own words, and nothing lost.
         app.wait(for: .containing("the checks of this project failed"))
         XCTAssertEqual(git("log", "--oneline", in: project).split(separator: "\n").count, 1)
         XCTAssertEqual(app.value(of: .text("Commit message")), "fix: will be refused", "a refused commit lost its message")

@@ -7,7 +7,7 @@ import XCTest
 /// Whether each agent's session talks to the host (#129): its hooks and
 /// AgentTerm's MCP server, heard from or said missing; an agent typed by
 /// hand in a shell, found from the program in front of the terminal.
-/// LINK-1 to LINK-4 and LINK-14 in docs/TESTING.md.
+/// LINK-2 to LINK-4 and LINK-14 in docs/TESTING.md.
 final class AgentLinkTests: XCTestCase {
     private var root: URL!
     private var server: HostServer!
