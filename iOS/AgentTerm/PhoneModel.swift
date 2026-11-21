@@ -92,19 +92,32 @@ final class PhoneModel: ObservableObject {
     /// What the Mac answered about a tab: a picture of it, or why there is none.
     @Published private(set) var browserPictures: [String: Data] = [:]
     @Published private(set) var browserProblems: [String: String] = [:]
-    private var browserAsks: [Int: (BrowserResult) -> Void] = [:]
-    private var nextBrowserAsk = 1
+    private var browserAsks = BrowserAsks<(BrowserResult) -> Void>()
 
-    /// Asks the browser on the Mac, through its host.
+    /// Asks the browser on the Mac, through its host. With no connection,
+    /// nothing could answer it: refused at once (#198).
     func askBrowser(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
-        let id = nextBrowserAsk
-        nextBrowserAsk += 1
-        browserAsks[id] = done
-        connection?.send(.browserAsk(id: id, request: request))
+        guard let connection else { return done(.refused(BrowserWords.otherMacClosed(connectedMacName))) }
+        let id = browserAsks.add(done)
+        connection.send(.browserAsk(id: id, request: request))
     }
 
     func browserAnswered(id: Int, result: BrowserResult) {
-        browserAsks.removeValue(forKey: id)?(result)
+        browserAsks.answered(id)?(result)
+    }
+
+    /// The Mac the connection is to: the one being paired while pairing.
+    private var connectedMacName: String {
+        (isPairing ? pendingPairing?.name : pairing?.name) ?? "the Mac"
+    }
+
+    /// The connection closed, or was left for another Mac (#198, as the
+    /// Mac's #196): what waits for the Mac's browser cannot be answered by
+    /// it now, so each is answered at once, refused in the Mac's words, and
+    /// said where its own refusal is said (a page's problem, a sheet's).
+    private func refuseBrowserAsks() {
+        guard let closed = browserAsks.closed(mac: connectedMacName) else { return }
+        for done in closed.waiting { done(.refused(closed.why)) }
     }
 
     /// Asks for a picture of a tab as it is now.
@@ -145,7 +158,9 @@ final class PhoneModel: ObservableObject {
     /// screen's pixels.
     func watch(_ tab: String, _ on: Bool) {
         askBrowser(.watch(tab: tab, on: on, width: on ? 1290 : 0)) { [weak self] result in
-            if case .refused(let why) = result { self?.browserProblems[tab] = why }
+            // Watched again once the Mac is back: what was refused while it
+            // was not is no longer so (#198).
+            if case .refused(let why) = result { self?.browserProblems[tab] = why } else { self?.browserProblems[tab] = nil }
         }
         if !on { browserFrames[tab] = nil }
     }
@@ -1546,6 +1561,9 @@ final class PhoneModel: ObservableObject {
     private func disconnect() {
         connection?.close()
         connection = nil
+        // Its `.closed` is not heard once it is not the connection: what
+        // waited is answered here, for a switch, a pairing, a Mac forgotten.
+        refuseBrowserAsks()
         controller = nil
         foreignSize = nil
         path = []
@@ -1562,6 +1580,7 @@ final class PhoneModel: ObservableObject {
             break
         case .closed(let reason):
             connection = nil
+            refuseBrowserAsks()
             replaying = nil
             status = .offline(reason)
             if isPairing {

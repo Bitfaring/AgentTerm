@@ -752,7 +752,11 @@ user sees.
   in front there: with several profiles, in the one picked from its menu,
   or private; with one, in it, and a private one from its own menu. The
   user's pages open in a sheet. Picking an element to send to an agent
-  is the Mac's only (principle 1).
+  is the Mac's only (principle 1). What the iPhone asked of the page and
+  the Mac had not answered when the connection to it closes, or when
+  another Mac is picked, is answered at once as on the Mac: refused, in
+  words that name the Mac and say it may not have been done, under the
+  page or where opening it is said (#198).
 
 ### Usage
 

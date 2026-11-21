@@ -1706,7 +1706,14 @@ meanwhile.
 whenever a tab changes and the host keeps and passes on, and asks
 `browserAsk(id:request:)` for a picture (`picture`, a JPEG) or to take a
 tab over or give it back; a device's request to act on a page is
-refused by the host.
+refused by the host. What the iPhone asked and was not answered is kept
+in a `BrowserAsks` (`AgentTermProtocol`) by the id it went with; when the
+connection closes, or is left for another Mac, a pairing or a Mac
+forgotten (`PhoneModel.disconnect`, after which that connection's
+`.closed` is not heard), each is answered at once, refused with the Mac's
+words (`BrowserWords.otherMacClosed`, as the Mac's #196), and said where
+its own refusal is said; an ask with no connection is refused at once
+(#198).
 
 ## Handoff
 
