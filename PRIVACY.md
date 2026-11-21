@@ -79,8 +79,9 @@ the source yourself sends nothing at all.
 - **Between your iPhone and your Mac.** The iPhone app connects only to the Mac you paired it with,
   over your local network or your own Tailscale network. The developer is not part of that
   connection. Tailscale is a separate service with its own privacy policy.
-- **Notifications through Apple (iPhone, released app).** While the iPhone app is asleep, your Mac
-  tells it that an agent is done or needs you through Apple's push service (APNs), by way of a small
+- **Notifications through Apple (iPhone, released app).** While the iPhone app is in the background
+  or asleep (it tells your Mac, over their own connection, when it goes to the background and comes
+  back), your Mac tells it that an agent is done or needs you through Apple's push service (APNs), by way of a small
   relay the developer runs on Cloudflare, which holds the key Apple asks for. What the notification
   says (the session's name, its folder, what the agent said or asks) is encrypted on your Mac with a
   key your iPhone made for that Mac alone, and only your iPhone can open it: the relay and Apple

@@ -278,8 +278,11 @@ happened; the Live Activity shows the host's state now (below).
   its notification goes from all of them. What is read while a device is
   not connected is said to the host once it is.
 - **On the iPhone and the iPad**, iOS's own notification banner, also
-  with the app open; the app draws none of its own. While the app is
-  asleep, the released build is told through Apple's push service: "Also
+  with the app open; the app draws none of its own. While the app is in
+  the background or asleep, the released build is told through Apple's
+  push service only, never also over its connection, so nothing shows
+  twice (#190); back in front, what it was not told either way is shown
+  then. "Also
   While the App Is Closed", on by default, under "Tell me when an agent is
   done or needs me". What it says is encrypted on the Mac for that device
   alone; one that cannot be opened says "An agent needs you". A

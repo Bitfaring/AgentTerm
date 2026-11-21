@@ -621,7 +621,9 @@ final class PhoneModel: ObservableObject {
     private var retryScheduled = false
     /// Attempts to connect since the last time it worked.
     private var failedAttempts = 0
-    private var active = true
+    /// Whether the app is in front. One that iOS launched in the background
+    /// (for a push) is not (#190).
+    private var active = UIApplication.shared.applicationState != .background
 
     // MARK: Agents that finished or need an instruction (#22)
 
@@ -1082,9 +1084,13 @@ final class PhoneModel: ObservableObject {
     }
 
     /// The app left the front: iOS lets it run a little longer, during
-    /// which the connection lives and a notification can still be made.
+    /// which the connection lives. The Mac is told, and tells this iPhone
+    /// through Apple from now on, as it does while the app sleeps (#190):
+    /// a suspended app's connection may stay open, and what is sent over
+    /// it is not seen until the app is in front again.
     func enteredBackground() {
         active = false
+        if status == .connected { connection?.send(.appInFront(false)) }
         guard backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Agents") { [weak self] in
             guard let self else { return }
@@ -1458,6 +1464,7 @@ final class PhoneModel: ObservableObject {
     /// Called when the app comes to the front.
     func resume() {
         active = true
+        if status == .connected { connection?.send(.appInFront(true)) }
         if backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTask)
             backgroundTask = .invalid
@@ -1571,6 +1578,8 @@ final class PhoneModel: ObservableObject {
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             status = .connected
+            // In front or in the background, from the start (#190).
+            connection?.send(.appInFront(active))
             for id in pendingDismissals { connection?.send(.handleNotice(id: id, how: .dismissed)) }
             pendingDismissals.removeAll()
             pushAsked = false

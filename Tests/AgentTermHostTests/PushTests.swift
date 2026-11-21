@@ -411,6 +411,62 @@ final class PushTests: XCTestCase {
         XCTAssertFalse(pushed.contains(done), "pushed though it was read")
     }
 
+    /// PUSH-10 (#190): a phone that says it went to the background is away,
+    /// though its connection is still open (iOS suspends the app without
+    /// closing its socket): a notice reaches it through Apple only, not
+    /// also over the connection; back in front it is shown nothing twice.
+    func testAPhoneInTheBackgroundIsToldThroughAppleOnly() throws {
+        let mac = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
+        let phoneToken = try pair(mac)
+        let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
+        phone.connection.send(.pushRegister(PushRegistration(token: deviceToken, key: key, mac: macName)))
+        waitUntil("registered") { phone.pushState == .on }
+        phone.connection.send(.appInFront(false))
+        mac.connection.send(.create(CreateRequest(command: try standIn().path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let agent = try XCTUnwrap(mac.sessions.first).id
+        mac.connection.send(.attach(session: agent, size: TermSize(cols: 80, rows: 24)))
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("the question on the Mac") { mac.alerts.count == 1 }
+        let id = try XCTUnwrap(mac.alerts.first)
+        waitUntil("pushed") { relay.sent.contains { $0["payload"] != nil } }
+        XCTAssertEqual(try opened(try XCTUnwrap(relay.sent.first { $0["payload"] != nil })).id, id)
+        XCTAssertTrue(phone.notices.contains { $0.id == id }, "in its Inbox all the same")
+        XCTAssertEqual(phone.alerts, [], "shown twice: over the connection too")
+        XCTAssertEqual(mac.devices?.first?.isConnected, true, "the connection is still open")
+
+        // Back in front: it was told already, through Apple.
+        phone.connection.send(.appInFront(true))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(phone.alerts, [], "shown again on coming back")
+    }
+
+    /// PUSH-11 (#190): what came due while a phone was in the background
+    /// and did not reach it through Apple (it is not registered) is shown
+    /// when it comes back to the front, as to a phone that connects.
+    func testWhatCameDueWhileAPhoneWasInTheBackgroundIsShownWhenItComesBack() throws {
+        let mac = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
+        let phone = Client(port: port, credential: .token(try pair(mac)), name: "iPhone")
+        waitUntil("connected") { phone.pushState == .off }
+        phone.connection.send(.appInFront(false))
+        mac.connection.send(.create(CreateRequest(command: try standIn().path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let agent = try XCTUnwrap(mac.sessions.first).id
+        mac.connection.send(.attach(session: agent, size: TermSize(cols: 80, rows: 24)))
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("the question on the Mac") { mac.alerts.count == 1 }
+        let id = try XCTUnwrap(mac.alerts.first)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(phone.alerts, [], "shown over the connection while in the background")
+        phone.connection.send(.appInFront(true))
+        waitUntil("shown once back") { phone.alerts == [id] }
+        phone.connection.send(.appInFront(true))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(phone.alerts, [id], "once")
+    }
+
     /// READ-1 (#180): read on one device is read on every device: the
     /// others are told, a phone that comes back finds it read in the log,
     /// and one that had it through Apple has it taken back.

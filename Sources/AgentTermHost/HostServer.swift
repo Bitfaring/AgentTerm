@@ -179,6 +179,10 @@ public final class HostServer {
         var awaitingScreen: [SessionID: (attach: Int, output: [DataFrame])] = [:]
         /// A Mac app that says it is in front: someone is at the Mac.
         var inFront = false
+        /// A device that says its app went to the background (#190): away,
+        /// though iOS may keep its connection open while it is suspended.
+        /// What it is told goes through Apple until it is in front again.
+        var inBackground = false
         /// Numbers the large messages sent in pieces.
         var nextMessage: UInt32 = 0
         /// The searches for text this client has going (#45), by its number.
@@ -1910,7 +1914,7 @@ public final class HostServer {
         activityStatus = status
         activitySentAt = now
         let mac = Host.current().localizedName ?? "Mac"
-        for device in push.activityDevices where !connectedDevices.contains(device) {
+        for device in push.activityDevices where !presentDevices.contains(device) {
             if let item = push.activity(status, end: end, mac: mac, to: device) { sendPush(item) }
         }
     }
@@ -1927,10 +1931,13 @@ public final class HostServer {
         }
     }
 
-    private var connectedDevices: Set<String> {
+    /// The devices connected with their app in front: the others are
+    /// away, and told through Apple (#66). A device whose app went to the
+    /// background is away though its connection may still be open (#190).
+    private var presentDevices: Set<String> {
         Set(
             clients.values.compactMap { client -> String? in
-                if case .device(let id) = client.identity { return id }
+                if case .device(let id) = client.identity, !client.inBackground { return id }
                 return nil
             })
     }
@@ -1956,21 +1963,32 @@ public final class HostServer {
     }
 
     /// Its time has come: a notification on every device, over the
-    /// connection or, for a device that is away, through Apple.
+    /// connection or, for a device that is away, through Apple: only that
+    /// way for one in the background (#190), so it is not shown twice.
     private func alert(_ id: UInt64) {
         guard let notice = notices.pending(id) else { return }
         notices.becameDue(id)
         var reached: Set<String> = []
-        for client in clients.values where client.authenticated {
+        for client in clients.values where client.authenticated && !client.inBackground {
             guard let key = noticeKey(of: client), !reached.contains(key) else { continue }
             send(.noticeAlert(id: id), to: client)
             reached.insert(key)
         }
         for key in reached { notices.told(id, to: key, throughApple: false) }
-        for device in Set(push.targets.keys).subtracting(connectedDevices) {
+        for device in Set(push.targets.keys).subtracting(presentDevices) {
             guard let item = push.push(notice, to: device) else { continue }
             notices.told(id, to: device, throughApple: true)
             sendPush(item)
+        }
+    }
+
+    /// What came due that this client was not shown, here or through
+    /// Apple: on connecting, and for a device back in front (#190).
+    private func tellUntold(_ client: Client) {
+        guard let key = noticeKey(of: client) else { return }
+        for notice in notices.untold(to: key) {
+            send(.noticeAlert(id: notice.id), to: client)
+            notices.told(notice.id, to: key, throughApple: false)
         }
     }
 
@@ -1982,7 +2000,7 @@ public final class HostServer {
             send(.noticesRead(ids: ids), to: client)
         }
         for id in ids {
-            for device in notices.pushedTo(id) where !connectedDevices.contains(device) {
+            for device in notices.pushedTo(id) where !presentDevices.contains(device) {
                 if let item = push.takeBack(id, from: device) { sendPush(item) }
             }
         }
@@ -1995,7 +2013,7 @@ public final class HostServer {
         for client in clients.values where client.authenticated && noticeKey(of: client) != nil {
             send(.noticeHandled(id: notice.id, handled: handled), to: client)
         }
-        for device in notices.pushedTo(notice.id) where !connectedDevices.contains(device) {
+        for device in notices.pushedTo(notice.id) where !presentDevices.contains(device) {
             if let item = push.takeBack(notice.id, from: device) { sendPush(item) }
         }
     }
@@ -2168,8 +2186,14 @@ public final class HostServer {
                 }
             }
         case .appInFront(let front):
-            client.inFront = front
-            updateMacInUse()
+            guard client.isDevice else {
+                client.inFront = front
+                return updateMacInUse()
+            }
+            // A device's app: in the background it is away (#190).
+            guard client.inBackground == front else { return }
+            client.inBackground = !front
+            if front { tellUntold(client) }
         case .used:
             used(by: client)
         case .pushRegister(let registration):
@@ -3056,12 +3080,9 @@ public final class HostServer {
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
         // The last 30 days, for its Inbox; then what it was not told of yet,
         // here or through Apple (#66).
-        if let key = noticeKey(of: client) {
+        if noticeKey(of: client) != nil {
             send(.noticeLog(notices.log), to: client)
-            for notice in notices.untold(to: key) {
-                send(.noticeAlert(id: notice.id), to: client)
-                notices.told(notice.id, to: key, throughApple: false)
-            }
+            tellUntold(client)
         }
         // What stopped before this client came, until someone has seen it.
         send(.failures(failures), to: client)

@@ -273,7 +273,8 @@ Host…, which asks first. It never restarts it by itself (decided by the
 owner on 2026-11-17), and a release that changes nothing of the host says
 nothing. A build outside an app bundle has no revision, and is not compared.
 
-The protocol version is 34. 34 added the browser's `pointer`, `contextAt` and
+The protocol version is 35. 35 has the iPhone send `appInFront` too, for
+whether its app is in the background (#190). 34 added the browser's `pointer`, `contextAt` and
 `copy`, and the result `context` (#147). 33 added `readNotices`, `noticesRead` and
 `noticeAlert`, and `Notice.read` (#180). 32 added `pushRegister`, `pushUnregister`, `pushState`, `handleNotice`,
 `liveActivity`, `noticeLog`, `notice` and `noticeHandled` (#66, #168). 15 in 0.7.0. It went up with each message that
@@ -941,9 +942,20 @@ no one is there) (NOTE-7). Every client is told `macInUse(Bool)`. Since
 
 **On the iPhone.** Since #66 iOS's own banner, in front as behind, for a
 session other than the one on screen (`AgentNotifications`, from the
-host's `notice`): the app asks iOS for a little more time when it leaves
-the front (`beginBackgroundTask`), during which the connection lives;
-after that, the host pushes. A question's or a finished task's notification has a text reply
+host's `noticeAlert`) while the app is in front. When it leaves the front
+it tells the host `appInFront(false)`, and `appInFront(true)` when it
+comes back, and says which on connecting (#190): iOS suspends an app in
+the background without closing its socket, so a phone asleep still counted
+as connected, was sent its notifications over a connection it did not
+read, and was not pushed to. A device in the background is away
+(`Client.inBackground`, `HostServer.presentDevices`): what comes due
+reaches it through Apple only, never also over the connection, so nothing
+shows twice, and its Live Activity is kept true through Apple; back in
+front it is told, as on connecting, what came due that it was not shown
+either way (`tellUntold`, `NoticeCenter.untold(to:)`). The app still asks
+iOS for a little more time when it leaves the front
+(`beginBackgroundTask`), during which the connection lives for what it
+shows in the Inbox. A question's or a finished task's notification has a text reply
 action that asks for the phone to be unlocked; the reply is sent as
 `answer(session:to:text:)`, naming the state it answers, and the host types
 it, then Return, only while the session is still in that state; else it
@@ -995,8 +1007,9 @@ Mac's own app as `local`.
   `Notice.pushWaits(macInUse:)` says so: a done agent always, anything else
   while someone is at the Mac (#180, decided 2026-11-20). Then, if it is
   still not handled nor read (`NoticeCenter.pending`), it is due
-  (`becameDue`): `noticeAlert(id:)` to every client and a push to each
-  registered device that is away, at the same moment.
+  (`becameDue`): `noticeAlert(id:)` to every client in front and a push
+  to each registered device that is away, not connected or in the
+  background (#190), at the same moment.
 - **Read** (#180) is the host's too: `readNotices(ids:)` from a device marks
   them read in the log (`Notice.read`, `NoticeCenter.read`), and every
   client is told `noticesRead(ids:)`; each device that had one through
@@ -1111,7 +1124,7 @@ agents work (`refreshSummaries`). The relay sends
 `apns-push-type: liveactivity` to the topic
 `com.manhpham.agentterm.push-type.liveactivity`, priority 5 (10 to
 start), with `stale-date` 30 minutes on and, for `end`, `dismissal-date`.
-While connected, the app updates the activity itself.
+While connected and in front, the app updates the activity itself.
 
 **On the Mac.** A banner over the window for a session that is not the one
 selected while the app is in front.
