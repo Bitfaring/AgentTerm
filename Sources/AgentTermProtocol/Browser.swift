@@ -425,6 +425,20 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
         }
     }
 
+    /// Whether a device's request is done after what that device sent the
+    /// page before it, in the order sent: what acts on it, and what reads
+    /// what that input made, the selection a drag made and what is at a
+    /// point (#147). Each is answered in a task of its own, and ⌘C right
+    /// after a drag must not read the page before the drag's last moves.
+    /// Not `acts`: copying and asking what is at a point are not refused
+    /// while the user has the tab.
+    public var followsTheDevicesInput: Bool {
+        switch self {
+        case .copy, .contextAt: return true
+        default: return acts
+        }
+    }
+
     /// What a device may ask of a tab: the user, who uses the page through
     /// it (#76), as on the Mac. An agent's own tab the device takes over by
     /// acting on its page; showing it as a device, or closing it, does not.

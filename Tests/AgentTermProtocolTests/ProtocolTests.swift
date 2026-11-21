@@ -76,6 +76,24 @@ final class ProtocolTests: XCTestCase {
         }
     }
 
+    /// BROWSER-50 (#191): a copy, and what is at a point, come after the
+    /// device's input before them, as what acts does, without acting: the
+    /// selection a drag made is read once the drag is done, and neither is
+    /// refused while the user has the tab. A look of an agent's waits for
+    /// nothing.
+    func testWhatReadsADragFollowsTheDevicesInput() {
+        let after: [BrowserRequest] = [
+            .pointer(tab: "7", event: PagePointer(kind: .moved, x: 1, y: 2, held: true)), .copy(tab: "7"), .contextAt(tab: "7", x: 1, y: 2),
+            .text(tab: "7", text: "a"), .press(tab: "7", key: "Backspace"), .tap(tab: "7", x: 1, y: 2), .scroll(tab: "7", ref: nil, x: 0, y: 10),
+        ]
+        for request in after { XCTAssertTrue(request.followsTheDevicesInput, "\(request)") }
+        for request: BrowserRequest in [.picture(tab: "7"), .watch(tab: "7", on: true, width: 300), .takeOver(tab: "7"), .snapshot(tab: "7", within: nil), .tabs] {
+            XCTAssertFalse(request.followsTheDevicesInput, "\(request)")
+        }
+        XCTAssertFalse(BrowserRequest.copy(tab: "7").acts)
+        XCTAssertFalse(BrowserRequest.contextAt(tab: "7", x: 1, y: 2).acts)
+    }
+
     func testClientMessagesRoundTrip() {
         let messages: [ClientMessage] = [
             .hello(token: "secret", client: "iPhone", kind: .iphone),

@@ -35,10 +35,18 @@ final class RemotePageNSView: NSView {
     var send: ((BrowserRequest) -> Void)?
     /// A request whose answer is wanted.
     var ask: ((BrowserRequest, @escaping (BrowserResult) -> Void) -> Void)?
-    /// The mouse's events, sent one at a time in their order: the next once
-    /// the last is answered, moves meanwhile kept to the latest only.
-    private var pointerQueue: [PagePointer] = []
-    private var pointerInFlight = false
+    /// The mouse's events, and what reads what they did (⌘C, a right
+    /// click), sent one at a time in their order: the next once the last is
+    /// answered, moves meanwhile kept to the latest only.
+    private var inputQueue: [Queued] = []
+    private var inputInFlight = false
+
+    private enum Queued {
+        case pointer(PagePointer)
+        /// Asked once the mouse's events before it are answered, and
+        /// answered to its own callback.
+        case asked(BrowserRequest, (BrowserResult) -> Void)
+    }
     var frameImage: (image: NSImage, width: Double, height: Double)?
     /// The width the pictures were asked at, in pixels; nil while not watched.
     private var watchedWidth: Int?
@@ -109,18 +117,35 @@ final class RemotePageNSView: NSView {
 
     /// Sends a mouse event after the ones before it.
     private func point(_ event: PagePointer) {
-        if event.kind == .moved, let last = pointerQueue.last, last.kind == .moved { pointerQueue[pointerQueue.count - 1] = event } else { pointerQueue.append(event) }
-        sendNextPointer()
+        if event.kind == .moved, case .pointer(let last)? = inputQueue.last, last.kind == .moved {
+            inputQueue[inputQueue.count - 1] = .pointer(event)
+        } else {
+            inputQueue.append(.pointer(event))
+        }
+        sendNextInput()
     }
 
-    private func sendNextPointer() {
-        guard !pointerInFlight, !pointerQueue.isEmpty, let ask else { return }
-        let event = pointerQueue.removeFirst()
-        pointerInFlight = true
-        ask(.pointer(tab: tabID, event: event)) { [weak self] _ in
+    /// Asks after the mouse's events before it (#147): what a drag selected
+    /// is read once its last move and its release are there, not before.
+    private func askInTurn(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void) {
+        inputQueue.append(.asked(request, done))
+        sendNextInput()
+    }
+
+    private func sendNextInput() {
+        guard !inputInFlight, !inputQueue.isEmpty, let ask else { return }
+        let request: BrowserRequest
+        var done: ((BrowserResult) -> Void)?
+        switch inputQueue.removeFirst() {
+        case .pointer(let event): request = .pointer(tab: tabID, event: event)
+        case .asked(let asked, let answer): (request, done) = (asked, answer)
+        }
+        inputInFlight = true
+        ask(request) { [weak self] result in
+            done?(result)
             DispatchQueue.main.async {
-                self?.pointerInFlight = false
-                self?.sendNextPointer()
+                self?.inputInFlight = false
+                self?.sendNextInput()
             }
         }
     }
@@ -167,8 +192,7 @@ final class RemotePageNSView: NSView {
 
     /// The menu for a point of the page, at a point of this view.
     private func showMenu(at point: (x: Double, y: Double), location: NSPoint) {
-        guard let ask else { return }
-        ask(.contextAt(tab: tabID, x: point.x, y: point.y)) { [weak self] result in
+        askInTurn(.contextAt(tab: tabID, x: point.x, y: point.y)) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self, case .context(let link, let selection) = result else { return }
                 self.showMenu(link: link, selection: selection, at: location)
@@ -212,9 +236,9 @@ final class RemotePageNSView: NSView {
     }
 
     /// Edit > Copy, ⌘C: what is selected in the page there, on this Mac's
-    /// pasteboard.
+    /// pasteboard, once the mouse's events before it are done there.
     @objc func copy(_ sender: Any?) {
-        ask?(.copy(tab: tabID)) { result in
+        askInTurn(.copy(tab: tabID)) { result in
             guard case .text(let text) = result, !text.isEmpty else { return }
             DispatchQueue.main.async { Self.putOnPasteboard(text) }
         }

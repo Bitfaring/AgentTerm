@@ -823,6 +823,79 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertNil(app.first(.text("Inspect"), menus: true), "a menu opened on the Mac the browser runs on")
     }
 
+    /// BROWSER-50 (#191): a drag from a Mac showing this Mac's page, its
+    /// events sent without waiting for their answers, and ⌘C asked at once
+    /// after its release, then a second drag and a right click asked at
+    /// once: each reads what its whole drag selected, not the page as it
+    /// was before the drag's last moves. It depends on timing: with the
+    /// copy not waiting for the device's input before it, it reached
+    /// Chromium before the moves that were still waiting for theirs.
+    func testACopyOrARightClickRightAfterADragReadsAllItSelected() throws {
+        let folder = root.appendingPathComponent("drag")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = folder.appendingPathComponent("drag.html")
+        try """
+        <!doctype html><title>Drag</title>
+        <style>body { margin: 0; font: 20px monospace } p { margin: 0; padding: 20px; white-space: nowrap }</style>
+        <p id="first">alpha beta gamma delta</p>
+        <p id="second">epsilon zeta eta theta</p>
+        """.write(to: page, atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let mac = try device()
+        var asked = 3000
+        // Sent, its answer not waited for.
+        func send(_ request: BrowserRequest) -> Int {
+            asked += 1
+            mac.send(.browserAsk(id: asked, request: request))
+            return asked
+        }
+        func answer(_ id: Int) -> BrowserResult? {
+            var answer: BrowserResult?
+            wait("the answer to \(id)") {
+                answer = mac.messages.lazy.compactMap { if case .browserAnswer(id, let result) = $0 { return result } else { return nil } }.first
+                return answer != nil
+            }
+            return answer
+        }
+        func rect(_ id: String) throws -> (x: Double, right: Double, middle: Double) {
+            let text = server.text("browser_evaluate", ["tab": tab, "script": "(r => [r.x, r.right, r.y + r.height / 2])(document.getElementById('\(id)').getBoundingClientRect())"]).text
+            let numbers = text.split { !"0123456789.".contains($0) }.compactMap { Double($0) }
+            XCTAssertEqual(numbers.count, 3, text)
+            return (numbers[0], numbers[1], numbers[2])
+        }
+        wait("the page", timeout: 15) { server.text("browser_evaluate", ["tab": tab, "script": "document.title"]).text.contains("Drag") }
+        let first = try rect("first"), second = try rect("second")
+        // Moved to, pressed, held across in five moves, released: all sent
+        // at once, as a Mac whose mouse is quicker than the link would.
+        func drag(across line: (x: Double, right: Double, middle: Double)) -> [Int] {
+            let from = line.x + 20, to = line.right - 20
+            var sent = [
+                send(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from, y: line.middle))),
+                send(.pointer(tab: tab, event: PagePointer(kind: .pressed, x: from, y: line.middle, held: true))),
+            ]
+            for step in 1...5 {
+                sent.append(send(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from + (to - from) * Double(step) / 5, y: line.middle, held: true))))
+            }
+            sent.append(send(.pointer(tab: tab, event: PagePointer(kind: .released, x: to, y: line.middle))))
+            return sent
+        }
+
+        let dragged = drag(across: first)
+        let copy = send(.copy(tab: tab))
+        guard case .text(let copied)? = answer(copy) else { return XCTFail("no text copied") }
+        XCTAssertEqual(copied.trimmingCharacters(in: .whitespaces), "alpha beta gamma delta", "⌘C read the page before the drag was done")
+        for id in dragged { if case .refused(let why)? = answer(id) { XCTFail(why) } }
+
+        let draggedAgain = drag(across: second)
+        let context = send(.contextAt(tab: tab, x: second.x + 30, y: second.middle))
+        guard case .context(_, let selection)? = answer(context) else { return XCTFail("no context") }
+        XCTAssertEqual(selection.trimmingCharacters(in: .whitespaces), "epsilon zeta eta theta", "the right click read the page before the drag was done")
+        for id in draggedAgain { if case .refused(let why)? = answer(id) { XCTFail(why) } }
+    }
+
     /// BROWSER-19 (#100): a page shown on the Mac as a device whose pixels
     /// are not the screen's, watched by a device: what the Mac shows of it
     /// stays as it is, the page standing still.

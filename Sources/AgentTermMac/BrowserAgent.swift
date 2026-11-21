@@ -556,8 +556,9 @@ extension AppModel {
     private func deviceRequest(_ request: BrowserRequest, inTurn: Bool = false) async -> BrowserResult {
         // What a device does to a page is done in the order it was sent:
         // each answer is awaited in a task of its own, and text typed and a
-        // Backspace after it must not change places.
-        if !inTurn, request.acts, let id = request.tab, let tab = browsers.tab(id: id) {
+        // Backspace after it must not change places, nor a drag and the
+        // copy of what it selected.
+        if !inTurn, request.followsTheDevicesInput, let id = request.tab, let tab = browsers.tab(id: id) {
             let before = tab.deviceInput
             let turn = Task { @MainActor [weak self] () -> BrowserResult in
                 _ = await before?.value

@@ -1583,7 +1583,10 @@ it, through shadow roots and frames of the same site; a frame of another
 site counts as a field), and the device's keyboard comes up for it; a
 `newTab` with the new tab's id (`opened`). What a device does to a page
 is done on the Mac in the order it was sent (`BrowserTab.deviceInput`
-chains them), since each answer is awaited in a task of its own. A page
+chains them), since each answer is awaited in a task of its own; so is
+what reads what that input made, a `copy` and a `contextAt`, which are
+not refused while the user has the tab as what acts is
+(`BrowserRequest.followsTheDevicesInput`, #191). A page
 no pane shows that takes the keyboard while it loads is not brought to
 the front, and the keyboard goes back where it was. The
 host keeps which devices watch which tab (`browserWatchers`), and asks the
@@ -1595,7 +1598,9 @@ watchers. A Mac showing another Mac's page (#147, `RemotePageView`) draws
 those pictures and sends its mouse as `pointer` events in the page's CSS
 pixels: moved (a hover, and with the button held a drag, which selects
 text), pressed and released, each sent once the one before it is answered
-so that they keep their order, the moves made meanwhile kept to the latest.
+so that they keep their order, the moves made meanwhile kept to the latest;
+⌘C and a right click wait in the same queue, never kept to the latest,
+so that they read what the drag before them selected (#191).
 The Mac the browser runs on gives them to Chromium as
 `Input.dispatchMouseEvent`; a press takes an agent's page over, as a tap
 does, a move does not. A right click is not sent to Chromium, whose menu
