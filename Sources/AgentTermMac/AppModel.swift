@@ -348,6 +348,14 @@ final class AppModel: ObservableObject {
     var remoteTabs: [BrowserTabInfo] = []
     var remoteBrowserAsks: [Int: (BrowserResult) -> Void] = [:]
     var nextRemoteBrowserAsk = 1
+    /// Those of them the app sent by itself, with what each asks: their
+    /// refusal is said only as `BrowserRefusal` says (#210).
+    var remoteBrowserAsksByItself: [Int: BrowserRequest] = [:]
+    /// True from the connection to the other Mac closing until its host
+    /// lists its pages again: the pages shown meanwhile are the ones it
+    /// listed before, and what is asked of them is asked by the app itself,
+    /// as the panes come back with the connection (#210).
+    var remotePagesFromBefore = false
     var pendingRemotePage: String?
     /// The tab the element sent last was picked in.
     weak var lastPicked: BrowserTab?
@@ -1493,6 +1501,7 @@ final class AppModel: ObservableObject {
         // What waited for the Mac left is answered, not said: the user
         // switched (#196).
         refuseRemoteBrowserAsks(macName: remote?.name ?? "the other Mac", tell: false)
+        remotePagesFromBefore = false
         remote = mac
         UserDefaults.standard.set(mac?.id, forKey: Self.currentMacKey)
         forgetHostState()
@@ -1676,7 +1685,10 @@ final class AppModel: ObservableObject {
             connection = nil
             // What waited for the other Mac's browser cannot be answered
             // by it now: answered at once, and said (#196).
-            if let remote { refuseRemoteBrowserAsks(macName: remote.name, tell: true) }
+            if let remote {
+                refuseRemoteBrowserAsks(macName: remote.name, tell: true)
+                remotePagesFromBefore = true
+            }
             files.connectionLost()
             search.connectionLost()
             historyStore.reset()
@@ -1847,6 +1859,7 @@ final class AppModel: ObservableObject {
             // This Mac's own are this app's, which said them; another Mac's
             // are shown here as its host lists them (#147).
             guard isRemote else { break }
+            remotePagesFromBefore = false
             remoteTabs = list
             browsers.mirror(list, sessions: sessions)
             if let wanted = pendingRemotePage, let tab = browsers.tab(id: wanted) {

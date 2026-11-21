@@ -773,7 +773,12 @@ user sees.
   is away says it asks nothing then, and is asked for again by itself when
   the connection comes back, the line under it gone once the Mac answers
   (#209); on the Mac, another Mac's page shown again with the connection
-  is asked for again too.
+  is asked for again too. What that Mac's host refuses of what the Mac
+  asked of its page by itself (the page shown again with the connection,
+  asked again at a new width, let go of as it goes) because that Mac's app
+  is not connected is not said in an alert: its pages go until that app
+  is back, and are asked for again then (the owner's decision,
+  2026-11-21, #210). A page the user opens is still refused in an alert.
 
 ### Usage
 

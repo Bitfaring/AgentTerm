@@ -21,11 +21,14 @@ extension AppModel {
     // MARK: Another Mac's browser (#147)
 
     /// Asks the other Mac's browser, through its host, as the iPhone does;
-    /// what it refuses is said.
-    func askRemoteBrowser(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
+    /// what it refuses is said, apart from what `BrowserRefusal` leaves
+    /// unsaid of what the app asked by itself (#210): `byItself`, or any
+    /// ask of the pages listed before the connection came back.
+    func askRemoteBrowser(_ request: BrowserRequest, byItself: Bool = false, _ done: @escaping (BrowserResult) -> Void = { _ in }) {
         guard isRemote, let connection else { return done(.refused(BrowserWords.noApp)) }
         let id = nextRemoteBrowserAsk
         nextRemoteBrowserAsk += 1
+        if byItself || remotePagesFromBefore { remoteBrowserAsksByItself[id] = request }
         remoteBrowserAsks[id] = { result in
             Self.noteRemoteBrowserAnswer(result)
             done(result)
@@ -48,8 +51,9 @@ extension AppModel {
 
     /// What the other Mac's browser answered.
     func remoteBrowserAnswered(id: Int, result: BrowserResult) {
+        let byItself = remoteBrowserAsksByItself.removeValue(forKey: id)
         guard let done = remoteBrowserAsks.removeValue(forKey: id) else { return }
-        if case .refused(let why) = result { notice = why }
+        if case .refused(let why) = result, byItself.map({ BrowserRefusal.isSaid(why, of: $0, byItself: true) }) ?? true { notice = why }
         done(result)
     }
 
@@ -60,6 +64,7 @@ extension AppModel {
     func refuseRemoteBrowserAsks(macName: String, tell: Bool) {
         let waiting = remoteBrowserAsks
         remoteBrowserAsks = [:]
+        remoteBrowserAsksByItself = [:]
         guard !waiting.isEmpty else { return }
         let why = BrowserWords.otherMacClosed(macName)
         if tell { notice = why }

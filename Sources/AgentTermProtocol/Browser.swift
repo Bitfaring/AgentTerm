@@ -505,6 +505,21 @@ public struct PagePointer: Codable, Equatable, Sendable {
     }
 }
 
+/// Whether the Mac says, in an alert, what another Mac's browser refused
+/// it (#210). The owner decided (2026-11-21) that a watch or an unwatch the
+/// app sent by itself (a page shown again as the connection comes back, a
+/// page that goes, a new width), refused because that Mac's app is not
+/// connected (`BrowserWords.noApp`), is not said: the page says it waits,
+/// and it is watched again once that app is back (REMOTE-31). A watch the
+/// user asked for, by opening a page, is still refused out loud, and so is
+/// every other refusal.
+public enum BrowserRefusal {
+    public static func isSaid(_ why: String, of request: BrowserRequest, byItself: Bool) -> Bool {
+        guard byItself, why == BrowserWords.noApp, case .watch = request else { return true }
+        return false
+    }
+}
+
 /// What the apps and the agents are told about the browser, in the same
 /// words everywhere (principle 9).
 public enum BrowserWords {

@@ -20,7 +20,7 @@ struct RemotePageView: NSViewRepresentable {
         // Its Mac's page only: what is still in its queue once another Mac
         // is on show is not sent to that one, whose tab may have its id (#196).
         let mac = model.remote
-        view.send = { [weak model] request in if let model, model.remote == mac { model.askRemoteBrowser(request) } }
+        view.send = { [weak model] request, byItself in if let model, model.remote == mac { model.askRemoteBrowser(request, byItself: byItself) } }
         view.ask = { [weak model] request, done in
             guard let model, model.remote == mac else { return done(.refused(BrowserWords.otherMacClosed(mac?.name ?? "the other Mac"))) }
             model.askRemoteBrowser(request, done)
@@ -39,7 +39,9 @@ struct RemotePageView: NSViewRepresentable {
 final class RemotePageNSView: NSView {
     var tabID = ""
     var project = ""
-    var send: ((BrowserRequest) -> Void)?
+    /// Sends a request, and whether the app sent it by itself rather than
+    /// for something the user did (#210).
+    var send: ((BrowserRequest, _ byItself: Bool) -> Void)?
     /// A request whose answer is wanted.
     var ask: ((BrowserRequest, @escaping (BrowserResult) -> Void) -> Void)?
     /// What the mouse, the keys and the wheel do, and what reads what they
@@ -68,14 +70,18 @@ final class RemotePageNSView: NSView {
 
     private var pixelWidth: Int { max(320, Int(bounds.width * (window?.backingScaleFactor ?? 2))) }
 
+    /// Watched as the page is opened, which the user asked for; again at a
+    /// new width, and no longer as it goes, which the app does by itself
+    /// (#210).
     func watch(_ on: Bool) {
         guard !tabID.isEmpty else { return }
         if on {
+            let again = watchedWidth != nil
             watchedWidth = pixelWidth
-            send?(.watch(tab: tabID, on: true, width: pixelWidth))
+            send?(.watch(tab: tabID, on: true, width: pixelWidth), again)
         } else if watchedWidth != nil {
             watchedWidth = nil
-            send?(.watch(tab: tabID, on: false, width: 0))
+            send?(.watch(tab: tabID, on: false, width: 0), true)
         }
     }
 
@@ -206,7 +212,7 @@ final class RemotePageNSView: NSView {
         if let link {
             item(BrowserWords.PageMenu.openLink) { [weak self] in
                 guard let self else { return }
-                self.send?(.newTab(project: self.project, url: link, profile: nil, private: false))
+                self.send?(.newTab(project: self.project, url: link, profile: nil, private: false), false)
             }
             item(BrowserWords.PageMenu.copyLink) { Self.putOnPasteboard(link) }
             menu.addItem(.separator())

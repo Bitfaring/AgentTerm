@@ -673,6 +673,10 @@ final class RemoteMacTests: MacUITestCase {
         app.wait(for: .containing("The host on Other Mac stopped unexpectedly"), timeout: 30)
         // Its pages go with its app: none is shown as loading meanwhile.
         app.waitGone(.id("remote-page"), timeout: 15)
+        // The page's watch and unwatch, sent by the app itself as the
+        // panes come back, are refused without an alert (REMOTE-32, the
+        // owner's decision, 2026-11-21).
+        XCTAssertNil(app.first(.containing(BrowserWords.noApp)), "a watch the app sent by itself was refused in an alert")
         shot("app-not-back")
         // That Mac's app comes back, with its page.
         let second = try device("Mac", state: otherState, port: otherPort)
