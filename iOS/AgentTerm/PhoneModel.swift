@@ -2556,7 +2556,8 @@ final class PhoneModel: ObservableObject {
 /// (#66) and the notification service extension makes the same ones.
 final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
     weak var model: PhoneModel?
-    private var asked = false
+    /// Whether iOS was asked, and who waits for its answer (#200).
+    private var permission = PermissionAsk<(Bool) -> Void>()
 
     override init() {
         super.init()
@@ -2582,18 +2583,25 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     /// Asks iOS, the first time, whether the app may notify; `done` is told
     /// whether it may. Never while the app's notifications are off (#195):
-    /// whatever asks, iOS is asked only once the user turns them on.
+    /// whatever asks, iOS is asked only once the user turns them on. What
+    /// asks while iOS's question is open is told its answer (#200), not the
+    /// settings, which say "not determined" until then.
     @MainActor func askOnce(_ done: ((Bool) -> Void)? = nil) {
-        guard model?.notifyAgents != false else {
-            done?(false)
-            return
+        let done = done ?? { _ in }
+        switch permission.ask(done, switchedOn: model?.notifyAgents != false) {
+        case .refuse:
+            done(false)
+        case .wait:
+            break
+        case .readSettings:
+            UNUserNotificationCenter.current().getNotificationSettings { settings in done(settings.authorizationStatus == .authorized) }
+        case .request:
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                DispatchQueue.main.async {
+                    for waiting in self.permission.answered() { waiting(granted) }
+                }
+            }
         }
-        guard !asked else {
-            UNUserNotificationCenter.current().getNotificationSettings { settings in done?(settings.authorizationStatus == .authorized) }
-            return
-        }
-        asked = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in done?(granted) }
     }
 
     /// Takes back what was posted of these notices: handled, here or on

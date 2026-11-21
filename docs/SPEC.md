@@ -300,7 +300,9 @@ happened; the Live Activity shows the host's state now (below).
   Mac's (#180). Not Now turns "Tell me when an agent is done or needs me"
   off, as Settings then shows, and iOS is not asked, not when the phone
   pairs either, until that switch is turned on again (#195, decided by the
-  owner).
+  owner). iOS asks once: what wants to know meanwhile (pairing, then the
+  pushes) waits for the user's answer, and is not told no while the
+  question is still on screen (#200).
 - **On the Mac**, a banner while the app is in front, which opens the
   session; and a macOS notification, with the app in front or not (#180),
   with Reply and the choices as on the iPhone: "Notify when an agent is
