@@ -170,6 +170,7 @@ final class AgentLinkTests: XCTestCase {
         let process = Process()
         process.executableURL = root.appendingPathComponent("bin/claude")
         process.arguments = ["5"]
+        process.environment = OwnEnvironment.withoutAgentTerms
         try process.run()
         defer { process.terminate() }
         wait("its name") { ProcessNames.command(of: process.processIdentifier) == "claude" }

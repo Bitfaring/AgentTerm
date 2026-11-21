@@ -718,7 +718,10 @@ Every hook runs `agenttermd hook <agent> <event>`. It saves what it is told,
 with the agent, the event and the time, in the file the session's
 environment names (`AppChannel.eventsVariable`, each build's own, so that
 the other build's hooks leave this one's sessions alone):
-`events/session-<id>.json` in the usage folder. Every session has one, a
+`events/session-<id>.json` in the usage folder. A host started from inside
+a session of AgentTerm gives its sessions none of that session's own
+variables, of either build (`HostEnvironment.sessionsOwnVariables`, #207),
+only its own. Every session has one, a
 shell's too, for an agent typed in it. Outside a session of AgentTerm's it
 does nothing. The command is the same for every session because Codex
 trusts a hook by its command and asks again when it changes. For

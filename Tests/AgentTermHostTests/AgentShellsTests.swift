@@ -396,9 +396,9 @@ final class AgentShellsHostTests: XCTestCase {
         let process = Process()
         process.executableURL = tool
         process.arguments = ["mcp"]
-        var environment = ProcessInfo.processInfo.environment
+        var environment = OwnEnvironment.withoutAgentTerms
         environment[HostServer.agentShellsVariable] = variable
-        if let state { environment["AGENTTERM_STATE_DIR"] = state.path }
+        environment["AGENTTERM_STATE_DIR"] = (state ?? root.appendingPathComponent("state")).path
         process.environment = environment
         let input = Pipe(), output = Pipe()
         process.standardInput = input

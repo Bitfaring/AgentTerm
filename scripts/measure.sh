@@ -10,5 +10,8 @@
 # a port and a home folder of its own.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# None of the installed app's variables reaches the tests (#207).
+source scripts/lib-own-environment.sh
+own_environment
 CONFIGURATION="${CONFIGURATION:-debug}"
 AGENTTERM_MEASURE=1 swift test -c "$CONFIGURATION" --filter PerformanceMeasurements 2>&1 | grep -E "^MEASURE |error:|Executed [0-9]+ test" | sed 's/^MEASURE //'

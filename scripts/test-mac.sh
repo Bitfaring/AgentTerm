@@ -15,6 +15,9 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# None of the installed app's variables reaches the tests (#207).
+source scripts/lib-own-environment.sh
+own_environment AGENTTERM_REAL_AGENTS AGENTTERM_EXTENSION_TRIAL AGENTTERM_MAC_UI_PORT
 # Chromium first, so that the first build already has it (#181).
 ./scripts/fetch-cef.sh
 swift build --build-tests

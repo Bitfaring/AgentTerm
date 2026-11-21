@@ -97,7 +97,7 @@ final class LaunchdHostTests: XCTestCase {
     }
 
     private func startHost() -> (start: DaemonLauncher.Start, lastExit: Int32?) {
-        var environment = ProcessInfo.processInfo.environment
+        var environment = OwnEnvironment.withoutAgentTerms
         environment["AGENTTERM_STATE_DIR"] = state.path
         let result = DaemonLauncher.startHost(
             executable: item.executable, arguments: item.arguments, loginItem: item, environment: environment, log: item.log)

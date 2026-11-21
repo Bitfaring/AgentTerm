@@ -147,7 +147,7 @@ class MacUITestCase: XCTestCase {
     }
 
     /// What a program was started with, as the kernel keeps it.
-    private static func argumentsAndEnvironment(of pid: pid_t) -> ([String], [String: String])? {
+    static func argumentsAndEnvironment(of pid: pid_t) -> ([String], [String: String])? {
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
         var size = 0
         guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
@@ -560,12 +560,21 @@ class MacUITestCase: XCTestCase {
         return process
     }
 
+    /// This process's environment with none of AgentTerm's variables
+    /// (TEST-11, #207): the tests may be run from a session of the
+    /// installed app, whose own (its hooks' file, its MCP server's key) are
+    /// in it. What a test starts gets the `AGENTTERM_` variables the test
+    /// gives it, and no other.
+    static var withoutAgentTerms: [String: String] {
+        ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("AGENTTERM_") }
+    }
+
     /// This process's environment, with `home` as the home folder: the
     /// login shells the host starts, for sessions and to find the user's
     /// PATH, read their startup files from there, and none of those of the
     /// person running the tests (TEST-1).
     static func ownHome(_ home: URL) -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
+        var environment = withoutAgentTerms
         environment["HOME"] = home.path
         // zsh looks for its files here first, whatever HOME says.
         environment["ZDOTDIR"] = home.path
@@ -628,7 +637,7 @@ class MacUITestCase: XCTestCase {
         let process = Process()
         process.executableURL = products.appendingPathComponent("agenttermd")
         process.arguments = ["pairing-link", "--port", String(port), "--host", "127.0.0.1", "--name", name]
-        var environment = ProcessInfo.processInfo.environment
+        var environment = Self.withoutAgentTerms
         environment["AGENTTERM_STATE_DIR"] = state.path
         process.environment = environment
         let pipe = Pipe()

@@ -59,7 +59,15 @@ copy's host (HOST-1), naming `xctest`, in every picture of those tests
 (#204). It is what the app does for any program not its own host on its
 port; no other host, left behind or the installed app's, is involved. Its
 "Use This App's Host…" would stop the test runner: no test presses it
-there. All
+there. Run from a session of the installed app, the tests have that
+session's own variables (`AGENTTERM_EVENTS`, `AGENTTERM_USAGE`,
+`AGENTTERM_MCP`), which reached every host, app and session they started
+(#207). The test scripts now take every `AGENTTERM_` variable out of their
+environment first, but the settings they document
+(`scripts/lib-own-environment.sh`); what a test starts is given none of
+the test runner's `AGENTTERM_` variables, only those the test sets
+(`withoutAgentTerms`); and a host gives its sessions none of the session
+it was started from (TEST-10, TEST-11). All
 layers use state folders, ports, a home folder and preferences of their own,
 and stand-in agents (small scripts) instead of the installed ones: the
 installed app, its sessions, its paired devices and the user's accounts are
@@ -985,6 +993,8 @@ and the test talks to the real `agenttermd mcp` with it.
 | TEST-7 | A shell started by itself that ends at the first request, waiting for a program that ignores being asked | Stopped | The program is killed three seconds on. Before the fix it was left running | H |
 | TEST-8 | A host whose figures of the Mac come as often as they can | A session's command ends | The last list of sessions is empty, whatever came after it. The test looked at the last message only, and failed on CI whenever the figures came right after the list | H |
 | TEST-9 (#203) | A Mac UI test over, all it started stopped | Any program of the build is still running with the test's state folder (a host the app started by itself on a proxy's port, the app, a helper) | It is named and ended, and the test fails. Before the fix `WaitingTests` stopped its `SlowProxy` before the app quit, and with `ALL_SHOTS` a host on the proxy's port outlived every run of it, unseen by `test-mac.sh` | M |
+| TEST-10 (#207) | The host's tests, run from a session of the installed app: its hooks' file, its status line's and its MCP server's key, of either build, in the test runner's environment | A session of a test's host starts | It has none of them: those names have its own host's values, or none. Before the fix the other build's two came through | H |
+| TEST-11 (#207) | The Mac UI tests, with those variables and another of AgentTerm's in the test runner's environment | A test starts its host and its app, and a session in it | None of the three is given any of them. Before the fix `ownHome` passed every one on to the host and the app | M |
 | SET-1 | The Mac app's Settings left on Privacy | Left for Sessions, opened again with ⌘, | It opens on General | M |
 | SET-2 | A setting the host tidies (a blank model, an unknown agent; keep awake options; the display) | A client asks for what, once tidied, the host keeps already | The asker is told what the host keeps | H |
 | SET-3 | Start at Login on | The launch agent is removed outside AgentTerm | Every client is told it is off, without asking | H |

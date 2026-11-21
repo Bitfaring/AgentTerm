@@ -286,7 +286,7 @@ final class PerformanceMeasurements: XCTestCase {
         let host = Process()
         host.executableURL = tool
         host.arguments = ["--port", String(port), "--local-only", "--no-account-usage", "--home", root.path, "--agents", root.path]
-        var environment = ProcessInfo.processInfo.environment
+        var environment = OwnEnvironment.withoutAgentTerms
         environment["AGENTTERM_STATE_DIR"] = state.path
         environment["HOME"] = root.path
         environment["ZDOTDIR"] = root.path

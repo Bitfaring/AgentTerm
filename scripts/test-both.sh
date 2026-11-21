@@ -17,6 +17,9 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# None of the installed app's variables reaches the tests (#207).
+source scripts/lib-own-environment.sh
+own_environment
 command -v xcodegen >/dev/null || { echo "test-both.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
 source scripts/lib-simulator.sh
 source scripts/lib-cleanup.sh

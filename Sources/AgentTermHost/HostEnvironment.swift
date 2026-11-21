@@ -68,6 +68,7 @@ public enum HostEnvironment {
         for key in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION"] {
             env[key] = nil
         }
+        withoutTheOuterSessions(&env)
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "AgentTerm"
@@ -90,6 +91,21 @@ public enum HostEnvironment {
         if LoginShellPath.underTests { env["ZDOTDIR"] = testShellHome.path }
         keepGitOffTheirConfiguration(&env)
         return env
+    }
+
+    /// The variables a host gives each of its sessions, of both builds
+    /// (#207). A host started from inside a session of AgentTerm (a test's
+    /// host, a development build's, the tests themselves) has that
+    /// session's: passed on, an agent in one of its sessions would report
+    /// to the other host, or use its key (principle 7). The host sets its
+    /// own build's afterwards; the other build's a session does not have.
+    static let sessionsOwnVariables = [
+        AppChannel.release.eventsVariable, AppChannel.dev.eventsVariable, AppChannel.release.usageVariable, AppChannel.dev.usageVariable,
+        HostServer.agentShellsVariable,
+    ]
+
+    static func withoutTheOuterSessions(_ env: inout [String: String]) {
+        for key in sessionsOwnVariables { env[key] = nil }
     }
 
     /// Under XCTest, git reads no global configuration: the identity, hooks
@@ -129,6 +145,7 @@ public enum HostEnvironment {
         guard LoginShellPath.underTests else { return nil }
         var env = ProcessInfo.processInfo.environment
         env["ZDOTDIR"] = testShellHome.path
+        withoutTheOuterSessions(&env)
         return env
     }
 
