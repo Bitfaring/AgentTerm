@@ -896,6 +896,83 @@ final class BrowserUITests: MacUITestCase {
         for id in draggedAgain { if case .refused(let why)? = answer(id) { XCTFail(why) } }
     }
 
+    /// BROWSER-54 (#199), the Mac whose page it is: text typed right after
+    /// a click into a field, and a scroll right after a drag, all sent
+    /// without waiting for their answers, are done in the order sent. The
+    /// viewing Mac now sends them in order (`PageInputQueueTests`); this is
+    /// the host keeping that order, which it already did
+    /// (`followsTheDevicesInput`): it was not seen failing before the fix.
+    func testTextRightAfterAClickAndAScrollRightAfterADragKeepTheirOrder() throws {
+        let folder = root.appendingPathComponent("order")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = folder.appendingPathComponent("order.html")
+        try """
+        <!doctype html><title>Order</title>
+        <style>body { margin: 0; font: 20px monospace } p { margin: 0; padding: 20px; white-space: nowrap } input { font: 20px monospace; margin: 20px; width: 400px }</style>
+        <input id="field">
+        <p id="line">alpha beta gamma delta</p>
+        <div style="height: 3000px"></div>
+        """.write(to: page, atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let mac = try device()
+        var asked = 4000
+        // Sent, its answer not waited for.
+        func send(_ request: BrowserRequest) -> Int {
+            asked += 1
+            mac.send(.browserAsk(id: asked, request: request))
+            return asked
+        }
+        func answer(_ id: Int) -> BrowserResult? {
+            var answer: BrowserResult?
+            wait("the answer to \(id)") {
+                answer = mac.messages.lazy.compactMap { if case .browserAnswer(id, let result) = $0 { return result } else { return nil } }.first
+                return answer != nil
+            }
+            return answer
+        }
+        func evaluate(_ script: String) -> String { server.text("browser_evaluate", ["tab": tab, "script": script]).text }
+        func rect(_ id: String) throws -> (x: Double, right: Double, middle: Double) {
+            let text = evaluate("(r => [r.x, r.right, r.y + r.height / 2])(document.getElementById('\(id)').getBoundingClientRect())")
+            let numbers = text.split { !"0123456789.".contains($0) }.compactMap { Double($0) }
+            XCTAssertEqual(numbers.count, 3, text)
+            return (numbers[0], numbers[1], numbers[2])
+        }
+        wait("the page", timeout: 15) { evaluate("document.title").contains("Order") }
+        let field = try rect("field"), line = try rect("line")
+
+        // A click into the field, then text typed at once.
+        let x = field.x + 30
+        var sent = [
+            send(.pointer(tab: tab, event: PagePointer(kind: .moved, x: x, y: field.middle))),
+            send(.pointer(tab: tab, event: PagePointer(kind: .pressed, x: x, y: field.middle, held: true))),
+            send(.pointer(tab: tab, event: PagePointer(kind: .released, x: x, y: field.middle))),
+        ]
+        let typed = send(.text(tab: tab, text: "typed"))
+        if case .refused(let why)? = answer(typed) { XCTFail(why) }
+        XCTAssertTrue(evaluate("document.getElementById('field').value").contains("typed"), "the text reached the page before the click put the caret in the field")
+
+        // A drag across the line, then a scroll at once, then what it selected.
+        let from = line.x + 20, to = line.right - 20
+        sent += [
+            send(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from, y: line.middle))),
+            send(.pointer(tab: tab, event: PagePointer(kind: .pressed, x: from, y: line.middle, held: true))),
+        ]
+        for step in 1...5 {
+            sent.append(send(.pointer(tab: tab, event: PagePointer(kind: .moved, x: from + (to - from) * Double(step) / 5, y: line.middle, held: true))))
+        }
+        sent.append(send(.pointer(tab: tab, event: PagePointer(kind: .released, x: to, y: line.middle))))
+        let scrolled = send(.scroll(tab: tab, ref: nil, x: 0, y: 600))
+        let copy = send(.copy(tab: tab))
+        guard case .text(let copied)? = answer(copy) else { return XCTFail("no text copied") }
+        XCTAssertEqual(copied.trimmingCharacters(in: .whitespaces), "alpha beta gamma delta", "the scroll was done before the drag")
+        if case .refused(let why)? = answer(scrolled) { XCTFail(why) }
+        wait("the page scrolled") { (Double(evaluate("window.scrollY").filter { "0123456789.".contains($0) }) ?? 0) > 0 }
+        for id in sent { if case .refused(let why)? = answer(id) { XCTFail(why) } }
+    }
+
     /// BROWSER-19 (#100): a page shown on the Mac as a device whose pixels
     /// are not the screen's, watched by a device: what the Mac shows of it
     /// stays as it is, the page standing still.

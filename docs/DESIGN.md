@@ -1640,7 +1640,15 @@ pixels: moved (a hover, and with the button held a drag, which selects
 text), pressed and released, each sent once the one before it is answered
 so that they keep their order, the moves made meanwhile kept to the latest;
 ⌘C and a right click wait in the same queue, never kept to the latest,
-so that they read what the drag before them selected (#191).
+so that they read what the drag before them selected (#191); so do the
+keys, text typed and pasted, the wheel, a press by accessibility and the
+menu's Back, Forward and Reload, everything that follows the device's
+input on the Mac whose page it is (`followsTheDevicesInput`), so that
+text typed right after a click goes where the click's release put the
+caret and a scroll comes after the drag before it (#199). The queue is
+`PageInputQueue` (AgentTermProtocol): while one waits for its answer,
+moves are kept to the latest, scrolls added up and text typed joined,
+none dropped; a watch and a new tab, which follow no input, go at once.
 The Mac the browser runs on gives them to Chromium as
 `Input.dispatchMouseEvent`; a press takes an agent's page over, as a tap
 does, a move does not. A right click is not sent to Chromium, whose menu

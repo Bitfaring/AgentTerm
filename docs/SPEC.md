@@ -728,7 +728,10 @@ user sees.
   Back, Forward, Reload; a page's own right-click menu is not shown), the
   address, back, forward, reload, stop, close, taking a page
   from its agent and giving it back, and a new page of the user's (in that
-  Mac's default profile). What is done in a Mac's own Chromium (picking an
+  Mac's default profile). What the mouse, the keys and the wheel do reaches
+  that Mac in the order it was done, however slow the link: text typed
+  right after a click goes where the click put the caret, and a scroll
+  never passes the drag before it (#191, #199). What is done in a Mac's own Chromium (picking an
   element, Show As, finding, zooming, the developer tools, a page beside an
   agent) is on that Mac, and the page's menu says so.
 - **On the iPhone**, as on the Mac: an agent's own shells and pages are

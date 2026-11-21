@@ -83,6 +83,8 @@ final class RemoteMacTests: MacUITestCase {
         // A click there, at the page's point.
         app.press(.id("remote-page"))
         wait("the click sent", timeout: 15) { calls().contains { if case .tap("7", _, _) = $0.request { return true } else { return false } } }
+        // Answered, as that Mac's app answers it: what comes after it waits for that (#199).
+        for call in calls() { if case .tap = call.request { browser.send(.browserReply(id: call.id, result: .text("Tapped."))) } }
 
         // ⌘C: what is selected there is asked for. Answered with nothing, so
         // that the test leaves this Mac's pasteboard as it is.
@@ -146,6 +148,64 @@ final class RemoteMacTests: MacUITestCase {
         app.wait(for: .containing(BrowserWords.otherMacClosed("Other Mac")), timeout: 20)
         shot("remote-browser-gone")
         app.press(.button("OK"))
+    }
+
+    /// BROWSER-54 (#199): what is done on the other Mac's page waits for
+    /// what was done there before it to be answered, as the mouse's events
+    /// do: a click right after ⌘C, whose answer that Mac's stand-in holds
+    /// back, is sent once the copy is answered, not before. The keys, text
+    /// typed and the wheel wait in the same queue (`PageInputQueueTests`),
+    /// which accessibility cannot make: it presses, it cannot type into a
+    /// picture nor turn a wheel. Before the fix the click, as the keys and
+    /// the wheel, was sent at once, past what waited.
+    func testWhatIsDoneOnTheOtherMacsPageWaitsForWhatWasDoneBeforeIt() throws {
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        func calls() -> [(id: Int, request: BrowserRequest)] {
+            browser.messages.compactMap { if case .browserCall(let id, _, let request) = $0 { return (id, request) } else { return nil } }
+        }
+        func taps() -> [Int] { calls().compactMap { if case .tap("7", _, _) = $0.request { return $0.id } else { return nil } } }
+        wait("the page watched", timeout: 15) { calls().contains { if case .watch("7", true, _) = $0.request { return true } else { return false } } }
+        for call in calls() { browser.send(.browserReply(id: call.id, result: .text("Watching tab 7."))) }
+        // A picture of the page, which a press clicks in the middle of.
+        let image = NSImage(size: NSSize(width: 400, height: 200))
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: 400, height: 200).fill()
+        image.unlockFocus()
+        let jpeg = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation))?.representation(using: .jpeg, properties: [:]))
+        browser.send(.browserFrame(tab: "7", jpeg: jpeg, width: 400, height: 200))
+
+        // Drawn: white, against the dark the view shows before a picture.
+        let page = try XCTUnwrap(app.frame(of: .id("remote-page")))
+        wait("the picture drawn", timeout: 15) {
+            guard let color = self.app.color(at: CGPoint(x: page.minX + 20, y: page.minY + 20))?.usingColorSpace(.sRGB) else { return false }
+            return color.redComponent > 0.7 && color.greenComponent > 0.7 && color.blueComponent > 0.7
+        }
+
+        // A first click, answered: the keyboard and Edit's commands go to the page.
+        app.press(.id("remote-page"))
+        wait("the click sent", timeout: 15) { !taps().isEmpty }
+        for id in taps() { browser.send(.browserReply(id: id, result: .text("Tapped."))) }
+        let clicked = taps().count
+
+        // ⌘C asked there, its answer held back by that Mac's stand-in.
+        app.menu(["Edit", "Copy"])
+        wait("the selection asked for", timeout: 15) { calls().contains { if case .copy("7") = $0.request { return true } else { return false } } }
+        let copy = try XCTUnwrap(calls().last { $0.request == .copy(tab: "7") })
+        // A click right after it waits for its answer.
+        app.press(.id("remote-page"))
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertEqual(taps().count, clicked, "the click was sent before the copy before it was answered")
+        // Answered with nothing, so that the test leaves this Mac's pasteboard as it is.
+        browser.send(.browserReply(id: copy.id, result: .text("")))
+        wait("the click sent once the copy is answered", timeout: 15) { taps().count == clicked + 1 }
     }
 
     func testPairingShowsTheOtherMacAndWorkingOnItChangesItsDisk() throws {

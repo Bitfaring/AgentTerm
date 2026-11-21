@@ -7,7 +7,8 @@ import SwiftUI
 /// and what the mouse and the keyboard do sent there: the keys and the
 /// wheel by the same requests a device makes (`press`, `text`, `scroll`),
 /// the mouse by `pointer` (hover, click, drag, selecting text), a right
-/// click by a menu of this Mac's made from `contextAt`, ⌘C by `copy`.
+/// click by a menu of this Mac's made from `contextAt`, ⌘C by `copy`. All
+/// of it in the order done, one at a time (`PageInputQueue`, #191, #199).
 struct RemotePageView: NSViewRepresentable {
     @ObservedObject var tab: BrowserTab
     let model: AppModel
@@ -41,18 +42,10 @@ final class RemotePageNSView: NSView {
     var send: ((BrowserRequest) -> Void)?
     /// A request whose answer is wanted.
     var ask: ((BrowserRequest, @escaping (BrowserResult) -> Void) -> Void)?
-    /// The mouse's events, and what reads what they did (⌘C, a right
-    /// click), sent one at a time in their order: the next once the last is
-    /// answered, moves meanwhile kept to the latest only.
-    private var inputQueue: [Queued] = []
-    private var inputInFlight = false
-
-    private enum Queued {
-        case pointer(PagePointer)
-        /// Asked once the mouse's events before it are answered, and
-        /// answered to its own callback.
-        case asked(BrowserRequest, (BrowserResult) -> Void)
-    }
+    /// What the mouse, the keys and the wheel do, and what reads what they
+    /// did (⌘C, a right click), sent one at a time in their order: the next
+    /// once the last is answered (#191, #199).
+    private var inputQueue = PageInputQueue<(BrowserResult) -> Void>()
     var frameImage: (image: NSImage, width: Double, height: Double)?
     /// The width the pictures were asked at, in pixels; nil while not watched.
     private var watchedWidth: Int?
@@ -121,36 +114,24 @@ final class RemotePageNSView: NSView {
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
     }
 
-    /// Sends a mouse event after the ones before it.
-    private func point(_ event: PagePointer) {
-        if event.kind == .moved, case .pointer(let last)? = inputQueue.last, last.kind == .moved {
-            inputQueue[inputQueue.count - 1] = .pointer(event)
-        } else {
-            inputQueue.append(.pointer(event))
-        }
-        sendNextInput()
-    }
+    /// Sends a mouse event after what was done before it.
+    private func point(_ event: PagePointer) { input(.pointer(tab: tabID, event: event)) }
 
-    /// Asks after the mouse's events before it (#147): what a drag selected
-    /// is read once its last move and its release are there, not before.
-    private func askInTurn(_ request: BrowserRequest, _ done: @escaping (BrowserResult) -> Void) {
-        inputQueue.append(.asked(request, done))
+    /// Sends what the mouse, the keys or the wheel did, or asks what reads
+    /// it, after what was done before it: what a drag selected is read once
+    /// its last move and its release are there (#191), text typed after a
+    /// click goes in once the click's release is there (#199).
+    private func input(_ request: BrowserRequest, _ done: ((BrowserResult) -> Void)? = nil) {
+        if let now = inputQueue.add(request, answer: done) { ask?(now.request, now.answer ?? { _ in }) }
         sendNextInput()
     }
 
     private func sendNextInput() {
-        guard !inputInFlight, !inputQueue.isEmpty, let ask else { return }
-        let request: BrowserRequest
-        var done: ((BrowserResult) -> Void)?
-        switch inputQueue.removeFirst() {
-        case .pointer(let event): request = .pointer(tab: tabID, event: event)
-        case .asked(let asked, let answer): (request, done) = (asked, answer)
-        }
-        inputInFlight = true
-        ask(request) { [weak self] result in
-            done?(result)
+        guard let ask, let item = inputQueue.next() else { return }
+        ask(item.request) { [weak self] result in
+            item.answer?(result)
             DispatchQueue.main.async {
-                self?.inputInFlight = false
+                self?.inputQueue.answered()
                 self?.sendNextInput()
             }
         }
@@ -198,7 +179,7 @@ final class RemotePageNSView: NSView {
 
     /// The menu for a point of the page, at a point of this view.
     private func showMenu(at point: (x: Double, y: Double), location: NSPoint) {
-        askInTurn(.contextAt(tab: tabID, x: point.x, y: point.y)) { [weak self] result in
+        input(.contextAt(tab: tabID, x: point.x, y: point.y)) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self, case .context(let link, let selection) = result else { return }
                 self.showMenu(link: link, selection: selection, at: location)
@@ -230,9 +211,9 @@ final class RemotePageNSView: NSView {
             item(BrowserWords.PageMenu.copyLink) { Self.putOnPasteboard(link) }
             menu.addItem(.separator())
         }
-        item(BrowserWords.PageMenu.back) { [weak self] in self.map { $0.send?(.history(tab: $0.tabID, step: -1)) } }
-        item(BrowserWords.PageMenu.forward) { [weak self] in self.map { $0.send?(.history(tab: $0.tabID, step: 1)) } }
-        item(BrowserWords.PageMenu.reload) { [weak self] in self.map { $0.send?(.history(tab: $0.tabID, step: 0)) } }
+        item(BrowserWords.PageMenu.back) { [weak self] in self.map { $0.input(.history(tab: $0.tabID, step: -1)) } }
+        item(BrowserWords.PageMenu.forward) { [weak self] in self.map { $0.input(.history(tab: $0.tabID, step: 1)) } }
+        item(BrowserWords.PageMenu.reload) { [weak self] in self.map { $0.input(.history(tab: $0.tabID, step: 0)) } }
         menu.popUp(positioning: nil, at: location, in: self)
     }
 
@@ -242,9 +223,9 @@ final class RemotePageNSView: NSView {
     }
 
     /// Edit > Copy, ⌘C: what is selected in the page there, on this Mac's
-    /// pasteboard, once the mouse's events before it are done there.
+    /// pasteboard, once the input before it is done there.
     @objc func copy(_ sender: Any?) {
-        askInTurn(.copy(tab: tabID)) { result in
+        input(.copy(tab: tabID)) { result in
             guard case .text(let text) = result, !text.isEmpty else { return }
             DispatchQueue.main.async { Self.putOnPasteboard(text) }
         }
@@ -254,7 +235,8 @@ final class RemotePageNSView: NSView {
         scrolled.width -= event.scrollingDeltaX / scale
         scrolled.height -= event.scrollingDeltaY / scale
         guard abs(scrolled.width) >= 24 || abs(scrolled.height) >= 24 || event.phase == .ended else { return }
-        send?(.scroll(tab: tabID, ref: nil, x: Double(scrolled.width), y: Double(scrolled.height)))
+        // After a drag before it, never past it (#199).
+        input(.scroll(tab: tabID, ref: nil, x: Double(scrolled.width), y: Double(scrolled.height)))
         scrolled = .zero
     }
 
@@ -267,8 +249,9 @@ final class RemotePageNSView: NSView {
     override func keyDown(with event: NSEvent) {
         // The app's shortcuts are the app's.
         if event.modifierFlags.contains(.command) { return super.keyDown(with: event) }
-        if let key = Self.keys[event.keyCode] { return send?(.press(tab: tabID, key: key)) ?? () }
-        if let text = event.characters, !text.isEmpty { send?(.text(tab: tabID, text: text)) }
+        // After the click before them, never before its release (#199).
+        if let key = Self.keys[event.keyCode] { return input(.press(tab: tabID, key: key)) }
+        if let text = event.characters, !text.isEmpty { input(.text(tab: tabID, text: text)) }
     }
 
     // For VoiceOver and anything else without a pointer: a picture of the
@@ -288,14 +271,15 @@ final class RemotePageNSView: NSView {
         // As a click: the keyboard, and Edit's commands, go to the page.
         window?.makeFirstResponder(self)
         guard let frame = frameImage else { return false }
-        send?(.tap(tab: tabID, x: frame.width / 2, y: min(frame.height, Double(bounds.height / scale)) / 2))
+        input(.tap(tab: tabID, x: frame.width / 2, y: min(frame.height, Double(bounds.height / scale)) / 2))
         return true
     }
 
-    /// Edit > Paste, ⌘V: what this Mac copied, typed into the page there.
+    /// Edit > Paste, ⌘V: what this Mac copied, typed into the page there
+    /// after what was done before it.
     @objc func paste(_ sender: Any?) {
         guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
-        send?(.text(tab: tabID, text: text))
+        input(.text(tab: tabID, text: text))
     }
 }
 
