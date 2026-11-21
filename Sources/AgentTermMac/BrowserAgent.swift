@@ -26,8 +26,24 @@ extension AppModel {
         guard isRemote, let connection else { return done(.refused(BrowserWords.noApp)) }
         let id = nextRemoteBrowserAsk
         nextRemoteBrowserAsk += 1
-        remoteBrowserAsks[id] = done
+        remoteBrowserAsks[id] = { result in
+            Self.noteRemoteBrowserAnswer(result)
+            done(result)
+        }
         connection.send(.browserAsk(id: id, request: request))
+    }
+
+    /// For a test, which cannot see a callback (#196): with
+    /// `AGENTTERM_BROWSER_ANSWERS` set, each answer an ask of the other
+    /// Mac's browser is given, a line each: "refused" and why, or what
+    /// else it was.
+    private static func noteRemoteBrowserAnswer(_ result: BrowserResult) {
+        guard let path = ProcessInfo.processInfo.environment["AGENTTERM_BROWSER_ANSWERS"] else { return }
+        let line: String
+        if case .refused(let why) = result { line = "refused \(why)" } else { line = "answered" }
+        let file = URL(fileURLWithPath: path)
+        let before = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        try? (before + line + "\n").write(to: file, atomically: true, encoding: .utf8)
     }
 
     /// What the other Mac's browser answered.

@@ -30,6 +30,11 @@ final class RemoteMacTests: MacUITestCase {
         wait("the other Mac to be on screen", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == "Other Mac" }
     }
 
+    /// REMOTE-27's app notes each answer of the other Mac's browser.
+    override func beforeTheAppStarts() throws {
+        if name.contains("ThisMacSwitches") { appEnvironment["AGENTTERM_BROWSER_ANSWERS"] = root.appendingPathComponent("browser-answers").path }
+    }
+
     private func switchTo(_ name: String) {
         app.press(.id("mac-switcher"))
         app.press(.button(name), menus: true)
@@ -148,6 +153,45 @@ final class RemoteMacTests: MacUITestCase {
         app.wait(for: .containing(BrowserWords.otherMacClosed("Other Mac")), timeout: 20)
         shot("remote-browser-gone")
         app.press(.button("OK"))
+    }
+
+    /// REMOTE-27 (#196): what this Mac asked of the other Mac's browser,
+    /// still not answered when the user switches to this Mac, is answered
+    /// at once, refused in the words of a closed connection, and not said:
+    /// the user asked for the switch. Before the fix the switch emptied the
+    /// table of what waited without answering any of it. Seen through
+    /// `AGENTTERM_BROWSER_ANSWERS`, the app's note of each answer.
+    func testWhatWaitsForTheOtherMacsBrowserIsAnsweredWhenThisMacSwitches() throws {
+        let answers = root.appendingPathComponent("browser-answers")
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        func calls() -> [(id: Int, request: BrowserRequest)] {
+            browser.messages.compactMap { if case .browserCall(let id, _, let request) = $0 { return (id, request) } else { return nil } }
+        }
+        wait("the page watched", timeout: 15) { calls().contains { if case .watch("7", true, _) = $0.request { return true } else { return false } } }
+        for call in calls() { browser.send(.browserReply(id: call.id, result: .text("Watching tab 7."))) }
+        func refused() -> Int {
+            ((try? String(contentsOf: answers, encoding: .utf8)) ?? "").split(separator: "\n")
+                .filter { $0 == "refused " + BrowserWords.otherMacClosed("Other Mac") }.count
+        }
+
+        // ⌘C asked there, and not answered by that Mac's browser.
+        app.press(.id("remote-page"))
+        app.menu(["Edit", "Copy"])
+        wait("the selection asked for", timeout: 15) { calls().contains { if case .copy("7") = $0.request { return true } else { return false } } }
+        XCTAssertEqual(refused(), 0, "answered before the switch")
+
+        // The user switches to this Mac: it is answered, and nothing is said.
+        switchTo("This Mac")
+        wait("what waited answered", timeout: 10) { refused() > 0 }
+        XCTAssertNil(app.first(.containing(BrowserWords.otherMacClosed("Other Mac"))), "a switch the user asked for was said")
+        shot("switched")
     }
 
     /// BROWSER-54 (#199): what is done on the other Mac's page waits for
