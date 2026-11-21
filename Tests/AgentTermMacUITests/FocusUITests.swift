@@ -71,6 +71,81 @@ final class FocusUITests: MacUITestCase {
             guard let left = self.app.frame(of: .id("terminal-\(second.id)")), let right = self.app.frame(of: .id("terminal-\(first.id)")) else { return false }
             return right.minX > left.maxX - 1
         }
+        shot("left-to-right")
+        // Below's shell shown on a right that is off: there alone, and
+        // below closes.
+        app.press(.id("shells-part-below"))
+        wait("a third shell") { phone.sessions.count == 3 }
+        let third = try XCTUnwrap(phone.sessions.max { $0.id < $1.id })
+        app.wait(for: .id("terminal-\(third.id)"), timeout: 15)
+        app.press(.id("shells-part-right"))
+        app.waitGone(.id("terminal-\(first.id)"))
+        app.perform(ShellSplitWords.right, on: .id("item-\(third.id)"))
+        app.waitForKeyboard(in: "terminal-\(third.id)", "the third, now on the right")
+        XCTAssertEqual(app.all(.id("terminal-\(third.id)")).count, 1, "the third shell is in two parts")
+        XCTAssertEqual(app.first(.id("shells-part-right"))?.value, "shown")
+        XCTAssertEqual(app.first(.id("shells-part-below"))?.value, "hidden")
+        wait("the second on the left of the third") {
+            guard let left = self.app.frame(of: .id("terminal-\(second.id)")), let right = self.app.frame(of: .id("terminal-\(third.id)")) else { return false }
+            return right.minX > left.maxX - 1
+        }
+        shot("below-to-right")
+    }
+
+    /// SHELL-SPLIT-8 (#188): the keys that pick an item of the row (⌥⌘ and
+    /// its number, ⌥⌘→, ⌥⌘←) move no shell between parts. One shown in a
+    /// part takes the keyboard there; one not shown takes the place of the
+    /// shell in the part with the keyboard, which goes back to the row. No
+    /// shell is ever in two parts.
+    func testTheKeysThatPickAnItemMoveNoShellBetweenParts() throws {
+        let phone = try device()
+        let shells = [try newShell(phone, count: 1), try newShell(phone, count: 2), try newShell(phone, count: 3)]
+        app.press(.id("item-\(shells[0].id)"))
+        app.waitForKeyboard(in: "terminal-\(shells[0].id)", "the first shell")
+        app.press(.id("shells-part-right"))
+        wait("a shell on the right") { shells.dropFirst().contains { self.app.exists(.id("terminal-\($0.id)")) } }
+        let right = try XCTUnwrap(shells.dropFirst().first { app.exists(.id("terminal-\($0.id)")) })
+        let free = try XCTUnwrap(shells.dropFirst().first { $0.id != right.id })
+        app.waitForKeyboard(in: "terminal-\(right.id)", "the shell on the right")
+        func assertEachOnce(_ when: String) {
+            for shell in shells { XCTAssertLessThanOrEqual(app.all(.id("terminal-\(shell.id)")).count, 1, "shell \(shell.id) in two parts \(when)") }
+        }
+        func number(_ shell: SessionInfo) -> Int { (shells.firstIndex { $0.id == shell.id } ?? 0) + 1 }
+        // The left's shell, by its number: the keyboard goes there.
+        app.menu(["View", "Item \(number(shells[0])) in Group"])
+        app.waitForKeyboard(in: "terminal-\(shells[0].id)", "the left's shell, by its number")
+        XCTAssertTrue(app.exists(.id("terminal-\(right.id)")), "the right's shell went")
+        assertEachOnce("after the left's was picked by its number")
+        // The right's, by its number, from the left: the keyboard goes
+        // there, and it stays on the right.
+        app.menu(["View", "Item \(number(right)) in Group"])
+        app.waitForKeyboard(in: "terminal-\(right.id)", "the right's shell, by its number")
+        XCTAssertTrue(app.exists(.id("terminal-\(shells[0].id)")), "the left's shell went")
+        assertEachOnce("after the right's was picked by its number")
+        wait("the right's shell still on the right") {
+            guard let left = self.app.frame(of: .id("terminal-\(shells[0].id)")), let shown = self.app.frame(of: .id("terminal-\(right.id)")) else { return false }
+            return shown.minX > left.maxX - 1
+        }
+        // The one not shown, from the right: in the right's place, the
+        // right's back in the row, the left as it was.
+        app.menu(["View", "Item \(number(free)) in Group"])
+        app.waitForKeyboard(in: "terminal-\(free.id)", "the free shell, on the right")
+        app.waitGone(.id("terminal-\(right.id)"))
+        XCTAssertTrue(app.exists(.id("terminal-\(shells[0].id)")), "the left's shell went")
+        XCTAssertTrue(app.exists(.id("item-\(right.id)")), "the right's shell left the row")
+        assertEachOnce("after the free one was picked by its number")
+        // The arrows go the same way: from the free one, the next in the
+        // row and then back.
+        let next = shells[number(free) % shells.count]
+        app.menu(["View", "Next Item in Group"])
+        app.waitForKeyboard(in: "terminal-\(next.id)", "the next in the row")
+        assertEachOnce("after Next Item in Group")
+        app.menu(["View", "Previous Item in Group"])
+        app.waitForKeyboard(in: "terminal-\(free.id)", "the one before it")
+        assertEachOnce("after Previous Item in Group")
+        XCTAssertTrue(app.exists(.id("terminal-\(shells[0].id)")), "the left's shell went")
+        XCTAssertEqual(phone.sessions.count, 3, "a shell was started")
+        shot("keys")
     }
 
     /// SHELL-SPLIT-3 (#188): the one shell of the tab, on the left, cannot
@@ -82,6 +157,7 @@ final class FocusUITests: MacUITestCase {
         app.waitForKeyboard(in: "terminal-\(only.id)", "the shell")
         app.perform(ShellSplitWords.right, on: .id("item-\(only.id)"))
         app.wait(for: .text(ShellSplitWords.leftKeepsIt))
+        shot("refused")
         app.press(.button("OK"))
         app.waitGone(.text(ShellSplitWords.leftKeepsIt))
         XCTAssertEqual(app.all(.id("terminal-\(only.id)")).count, 1)
