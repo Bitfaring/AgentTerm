@@ -168,6 +168,8 @@ private struct SessionTab: View {
 /// all it holds, asked first as `CloseWords.asks` says (#145), as Chrome's
 /// window closes its tabs.
 private struct HolderTabLabel: View {
+    /// What is in front, which it shows (#178).
+    @EnvironmentObject private var front: FrontState
     @EnvironmentObject private var model: AppModel
     // What it holds is read through the model, but these say when it
     // changed: a page closed from a phone, a file opened, which need not

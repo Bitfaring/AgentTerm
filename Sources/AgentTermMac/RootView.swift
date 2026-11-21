@@ -5,7 +5,6 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var files: FilesModel
 
     var body: some View {
         HStack(spacing: 0) {
@@ -118,9 +117,33 @@ private struct WindowSheets: ViewModifier {
     }
 }
 
+/// Whether to save a file closed with changes: a modifier of its own, so
+/// that the window's other questions do not follow the open files, which
+/// change with every file opened (#178).
+private struct SaveQuestion: ViewModifier {
+    @EnvironmentObject private var files: FilesModel
+
+    private var saveQuestion: String {
+        let name = files.pendingClose.map { ($0 as NSString).lastPathComponent } ?? ""
+        return "Save changes to \"\(name)\"?"
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                saveQuestion,
+                isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
+                titleVisibility: .visible, presenting: files.pendingClose
+            ) { path in
+                Button("Save") { files.saveAndClose(path) }
+                Button("Don't Save", role: .destructive) { files.close(path) }
+                Button("Cancel", role: .cancel) {}
+            }
+    }
+}
+
 private struct WindowQuestions: ViewModifier {
     @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var files: FilesModel
 
     private var closeQuestion: String {
         guard let request = model.pendingCloseRequest else { return "" }
@@ -133,11 +156,6 @@ private struct WindowQuestions: ViewModifier {
     // inside the long chain of the window's sheets and dialogs each of them
     // is one more thing the compiler has to work out at once, and on a slow
     // machine it gives up.
-    private var saveQuestion: String {
-        let name = files.pendingClose.map { ($0 as NSString).lastPathComponent } ?? ""
-        return "Save changes to \"\(name)\"?"
-    }
-
     private var endQuestion: String { CloseWords.endQuestion(model.pendingEnd?.displayName ?? "this session") }
 
     /// An agent's shells and pages end with it (#145).
@@ -154,15 +172,7 @@ private struct WindowQuestions: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .confirmationDialog(
-                saveQuestion,
-                isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
-                titleVisibility: .visible, presenting: files.pendingClose
-            ) { path in
-                Button("Save") { files.saveAndClose(path) }
-                Button("Don't Save", role: .destructive) { files.close(path) }
-                Button("Cancel", role: .cancel) {}
-            }
+            .modifier(SaveQuestion())
             .confirmationDialog(
                 endQuestion,
                 isPresented: Binding(get: { model.pendingEnd != nil }, set: { if !$0 { model.pendingEnd = nil } }),

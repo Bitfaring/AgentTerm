@@ -31,6 +31,9 @@ if [ -n "${ALL_SHOTS:-}" ]; then export AGENTTERM_SHOT_ALWAYS=1; fi
 # MEASURE=1 runs the measurements of the app's main thread (#21), which the
 # tests otherwise skip, and prints their figures: nothing fails on a figure.
 if [ -n "${MEASURE:-}" ]; then export AGENTTERM_MEASURE_UI=1; fi
+# RELEASE_APP=1 runs the tests on a release build of the app (#178), for
+# figures of the build users run; the host and the tests stay debug.
+if [ -n "${RELEASE_APP:-}" ]; then swift build -c release --product AgentTermMac > /dev/null; export AGENTTERM_RELEASE_APP=1; fi
 FILTER="AgentTermMacUITests"
 if [ -n "${1:-}" ]; then FILTER="AgentTermMacUITests\..*$1"; fi
 # The half of the test with the iPhone app is run by test-both.sh.

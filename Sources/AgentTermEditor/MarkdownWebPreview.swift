@@ -203,7 +203,18 @@ private struct MarkdownWebView: PreviewRepresentable {
     /// main thread every time a document was opened (#126).
     @MainActor private static let dataStore = WKWebsiteDataStore.nonPersistent()
 
+    /// The web view of the last preview that went, kept for the next one
+    /// (#178): a preview opened after a file in the editor made a web view
+    /// of its own, and WebKit started a process for it, about 25 ms of the
+    /// main thread every time; kept, its process is.
+    @MainActor private static var kept: WKWebView?
+
     private func make(_ coordinator: Coordinator) -> WKWebView {
+        if let webView = Self.kept {
+            Self.kept = nil
+            webView.navigationDelegate = coordinator
+            return webView
+        }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = Self.dataStore
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -226,12 +237,25 @@ private struct MarkdownWebView: PreviewRepresentable {
         coordinator.load(text: text, baseURL: baseURL, into: webView)
     }
 
+    /// A preview gone: its web view kept for the next one, emptied of its
+    /// page, which is not shown again by mistake.
+    @MainActor private static func keep(_ webView: WKWebView) {
+        webView.navigationDelegate = nil
+        webView.stopLoading()
+        // Emptied in place: a navigation to a blank page could have WebKit
+        // move it to another process, which keeping it is to spare.
+        webView.evaluateJavaScript("document.body && (document.body.innerHTML = '')")
+        kept = webView
+    }
+
     #if canImport(AppKit) && !targetEnvironment(macCatalyst)
     func makeNSView(context: Context) -> WKWebView { make(context.coordinator) }
     func updateNSView(_ webView: WKWebView, context: Context) { update(webView, context.coordinator) }
+    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) { keep(webView) }
     #else
     func makeUIView(context: Context) -> WKWebView { make(context.coordinator) }
     func updateUIView(_ webView: WKWebView, context: Context) { update(webView, context.coordinator) }
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) { keep(webView) }
     #endif
 
     final class Coordinator: NSObject, WKNavigationDelegate {

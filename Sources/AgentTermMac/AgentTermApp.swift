@@ -25,6 +25,7 @@ struct AgentTermApp: App {
             RootView()
                 .modifier(MainWindowOpener())
                 .environmentObject(model)
+                .environmentObject(model.front)
                 .environmentObject(model.files)
                 .environmentObject(model.browsers)
                 .environmentObject(model.profiles)
@@ -67,13 +68,13 @@ struct AgentTermApp: App {
                 SaveCommand(files: model.files)
             }
             CommandMenu("Tab") {
-                TabCommands(model: model, files: model.files)
+                TabCommands(model: model, front: model.front, files: model.files)
             }
             CommandMenu("Browser") {
-                BrowserCommands(model: model)
+                BrowserCommands(model: model, front: model.front)
             }
             CommandGroup(after: .toolbar) {
-                GroupItemCommands(model: model)
+                GroupItemCommands(model: model, front: model.front)
             }
             CommandGroup(after: .sidebar) {
                 Button("Bigger Text") { model.changeFontSize(by: 1) }
@@ -739,6 +740,8 @@ private struct SaveCommand: View {
 /// The tabs of the middle pane as menu items: sessions first, then files.
 private struct TabCommands: View {
     @ObservedObject var model: AppModel
+    /// What is in front, which its items follow (#178).
+    @ObservedObject var front: FrontState
     @ObservedObject var files: FilesModel
 
     private var names: [String] { model.visibleTabs.map(model.tabName) }
@@ -795,6 +798,8 @@ private struct TabCommands: View {
 /// The same keys for both: Option and Command with an arrow.
 private struct GroupItemCommands: View {
     @ObservedObject var model: AppModel
+    /// What is in front, which its items follow (#178).
+    @ObservedObject var front: FrontState
 
     private var area: Bool { model.agentAreaInFront != nil }
     private var several: Bool { model.paneLayout.focusedPane.front.map { model.members(of: $0).count > 1 } ?? false }
@@ -834,6 +839,8 @@ private struct GroupItemCommands: View {
 /// The browser's commands (#76), for the tab in front.
 private struct BrowserCommands: View {
     @ObservedObject var model: AppModel
+    /// What is in front, which its items follow (#178).
+    @ObservedObject var front: FrontState
 
     private var tab: BrowserTab? { model.browserInFront.flatMap { model.browsers.tab(forTab: $0) } }
 

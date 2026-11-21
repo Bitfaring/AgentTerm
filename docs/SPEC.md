@@ -1513,8 +1513,10 @@ edits here is not merged; saving overwrites it.
 - Pairing gives the iPhone a token of its own, kept in its Keychain. The Mac
   lists the paired devices, with when each last connected, and can remove
   one. A removed device is disconnected at once and has to pair again.
-- All remote traffic goes through Tailscale. AgentTerm does not run a relay
-  server and does not open a port on the local network.
+- All remote traffic between the devices goes through Tailscale, and
+  AgentTerm does not open a port on the local network. The one relay is that
+  of the iPhone's notifications through Apple, which passes on what it
+  cannot read (When an agent is done or needs you).
 - The pairing screen checks Tailscale on the Mac first. The code is shown only
   when Tailscale is installed, signed in and connected. Otherwise the screen
   shows what is missing (not installed, not signed in, or not connected) and

@@ -15,6 +15,8 @@ struct GroupPlus: Identifiable {
 /// it, and at its end what shows and hides the page and the shell beside
 /// the agent: its area's parts are managed here, not in the area.
 struct GroupRow: View {
+    /// What is in front, which it shows (#178).
+    @EnvironmentObject private var front: FrontState
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
     @EnvironmentObject private var browsers: BrowserModel

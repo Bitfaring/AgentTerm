@@ -107,11 +107,14 @@ struct FilesView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 1) {
                 ForEach(files.rows) { row in
-                    FileTreeRow(row: row, changed: change(for: row.entry))
-                        .contextMenu { menu(for: row.entry) }
-                        // The same, for who has no pointer to open the menu with.
-                        .accessibilityAction(named: "Rename") { ask(.rename(row.entry)) }
-                        .accessibilityAction(named: "Move to Trash") { trashing = row.entry }
+                    FileTreeRow(
+                        files: files, row: row, changed: change(for: row.entry), isOpen: files.active == row.entry.path,
+                        isExpanded: files.expanded.contains(row.entry.path)
+                    )
+                    .contextMenu { menu(for: row.entry) }
+                    // The same, for who has no pointer to open the menu with.
+                    .accessibilityAction(named: "Rename") { ask(.rename(row.entry)) }
+                    .accessibilityAction(named: "Move to Trash") { trashing = row.entry }
                 }
                 if files.rows.isEmpty {
                     Text("This folder is empty.")
@@ -193,15 +196,20 @@ private struct SearchOrTree<Tree: View>: View {
     }
 }
 
+/// A row of the tree. What it shows is given, not read from the files'
+/// model, which it does not observe: a file opened changed that model, and
+/// every row of the tree was made again for it (#178); now only the rows
+/// whose state changed are.
 private struct FileTreeRow: View {
-    @EnvironmentObject private var files: FilesModel
+    /// To act on, not observed.
+    let files: FilesModel
     let row: FilesModel.Row
     let changed: FileDiff?
+    let isOpen: Bool
+    let isExpanded: Bool
     @State private var hovering = false
 
     private var entry: FileEntry { row.entry }
-    private var isOpen: Bool { files.active == entry.path }
-    private var isExpanded: Bool { files.expanded.contains(entry.path) }
 
     var body: some View {
         HStack(spacing: 6) {

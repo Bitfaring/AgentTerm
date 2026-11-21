@@ -123,6 +123,8 @@ private enum SplitSpace {
 
 /// One pane: its strip of tabs, and the tab in front.
 struct PaneView: View {
+    /// What is in front, which it shows (#178).
+    @EnvironmentObject private var front: FrontState
     @EnvironmentObject private var model: AppModel
     // Which of a tab's items is shown is read through the model, but these
     // say when it changed: a file opened, a new page.
@@ -189,6 +191,8 @@ struct PaneFrameReader: View {
 /// A session's terminal, with what goes with it: the banner while another
 /// device sizes it, and what an agent has used under it.
 struct SessionContent: View {
+    /// What is in front, which it shows (#178).
+    @EnvironmentObject private var front: FrontState
     @EnvironmentObject private var model: AppModel
     let session: SessionInfo
     /// Whether the keyboard is to be in it: its pane's, and its part's.

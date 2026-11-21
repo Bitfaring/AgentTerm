@@ -48,7 +48,15 @@ final class AppModel: ObservableObject {
     @Published var shownWorktree: String? { didSet { if shownWorktree != oldValue { folderChanged() } } }
     /// What the side panel shows: the worktree picked, or the folder.
     var panelFolder: String? { shownWorktree ?? selectedFolder }
-    @Published var selectedSession: SessionID? {
+    /// What is in front, the session, the page, the diff and the item each
+    /// group shows (`groupShown`), is told by `front` only, not by the
+    /// whole model: opening or picking a tab updated every view of the
+    /// window, 20 to 45 ms of the main thread, and only what shows the tab
+    /// in front need be (#178, the owner's decision, 2026-11-21).
+    let front = FrontState()
+
+    var selectedSession: SessionID? {
+        willSet { if newValue != selectedSession { front.objectWillChange.send() } }
         // The side panel shows the worktree of the session in front, however
         // it came to be selected (#23).
         didSet {
@@ -96,12 +104,14 @@ final class AppModel: ObservableObject {
         var tabID: String { "d:" + folder + "\n" + (commit?.hash ?? "") + "\n" + file.path }
     }
     /// Whether the diff's tab is the one in front.
-    @Published private(set) var diffInFront = false {
+    private(set) var diffInFront = false {
+        willSet { if newValue != diffInFront { front.objectWillChange.send() } }
         didSet { if diffInFront, !oldValue { frontChanged() } }
     }
     /// The browser's tab in front, when one is (#76): before a file, the
     /// diff or a session.
-    @Published var browserInFront: String? {
+    var browserInFront: String? {
+        willSet { if newValue != browserInFront { front.objectWillChange.send() } }
         didSet { if browserInFront != nil, browserInFront != oldValue { frontChanged() } }
     }
     private var observers: Set<AnyCancellable> = []
@@ -279,7 +289,8 @@ final class AppModel: ObservableObject {
     /// The item each of the user's groups of the strip shows, by the
     /// group's id (#127): a shell, a page, a diff, a file. What an agent's
     /// tab shows is its area's (`agentAreas`).
-    @Published var groupShown: [String: String] = [:]
+    /// Told by `front` only, as what is in front is (#178).
+    var groupShown: [String: String] = [:] { willSet { if newValue != groupShown { front.objectWillChange.send() } } }
     /// Where each pane, and each part of an agent's area, is in the window,
     /// in its coordinates from the top left: a click finds its place here.
     var paneFrames: [PanePlace: CGRect] = [:]
@@ -3297,3 +3308,9 @@ final class AppModel: ObservableObject {
 
     var hostPort: UInt16 { port }
 }
+
+/// What is in front (#178): the session, the page, the diff, the item each
+/// group shows. Kept by `AppModel`, told by this object, which only what
+/// shows them observes.
+@MainActor
+final class FrontState: ObservableObject {}

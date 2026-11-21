@@ -520,9 +520,13 @@ class MacUITestCase: XCTestCase {
         // Under a name of its own, the app keeps its preferences apart from
         // those of an AgentTerm someone runs from this build folder: macOS
         // files the preferences of a program without a bundle under its name.
-        let executable = products.appendingPathComponent(Self.appName)
+        // A release build of the app, for figures of the build users run
+        // (`RELEASE_APP=1 scripts/test-mac.sh`, #178): built beside the
+        // debug one, the host and the tests staying the debug build's.
+        let appProducts = ProcessInfo.processInfo.environment["AGENTTERM_RELEASE_APP"] != nil ? products.deletingLastPathComponent().appendingPathComponent("Release") : products
+        let executable = appProducts.appendingPathComponent(Self.appName)
         if !FileManager.default.fileExists(atPath: executable.path) {
-            try FileManager.default.createSymbolicLink(at: executable, withDestinationURL: products.appendingPathComponent("AgentTermMac"))
+            try FileManager.default.createSymbolicLink(at: executable, withDestinationURL: appProducts.appendingPathComponent("AgentTermMac"))
         }
         let driver = try startDriver(executable: executable, environment: environment)
         driver.wait(for: .id("mac-switcher"), timeout: 20)
