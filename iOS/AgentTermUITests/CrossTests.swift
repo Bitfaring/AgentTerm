@@ -122,7 +122,15 @@ final class CrossTests: XCTestCase {
         XCTAssertTrue(shellRow.waitForExistence(timeout: 10))
         sleep(2)
         let phones = try XCTUnwrap(size(shellRow), shellRow.label)
-        XCTAssertTrue(phones.cols < macs.cols && phones.cols <= 50, "the agent's shell is \(phones.cols) × \(phones.rows) after the phone showed it, the Mac's \(macs.cols) × \(macs.rows)")
+        // The phone's width is that of the shells it opened, whatever text
+        // size the app has: not a number of columns, which held only at the
+        // size an earlier run of test-ios.sh left behind (#208).
+        let shells = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'zsh'")).allElementsBoundByIndex
+        let phoneWidths = Set(shells.compactMap { size($0)?.cols })
+        XCTAssertFalse(phoneWidths.isEmpty, "no shell the phone opened is listed with its size")
+        XCTAssertTrue(
+            phones.cols < macs.cols && phoneWidths.contains(phones.cols),
+            "the agent's shell is \(phones.cols) × \(phones.rows) after the phone showed it, the Mac's \(macs.cols) × \(macs.rows), the phone's shells \(phoneWidths.sorted()) wide")
         let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'browser-tab-'"))
         let agentsPage = rows.firstMatch
         XCTAssertTrue(agentsPage.waitForExistence(timeout: 10))
