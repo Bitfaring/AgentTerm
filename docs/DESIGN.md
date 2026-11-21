@@ -1120,7 +1120,11 @@ none and an agent works or waits, `end` once none has for
 #180): until then, with nothing working or waiting, it is an `update`
 showing so, and a new turn updates the same activity rather than starting
 one, whose start push must carry an alert; again every 15 minutes while
-agents work (`refreshSummaries`). The relay sends
+agents work (`refreshSummaries`). The end is kept for each device
+(`activityEndSent`, #192): one that was present when the host's activity
+ended and goes away later, closed or in the background, before its own
+`keptIdle` ran out (iOS suspends the app, and its timer with it) is sent
+the end when it goes, once. The relay sends
 `apns-push-type: liveactivity` to the topic
 `com.manhpham.agentterm.push-type.liveactivity`, priority 5 (10 to
 start), with `stale-date` 30 minutes on and, for `end`, `dismissal-date`.

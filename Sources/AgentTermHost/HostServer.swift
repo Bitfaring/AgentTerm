@@ -1824,6 +1824,7 @@ public final class HostServer {
         client.attached.removeAll()
         if case .device(let id) = client.identity {
             broadcastDevices()
+            activityWentAway(id)
         }
         if browserProvider == client.id { setBrowserProvider(client, false) }
         // A device that goes no longer watches a page.
@@ -1890,6 +1891,11 @@ public final class HostServer {
     private var activityIdleSince: Date?
     /// The activities were ended, after `activityKeptIdle` with nothing.
     private var activityEnded = false
+    /// The devices that were away when the activities ended, or went away
+    /// since, and were sent the end (#192). One that was present then and
+    /// goes away later is sent it when it goes: its own wait may not run
+    /// out, since iOS suspends the app.
+    private var activityEndSent: Set<String> = []
 
     private func sendActivity() {
         activityPending = false
@@ -1898,6 +1904,7 @@ public final class HostServer {
         if status.isActive {
             activityIdleSince = nil
             activityEnded = false
+            activityEndSent = []
         } else if activityIdleSince == nil {
             activityIdleSince = now
             // Looked at again once it has been idle long enough to end.
@@ -1915,8 +1922,20 @@ public final class HostServer {
         activitySentAt = now
         let mac = Host.current().localizedName ?? "Mac"
         for device in push.activityDevices where !presentDevices.contains(device) {
+            if end { activityEndSent.insert(device) }
             if let item = push.activity(status, end: end, mac: mac, to: device) { sendPush(item) }
         }
+    }
+
+    /// A device went away, closed or in the background: when the
+    /// activities were ended while it was present, it is sent the end now,
+    /// once (#192).
+    private func activityWentAway(_ device: String) {
+        guard activityEnded, let status = activityStatus, !activityEndSent.contains(device), !presentDevices.contains(device),
+            push.activityDevices.contains(device)
+        else { return }
+        activityEndSent.insert(device)
+        if let item = push.activity(status, end: true, mac: Host.current().localizedName ?? "Mac", to: device) { sendPush(item) }
     }
 
     // MARK: Notices, on every device (#66)
@@ -2191,9 +2210,9 @@ public final class HostServer {
                 return updateMacInUse()
             }
             // A device's app: in the background it is away (#190).
-            guard client.inBackground == front else { return }
+            guard client.inBackground == front, case .device(let device) = client.identity else { return }
             client.inBackground = !front
-            if front { tellUntold(client) }
+            if front { tellUntold(client) } else { activityWentAway(device) }
         case .used:
             used(by: client)
         case .pushRegister(let registration):

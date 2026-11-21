@@ -393,7 +393,8 @@ shows the host's state now rather than events.
   between turns and only updated** (#180, decided by the owner on
   2026-11-20): when every agent is done it shows that, and is ended only
   once nothing has worked or waited for 15 minutes, leaving the last state,
-  which stays true. A new turn within those 15 minutes updates it rather
+  which stays true; an iPhone that was connected then and goes away later
+  is sent the end when it goes (#192). A new turn within those 15 minutes updates it rather
   than starting another, whose start through Apple comes with an alert. Without push (a development
   build), it goes out of date ten minutes after the app last updated it.
 - "Live Activity of the Mac's agents" in the iPhone's Settings turns it

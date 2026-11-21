@@ -302,6 +302,40 @@ final class PushTests: XCTestCase {
         XCTAssertLessThanOrEqual(activities().count, 5, "a burst is gathered: \(activities().map { $0["event"] ?? "" })")
     }
 
+    /// LIVE-5 (#192): a phone that was connected when the host's activity
+    /// ended (nothing worked or waited for `keptIdle`) and goes away later,
+    /// before its own wait ran out, is sent the end then: once, closed or
+    /// in the background.
+    func testAPhoneThatGoesAwayAfterTheActivityEndedIsSentTheEnd() throws {
+        let mac = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
+        let phoneToken = try pair(mac)
+        let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
+        phone.connection.send(.pushRegister(PushRegistration(token: deviceToken, key: key, mac: macName)))
+        waitUntil("registered") { phone.pushState == .on }
+        let own = String(repeating: "6b", count: 32)
+        phone.connection.send(.liveActivity(token: own, startToken: String(repeating: "5a", count: 32)))
+        func activities() -> [[String: Any]] { relay.sent.compactMap { $0["activity"] as? [String: Any] } }
+
+        mac.connection.send(.create(CreateRequest(command: try standIn().path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let agent = try XCTUnwrap(mac.sessions.first).id
+        mac.connection.send(.attach(session: agent, size: TermSize(cols: 80, rows: 24)))
+        for _ in 0..<4 { mac.connection.sendInput(Data("\n".utf8), to: agent) }
+        waitUntil("done") { mac.sessions.first?.state == .done(said: "All tests pass.") }
+        // Past the burst's 3 s and `keptIdle`: the host's activity ended
+        // while the phone was connected, so nothing went through Apple.
+        RunLoop.main.run(until: Date().addingTimeInterval(3 + activityKeptIdle + 1.5))
+        XCTAssertEqual(activities().count, 0, "a connected phone is sent its activity through Apple")
+
+        phone.connection.send(.appInFront(false))
+        waitUntil("the end, once it is away", timeout: 5) { activities().contains { $0["event"] as? String == "end" } }
+        XCTAssertEqual(activities().count, 1)
+        XCTAssertEqual(activities().first?["token"] as? String, own)
+        phone.connection.close()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(activities().count, 1, "ended twice")
+    }
+
     /// PUSH-4: a push the relay refuses is said in both apps' banner, once
     /// for the device; a token APNs no longer knows is forgotten.
     func testAPushThatFailsIsSaidAndAnUnknownTokenForgotten() throws {
