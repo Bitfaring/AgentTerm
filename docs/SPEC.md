@@ -286,7 +286,10 @@ happened; the Live Activity shows the host's state now (below).
   twice (#190); back in front, what it was not told either way is shown
   then. "Also
   While the App Is Closed", on by default, under "Tell me when an agent is
-  done or needs me". What it says is encrypted on the Mac for that device
+  done or needs me". While that one is off it is dimmed and shows off,
+  whatever it was set to, since nothing is shown while the app is closed
+  either; what it was set to is kept, and shown again once notifications
+  are turned on (#211). What it says is encrypted on the Mac for that device
   alone; one that cannot be opened says "An agent needs you". A
   notification handled elsewhere while the app is asleep is taken back by
   a background push, which iOS limits and does not deliver to an app the

@@ -266,3 +266,25 @@ public struct DisplaySettings: Codable, Equatable, Sendable {
         defaults.set(turnResults, forKey: Self.turnResultsKey)
     }
 }
+
+/// A switch that stands for something only while the switch it depends on
+/// is on, as "Also While the App Is Closed" under the app's notifications
+/// (#211). While that one is off it shows off, whatever it keeps
+/// (principle 3), and cannot be changed; what it keeps is the user's own
+/// and stays, to be shown again once that one is on.
+public struct DependentSwitch: Equatable, Sendable {
+    /// What the user chose for it, as it is kept.
+    public var stored: Bool
+    /// Whether the switch it depends on is on.
+    public var dependsOn: Bool
+
+    public init(stored: Bool, dependsOn: Bool) {
+        self.stored = stored
+        self.dependsOn = dependsOn
+    }
+
+    /// What the switch shows.
+    public var shown: Bool { dependsOn && stored }
+    /// Whether it can be changed from the screen.
+    public var isEnabled: Bool { dependsOn }
+}

@@ -344,11 +344,18 @@ final class FlowTests: XCTestCase {
         for _ in 0..<5 where !(notify.exists && notify.isHittable) { app.swipeUp() }
         XCTAssertTrue(notify.waitForExistence(timeout: 5), "Settings has no switch for the app's notifications")
         XCTAssertEqual(notify.value as? String, "0", "Not Now left the app's notifications on")
+        // NOTIFY-4 (#211): the switch under it says off too, not only dimmed
+        // (principle 3), and shows what it was set to (on, as installed)
+        // once they are on again.
+        let pushAlso = app.switches["push-also"].firstMatch
+        XCTAssertTrue(pushAlso.waitForExistence(timeout: 5), "Settings has no switch for notifications while the app is closed")
+        XCTAssertEqual(pushAlso.value as? String, "0", "Also While the App Is Closed shows on while the app's notifications are off")
         capture("NN-1-notifications-off")
         notify.switches.firstMatch.exists ? notify.switches.firstMatch.tap() : notify.tap()
         XCTAssertTrue(springboard.alerts.buttons["Allow"].firstMatch.waitForExistence(timeout: 10), "iOS was not asked once they were turned on")
         allowNotifications(timeout: 1)
         XCTAssertEqual(notify.value as? String, "1")
+        XCTAssertEqual(pushAlso.value as? String, "1", "Also While the App Is Closed did not show what it was set to once notifications were on again")
     }
 
     func testPairStartSessionAndType() throws {
