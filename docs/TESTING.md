@@ -46,7 +46,13 @@ the test's host was stopped it started a host of its own. Every app a test
 starts is now kept from the moment it starts (`startDriver`). Two web
 servers of `BrowserUITests` were left too: `/usr/bin/python3` runs the real
 one as a child that outlives it, and whatever listens on its port is now
-stopped after the test. All
+stopped after the test. A test that puts something between the app and its
+host (`SlowProxy`, `PortBlocker`) quits the app first and stops that thing
+after (#203): `WaitingTests` stopped its proxy first, and the app, finding
+its host gone, started one of its own on the proxy's port, which no one
+stopped. Every test now checks, as it ends, that no program of the build
+with its state folder is still running (TEST-9): one that is, is named and
+ended, and the test fails. All
 layers use state folders, ports, a home folder and preferences of their own,
 and stand-in agents (small scripts) instead of the installed ones: the
 installed app, its sessions, its paired devices and the user's accounts are
@@ -966,6 +972,7 @@ and the test talks to the real `agenttermd mcp` with it.
 | TEST-6 | An interactive shell started by itself that stays the parent of the program it runs (`zsh -i -c "sleep 60; true"`) | Stopped | Over within five seconds, with nothing of its session left; before the fix it went on for the program's whole minute, which is how the commit writer's test failed on CI and not here | H |
 | TEST-7 | A shell started by itself that ends at the first request, waiting for a program that ignores being asked | Stopped | The program is killed three seconds on. Before the fix it was left running | H |
 | TEST-8 | A host whose figures of the Mac come as often as they can | A session's command ends | The last list of sessions is empty, whatever came after it. The test looked at the last message only, and failed on CI whenever the figures came right after the list | H |
+| TEST-9 (#203) | A Mac UI test over, all it started stopped | Any program of the build is still running with the test's state folder (a host the app started by itself on a proxy's port, the app, a helper) | It is named and ended, and the test fails. Before the fix `WaitingTests` stopped its `SlowProxy` before the app quit, and with `ALL_SHOTS` a host on the proxy's port outlived every run of it, unseen by `test-mac.sh` | M |
 | SET-1 | The Mac app's Settings left on Privacy | Left for Sessions, opened again with ⌘, | It opens on General | M |
 | SET-2 | A setting the host tidies (a blank model, an unknown agent; keep awake options; the display) | A client asks for what, once tidied, the host keeps already | The asker is told what the host keeps | H |
 | SET-3 | Start at Login on | The launch agent is removed outside AgentTerm | Every client is told it is off, without asking | H |

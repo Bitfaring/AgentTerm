@@ -46,8 +46,11 @@ final class WaitingTests: MacUITestCase {
     }
 
     override func tearDown() {
-        proxy?.stop()
+        // The app quits first: with the proxy gone under it, it started a
+        // host of its own on the proxy's port, which outlived the test
+        // (#203, TEST-9).
         super.tearDown()
+        proxy?.stop()
     }
 
     func testWhileASessionLoadsTheAppSaysSoAndThenThatItTakesLong() throws {

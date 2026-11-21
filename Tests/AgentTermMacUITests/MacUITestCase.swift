@@ -71,6 +71,9 @@ class MacUITestCase: XCTestCase {
     }
 
     override func tearDown() {
+        // A failure here does not stop the tearing down half way, nor that
+        // of a subclass after it: what it started would be left running.
+        continueAfterFailure = true
         let environment = ProcessInfo.processInfo.environment
         let wanted = (testRun?.failureCount ?? 0) > 0 || environment["AGENTTERM_SHOT_ALWAYS"] != nil
         if wanted, let folder = environment["AGENTTERM_SHOT_DIR"], let app {
@@ -88,8 +91,88 @@ class MacUITestCase: XCTestCase {
             process.terminate()
             process.waitUntilExit()
         }
+        let left = endWhatOutlivedTheTest()
         if let root { try? FileManager.default.removeItem(at: root) }
         if app != nil { forgetPreferences() }
+        if !left.isEmpty { XCTFail("the test left these running, now ended: " + left.joined(separator: "; ")) }
+    }
+
+    /// TEST-9 (#203): nothing of a test outlives it. Once everything it
+    /// started was stopped, any program of this build still running with
+    /// the test's state folder is a fault of the test: most often a host the
+    /// app started by itself, on a port no one stops, because what the app
+    /// was connected to (a `SlowProxy`) was stopped before the app quit.
+    /// It is ended, and named for the test to fail.
+    private func endWhatOutlivedTheTest() -> [String] {
+        guard let root else { return [] }
+        var left = programsOfThisTest(root)
+        let deadline = Date().addingTimeInterval(10)
+        // What was just told to stop takes a moment to go.
+        while !left.isEmpty, Date() < deadline {
+            usleep(100_000)
+            left = programsOfThisTest(root)
+        }
+        guard !left.isEmpty else { return [] }
+        for program in left { kill(program.pid, SIGTERM) }
+        let killed = Date().addingTimeInterval(3)
+        while !programsOfThisTest(root).isEmpty, Date() < killed { usleep(100_000) }
+        for program in programsOfThisTest(root) { kill(program.pid, SIGKILL) }
+        return left.map { "\($0.pid) \($0.command)" }
+    }
+
+    /// The programs of this build (the folder `.build` the tests run from,
+    /// or the test's own folder) whose state folder is the test's. Nothing
+    /// else is looked into: the installed app and its host are not of this
+    /// build.
+    private func programsOfThisTest(_ root: URL) -> [(pid: pid_t, command: String)] {
+        let resolvedProducts = products.resolvingSymlinksInPath().path
+        let build = resolvedProducts.range(of: "/.build/").map { String(resolvedProducts[..<$0.upperBound]) } ?? resolvedProducts + "/"
+        let places = [build, root.resolvingSymlinksInPath().path + "/"]
+        let mark = root.lastPathComponent
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(count) + 64)
+        let found = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        var programs: [(pid: pid_t, command: String)] = []
+        for pid in pids.prefix(Int(max(found, 0))) where pid > 0 && pid != getpid() {
+            var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+            guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { continue }
+            let path = String(cString: buffer)
+            guard places.contains(where: { path.hasPrefix($0) }), let (arguments, environment) = Self.argumentsAndEnvironment(of: pid),
+                environment["AGENTTERM_STATE_DIR"]?.contains(mark) == true
+            else { continue }
+            programs.append((pid, ([path] + arguments.dropFirst()).joined(separator: " ")))
+        }
+        return programs
+    }
+
+    /// What a program was started with, as the kernel keeps it.
+    private static func argumentsAndEnvironment(of pid: pid_t) -> ([String], [String: String])? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        let argc = Int(buffer.withUnsafeBytes { $0.load(as: Int32.self) })
+        var index = MemoryLayout<Int32>.size
+        // The executable's path, then the zeros that pad it.
+        while index < size, buffer[index] != 0 { index += 1 }
+        while index < size, buffer[index] == 0 { index += 1 }
+        func next() -> String? {
+            guard index < size else { return nil }
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            defer { index += 1 }
+            return String(decoding: buffer[start..<index], as: UTF8.self)
+        }
+        var arguments: [String] = []
+        for _ in 0..<argc { guard let argument = next() else { break }; arguments.append(argument) }
+        var environment: [String: String] = [:]
+        while let entry = next(), !entry.isEmpty {
+            guard let equals = entry.firstIndex(of: "=") else { continue }
+            environment[String(entry[..<equals])] = String(entry[entry.index(after: equals)...])
+        }
+        return (arguments, environment)
     }
 
     /// A picture of the window in the middle of a test, with `ALL_SHOTS`.
