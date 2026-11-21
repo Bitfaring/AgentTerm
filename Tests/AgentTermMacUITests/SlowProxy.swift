@@ -55,11 +55,22 @@ final class SlowProxy {
                 if complete || error != nil { to.cancel() }
                 return
             }
-            to.send(
-                content: data,
-                completion: .contentProcessed { _ in
-                    self.queue.asyncAfter(deadline: .now() + pause) { self.pump(from: from, to: to, piece: piece, pause: pause, holdable: holdable) }
-                })
+            // A receive asked for before the hold, while the link was idle,
+            // ends with the first answer after it: that answer waits too,
+            // or the hold lets one through (#189's test met it).
+            self.send(data, from: from, to: to, piece: piece, pause: pause, holdable: holdable)
         }
+    }
+
+    private func send(_ data: Data, from: NWConnection, to: NWConnection, piece: Int, pause: TimeInterval, holdable: Bool) {
+        if holdable, held {
+            queue.asyncAfter(deadline: .now() + 0.02) { [weak self] in self?.send(data, from: from, to: to, piece: piece, pause: pause, holdable: holdable) }
+            return
+        }
+        to.send(
+            content: data,
+            completion: .contentProcessed { _ in
+                self.queue.asyncAfter(deadline: .now() + pause) { self.pump(from: from, to: to, piece: piece, pause: pause, holdable: holdable) }
+            })
     }
 }

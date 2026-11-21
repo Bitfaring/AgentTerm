@@ -208,8 +208,10 @@ final class ShellSplitWaitTests: MacUITestCase {
     }
 
     override func tearDown() {
-        proxy?.stop()
+        // The app quit first: with the proxy gone under it, it started a
+        // host of its own on the proxy's port, which its picture showed.
         super.tearDown()
+        proxy?.stop()
     }
 
     @discardableResult
@@ -226,6 +228,14 @@ final class ShellSplitWaitTests: MacUITestCase {
         return try XCTUnwrap(phone.sessions.max { $0.id < $1.id })
     }
 
+    /// What the test is about: while held, the app has not heard of the
+    /// new shell. Once, a receive the proxy had asked for before it was
+    /// held let the next answer through, and the app had the shell.
+    private func assertNotHeardOf(_ shell: SessionInfo, file: StaticString = #filePath, line: UInt = #line) {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertFalse(app.exists(.id("item-\(shell.id)")), "the app heard of shell \(shell.id) while the host's answers were held", file: file, line: line)
+    }
+
     /// SHELL-SPLIT-4: the right and then below turned on before the first
     /// new shell is in the app: each shows a new shell of its own. Before
     /// the fix below took the right's wait, and the right stayed off.
@@ -236,8 +246,10 @@ final class ShellSplitWaitTests: MacUITestCase {
         proxy.hold(true)
         app.press(.id("shells-part-right"))
         let second = try started(phone, count: 2)
+        assertNotHeardOf(second)
         app.press(.id("shells-part-below"))
         let third = try started(phone, count: 3)
+        assertNotHeardOf(third)
         proxy.hold(false)
         app.wait(for: .id("terminal-\(second.id)"), timeout: 15)
         app.wait(for: .id("terminal-\(third.id)"), timeout: 15)
@@ -250,6 +262,7 @@ final class ShellSplitWaitTests: MacUITestCase {
             else { return false }
             return right.minX > left.maxX - 1 && below.minY > left.maxY - 1 && below.minY > right.maxY - 1
         }
+        shot("each-its-own")
     }
 
     /// SHELL-SPLIT-5: while below waits for its new shell, a shell the tab
@@ -267,6 +280,7 @@ final class ShellSplitWaitTests: MacUITestCase {
         proxy.hold(true)
         app.press(.id("shells-part-below"))
         let third = try started(phone, count: 3)
+        assertNotHeardOf(third)
         // The right off, then its shell picked in the row: the left shows it.
         app.press(.id("shells-part-right"))
         app.waitGone(.id("terminal-\(second.id)"))
@@ -282,5 +296,6 @@ final class ShellSplitWaitTests: MacUITestCase {
             guard let top = self.app.frame(of: .id("terminal-\(second.id)")), let below = self.app.frame(of: .id("terminal-\(third.id)")) else { return false }
             return below.minY > top.maxY - 1
         }
+        shot("below-its-own")
     }
 }
