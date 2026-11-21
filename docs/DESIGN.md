@@ -2029,7 +2029,8 @@ has it. Both apps word a report the same way (`PartFailure.headline`,
 sessions by name, written again when they change. It touches the file
 every few seconds, so its modification time is when the host was last
 known to be alive. A stop that was asked for (SIGTERM, SIGINT: Restart
-Host, replacing another copy's host, logging out) removes the marker before
+Host, replacing another copy's host, logging out; never a program that is
+not an `agenttermd`, `DaemonLauncher.isAHost`, #204) removes the marker before
 the clients' connections close. A host that is killed or crashes cannot.
 So a host that starts, once its port is its own, and finds a marker whose
 process no longer runs as a host knows the one before it died: it adds a

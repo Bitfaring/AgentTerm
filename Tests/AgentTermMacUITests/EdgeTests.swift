@@ -28,6 +28,41 @@ final class OtherCopysHostTests: MacUITestCase {
     }
 }
 
+/// HOST-13 (#204): what listens on the app's port is a program that is not
+/// an AgentTerm host, a proxy in front of the host (this test runner
+/// itself, through its `SlowProxy`).
+final class PortInUseTests: MacUITestCase {
+    private var proxy: SlowProxy!
+    private var proxyPort: UInt16 = 0
+    override var appPort: UInt16 { proxyPort }
+
+    override func beforeTheAppStarts() throws {
+        proxy = try SlowProxy(to: port, bytesPerSecond: 50_000_000)
+        proxyPort = proxy.start()
+    }
+
+    override func tearDown() {
+        // The app quits first (#203, TEST-9).
+        super.tearDown()
+        proxy?.stop()
+    }
+
+    func testAProgramThatIsNotAHostOnThePortIsNamedAndNotOfferedToBeStopped() throws {
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        XCTAssertGreaterThan(proc_pidpath(getpid(), &buffer, UInt32(buffer.count)), 0)
+        let program = (String(cString: buffer) as NSString).lastPathComponent
+        // Said by name, in the words both apps take theirs from.
+        app.wait(for: .containing(PortWords.inUse(port: proxyPort, by: program)), timeout: 15)
+        // Not another copy's host, and nothing offers to stop it.
+        XCTAssertFalse(app.exists(.containing("held by the host of another copy")))
+        XCTAssertFalse(app.exists(.button("Use This App's Host…")))
+        XCTAssertFalse(app.exists(.button("Restart Host…")))
+        // The app works through it all the same.
+        app.wait(for: .button("Shell"), timeout: 15)
+        shot("banner")
+    }
+}
+
 /// A link to the host that is slow, to see what the app shows while it waits.
 final class WaitingTests: MacUITestCase {
     private var proxy: SlowProxy!

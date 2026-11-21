@@ -668,6 +668,33 @@ private struct AgentNoticeBanner: View {
     }
 }
 
+/// The program on the app's port is not an AgentTerm host (#204): said by
+/// its name, with nothing that would stop it.
+private struct PortInUseBanner: View {
+    let name: String
+    let port: UInt16
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(PortWords.inUse(port: port, by: name))
+                    .font(.system(size: 12, weight: .medium))
+                Text(PortWords.inUseDetail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("port-in-use")
+    }
+}
+
 private struct OtherHostBanner: View {
     @EnvironmentObject private var model: AppModel
     let path: String
@@ -781,8 +808,10 @@ private struct Banners: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        if let path = model.otherHost {
+        if case .otherCopysHost(let path) = model.otherHost {
             OtherHostBanner(path: path)
+        } else if case .otherProgram(let name, let port) = model.otherHost {
+            PortInUseBanner(name: name, port: port)
         } else if model.hostMatch != .same {
             HostVersionBanner(match: model.hostMatch)
         } else if let other = model.otherBuildOfHost {

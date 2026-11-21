@@ -1419,6 +1419,13 @@ ships with, a banner says so, with the other host's path, and offers **Use
 This App's Host…**: the other host is stopped, after asking since its
 sessions end with it, and the app's own is started.
 
+Another copy's host is a program named `agenttermd`. When what listens on
+the port is any other program (a proxy in front of the host, say), the
+banner says instead that the port is in use by that program, by its name,
+and that it is not an AgentTerm host (#204). Nothing offers to stop it: the
+app never stops a program that is not an AgentTerm host, not even through
+Restart Host.
+
 ### A host that stopped
 
 A host that stops without being asked to (killed, by macOS or by another

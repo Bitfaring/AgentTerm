@@ -54,12 +54,13 @@ stopped. Every test now checks, as it ends, that no program of the build
 with its state folder is still running (TEST-9): one that is, is named and
 ended, and the test fails. While a `SlowProxy` stands on the app's port,
 the program the app finds listening there is the test runner itself
-(`xctest`), not the app's own host, so the app shows its banner of another
-copy's host (HOST-1), naming `xctest`, in every picture of those tests
-(#204). It is what the app does for any program not its own host on its
-port; no other host, left behind or the installed app's, is involved. Its
-"Use This App's Host…" would stop the test runner: no test presses it
-there. Run from a session of the installed app, the tests have that
+(`xctest`), not the app's own host. The app took any such program for
+another copy's host and showed that banner, naming `xctest`, in every
+picture of those tests, with a button that would have stopped the test
+runner (#204); no other host, left behind or the installed app's, was
+involved. Another copy's host is now an `agenttermd` only: for anything
+else the app says the port is in use by that program, by its name, and
+offers nothing that stops it (HOST-13). Run from a session of the installed app, the tests have that
 session's own variables (`AGENTTERM_EVENTS`, `AGENTTERM_USAGE`,
 `AGENTTERM_MCP`), which reached every host, app and session they started
 (#207). The test scripts now take every `AGENTTERM_` variable out of their
@@ -566,6 +567,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | MENU-2 | The app running | Choose File > New Shell, New Claude Code | A session of each kind starts | M |
 | PERM-1 | The app running | Open Settings > Permissions | Each permission is listed with whether it is allowed, Notifications among them (#180) | M |
 | HOST-1 | A host from another copy of the app on the app's port | Open the app | A banner names the other host's path and offers this app's own | M |
+| HOST-13 (#204) | A program that is not an AgentTerm host (the test runner, through a `SlowProxy` in front of the host) on the app's port | Open the app | The banner says the port is in use by that program, by its name (`PortWords.inUse`); it is not called another copy's host, and neither Use This App's Host… nor Restart Host… is offered. Before the fix the banner of another copy's host named `xctest` | M |
 | HOST-2 | A host of another protocol version | Connect | Both apps say the versions differ | H, P |
 | HOST-12 (#121) | The app as shipped, its own host left running from an earlier release (`--app-version 0.0.1`): built from other sources (`--host-revision`), then from the same ones | Open the app | Other sources: a banner says the host is from AgentTerm 0.0.1, older than the app, and Restart Host… asks, then starts the app's own, and the banner goes. The same sources: nothing is said, a release that changes nothing of the host asks for no restart | M, P |
 | HOST-3 | A host with two sessions, `build` and `tests` | The host is killed (SIGKILL), and another is started on its state folder and port | Every client is told that the host stopped, about when, that `build` and `tests` ended with it, and that it was started again; so is a client that connects later, also after the host is restarted on purpose. Dismissed on one client, it is gone from all and not sent again | H |

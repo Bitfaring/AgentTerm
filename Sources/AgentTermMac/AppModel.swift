@@ -201,13 +201,27 @@ final class AppModel: ObservableObject {
         launchedDaemon = false
         connectAttempts = 0
         DispatchQueue.global(qos: .userInitiated).async {
-            if let listener = DaemonLauncher.listener(onPort: port) { DaemonLauncher.stop(listener.pid) }
+            // Never a program that is not a host (#204).
+            if let listener = DaemonLauncher.listener(onPort: port), DaemonLauncher.isAHost(listener.path) { DaemonLauncher.stop(listener.pid) }
         }
     }
 
-    /// Set when the host that answered is not the one this app ships with:
-    /// the path of that other host. It may be an older version.
-    @Published private(set) var otherHost: String?
+    /// What listens on this Mac's port when it is not the host this app
+    /// ships with.
+    enum PortHolder: Equatable {
+        /// The host of another copy of AgentTerm, by its path. It may be an
+        /// older version.
+        case otherCopysHost(path: String)
+        /// A program that is not an AgentTerm host at all (#204), by its
+        /// name: a proxy in front of the host, say. The app never stops it.
+        case otherProgram(name: String, port: UInt16)
+    }
+
+    /// Set when what answered on this Mac's port is not the host this app
+    /// ships with.
+    @Published private(set) var otherHost: PortHolder?
+    /// The other copy's host, which Use This App's Host stops; never set
+    /// for a program that is not a host.
     private var otherHostPID: pid_t?
 
     /// Looks at which program is the host, off the main thread.
@@ -216,9 +230,15 @@ final class AppModel: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let listener = DaemonLauncher.listener(onPort: port)
             let foreign = listener.flatMap { DaemonLauncher.isBundled($0.path) ? nil : $0 }
+            // Another copy's host is an `agenttermd`; anything else is said
+            // by its name, and is not offered to be stopped (#204).
+            let holder: PortHolder? = foreign.map {
+                DaemonLauncher.isAHost($0.path)
+                    ? .otherCopysHost(path: $0.path) : .otherProgram(name: ($0.path as NSString).lastPathComponent, port: port)
+            }
             DispatchQueue.main.async {
-                self?.otherHost = foreign?.path
-                self?.otherHostPID = foreign?.pid
+                self?.otherHost = holder
+                self?.otherHostPID = foreign.flatMap { DaemonLauncher.isAHost($0.path) ? $0.pid : nil }
             }
         }
     }

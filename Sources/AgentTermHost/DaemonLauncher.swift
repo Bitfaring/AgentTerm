@@ -31,6 +31,13 @@ public enum DaemonLauncher {
         return URL(fileURLWithPath: own).resolvingSymlinksInPath().path == URL(fileURLWithPath: path).resolvingSymlinksInPath().path
     }
 
+    /// Whether a program is an AgentTerm host, of any copy: `agenttermd`.
+    /// What else listens on the app's port (a proxy, a test runner) is
+    /// never stopped by the app (#204).
+    public static func isAHost(_ path: String) -> Bool {
+        (path as NSString).lastPathComponent == "agenttermd"
+    }
+
     /// Asks a host to stop. Its sessions end with it.
     public static func stop(_ pid: pid_t) {
         kill(pid, SIGTERM)
