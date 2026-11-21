@@ -276,7 +276,9 @@ nothing. A build outside an app bundle has no revision, and is not compared.
 The protocol version is 36. 36 added `deviceInBackground`, which a
 device's app sends for going to the background and coming back, in place
 of the `appInFront` 35 had it send (#190), so that `appInFront` is only the
-Mac app's. 35 had the iPhone send `appInFront` too, for whether its app is
+Mac app's; and `CreateRequest.requestID`, a number the client picks for a
+launch, which the host gives back to that client alone in `attached`'s
+`request`, or in `error`'s `request` when it refuses the launch (#189). 35 had the iPhone send `appInFront` too, for whether its app is
 in the background (#190). 34 added the browser's `pointer`, `contextAt` and
 `copy`, and the result `context` (#147). 33 added `readNotices`, `noticesRead` and
 `noticeAlert`, and `Notice.read` (#180). 32 added `pushRegister`, `pushUnregister`, `pushState`, `handleNotice`,
@@ -1947,15 +1949,25 @@ notice, when there are none) or turns off the right or below it leaves;
 `tidy`, after the tab's shells change, closes a part whose shell ended
 and gives the left the right's shell, else the one below's, when the
 left's ended with every other one on show. A part turned on with no shell
-left to show is a `Wait` that remembers the shells the tab had then; the
-first shell the tab gets that is not among them, put in front or only in
-the row, goes to the first part waiting (#189), so the right and below can
-wait at once, each for its own, and a shell the tab already had is never
-taken. There is no request id in `CreateRequest`, so a shell new to the
-tab from elsewhere while a part waits (File > New Shell, the iPhone) is
-taken as well. The waits end when the host sends an error (a launch it
-refused, said in the notice) and when the connection goes; there is no
-timeout that ends them without a word. A part turned on while not
+left to show is a `Wait` for the shell launched for it, known by its
+identity (#189): the Mac numbers that launch (`AppModel.lastShellPartLaunch`,
+sent as `CreateRequest.requestID`), and the host gives the number back to
+it alone with the session it made, in `attached(_, request:)`, the message
+by which the creator learns of its new session, before the session is put
+in front. `ShellSplit.launched(request:shell:)` then names the wait's
+shell, which the part takes once it is in the row, put in front or not.
+So the right and below can wait at once, each for its own, and no other
+shell is taken: neither one the tab already had nor one new to the tab
+from elsewhere while the part waits (File > New Shell, the iPhone, a
+launch of the Mac's own without a number). A wait whose shell is named
+but is not in the tab (it ended before it was shown, or was started in
+another folder) ends in `tidy`. The host refuses a launch with
+`error(_, request:)`, its number in it, for a shell asked for an agent
+that does not run, a worktree it could not make and a program that did not
+start: that ends that part's wait alone (`stopWaiting(request:)`), and the
+refusal is said in the notice; an error without a number ends none. The
+waits all end when the connection goes; there is no timeout that ends
+them without a word. A part turned on while not
 connected does not wait at all: like every way of starting a session
 (`AppModel.canStartSessions`, #202), it is refused with
 `StateWords.notStarted` in the window's notice. That press cannot come

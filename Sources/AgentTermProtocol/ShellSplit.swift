@@ -24,22 +24,28 @@ public struct ShellSplit: Equatable, Sendable {
     public var across = 0.5
     /// The share of the height above the one below.
     public var down = 0.62
-    /// Parts turned on while no shell was left to show: each waits for a
-    /// shell new to the tab, in the order they were turned on.
+    /// Parts turned on while no shell was left to show: each waits for the
+    /// shell launched for it, in the order they were turned on.
     public private(set) var waits: [Wait] = []
 
-    /// A part waiting for a new shell, and the shells the tab held when it
-    /// was turned on: none of those is the one it waits for.
+    /// A part waiting for the shell launched for it (#189), known by the
+    /// number the launch was asked with (`CreateRequest.requestID`), which
+    /// the host gives back with the session it made (`attached`) or with
+    /// its refusal (`error`). A shell started elsewhere meanwhile (File >
+    /// New Shell, the iPhone) is never the one it waits for.
     public struct Wait: Equatable, Sendable {
         public let part: ShellPart
-        public let known: Set<String>
+        public let request: Int
+        /// The shell made for it, by its tab id, once the host said which.
+        public fileprivate(set) var shell: String?
     }
 
     /// What turning a part on did.
     public enum TurnedOn: Equatable, Sendable {
         /// It shows a shell that was not on show.
         case shown(String)
-        /// None was left: it waits for a new one, which the caller opens.
+        /// None was left: it waits for the shell the caller launches with
+        /// the request number it gave.
         case waiting
     }
 
@@ -102,8 +108,9 @@ public struct ShellSplit: Equatable, Sendable {
     }
 
     /// Turns the right or the one below on, with a shell not on show; or,
-    /// when none is left, has it wait for a new one.
-    public mutating func turnOn(_ part: ShellPart, picked: String?, members: [String]) -> TurnedOn {
+    /// when none is left, has it wait for the new one the caller launches
+    /// with `request`, a number of its own for each launch (#189).
+    public mutating func turnOn(_ part: ShellPart, picked: String?, members: [String], request: Int) -> TurnedOn {
         if part == .main || parts(in: members).contains(part), let shown = shell(in: part, picked: picked, members: members) { return .shown(shown) }
         let shown = onShow(picked: picked, members: members)
         if let free = members.first(where: { !shown.contains($0) }) {
@@ -112,7 +119,7 @@ public struct ShellSplit: Equatable, Sendable {
             return .shown(free)
         }
         waits.removeAll { $0.part == part }
-        waits.append(Wait(part: part, known: Set(members)))
+        waits.append(Wait(part: part, request: request))
         return .waiting
     }
 
@@ -127,12 +134,23 @@ public struct ShellSplit: Equatable, Sendable {
         waits.removeAll { $0.part == part }
     }
 
-    /// A shell put in front, or new in the row: the first part waiting for
-    /// a shell the tab did not have when it was turned on shows it (#189).
-    /// The part, or nil when none took it.
+    /// The host made the shell of a launch, and gave its request back
+    /// (#189): the part waiting for it shows it once it is in the row.
+    /// False when no part of this tab waits for that request.
+    @discardableResult
+    public mutating func launched(request: Int, shell: String) -> Bool {
+        guard let index = waits.firstIndex(where: { $0.request == request && $0.shell == nil }) else { return false }
+        waits[index].shell = shell
+        return true
+    }
+
+    /// A shell put in front, or new in the row: the part waiting for it,
+    /// the one it was launched for, shows it (#189). A shell launched for
+    /// no part, new to the tab or not, is never taken. The part, or nil
+    /// when none took it.
     public mutating func takeNew(_ item: String, picked: String?, members: [String]) -> ShellPart? {
         guard members.contains(item), !onShow(picked: picked, members: members).contains(item),
-            let index = waits.firstIndex(where: { !$0.known.contains(item) })
+            let index = waits.firstIndex(where: { $0.shell == item })
         else { return nil }
         let part = waits.remove(at: index).part
         var picked = picked
@@ -140,17 +158,24 @@ public struct ShellSplit: Equatable, Sendable {
         return part
     }
 
-    /// No part waits any more: the launch failed, or the host went.
+    /// The launch asked with this request failed, said by the host's error
+    /// for it: the part waiting for it waits no more, the others still do.
+    public mutating func stopWaiting(request: Int) { waits.removeAll { $0.request == request } }
+
+    /// No part waits any more: the connection to the host went.
     public mutating func stopWaiting() { waits = [] }
 
     /// After the tab's shells changed: a part whose shell ended closes; a
-    /// part waiting takes a new shell, put in front or not (#189); and the
-    /// left, its shell ended with every other one on show, takes the
+    /// part waiting takes the shell launched for it, put in front or not
+    /// (#189), and waits no more when that shell is not in the tab (it
+    /// ended before it was shown, or was started in another folder); and
+    /// the left, its shell ended with every other one on show, takes the
     /// right's, else the one below, which closes (#188).
     public mutating func tidy(picked: inout String?, members: [String]) {
         if let right, !members.contains(right) { self.right = nil }
         if let below, !members.contains(below) { self.below = nil }
-        for item in members where !waits.isEmpty { _ = takeNew(item, picked: picked, members: members) }
+        for wait in waits { if let shell = wait.shell { _ = takeNew(shell, picked: picked, members: members) } }
+        waits.removeAll { $0.shell.map { !members.contains($0) } ?? false }
         if shell(in: .main, picked: picked, members: members) == nil, let moved = right ?? below {
             set(moved == right ? .right : .below, nil, picked: &picked)
             picked = moved

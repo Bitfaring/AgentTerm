@@ -132,7 +132,7 @@ final class SchedulerHostTests: XCTestCase {
 
         var sessions: [SessionInfo] { messages.compactMap { if case .sessions(let list) = $0 { return list } else { return nil } }.last ?? [] }
         var schedules: [Schedule] { messages.compactMap { if case .schedules(let list) = $0 { return list } else { return nil } }.last ?? [] }
-        var errors: [String] { messages.compactMap { if case .error(let text) = $0 { return text } else { return nil } } }
+        var errors: [String] { messages.compactMap { if case .error(let text, _) = $0 { return text } else { return nil } } }
         var failures: [PartFailure] { messages.compactMap { if case .failures(let list) = $0 { return list } else { return nil } }.last ?? [] }
         var paused: Bool? { messages.compactMap { if case .schedulesPaused(let paused) = $0 { return paused } else { return nil } }.last }
     }

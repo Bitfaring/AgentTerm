@@ -240,7 +240,7 @@ final class WorktreeHostTests: XCTestCase {
 
         var sessions: [SessionInfo] { messages.compactMap { if case .sessions(let list) = $0 { return list } else { return nil } }.last ?? [] }
         var worktrees: [WorktreeInfo] { messages.compactMap { if case .worktrees(_, let list) = $0 { return list } else { return nil } }.last ?? [] }
-        var errors: [String] { messages.compactMap { if case .error(let text) = $0 { return text } else { return nil } } }
+        var errors: [String] { messages.compactMap { if case .error(let text, _) = $0 { return text } else { return nil } } }
     }
 
     private var root: URL!

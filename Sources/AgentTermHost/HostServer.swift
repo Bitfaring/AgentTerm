@@ -1556,7 +1556,7 @@ public final class HostServer {
                 guard let self, let client = self.clients[id] else { return }
                 switch made {
                 case .failure(let error):
-                    self.send(.error("The worktree could not be made: \(error.localizedDescription)"), to: client)
+                    self.send(.error("The worktree could not be made: \(error.localizedDescription)", request: request.requestID), to: client)
                 case .success(let worktree):
                     if let problem { self.send(.error(problem), to: client) }
                     var inWorktree = request
@@ -2149,7 +2149,7 @@ public final class HostServer {
                 // A shell for an agent, opened by the user in its group
                 // (#127): a shell only, for an agent that runs, in its folder.
                 guard request.command == nil, let owner = sessions[agent], owner.info.agent != nil else {
-                    send(.error("A shell can be opened only for an agent that runs."), to: client)
+                    send(.error("A shell can be opened only for an agent that runs.", request: request.requestID), to: client)
                     return
                 }
                 var shell = request
@@ -3319,7 +3319,8 @@ public final class HostServer {
                 queue: queue
             )
         } catch {
-            if let client { send(.error("\(error)"), to: client) }
+            // The refusal names the launch it answers (#189).
+            if let client { send(.error("\(error)", request: request.requestID), to: client) }
             return nil
         }
 
@@ -3360,7 +3361,8 @@ public final class HostServer {
             self?.sessionExited(id, status: status)
         }
 
-        if let client { attach(client, to: session, size: size) }
+        // The creator learns of its session with its request (#189).
+        if let client { attach(client, to: session, size: size, request: request.requestID) }
         broadcastSessions()
         // An agent that was not in use until now: ask its service right away.
         refreshAccountUsage(olderThan: Self.accountInterval)
@@ -3839,7 +3841,9 @@ public final class HostServer {
         for client in clients.values where client.authenticated { send(.agentShellsFaults(faults), to: client) }
     }
 
-    private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil, history: Int? = nil) {
+    /// `request`: the `CreateRequest.requestID` of the `create` that made
+    /// the session, for its creator (#189).
+    private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil, history: Int? = nil, request: Int? = nil) {
         client.attached.insert(session.info.id)
         // Watching is not using: this only sets the size if nobody else is attached.
         let changed = session.arbiter.update(client.id, size: size)
@@ -3849,7 +3853,7 @@ public final class HostServer {
             let size = session.info.size, mirror = session.mirror
             session.mirrorQueue.async { mirror.resize(size) }
         }
-        send(.attached(session.info), to: client)
+        send(.attached(session.info, request: request), to: client)
         let id = session.info.id
         if let have, have <= session.written, session.written - have <= session.scrollback.count {
             // A client that was here before, a phone after its network

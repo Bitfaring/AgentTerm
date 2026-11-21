@@ -705,7 +705,7 @@ final class AgentStateHostTests: XCTestCase {
         // A reply to what it asked before is dropped, with a word.
         phone.connection.send(.answer(session: agent.id, to: .done(said: "earlier"), text: "go on"))
         waitUntil("the reply to be refused") {
-            phone.messages.contains { if case .error(let text) = $0 { return text.contains("moved on") } else { return false } }
+            phone.messages.contains { if case .error(let text, _) = $0 { return text.contains("moved on") } else { return false } }
         }
         XCTAssertEqual(phone.sessions.first?.state, waiting, "nothing was typed")
 

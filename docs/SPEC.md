@@ -980,9 +980,10 @@ panel.
   at the end of its row show a shell on the right and one below, the first
   not on show, or a new one when none is left; the shell picked stays on
   the left. A part waiting for its new shell takes that one only, once it
-  is in the row, not a shell the tab already had; the right and below can
-  both wait, each for its own (#189). A launch the host refuses ends the
-  wait, and the refusal is said. The parts are parted and framed as an
+  is in the row: not a shell the tab already had, nor one started
+  elsewhere meanwhile (File > New Shell, the iPhone); the right and below
+  can both wait, each for its own (#189). A launch the host refuses ends
+  that part's wait alone, and the refusal is said. The parts are parted and framed as an
   agent's area's, and dragged the same; a click in a part, or its shell
   picked in the row, puts the keyboard there, and a shell picked that is
   not on show is shown in the part the keyboard is in. A shell's menu in

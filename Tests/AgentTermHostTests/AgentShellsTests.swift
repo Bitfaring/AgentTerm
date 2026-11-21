@@ -726,7 +726,7 @@ final class AgentShellsHostTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: program.path)
 
         mac.connection.send(.setShellSettings(ShellSettings(program: "/nowhere/shell")))
-        waitUntil("refused") { mac.messages.contains { if case .error(let text) = $0 { return text.contains("/nowhere/shell") } else { return false } } }
+        waitUntil("refused") { mac.messages.contains { if case .error(let text, _) = $0 { return text.contains("/nowhere/shell") } else { return false } } }
         let settings = ShellSettings(program: program.path, startup: "echo startup > '\(ran.path)'", agentStartup: "export AT_AGENT=on")
         mac.connection.send(.setShellSettings(settings))
         waitUntil("every device told") {

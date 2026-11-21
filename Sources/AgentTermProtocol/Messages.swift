@@ -125,10 +125,15 @@ public struct CreateRequest: Codable, Equatable, Sendable {
     /// (#127): the agent sees and uses it as one it opened itself. A shell
     /// only, in the agent's folder.
     public var openedBy: SessionID?
+    /// A number the client picks for this launch (#189), given back to it
+    /// alone with the session made (`attached`'s `request`) or with the
+    /// refusal (`error`'s `request`), so that it knows its own launch from
+    /// a session started elsewhere meanwhile. Nil when it does not ask.
+    public var requestID: Int?
 
     public init(
         command: String? = nil, cwd: String? = nil, title: String? = nil, size: TermSize = .default, typed: String? = nil,
-        openedBy: SessionID? = nil
+        openedBy: SessionID? = nil, requestID: Int? = nil
     ) {
         self.command = command
         self.cwd = cwd
@@ -136,6 +141,7 @@ public struct CreateRequest: Codable, Equatable, Sendable {
         self.size = size
         self.typed = typed
         self.openedBy = openedBy
+        self.requestID = requestID
     }
 }
 
@@ -556,7 +562,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case agents([AgentInfo])
     /// Project folders on the host, in the order they were added.
     case folders([String])
-    case attached(SessionInfo)
+    /// The sender is attached to this session. `request` is the
+    /// `CreateRequest.requestID` of the `create` that made it (#189), sent
+    /// only to the client that asked; nil for any other attach.
+    case attached(SessionInfo, request: Int? = nil)
     /// Sent after `attached`, before the session's earlier output: where in
     /// the session's output what follows starts. It is the `have` the
     /// client attached with when the host could go on from there. Any other
@@ -572,7 +581,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// another (#120).
     case resized(session: SessionID, size: TermSize, driver: Bool, by: SizeDriver? = nil)
     case exited(session: SessionID, status: Int32)
-    case error(String)
+    /// What the host refused or what failed, in words. `request` is the
+    /// `CreateRequest.requestID` of the `create` it refused (#189); nil for
+    /// every other error.
+    case error(String, request: Int? = nil)
     /// Answer to `pair`: the token this device connects with from now on.
     case paired(device: String, token: String)
     /// Answer to `createPairingCode`.

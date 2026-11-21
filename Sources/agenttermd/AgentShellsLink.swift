@@ -128,7 +128,7 @@ final class AgentShellsLink {
             switch message {
             case .welcome(let version, _, _, _):
                 self.hostVersion = version
-            case .error(let said) where self.hostVersion == nil:
+            case .error(let said, _) where self.hostVersion == nil:
                 self.refusal = said
             case .agentShellResult(let id, let result):
                 self.answers[id] = result

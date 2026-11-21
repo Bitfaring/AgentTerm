@@ -43,21 +43,44 @@ extension AppModel {
             focusKeyboard()
             return
         }
-        switch split.turnOn(part, picked: groupShown[group], members: members(of: group)) {
+        lastShellPartLaunch += 1
+        let request = lastShellPartLaunch
+        switch split.turnOn(part, picked: groupShown[group], members: members(of: group), request: request) {
         case .shown:
             shellSplits[group] = split
             focusShellPart(part, of: group)
         case .waiting:
-            // None left to show: a new one, which goes there once it is in
-            // the row (#189). The part waits until then, or until the host
-            // says the launch failed or goes, either of which is said. Not
-            // connected, nothing is started and the part does not wait:
+            // None left to show: a new one, launched with a number of its
+            // own, which goes there once the host has given that number back
+            // with it and it is in the row (#189); a shell started elsewhere
+            // meanwhile is not taken. The part waits until then, or until
+            // the host refuses that launch or goes, either of which is said.
+            // Not connected, nothing is started and the part does not wait:
             // that is said at once (#202). The tab is not on screen while
             // not connected (CenterView shows why instead), so its part
             // buttons cannot be pressed then; the check is kept all the same.
             guard canStartSessions() else { return }
             shellSplits[group] = split
-            launch(nil)
+            launch(nil, request: request)
+        }
+    }
+
+    /// The host made the shell launched for a part, and gave its request
+    /// back with it (#189): that part, and no other, takes it.
+    func shellPartLaunched(request: Int, session: SessionInfo) {
+        for (group, split) in shellSplits where split.waits.contains(where: { $0.request == request }) {
+            var launched = split
+            if launched.launched(request: request, shell: TabID.session(session)) { shellSplits[group] = launched }
+        }
+    }
+
+    /// The host refused the launch asked with this request: the part that
+    /// waited for it waits no more, the others still do (#189).
+    func stopShellPartWait(request: Int) {
+        for (group, split) in shellSplits where split.waits.contains(where: { $0.request == request }) {
+            var stopped = split
+            stopped.stopWaiting(request: request)
+            shellSplits[group] = stopped
         }
     }
 
@@ -79,8 +102,8 @@ extension AppModel {
         focusShellPart(part, of: group)
     }
 
-    /// No part of a Shells tab waits for a new shell any more: the host
-    /// refused a launch, or the connection went (#189).
+    /// No part of a Shells tab waits for a new shell any more: the
+    /// connection went (#189).
     func stopShellPartWaits() {
         for (group, split) in shellSplits where !split.waits.isEmpty {
             var stopped = split
@@ -124,8 +147,8 @@ extension AppModel {
     /// False when the tab is not split, nor about to be.
     func placeInShellSplit(_ item: String, group: String) -> Bool {
         guard TabID.holder(of: group)?.kind == .shells else { return false }
-        // A new shell asked for by a part turned on: shown there. Only one
-        // the tab did not have when the part was turned on (#189).
+        // A new shell asked for by a part turned on: shown there. Only the
+        // one launched for it, as the host said (#189).
         if var split = shellSplits[group], let part = split.takeNew(item, picked: groupShown[group], members: members(of: group)) {
             shellSplits[group] = split
             shellSplitFocus[group] = part
@@ -148,8 +171,8 @@ extension AppModel {
     }
 
     /// Parts whose shell ended close, and the keyboard goes back to the
-    /// left; a part waiting for a new shell takes it once it is in the row,
-    /// put in front or not (#189).
+    /// left; a part waiting for the shell launched for it takes it once it
+    /// is in the row, put in front or not (#189).
     func tidyShellSplits() {
         for (group, split) in shellSplits {
             var tidy = split

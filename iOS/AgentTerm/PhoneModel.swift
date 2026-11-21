@@ -1818,7 +1818,7 @@ final class PhoneModel: ObservableObject {
             syncSessionLayout()
         case .folders(let list):
             folders = list
-        case .attached(let info):
+        case .attached(let info, _):
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
             if openCreatedSession {
                 openCreatedSession = false
@@ -1891,7 +1891,7 @@ final class PhoneModel: ObservableObject {
             path = []
             tab = "sessions"
             entered = true
-        case .error(let text):
+        case .error(let text, _):
             if text == "invalid token" {
                 let name = pairing?.name ?? "The Mac"
                 forgetMac()

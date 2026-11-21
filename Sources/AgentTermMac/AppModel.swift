@@ -275,6 +275,10 @@ final class AppModel: ObservableObject {
     @Published var shellSplits: [String: ShellSplit] = [:]
     /// The part of a split Shells tab the keyboard is in.
     @Published var shellSplitFocus: [String: ShellPart] = [:]
+    /// The number of the last shell launched for a part of a Shells tab
+    /// (`CreateRequest.requestID`, #189): the host gives it back with the
+    /// session it made, or with its refusal.
+    var lastShellPartLaunch = 0
     /// A shell of a Shells tab's row being dragged to a part of it.
     @Published var draggedShell: String?
 
@@ -1546,7 +1550,7 @@ final class AppModel: ObservableObject {
                     RemoteMacStore.save(self.remoteMacs)
                     self.showPairMac = false
                     self.switchTo(mac)
-                case .error(let text):
+                case .error(let text, _):
                     self.pairMacError =
                         text == "invalid pairing code" ? "That link has expired or was already used. Show a new one on the other Mac and try again." : text
                 default:
@@ -1879,12 +1883,15 @@ final class AppModel: ObservableObject {
             if let tab = diffTab, !list.contains(tab.folder) { closeDiffTab() }
             if selectedFolder == nil || !list.contains(selectedFolder ?? "") { selectedFolder = list.first }
             migrateLocalFolders(known: list)
-        case .attached(let info):
+        case .attached(let info, let request):
             if controllers[info.id] == nil { controllers[info.id] = makeController(for: info.id) }
             // What follows is the session's earlier output, until `replayed`.
             controllers[info.id]?.beginReplay(size: info.size)
             replaying.insert(info.id)
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
+            // The shell launched for a part of a Shells tab, known by its
+            // request, before it is put in front below (#189).
+            if let request { shellPartLaunched(request: request, session: info) }
             if selectNextAttached || selectedSession == nil {
                 // A session that was just started comes to the front, also
                 // when a file, the diff or a page of the browser was showing
@@ -1920,11 +1927,11 @@ final class AppModel: ObservableObject {
                 syncTabs()
                 adoptFocusedFront()
             }
-        case .error(let text):
+        case .error(let text, let request):
             starting = nil
-            // A part waiting for a new shell waits no more: the launch may be
-            // what failed, and what failed is said below (#189).
-            stopShellPartWaits()
+            // The part waiting for the launch this refuses waits no more, and
+            // what failed is said below; the other parts still wait (#189).
+            if let request { stopShellPartWait(request: request) }
             if isRemote, text == "invalid token", let mac = remote {
                 // The other Mac took this one off its paired devices. What
                 // was not saved there cannot be saved any more.
@@ -2073,14 +2080,16 @@ final class AppModel: ObservableObject {
         return true
     }
 
-    /// Starts an agent, or a plain shell when `agent` is nil, in the selected folder.
-    func launch(_ agent: AgentInfo?) {
+    /// Starts an agent, or a plain shell when `agent` is nil, in the selected
+    /// folder. `request`, for a shell launched for a part of a Shells tab,
+    /// comes back with the session or the host's refusal (#189).
+    func launch(_ agent: AgentInfo?, request: Int? = nil) {
         guard canStartSessions() else { return }
         lastError = nil
         selectNextAttached = true
         let size = startingSize
         Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
-        connection?.send(.create(CreateRequest(command: agent?.id, cwd: startingDirectory, title: agent?.name, size: size)))
+        connection?.send(.create(CreateRequest(command: agent?.id, cwd: startingDirectory, title: agent?.name, size: size, requestID: request)))
     }
 
     /// Starts a shell for an agent (#127), from its group's row: in its
