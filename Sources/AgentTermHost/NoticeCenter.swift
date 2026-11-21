@@ -15,6 +15,7 @@ final class NoticeCenter {
         var told: [String: Set<UInt64>]
         var pushed: [String: Set<UInt64>]
         var due: Set<UInt64>?
+        var waiting: [UInt64: Date]?
     }
 
     private let file: URL?
@@ -29,6 +30,10 @@ final class NoticeCenter {
     private var due: Set<UInt64> = []
     /// Of those, the ones told through Apple: taken back the same way.
     private var pushed: [String: Set<UInt64>] = [:]
+    /// The notices that wait to be a notification (`Notice.pushWait`), and
+    /// when their time comes: kept, so that a host that starts again within
+    /// the wait still makes them due (#193).
+    private var waits: [UInt64: Date] = [:]
 
     init(file: URL?) {
         self.file = file
@@ -38,6 +43,7 @@ final class NoticeCenter {
             told = saved.told
             pushed = saved.pushed
             due = saved.due ?? []
+            waits = saved.waiting ?? [:]
         }
         // A host that starts again has none of the sessions of the last one:
         // what they were told of is over.
@@ -131,9 +137,22 @@ final class NoticeCenter {
         log.first { $0.id == id && $0.handled == nil && $0.read != true }
     }
 
+    /// It waits until `until` to be a notification (#193).
+    func waits(_ id: UInt64, until: Date) {
+        waits[id] = until
+        save()
+    }
+
+    /// The notices that still wait, not handled nor read, with when their
+    /// time comes: for a host that starts again (#193).
+    var waiting: [(id: UInt64, until: Date)] {
+        waits.filter { pending($0.key) != nil }.map { (id: $0.key, until: $0.value) }.sorted { $0.until < $1.until }
+    }
+
     /// Its time to be a notification has come.
     func becameDue(_ id: UInt64) {
         due.insert(id)
+        waits[id] = nil
         save()
     }
 
@@ -169,11 +188,12 @@ final class NoticeCenter {
         told = told.mapValues { $0.intersection(ids) }
         pushed = pushed.mapValues { $0.intersection(ids) }
         due.formIntersection(ids)
+        waits = waits.filter { ids.contains($0.key) }
     }
 
     private func save() {
         guard let file else { return }
-        let data = MessageCoding.encode(Saved(log: log, nextID: nextID, told: told, pushed: pushed, due: due))
+        let data = MessageCoding.encode(Saved(log: log, nextID: nextID, told: told, pushed: pushed, due: due, waiting: waits))
         try? FileManager.default.createDirectory(
             at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // What agents said: the user's alone.

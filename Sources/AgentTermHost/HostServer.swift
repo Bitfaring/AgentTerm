@@ -638,6 +638,7 @@ public final class HostServer {
             writePromptsForServers()
             loadSchedules()
             loadHistoryMarks()
+            alertWaitingNotices()
             startAtLoginByDefault()
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + min(1, configuration.scheduleInterval), repeating: configuration.scheduleInterval)
@@ -1978,7 +1979,22 @@ public final class HostServer {
         guard notice.alerts else { return }
         let wait = notice.pushWaits(macInUse: macInUse) ? configuration.pushWait : 0
         if wait <= 0 { return alert(notice.id) }
+        notices.waits(notice.id, until: configuration.now().addingTimeInterval(wait))
         queue.asyncAfter(deadline: .now() + wait) { [weak self] in self?.alert(notice.id) }
+    }
+
+    /// On starting: what waited to be a notification when the last host
+    /// stopped is one now, or once the rest of its wait is over (#193).
+    private func alertWaitingNotices() {
+        let now = configuration.now()
+        for (id, until) in notices.waiting {
+            let rest = until.timeIntervalSince(now)
+            if rest <= 0 {
+                alert(id)
+            } else {
+                queue.asyncAfter(deadline: .now() + rest) { [weak self] in self?.alert(id) }
+            }
+        }
     }
 
     /// Its time has come: a notification on every device, over the

@@ -268,7 +268,9 @@ happened; the Live Activity shows the host's state now (below).
   someone is at the Mac, and is told at once otherwise. Handled or read
   within those 30 seconds (the agent works again; opened, answered,
   dismissed or read on some device), it is a notification nowhere. Short
-  turns that end one after the other do not buzz the phone each time.
+  turns that end one after the other do not buzz the phone each time. A
+  host that starts again within the wait still tells it once the wait is
+  over (#193).
 - **Handled on one, gone from all**: answered, opened or dismissed (from
   the banner, from Notification Center) on one device, or its agent moving
   on, and the notification goes from every other device.

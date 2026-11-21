@@ -114,4 +114,22 @@ final class NoticeCenterTests: XCTestCase {
         XCTAssertEqual(center.log.first { $0.id == third.id }?.handled?.how, .movedOn)
         XCTAssertNil(center.log.first { $0.id == third.id }?.read, "moved on is not read")
     }
+
+    /// NOTICE-6 (#193): a notice that waits to be a notification is kept
+    /// waiting, with when its time comes, by a host that starts again; it
+    /// waits no longer once due, read or handled.
+    func testWhatWaitsIsKeptWhenTheHostStartsAgain() throws {
+        let center = NoticeCenter(file: file)
+        let stopped = try XCTUnwrap(center.report(PartFailure(part: .session, name: "build", at: now, restarted: false), now: now))
+        let other = try XCTUnwrap(center.report(PartFailure(part: .schedule, name: "nightly", at: now, restarted: false), now: now))
+        center.waits(stopped.id, until: now.addingTimeInterval(30))
+        center.waits(other.id, until: now.addingTimeInterval(20))
+        let again = NoticeCenter(file: file)
+        XCTAssertEqual(again.waiting.map(\.id), [other.id, stopped.id])
+        XCTAssertEqual(again.waiting.last?.until, now.addingTimeInterval(30))
+        again.becameDue(other.id)
+        XCTAssertEqual(again.waiting.map(\.id), [stopped.id])
+        _ = again.read([stopped.id])
+        XCTAssertEqual(again.waiting.map(\.id), [], "read: no longer waits")
+    }
 }

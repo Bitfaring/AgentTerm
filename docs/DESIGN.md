@@ -1007,7 +1007,12 @@ Mac's own app as `local`.
   `Notice.pushWaits(macInUse:)` says so: a done agent always, anything else
   while someone is at the Mac (#180, decided 2026-11-20). Then, if it is
   still not handled nor read (`NoticeCenter.pending`), it is due
-  (`becameDue`): `noticeAlert(id:)` to every client in front and a push
+  (`becameDue`). When it waits, when its time comes is kept in
+  `notices.json` (`NoticeCenter.waits`), and a host that starts again
+  alerts what still waits once the rest of the wait is over, or at once
+  when it is over already (`alertWaitingNotices`, #193): only a failure can still be
+  waiting then, since the host marks what agents asked as over. Due, it
+  is `noticeAlert(id:)` to every client in front and a push
   to each registered device that is away, not connected or in the
   background (#190), at the same moment.
 - **Read** (#180) is the host's too: `readNotices(ids:)` from a device marks

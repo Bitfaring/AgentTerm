@@ -771,12 +771,14 @@ A second host stands in for the other Mac, with a project of its own.
 | PUSH-9 (#180) | A registered phone, away; no one at the Mac; the wait shortened | The agent asks; then it is done, and read on the Mac within the wait | The question shown at once on both; the done one shown on neither | H |
 | PUSH-10 (#190) | A registered phone, connected, that says its app went to the background | The agent asks; the phone comes back to the front | Pushed through the relay, in its Inbox over the connection, but no `noticeAlert` over it; none on coming back, told through Apple already | H |
 | PUSH-11 (#190) | A phone not registered for push, connected, in the background | The agent asks; the phone comes back to the front, twice | No `noticeAlert` while in the background; one when back in front, once | H |
+| PUSH-12 (#193) | A registered phone, away; someone at the Mac; the wait shortened; the notices kept in a file | A session is killed, which waits; the host starts again within the wait | No notification before the wait is over; then pushed and `noticeAlert` to the Mac | H |
 | READ-1 (#180) | Two Macs' apps and a registered phone, away | A notice read on one Mac | The other told `noticesRead`; the phone's push taken back; the phone back finds it read in the log and is not shown it | H |
 | NOTICE-1 | A session whose agent asks, works, is done, ends | The host's notices | One for each state done or waiting, once; handled as moved on when the agent works again or the session ends | H |
 | NOTICE-2 | A notice | Answered, then dismissed | Handled once, as answered; another state of the session is not handled | H |
 | NOTICE-3 | Failures of a session, of push, of keeping awake | Reported | Each is a notice for the Inbox; only the session's alerts; dismissing the failure handles its notice | H |
 | NOTICE-4 | Notices, one told to a phone through Apple | The host starts again; 30 days pass | What was told and pushed is kept, what agents asked is over, numbers are not used again; older than 30 days goes; the file is mode 0600 | H |
 | NOTICE-5 (#180) | Two notices of a host | One read on a device, again; one opened; one whose agent moves on | Read once and kept so; read is not to be shown; opened is read, moved on is not | H |
+| NOTICE-6 (#193) | Two failures that wait, until different times | The host's notices are read again; one becomes due, the other is read | Both kept waiting, soonest first, with their times; due or read, no longer waiting | H |
 | INBOX-7 | A device's Inbox | Notices come, are read, are handled | Kept after reading, newest first, brought up to date when handled | H |
 | INBOX-8 | An Inbox with a waiting agent and done ones | One deleted, the read ones, all; the log comes again | Deleted ones stay deleted; the waiting one stays until answered | H |
 | INBOX-9 | Notices of 30 days and older | Pruned | Older than 30 days goes by itself | H |

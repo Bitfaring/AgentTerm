@@ -74,6 +74,8 @@ final class PushTests: XCTestCase {
     /// Shortened, as the wait of a notice that waits (#180).
     private var pushWait: TimeInterval = 1
     private var activityKeptIdle: TimeInterval = 2
+    /// Where the host keeps its notices; nil keeps them in memory.
+    private var noticesFile: URL?
     private let lock = NSLock()
     private var tool: URL { Bundle(for: PushTests.self).bundleURL.deletingLastPathComponent().appendingPathComponent("agenttermd") }
     private let deviceToken = String(repeating: "ab", count: 32)
@@ -107,6 +109,7 @@ final class PushTests: XCTestCase {
         configuration.pushRelay = url
         configuration.pushesFile = root.appendingPathComponent("pushes.json")
         configuration.pushTransport = relay.transport
+        configuration.noticesFile = noticesFile
         server = HostServer(configuration: configuration)
         port = try server.start()
     }
@@ -499,6 +502,40 @@ final class PushTests: XCTestCase {
         phone.connection.send(.appInFront(true))
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         XCTAssertEqual(phone.alerts, [id], "once")
+    }
+
+    /// PUSH-12 (#193): a notice that waits (a session that crashed while
+    /// someone is at the Mac) and whose host starts again within the wait
+    /// is still a notification when the wait is over, on the Mac and
+    /// through Apple, not before.
+    func testANoticeThatWaitedIsAlertedAfterTheHostStartsAgain() throws {
+        pushWait = 3
+        noticesFile = root.appendingPathComponent("notices.json")
+        lock.lock(); idle = 5; lock.unlock()
+        server.stop()
+        try start(relay: URL(string: "https://relay.test"))
+        let mac = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
+        let phone = Client(port: port, credential: .token(try pair(mac)), name: "iPhone")
+        phone.connection.send(.pushRegister(PushRegistration(token: deviceToken, key: key, mac: macName)))
+        waitUntil("registered") { phone.pushState == .on }
+        phone.connection.close()
+        waitUntil("the phone gone") { mac.devices?.first?.isConnected == false }
+        mac.connection.send(.create(CreateRequest(command: "kill -KILL $$", cwd: root.path, title: "crash")))
+        waitUntil("the failure's notice") { mac.notices.contains { $0.alerts && $0.state == nil } }
+        let asked = Date()
+        let id = try XCTUnwrap(mac.notices.first { $0.alerts && $0.state == nil }).id
+        mac.connection.close()
+
+        // Started again within the wait.
+        server.stop()
+        try start(relay: URL(string: "https://relay.test"))
+        let again = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
+        waitUntil("the log") { again.log != nil }
+        XCTAssertEqual(again.alerts, [], "a notification before the wait")
+        waitUntil("pushed once the wait is over", timeout: 6) { relay.sent.contains { $0["payload"] != nil } }
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(asked), pushWait - 0.3, "before the wait")
+        XCTAssertEqual(try opened(try XCTUnwrap(relay.sent.first { $0["payload"] != nil })).id, id)
+        waitUntil("on the Mac too") { again.alerts == [id] }
     }
 
     /// READ-1 (#180): read on one device is read on every device: the
