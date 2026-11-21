@@ -29,6 +29,9 @@ struct FolderScreen: View {
     var body: some View {
         content(of: shownPath)
             .onAppear { model.listWorktrees(key) }
+            // Forgotten with the connection, and the host says them only
+            // when asked: asked again once it is reached again (#215).
+            .onChange(of: model.status) { _, status in if status == .connected { model.listWorktrees(key) } }
             // What the list of worktrees says of the one on show is then stale.
             .onChange(of: model.diffs[shownPath]?.files.count) { old, _ in if old != nil { model.listWorktrees(project) } }
             .onChange(of: project) { _, project in if model.worktrees[project] == nil { model.listWorktrees(project) } }
