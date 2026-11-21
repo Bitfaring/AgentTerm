@@ -1129,7 +1129,18 @@ agents work (`refreshSummaries`). The end is kept for each device
 (`activityEndSent`, #192): one that was present when the host's activity
 ended and goes away later, closed or in the background, before its own
 `keptIdle` ran out (iOS suspends the app, and its timer with it) is sent
-the end when it goes, once. The relay sends
+the end when it goes, once. An ended activity is gone: its token is
+forgotten with the end push (#194), and the next turn sends `start`.
+A device that was sent `start` is sent nothing more for its activity
+(`Target.activityStarted`), not a second `start`, which would show a
+second activity, until it gives its tokens again (`liveActivity`, which it
+sends on every connection): the decision of the owner, 2026-11-21, since
+the app learns the new activity's token only when it runs. Meanwhile the
+started activity shows the state it was started with and goes out of date
+at its `stale-date`. The app takes up the activity iOS shows each time it
+updates it (`takeUpShownActivity`): one the Mac started while it slept is
+watched for its token, and one that ended is let go, so that a new one is
+asked for rather than an ended one updated. The relay sends
 `apns-push-type: liveactivity` to the topic
 `com.manhpham.agentterm.push-type.liveactivity`, priority 5 (10 to
 start), with `stale-date` 30 minutes on and, for `end`, `dismissal-date`.

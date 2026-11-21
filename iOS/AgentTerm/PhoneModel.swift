@@ -914,7 +914,7 @@ final class PhoneModel: ObservableObject {
             updateLiveActivity()
         }
     }
-    private var liveActivity: Activity<AgentsActivityAttributes>? = Activity<AgentsActivityAttributes>.activities.first
+    private var liveActivity: Activity<AgentsActivityAttributes>? = PhoneModel.shownActivity
     /// Its push token, and the one that starts one, as iOS gave them: sent
     /// to the Mac, which keeps the activity true while the app is asleep
     /// (#168). The released build only: the development one has no push.
@@ -933,6 +933,7 @@ final class PhoneModel: ObservableObject {
     /// Apple while the app is asleep. Left showing "done" when every agent
     /// is done; ended at once when switched off.
     func updateLiveActivity() {
+        takeUpShownActivity()
         let enabled = showsLiveActivity && ActivityAuthorizationInfo().areActivitiesEnabled
         watchActivityStart(enabled)
         // Not connected, nothing is known here: what was shown stays, and
@@ -971,6 +972,31 @@ final class PhoneModel: ObservableObject {
             sendActivityTokens()
             // Done is true and stays true; anything else could go stale.
             Task { await activity.end(content, dismissalPolicy: decision == .endShowingDone ? .default : .immediate) }
+        }
+    }
+
+    /// The activity iOS shows, not one that ended or was dismissed.
+    private static var shownActivity: Activity<AgentsActivityAttributes>? {
+        Activity<AgentsActivityAttributes>.activities.first { $0.activityState == .active || $0.activityState == .stale }
+    }
+
+    /// The Mac ends an activity and starts the next one through Apple
+    /// while the app sleeps (#194): one that ended is let go, so that a new
+    /// one is asked for rather than an ended one updated, and one the Mac
+    /// started is taken up, its token watched and given to the Mac,
+    /// rather than a second one asked for.
+    private func takeUpShownActivity() {
+        if let liveActivity, liveActivity.activityState == .active || liveActivity.activityState == .stale { return }
+        let shown = Self.shownActivity
+        guard shown?.id != liveActivity?.id else { return }
+        liveActivity = shown
+        activityToken = nil
+        if shown != nil {
+            watchActivityToken()
+        } else {
+            activityWatch?.cancel()
+            activityWatch = nil
+            sendActivityTokens()
         }
     }
 

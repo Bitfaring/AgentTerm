@@ -339,6 +339,67 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(activities().count, 1, "ended twice")
     }
 
+    /// LIVE-6 (#194): an activity ended through Apple is gone: the next
+    /// turn, with the phone still away, starts a new one with the start
+    /// token, not an update to the ended one; and once started, nothing
+    /// more is sent to it, not a second start, until the phone gives the
+    /// new activity's token.
+    func testAnActivityEndedThroughAppleIsStartedAgainOnce() throws {
+        let mac = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
+        let phoneToken = try pair(mac)
+        let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
+        phone.connection.send(.pushRegister(PushRegistration(token: deviceToken, key: key, mac: macName)))
+        waitUntil("registered") { phone.pushState == .on }
+        let start = String(repeating: "5a", count: 32)
+        let own = String(repeating: "6b", count: 32)
+        phone.connection.send(.liveActivity(token: own, startToken: start))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        phone.connection.close()
+        waitUntil("the phone gone") { mac.devices?.first?.isConnected == false }
+        func activities() -> [[String: Any]] { relay.sent.compactMap { $0["activity"] as? [String: Any] } }
+        func event(_ index: Int) -> String? { activities()[index]["event"] as? String }
+
+        let script = try standIn()
+        mac.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "first")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let first = try XCTUnwrap(mac.sessions.first).id
+        mac.connection.send(.attach(session: first, size: TermSize(cols: 80, rows: 24)))
+        for _ in 0..<4 { mac.connection.sendInput(Data("\n".utf8), to: first) }
+        waitUntil("ended", timeout: 15) { activities().last?["event"] as? String == "end" }
+        let ended = activities().count
+        XCTAssertEqual(activities().last?["token"] as? String, own)
+
+        // Another turn, the phone still away.
+        mac.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "second")))
+        waitUntil("the second session") { mac.sessions.count == 2 }
+        let second = try XCTUnwrap(mac.sessions.first { $0.id != first }).id
+        mac.connection.send(.attach(session: second, size: TermSize(cols: 80, rows: 24)))
+        mac.connection.sendInput(Data("\n".utf8), to: second)
+        waitUntil("sent again", timeout: 10) { activities().count > ended }
+        XCTAssertEqual(event(ended), "start", "sent to the ended activity: \(activities()[ended])")
+        XCTAssertEqual(activities()[ended]["token"] as? String, start)
+
+        // Its agent asks: the started activity's token is not known yet,
+        // and a second start would show a second activity.
+        mac.connection.sendInput(Data("\n".utf8), to: second)
+        waitUntil("asking") { mac.sessions.first { $0.id == second }?.state?.isWaiting == true }
+        RunLoop.main.run(until: Date().addingTimeInterval(4))
+        XCTAssertEqual(activities().count, ended + 1, "more sent: \(activities().dropFirst(ended).map { $0["event"] ?? "" })")
+
+        // The phone gives the new activity's token: updated through it.
+        let new = String(repeating: "7c", count: 32)
+        let back = Client(port: port, credential: .token(phoneToken), name: "iPhone")
+        waitUntil("back") { back.pushState == .on }
+        back.connection.send(.liveActivity(token: new, startToken: start))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        back.connection.close()
+        waitUntil("gone again") { mac.devices?.first?.isConnected == false }
+        mac.connection.sendInput(Data("\n".utf8), to: second)
+        waitUntil("updated", timeout: 10) { activities().count > ended + 1 }
+        XCTAssertEqual(activities().last?["event"] as? String, "update")
+        XCTAssertEqual(activities().last?["token"] as? String, new)
+    }
+
     /// PUSH-4: a push the relay refuses is said in both apps' banner, once
     /// for the device; a token APNs no longer knows is forgotten.
     func testAPushThatFailsIsSaidAndAnUnknownTokenForgotten() throws {

@@ -389,7 +389,9 @@ shows the host's state now rather than events.
   Activities, which the Mac sends through the relay of #66 on a path of its
   own, in the released build only: the counts and the names reach the
   relay and Apple in the clear, since iOS draws the activity from them.
-  The Mac starts it while the app is asleep, a burst of changes is one
+  The Mac starts it while the app is asleep, once: what changes after
+  that waits until the app is opened, rather than starting a second one
+  (#194, decided by the owner on 2026-11-21); a burst of changes is one
   update, and it is sent again every 15 minutes while agents work; one
   that gets no update is shown as out of date. **One activity is kept
   between turns and only updated** (#180, decided by the owner on
