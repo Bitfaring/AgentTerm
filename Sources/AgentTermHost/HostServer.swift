@@ -179,9 +179,10 @@ public final class HostServer {
         var awaitingScreen: [SessionID: (attach: Int, output: [DataFrame])] = [:]
         /// A Mac app that says it is in front: someone is at the Mac.
         var inFront = false
-        /// A device that says its app went to the background (#190): away,
-        /// though iOS may keep its connection open while it is suspended.
-        /// What it is told goes through Apple until it is in front again.
+        /// A device that says its app went to the background
+        /// (`deviceInBackground`, #190): away, though iOS may keep its
+        /// connection open while it is suspended. What it is told goes
+        /// through Apple until it is in front again.
         var inBackground = false
         /// Numbers the large messages sent in pieces.
         var nextMessage: UInt32 = 0
@@ -2221,14 +2222,13 @@ public final class HostServer {
                 }
             }
         case .appInFront(let front):
-            guard client.isDevice else {
-                client.inFront = front
-                return updateMacInUse()
-            }
+            client.inFront = front
+            updateMacInUse()
+        case .deviceInBackground(let away):
             // A device's app: in the background it is away (#190).
-            guard client.inBackground == front, case .device(let device) = client.identity else { return }
-            client.inBackground = !front
-            if front { tellUntold(client) } else { activityWentAway(device) }
+            guard client.inBackground != away, case .device(let device) = client.identity else { return }
+            client.inBackground = away
+            if away { activityWentAway(device) } else { tellUntold(client) }
         case .used:
             used(by: client)
         case .pushRegister(let registration):

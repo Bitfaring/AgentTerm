@@ -330,7 +330,7 @@ final class PushTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(3 + activityKeptIdle + 1.5))
         XCTAssertEqual(activities().count, 0, "a connected phone is sent its activity through Apple")
 
-        phone.connection.send(.appInFront(false))
+        phone.connection.send(.deviceInBackground(true))
         waitUntil("the end, once it is away", timeout: 5) { activities().contains { $0["event"] as? String == "end" } }
         XCTAssertEqual(activities().count, 1)
         XCTAssertEqual(activities().first?["token"] as? String, own)
@@ -519,7 +519,7 @@ final class PushTests: XCTestCase {
         let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
         phone.connection.send(.pushRegister(PushRegistration(token: deviceToken, key: key, mac: macName)))
         waitUntil("registered") { phone.pushState == .on }
-        phone.connection.send(.appInFront(false))
+        phone.connection.send(.deviceInBackground(true))
         mac.connection.send(.create(CreateRequest(command: try standIn().path, cwd: root.path, title: "agent")))
         waitUntil("the session") { mac.sessions.count == 1 }
         let agent = try XCTUnwrap(mac.sessions.first).id
@@ -535,7 +535,7 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(mac.devices?.first?.isConnected, true, "the connection is still open")
 
         // Back in front: it was told already, through Apple.
-        phone.connection.send(.appInFront(true))
+        phone.connection.send(.deviceInBackground(false))
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
         XCTAssertEqual(phone.alerts, [], "shown again on coming back")
     }
@@ -547,7 +547,7 @@ final class PushTests: XCTestCase {
         let mac = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
         let phone = Client(port: port, credential: .token(try pair(mac)), name: "iPhone")
         waitUntil("connected") { phone.pushState == .off }
-        phone.connection.send(.appInFront(false))
+        phone.connection.send(.deviceInBackground(true))
         mac.connection.send(.create(CreateRequest(command: try standIn().path, cwd: root.path, title: "agent")))
         waitUntil("the session") { mac.sessions.count == 1 }
         let agent = try XCTUnwrap(mac.sessions.first).id
@@ -558,9 +558,9 @@ final class PushTests: XCTestCase {
         let id = try XCTUnwrap(mac.alerts.first)
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
         XCTAssertEqual(phone.alerts, [], "shown over the connection while in the background")
-        phone.connection.send(.appInFront(true))
+        phone.connection.send(.deviceInBackground(false))
         waitUntil("shown once back") { phone.alerts == [id] }
-        phone.connection.send(.appInFront(true))
+        phone.connection.send(.deviceInBackground(false))
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         XCTAssertEqual(phone.alerts, [id], "once")
     }

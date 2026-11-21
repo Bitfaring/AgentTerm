@@ -30,6 +30,21 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(MessageCoding.decode(ServerMessage.self, from: old), .welcome(version: 22, host: "Mac", release: nil, revision: nil))
     }
 
+    /// PUSH-13 (#190): a device's app going to the background and coming
+    /// back is a message of its own, `deviceInBackground`, not the Mac
+    /// app's `appInFront`, which says only that the Mac is in use.
+    func testADevicesAppInTheBackgroundIsAMessageOfItsOwn() {
+        for away in [true, false] {
+            let message = ClientMessage.deviceInBackground(away)
+            let wire = MessageCoding.encode(message)
+            XCTAssertEqual(MessageCoding.decode(ClientMessage.self, from: wire), message)
+            XCTAssertNotEqual(MessageCoding.decode(ClientMessage.self, from: wire), .appInFront(!away))
+        }
+        let sent = Data(#"{"deviceInBackground":{"_0":true}}"#.utf8)
+        XCTAssertEqual(MessageCoding.decode(ClientMessage.self, from: sent), .deviceInBackground(true))
+        XCTAssertEqual(MessageCoding.decode(ClientMessage.self, from: Data(#"{"appInFront":{"_0":true}}"#.utf8)), .appInFront(true))
+    }
+
     /// INBOX-2 (#67): what is in the Inbox, and in which order: the agents
     /// that wait, what stopped, then the agents done and not seen.
     func testWhatIsInTheInbox() {

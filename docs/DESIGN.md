@@ -273,8 +273,11 @@ Host…, which asks first. It never restarts it by itself (decided by the
 owner on 2026-11-17), and a release that changes nothing of the host says
 nothing. A build outside an app bundle has no revision, and is not compared.
 
-The protocol version is 35. 35 has the iPhone send `appInFront` too, for
-whether its app is in the background (#190). 34 added the browser's `pointer`, `contextAt` and
+The protocol version is 36. 36 added `deviceInBackground`, which a
+device's app sends for going to the background and coming back, in place
+of the `appInFront` 35 had it send (#190), so that `appInFront` is only the
+Mac app's. 35 had the iPhone send `appInFront` too, for whether its app is
+in the background (#190). 34 added the browser's `pointer`, `contextAt` and
 `copy`, and the result `context` (#147). 33 added `readNotices`, `noticesRead` and
 `noticeAlert`, and `Notice.read` (#180). 32 added `pushRegister`, `pushUnregister`, `pushState`, `handleNotice`,
 `liveActivity`, `noticeLog`, `notice` and `noticeHandled` (#66, #168). 15 in 0.7.0. It went up with each message that
@@ -943,8 +946,10 @@ no one is there) (NOTE-7). Every client is told `macInUse(Bool)`. Since
 **On the iPhone.** Since #66 iOS's own banner, in front as behind, for a
 session other than the one on screen (`AgentNotifications`, from the
 host's `noticeAlert`) while the app is in front. When it leaves the front
-it tells the host `appInFront(false)`, and `appInFront(true)` when it
-comes back, and says which on connecting (#190): iOS suspends an app in
+it tells the host `deviceInBackground(true)`, and `deviceInBackground(false)`
+when it comes back, and says which on connecting (#190), a message of its
+own: `appInFront` is the Mac app's alone and says only whether someone is
+at the Mac (`updateMacInUse`), whoever sends it. iOS suspends an app in
 the background without closing its socket, so a phone asleep still counted
 as connected, was sent its notifications over a connection it did not
 read, and was not pushed to. A device in the background is away

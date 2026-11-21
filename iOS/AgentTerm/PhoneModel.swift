@@ -1134,7 +1134,7 @@ final class PhoneModel: ObservableObject {
     /// it is not seen until the app is in front again.
     func enteredBackground() {
         active = false
-        if status == .connected { connection?.send(.appInFront(false)) }
+        if status == .connected { connection?.send(.deviceInBackground(true)) }
         guard backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Agents") { [weak self] in
             guard let self else { return }
@@ -1508,7 +1508,7 @@ final class PhoneModel: ObservableObject {
     /// Called when the app comes to the front.
     func resume() {
         active = true
-        if status == .connected { connection?.send(.appInFront(true)) }
+        if status == .connected { connection?.send(.deviceInBackground(false)) }
         if backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTask)
             backgroundTask = .invalid
@@ -1627,7 +1627,7 @@ final class PhoneModel: ObservableObject {
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             status = .connected
             // In front or in the background, from the start (#190).
-            connection?.send(.appInFront(active))
+            connection?.send(.deviceInBackground(!active))
             for id in pendingDismissals { connection?.send(.handleNotice(id: id, how: .dismissed)) }
             pendingDismissals.removeAll()
             pushAsked = false

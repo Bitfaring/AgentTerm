@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 35
+public let agenttermProtocolVersion = 36
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -475,11 +475,13 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// session, then Return, only while its agent is still in `to`, the
     /// state the reply answers. One that comes after it moved on is dropped.
     case answer(session: SessionID, to: AgentState, text: String)
-    /// The app is in front, or is no longer. From the Mac's own app: then
-    /// the Mac is in use. From a device (#190): its app went to the
-    /// background or came back to the front, sent at each change and on
-    /// connecting; in the background it is away, told through Apple only.
+    /// The Mac app is in front, or is no longer: then the Mac is in use.
     case appInFront(Bool)
+    /// A device's app went to the background (true) or came back to the
+    /// front (false) (#190): sent at each change and on connecting. In the
+    /// background the device is away, though iOS may keep its connection
+    /// open while it is suspended, and is told through Apple only.
+    case deviceInBackground(Bool)
     /// The user opened this session on this device while its agent was
     /// done or waited, in `state`, or dismissed it from the Inbox: what it
     /// was told about is seen (#60). The host passes it on to the other
