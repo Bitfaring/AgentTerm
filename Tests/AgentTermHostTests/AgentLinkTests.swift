@@ -175,7 +175,9 @@ final class AgentLinkTests: XCTestCase {
         wait("its name") { ProcessNames.command(of: process.processIdentifier) == "claude" }
         XCTAssertEqual(ProcessNames.parent(of: process.processIdentifier), getpid())
         XCTAssertEqual(ProcessNames.agent(above: process.processIdentifier, known: { SessionSummaries.agent(forCommand: $0) }), "claude")
-        XCTAssertNil(ProcessNames.agent(above: getpid(), known: { SessionSummaries.agent(forCommand: $0) }))
+        // None above launchd: the test's own process may well be under an
+        // agent, the tests being run from one (#187).
+        XCTAssertNil(ProcessNames.agent(above: 1, known: { SessionSummaries.agent(forCommand: $0) }))
     }
 }
 
