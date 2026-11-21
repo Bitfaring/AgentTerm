@@ -310,6 +310,11 @@ final class FlowTests: XCTestCase {
     /// notifications off: iOS is not asked when the phone pairs, and the
     /// switch in Settings is off; iOS is asked once it is turned on again.
     /// The script installs the app afresh for it, so that iOS was not asked.
+    /// A notice that comes after pairing, and whose time to be a
+    /// notification comes while it is unread, does not ask iOS either: the
+    /// stand-in Claude Code says it is done (`NOTNOW=only` has it do so, as
+    /// `INBOX=only` does), and the host says its time has come 30 seconds
+    /// later (`Notice.pushWait`).
     private func notNow(_ app: XCUIApplication, link: String, launchButton: String) throws {
         app.buttons["notifications-not-now"].tap()
         XCTAssertTrue(app.buttons["notifications-not-now"].waitForNonExistence(timeout: 10), "the screen stays")
@@ -319,6 +324,21 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 15), "not connected to the host")
         let asked = springboard.alerts.firstMatch
         XCTAssertFalse(asked.waitForExistence(timeout: 5), "iOS asked whether the app may notify after Not Now: \(asked.label)")
+        // A notice after Not Now: in the Inbox, and no question of iOS when
+        // its time to be a notification comes.
+        let claude = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Claude Code")).firstMatch
+        XCTAssertTrue(claude.waitForExistence(timeout: 10), "no Claude Code to start")
+        claude.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["compose"].firstMatch.waitForExistence(timeout: 10), "the Claude Code session did not open")
+        app.navigationBars.buttons.firstMatch.tap()
+        let item = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES %@", "inbox-[0-9]+")).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 20), "the agent that is done is not in the Inbox")
+        XCTAssertTrue(item.label.contains("is done"), item.label)
+        // Unread on the list until its time has come (`Notice.pushWait`, 30
+        // seconds after it came), and some seconds on.
+        XCTAssertFalse(asked.waitForExistence(timeout: 40), "iOS asked whether the app may notify when a notice came after Not Now: \(asked.label)")
+        XCTAssertTrue(item.exists, "the notice was read or went, so its notification was not due")
+        capture("NN-0-notice-after-not-now")
         app.tab("Settings").tap()
         let notify = app.switches["notify-agents"].firstMatch
         for _ in 0..<5 where !(notify.exists && notify.isHittable) { app.swipeUp() }

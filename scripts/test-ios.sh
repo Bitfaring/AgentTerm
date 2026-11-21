@@ -107,6 +107,8 @@ for agent in claude codex agy copilot; do cp scripts/demo-agent.py "$AGENTS/$age
 # that its turn is done (#67).
 INBOX_DONE_AFTER=""
 if [ "${INBOX:-}" = only ]; then INBOX_DONE_AFTER=8; fi
+# NOTNOW=only too: a notice after Not Now asks nothing of iOS (NOTIFY-2).
+if [ "${NOTNOW:-}" = only ]; then INBOX_DONE_AFTER=8; fi
 HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
