@@ -685,10 +685,13 @@ final class PhoneModel: ObservableObject {
         }
     }
 
-    /// Allowed, or not now: not shown again either way.
+    /// Allowed, or not now: not shown again either way. Not now turns the
+    /// app's notifications off (the owner's decision, #195): the switch in
+    /// Settings shows it, and iOS is asked only once it is turned on.
     func answerNotificationAsk(allow: Bool) {
         UserDefaults.standard.set(true, forKey: Self.notificationsAskedKey)
         guard allow else {
+            notifyAgents = false
             asksNotifications = false
             return
         }
@@ -2559,8 +2562,13 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// Asks iOS, the first time, whether the app may notify; `done` is told
-    /// whether it may.
-    func askOnce(_ done: ((Bool) -> Void)? = nil) {
+    /// whether it may. Never while the app's notifications are off (#195):
+    /// whatever asks, iOS is asked only once the user turns them on.
+    @MainActor func askOnce(_ done: ((Bool) -> Void)? = nil) {
+        guard model?.notifyAgents != false else {
+            done?(false)
+            return
+        }
         guard !asked else {
             UNUserNotificationCenter.current().getNotificationSettings { settings in done?(settings.authorizationStatus == .authorized) }
             return
@@ -2579,7 +2587,7 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
         center.removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 
-    func post(_ notice: Notice, mac: String, macName: String) {
+    @MainActor func post(_ notice: Notice, mac: String, macName: String) {
         askOnce()
         let identifier = PushNotice.identifier(mac: mac, notice: notice.id)
         let content: UNMutableNotificationContent

@@ -1048,7 +1048,10 @@ Mac's own app as `local`.
   `TelemetryPreferences.needsAsking`, then `NotificationAsk` while
   `PhoneModel.asksNotifications`, one cover, never two over each other),
   once, while iOS was not asked (`AGENTTERM_ASK_NOTIFICATIONS` shows it to
-  a test). On the Mac the reporting question is the onboarding's Reports
+  a test). On the iPhone Not Now turns `notifyAgents` off (#195), and
+  `AgentNotifications.askOnce`, which pairing, posting and registering for
+  push go through, never asks iOS while it is off: iOS is asked when the
+  switch is turned on again. On the Mac the reporting question is the onboarding's Reports
   step (`OnboardingView.Step.reports`, shown while
   `Telemetry.shouldAskAboutCrashReports`; `AppModel.showOnboarding` starts
   true then), answered by its Next.

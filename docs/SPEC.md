@@ -297,7 +297,10 @@ happened; the Live Activity shows the host's state now (below).
   the relay could not be reached. At its first launch, once the question
   about reports is answered, the app's first screen asks only whether it
   may notify (Allow Notifications, Not Now), not an onboarding like the
-  Mac's (#180).
+  Mac's (#180). Not Now turns "Tell me when an agent is done or needs me"
+  off, as Settings then shows, and iOS is not asked, not when the phone
+  pairs either, until that switch is turned on again (#195, decided by the
+  owner).
 - **On the Mac**, a banner while the app is in front, which opens the
   session; and a macOS notification, with the app in front or not (#180),
   with Reply and the choices as on the iPhone: "Notify when an agent is

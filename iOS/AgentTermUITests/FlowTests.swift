@@ -306,6 +306,31 @@ final class FlowTests: XCTestCase {
         capture("L10-history")
     }
 
+    /// NOTIFY-2 (#195): Not Now on the first screen turns the app's
+    /// notifications off: iOS is not asked when the phone pairs, and the
+    /// switch in Settings is off; iOS is asked once it is turned on again.
+    /// The script installs the app afresh for it, so that iOS was not asked.
+    private func notNow(_ app: XCUIApplication, link: String, launchButton: String) throws {
+        app.buttons["notifications-not-now"].tap()
+        XCTAssertTrue(app.buttons["notifications-not-now"].waitForNonExistence(timeout: 10), "the screen stays")
+        app.launchEnvironment.removeValue(forKey: "AGENTTERM_ASK_NOTIFICATIONS")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        app.open(try XCTUnwrap(URL(string: link)))
+        XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 15), "not connected to the host")
+        let asked = springboard.alerts.firstMatch
+        XCTAssertFalse(asked.waitForExistence(timeout: 5), "iOS asked whether the app may notify after Not Now: \(asked.label)")
+        app.tab("Settings").tap()
+        let notify = app.switches["notify-agents"].firstMatch
+        for _ in 0..<5 where !(notify.exists && notify.isHittable) { app.swipeUp() }
+        XCTAssertTrue(notify.waitForExistence(timeout: 5), "Settings has no switch for the app's notifications")
+        XCTAssertEqual(notify.value as? String, "0", "Not Now left the app's notifications on")
+        capture("NN-1-notifications-off")
+        notify.switches.firstMatch.exists ? notify.switches.firstMatch.tap() : notify.tap()
+        XCTAssertTrue(springboard.alerts.buttons["Allow"].firstMatch.waitForExistence(timeout: 10), "iOS was not asked once they were turned on")
+        allowNotifications(timeout: 1)
+        XCTAssertEqual(notify.value as? String, "1")
+    }
+
     func testPairStartSessionAndType() throws {
         let link = try XCTUnwrap(environment["AGENTTERM_PAIR_URL"], "run this test through scripts/test-ios.sh")
         let launchButton = environment["AGENTTERM_LAUNCH"] ?? "Start Shell"
@@ -322,6 +347,7 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Know When an Agent Needs You"].exists)
         XCTAssertTrue(app.buttons["notifications-not-now"].exists)
         capture("0-notifications")
+        if environment["AGENTTERM_ONLY_NOT_NOW"] != nil { return try notNow(app, link: link, launchButton: launchButton) }
         passNotificationAsk(app)
         XCTAssertTrue(app.buttons["notifications-allow"].waitForNonExistence(timeout: 10), "the screen stays")
         // Opening a link launches the app again with this environment: from
