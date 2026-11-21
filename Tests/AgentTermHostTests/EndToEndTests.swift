@@ -1201,10 +1201,9 @@ final class EndToEndTests: XCTestCase {
     }
 
     /// HIST-18 (#46): a device reads a conversation, searches what was
-    /// said, pins and hides one, which every device is told and the host
-    /// keeps, has a transcript written out as a file, and deletes one,
+    /// said, has a transcript written out as a file, and deletes one,
     /// which goes to the Trash and is no longer listed.
-    func testADeviceReadsSearchesPinsAndDeletesConversations() throws {
+    func testADeviceReadsSearchesAndDeletesConversations() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-hist-\(UUID().uuidString)").standardizedFileURL
         defer { try? FileManager.default.removeItem(at: home) }
         let trash = home.appendingPathComponent("trash")
@@ -1228,7 +1227,6 @@ final class EndToEndTests: XCTestCase {
         let phone = TestClient(port: hostPort, token: token, name: "phone")
         let other = TestClient(port: hostPort, token: token, name: "other")
         waitUntil("welcome") { phone.welcomed && other.welcomed }
-        waitUntil("nothing pinned yet") { phone.messages.contains(.historyMarks(pinned: [], hidden: [])) }
 
         // Read: what was said and run, and what the file tells.
         phone.connection.send(.readConversation(agent: "claude", sessionID: "c-1", cwd: project))
@@ -1258,13 +1256,6 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(hits.map(\.conversation.sessionID), ["c-1"])
         XCTAssertEqual(hits.first?.snippet, "The tokenizer is written.")
 
-        // Pinned and hidden: every device is told, and the host keeps it.
-        phone.connection.send(.markConversation(id: "claude:c-1", pinned: true, hidden: nil))
-        phone.connection.send(.markConversation(id: "claude:c-2", pinned: nil, hidden: true))
-        waitUntil("the other device told") { other.messages.contains(.historyMarks(pinned: ["claude:c-1"], hidden: ["claude:c-2"])) }
-        let kept = try Data(contentsOf: home.appendingPathComponent("state/history.json"))
-        XCTAssertTrue(String(decoding: kept, as: UTF8.self).contains("claude:c-1"))
-
         // Written out as a file of the host's own.
         phone.connection.send(.exportConversation(agent: "claude", sessionID: "c-1", cwd: project))
         func exported() -> String? {
@@ -1279,12 +1270,11 @@ final class EndToEndTests: XCTestCase {
         phone.connection.send(.historyOlder(path: nil, before: .distantPast))
         waitUntil("no older ones") { phone.messages.contains(.historyOlder(path: nil, conversations: [], more: false)) }
 
-        // Deleted: to the Trash, its pin gone with it, every device told.
+        // Deleted: to the Trash, every device told.
         phone.connection.send(.deleteConversation(agent: "claude", sessionID: "c-1", cwd: project))
         waitUntil("deleted") { other.messages.contains(.conversationDeleted(id: "claude:c-1")) }
         XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("c-1.jsonl").path))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: trash.path), ["c-1.jsonl"])
-        waitUntil("its pin gone") { other.messages.last { if case .historyMarks = $0 { return true } else { return false } } == .historyMarks(pinned: [], hidden: ["claude:c-2"]) }
         phone.connection.send(.deleteConversation(agent: "claude", sessionID: "c-1", cwd: project))
         waitUntil("gone already") { phone.messages.contains(.error("That conversation is no longer there.")) }
         phone.connection.send(.history(path: project))
@@ -1295,8 +1285,9 @@ final class EndToEndTests: XCTestCase {
 
     /// HIST-23 (#50): the history is searched by its titles only when
     /// asked; conversations are deleted several at once, those picked or
-    /// every one on the Mac, the pinned ones kept, every device told of
-    /// each, and the sender of what came of it.
+    /// every one on the Mac, Antigravity's kept (#219: none for being
+    /// pinned), every device told of each, and the sender of what came of
+    /// it.
     func testConversationsAreSearchedByTitleAndDeletedSeveralAtOnce() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-many-\(UUID().uuidString)").standardizedFileURL
         defer { try? FileManager.default.removeItem(at: home) }
@@ -1306,7 +1297,7 @@ final class EndToEndTests: XCTestCase {
         defer { unsetenv(FileBrowser.trashVariable) }
         let folder = home.appendingPathComponent(".claude/projects/-Users-me-Dev-app")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        for (id, said) in [("c-1", "keep this one"), ("c-2", "tidy the README"), ("c-3", "write the parser"), ("c-4", "rename the token")] {
+        for (id, said) in [("c-1", "name the release"), ("c-2", "tidy the README"), ("c-3", "write the parser"), ("c-4", "rename the token")] {
             try #"{"type":"user","timestamp":"2026-11-14T08:00:00.000Z","cwd":"/Users/me/Dev/app","message":{"role":"user","content":"\#(said)"}}"#
                 .appending("\n")
                 .write(to: folder.appendingPathComponent("\(id).jsonl"), atomically: true, encoding: .utf8)
@@ -1315,6 +1306,15 @@ final class EndToEndTests: XCTestCase {
         let answer = #"{"type":"assistant","timestamp":"2026-11-14T08:01:00.000Z","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"The parser is next."}]}}"#
         try (String(contentsOf: folder.appendingPathComponent("c-2.jsonl"), encoding: .utf8) + answer + "\n")
             .write(to: folder.appendingPathComponent("c-2.jsonl"), atomically: true, encoding: .utf8)
+        // One of Antigravity, which keeps its list in a file of its own:
+        // never deleted here.
+        let cache = home.appendingPathComponent(".gemini/antigravity-cli/cache")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        try #"{"conversations":{"conv-1":{"is_internal":false,"summary":{"Title":"Plan the release","UpdatedAt":"2026-11-10T17:00:22Z","WorkspaceURIs":["file:///Users/me/Dev/app"]}}}}"#
+            .write(to: cache.appendingPathComponent("conversation_metadata.json"), atomically: true, encoding: .utf8)
+        // What a build before #219 kept of pinned and hidden ones: not read.
+        try FileManager.default.createDirectory(at: home.appendingPathComponent("state"), withIntermediateDirectories: true)
+        try #"{"pinned":["claude:c-1"],"hidden":["claude:c-3"]}"#.write(to: home.appendingPathComponent("state/history.json"), atomically: true, encoding: .utf8)
         var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, home: home.path)
         configuration.foldersFile = home.appendingPathComponent("state/folders.json")
         let host = HostServer(configuration: configuration)
@@ -1338,21 +1338,21 @@ final class EndToEndTests: XCTestCase {
         waitUntil("searched the titles") { phone.messages.contains(.historySearchEnded(search: 2)) }
         XCTAssertEqual(hits(2), ["c-3"])
 
-        // Two picked: deleted, every device told of each.
-        phone.connection.send(.markConversation(id: "claude:c-1", pinned: true, hidden: nil))
-        waitUntil("pinned") { other.messages.contains(.historyMarks(pinned: ["claude:c-1"], hidden: [])) }
-        phone.connection.send(.deleteConversations(ids: ["claude:c-2", "claude:c-1"]))
+        // Two picked: one deleted, Antigravity's kept, every device told
+        // of the one that went.
+        phone.connection.send(.deleteConversations(ids: ["claude:c-2", "agy:conv-1"]))
         waitUntil("what came of it") { phone.messages.contains(.conversationsDeleted(deleted: 1, kept: 1)) }
         XCTAssertTrue(other.messages.contains(.conversationDeleted(id: "claude:c-2")))
-        XCTAssertFalse(other.messages.contains(.conversationDeleted(id: "claude:c-1")), "a pinned one was deleted")
+        XCTAssertFalse(other.messages.contains(.conversationDeleted(id: "agy:conv-1")), "one of Antigravity was deleted")
         XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("c-2.jsonl").path))
 
-        // Every one on the Mac: all but the pinned one, to the Trash.
+        // Every one on the Mac: all but Antigravity's, to the Trash. None
+        // is kept for having been pinned by an earlier build (#219).
         phone.connection.send(.deleteConversations(ids: nil))
-        waitUntil("every one") { phone.messages.contains(.conversationsDeleted(deleted: 2, kept: 1)) }
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["c-1.jsonl"])
-        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: trash.path)), ["c-2.jsonl", "c-3.jsonl", "c-4.jsonl"])
-        XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 2, kept: 1), "2 conversations were deleted. 1 was kept: pinned, having a session, or of Antigravity.")
+        waitUntil("every one") { phone.messages.contains(.conversationsDeleted(deleted: 3, kept: 1)) }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), [])
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: trash.path)), ["c-1.jsonl", "c-2.jsonl", "c-3.jsonl", "c-4.jsonl"])
+        XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 3, kept: 1), "3 conversations were deleted. 1 was kept: having a session, or of Antigravity.")
     }
 
     func testAClientCanReadHistoryAndOnlyResumeRealConversations() throws {

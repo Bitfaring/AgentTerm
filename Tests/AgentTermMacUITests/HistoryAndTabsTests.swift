@@ -34,9 +34,10 @@ final class HistoryAndTabsTests: MacUITestCase {
     }
 
     /// HIST-19 (#46): the folder's conversations are searched by what was
-    /// said, one is read as a transcript and pinned, and one is deleted
-    /// after being asked about twice, its file going to the Trash.
-    func testHistoryIsSearchedReadPinnedAndDeleted() throws {
+    /// said, one is read as a transcript, and one is deleted after being
+    /// asked about twice, its file going to the Trash. Nothing pins one
+    /// (#219).
+    func testHistoryIsSearchedReadAndDeleted() throws {
         let history = home.appendingPathComponent(".claude/projects/" + project.path.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())
         try [
             #"{"type":"user","timestamp":"2026-11-14T08:00:00.000Z","cwd":"\#(project.path)","message":{"role":"user","content":"rename the token"}}"#,
@@ -69,10 +70,12 @@ final class HistoryAndTabsTests: MacUITestCase {
         XCTAssertTrue(app.offers("Copy", on: .text("Claude Code: The tokenizer is renamed.")), "what was answered has no Copy")
         XCTAssertFalse(app.offers("Copy", on: .text("Bash: swift test")), "a tool's line has a Copy")
         shot("transcript")
-        app.press(.id("conversation-pin"))
-        app.wait(for: .button("Unpin"))
+        // #219: nothing pins or hides it, in its header or from its row.
+        XCTAssertFalse(app.exists(.id("conversation-pin")), "the transcript still has Pin")
+        XCTAssertFalse(app.exists(.id("conversation-hide")), "the transcript still has Hide from the List")
         app.press(.button("Close"))
-        app.wait(for: .containing("Pinned, 1 conversations"))
+        XCTAssertFalse(app.offers("Pin", on: .id("conversation-c-2")), "a row still offers Pin")
+        XCTAssertFalse(app.offers("Hide", on: .id("conversation-c-2")), "a row still offers Hide")
 
         // Deleted: asked twice, and its file goes to the Trash.
         app.perform("Delete", on: .id("conversation-c-1"))
@@ -106,13 +109,11 @@ final class HistoryAndTabsTests: MacUITestCase {
         app.wait(for: .id("transcript-entry-markdown"))
         XCTAssertFalse(app.exists(.id("transcript-entry-text")))
         app.wait(for: .button(ConversationDetails.showAsText))
-        // HIST-22: Hide and Delete in view beside Pin, not in a menu.
+        // HIST-22: Delete in view, not in a menu; no Pin and no Hide (#219).
         XCTAssertFalse(app.exists(.id("conversation-more")))
         XCTAssertTrue(app.exists(.button("Delete…")))
-        app.press(.button("Hide from the List"))
-        app.wait(for: .button("Show Again in the List"))
-        app.press(.button("Show Again in the List"))
-        app.wait(for: .button("Hide from the List"))
+        XCTAssertFalse(app.exists(.button("Pin")), "the transcript still has Pin")
+        XCTAssertFalse(app.exists(.button("Hide from the List")), "the transcript still has Hide from the List")
         shot("markdown")
         // Kept: the next transcript opens rendered too.
         app.press(.button("Close"))
@@ -125,7 +126,8 @@ final class HistoryAndTabsTests: MacUITestCase {
     /// HIST-24 (#50): History's list is wider than the other places'; a
     /// search looks at the titles only when asked; conversations are picked
     /// and deleted together, and then every one on the Mac is, each time
-    /// after two questions, the pinned one kept.
+    /// after two questions, Antigravity's kept (#219: none for being
+    /// pinned).
     func testConversationsAreSearchedByTitleAndDeletedTogether() throws {
         let history = home.appendingPathComponent(".claude/projects/" + project.path.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())
         try [
@@ -137,6 +139,13 @@ final class HistoryAndTabsTests: MacUITestCase {
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
         try #"{"type":"user","cwd":"\#(demo)","message":{"role":"user","content":"tidy the demo"}}"#.appending("\n").write(
             to: other.appendingPathComponent("c-3.jsonl"), atomically: true, encoding: .utf8)
+        // One of Antigravity, which keeps its list in a file of its own:
+        // never deleted here.
+        let cache = home.appendingPathComponent(".gemini/antigravity-cli/cache")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        let uri = URL(fileURLWithPath: demo).absoluteString
+        try #"{"conversations":{"conv-1":{"is_internal":false,"summary":{"Title":"Plan the release","UpdatedAt":"2026-11-10T17:00:22Z","WorkspaceURIs":["\#(uri)"]}}}}"#
+            .write(to: cache.appendingPathComponent("conversation_metadata.json"), atomically: true, encoding: .utf8)
 
         app.press(.id("place-history"))
         app.wait(for: .id("conversation-c-3"), timeout: 20)
@@ -178,9 +187,10 @@ final class HistoryAndTabsTests: MacUITestCase {
         XCTAssertFalse(app.exists(.containing("was deleted")), "told what the rows going say")
         XCTAssertTrue(FileManager.default.fileExists(atPath: other.appendingPathComponent("c-3.jsonl").path))
 
-        // Every one on the Mac: the pinned one stays.
-        app.perform("Pin", on: .id("conversation-c-1"))
-        app.wait(for: .containing("Pinned, 1 conversations"))
+        // Every one on the Mac: Antigravity's stays, and no row offers Pin
+        // to keep another (#219).
+        XCTAssertFalse(app.offers("Pin", on: .id("conversation-c-1")), "a row still offers Pin")
+        app.wait(for: .id("conversation-conv-1"))
         app.press(.id("history-select"))
         app.press(.id("history-delete-all"))
         app.wait(for: .text("Delete every conversation on this Mac?"))
@@ -188,10 +198,12 @@ final class HistoryAndTabsTests: MacUITestCase {
         app.wait(for: .text("Delete them for good from their agents?"), timeout: 10)
         app.press(.button("Delete Every Conversation"))
         app.waitGone(.id("conversation-c-3"), timeout: 15)
-        app.wait(for: .containing("1 was kept"))
-        app.wait(for: .id("conversation-c-1"))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: history.appendingPathComponent("c-1.jsonl").path))
-        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".Trash-of-the-tests").path)), ["c-2.jsonl", "c-3.jsonl"])
+        app.waitGone(.id("conversation-c-1"), timeout: 15)
+        app.wait(for: .containing("1 was kept: having a session, or of Antigravity."))
+        app.wait(for: .id("conversation-conv-1"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: history.appendingPathComponent("c-1.jsonl").path))
+        XCTAssertEqual(
+            Set(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".Trash-of-the-tests").path)), ["c-1.jsonl", "c-2.jsonl", "c-3.jsonl"])
     }
 
     /// The width an element has on the screen.

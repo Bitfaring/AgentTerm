@@ -1,5 +1,27 @@
+import AgentTermEditor
 import AgentTermProtocol
 import SwiftUI
+
+/// The button that shows what an agent said with its Markdown rendered, or
+/// as it was written (#218): the same in a notice's screen and in what a
+/// turn came to, in History's words (#50), kept for the next item on this
+/// iPhone apart from History's own.
+struct InboxMarkdownButton: View {
+    static let key = "inboxMarkdown"
+    @Binding var markdown: Bool
+
+    var body: some View {
+        Button {
+            markdown.toggle()
+        } label: {
+            Label(markdown ? ConversationDetails.showAsText : ConversationDetails.previewMarkdown, systemImage: markdown ? "text.alignleft" : "doc.richtext")
+                .font(.footnote)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .accessibilityIdentifier("inbox-markdown")
+    }
+}
 
 /// One item of the Inbox, all of it, as the Mac shows the item picked
 /// (`InboxDetail`; the owner's decision, 2026-11-21): touching an item
@@ -9,6 +31,7 @@ import SwiftUI
 struct NoticeScreen: View {
     @EnvironmentObject private var model: PhoneModel
     let id: UInt64
+    @AppStorage(InboxMarkdownButton.key) private var markdown = false
 
     private var entry: InboxBook.Entry? { model.inbox.entries.first { $0.id == id } }
 
@@ -65,11 +88,19 @@ struct NoticeScreen: View {
         } else if notice.session != nil {
             Text(TurnResult.sessionEnded).font(.footnote).foregroundStyle(.secondary)
         }
+        // What an agent said is Markdown, and can be shown rendered (#218);
+        // what it asks, and what a failure says, stay as written.
+        let previews = notice.state.map { !$0.isWaiting } == true && !notice.fullBody.isEmpty
         part(notice.state.map { $0.isWaiting ? Inbox.asks : Inbox.said } ?? Inbox.said) {
             if notice.fullBody.isEmpty {
                 Text(Inbox.nothingSaid).foregroundStyle(.tertiary)
             } else {
-                Text(notice.fullBody).textSelection(.enabled).accessibilityIdentifier("notice-body")
+                if previews { InboxMarkdownButton(markdown: $markdown) }
+                if previews, markdown {
+                    MarkdownText(notice.fullBody, size: 15).accessibilityIdentifier("notice-body-markdown")
+                } else {
+                    Text(notice.fullBody).textSelection(.enabled).accessibilityIdentifier("notice-body")
+                }
             }
         }
         if let question = Self.question(of: notice.state), !question.choices.isEmpty {

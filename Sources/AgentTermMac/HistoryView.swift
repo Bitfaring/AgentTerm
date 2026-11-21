@@ -39,11 +39,11 @@ private struct HistoryList: View {
     }
     private var agentNames: [(id: String, name: String)] { AgentDetector.known.map { ($0.id, $0.name) } }
     private var groups: [HistoryFilter.Group] {
-        scope.filter.groups(conversations, pinned: store.pinned, hidden: store.hidden, agentNames: agentNames)
+        scope.filter.groups(conversations, agentNames: agentNames)
     }
     /// What a search found, as far as the filter lets it through.
     private var hits: [HistoryHit]? {
-        scope.hits?.filter { scope.filter.allows($0.conversation, hidden: store.hidden) }.sorted { $0.conversation.updatedAt > $1.conversation.updatedAt }
+        scope.hits?.filter { scope.filter.allows($0.conversation) }.sorted { $0.conversation.updatedAt > $1.conversation.updatedAt }
     }
     /// The first page is full: there may be older ones.
     private var mayHaveOlder: Bool { (listed?.count ?? 0) >= (ofFolder ? 200 : 300) && scope.more }
@@ -214,8 +214,6 @@ private struct HistoryList: View {
                 Button("This Week") { filter.wrappedValue.when = .thisWeek }
                 Button("On a Day…") { pickingDay = true }
             }
-            Divider()
-            Toggle("Show Hidden", isOn: filter.showsHidden)
         } label: {
             Image(systemName: scope.filter.isActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                 .font(.system(size: 12))
@@ -250,7 +248,7 @@ private struct HistoryList: View {
             }
         } else if groups.isEmpty {
             placeholder(
-                scope.filter.isActive || !store.hidden.isEmpty && !conversations.isEmpty
+                scope.filter.isActive
                     ? "No conversation passes the filter."
                     : ofFolder ? "No agent has a conversation in this folder yet." : "No agent has a conversation on \(model.macName) yet.")
         } else {
@@ -295,7 +293,7 @@ private struct HistoryList: View {
     }
 }
 
-/// A group's title: an agent with its mark, a day, or the pinned ones.
+/// A group's title: an agent with its mark, or a day.
 private struct GroupHeader: View {
     let group: HistoryFilter.Group
     let expanded: Bool
@@ -311,7 +309,7 @@ private struct GroupHeader: View {
             if let agent {
                 Image(systemName: Theme.symbol(for: agent)).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.accent(for: agent))
             } else {
-                Image(systemName: group.id == "pinned" ? "pin.fill" : "calendar").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                Image(systemName: "calendar").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
             }
             Text(group.title).font(.system(size: 12, weight: .semibold))
             Spacer(minLength: 0)
@@ -357,8 +355,6 @@ private struct ConversationRow: View {
     /// Its list is picking conversations to delete (#50): a touch ticks it.
     private var picking: Bool { store.picking == inSheet }
     private var picked: Bool { store.picked.contains(conversation.id) }
-    private var isPinned: Bool { store.pinned.contains(conversation.id) }
-    private var isHidden: Bool { store.hidden.contains(conversation.id) }
 
     private var tip: String {
         showsFolder ? conversation.title + "\n" + (conversation.cwd as NSString).abbreviatingWithTildeInPath : conversation.title
@@ -389,14 +385,11 @@ private struct ConversationRow: View {
         Button("Resume", action: resume)
         Button("Hand Off…") { model.requestHandoff(conversation) }
         Divider()
-        Button(isPinned ? "Unpin" : "Pin") { store.pin(conversation, !isPinned) }
-        Button(isHidden ? "Show Again" : "Hide") { store.hide(conversation, !isHidden) }
-        Divider()
         Button("Delete…", role: .destructive) { store.deleting = conversation }
     }
 
     private var spoken: String {
-        conversation.title + (isPinned ? ", pinned" : "") + (isHidden ? ", hidden" : "") + (hit?.snippet.map { ", " + $0 } ?? "")
+        conversation.title + (hit?.snippet.map { ", " + $0 } ?? "")
     }
 
     private var agentName: String { AgentDetector.known.first { $0.id == conversation.agent }?.name ?? conversation.agent }
@@ -411,7 +404,6 @@ private struct ConversationRow: View {
             }
             Text(when)
             if let hit, hit.count > 1 { Text("· \(hit.count) places") }
-            if isHidden { Text("· hidden") }
             if showsFolder {
                 Text("·")
                 Image(systemName: "folder").font(.system(size: 9))
@@ -427,14 +419,10 @@ private struct ConversationRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    if isPinned { Image(systemName: "pin.fill").font(.system(size: 8.5)).foregroundStyle(.orange) }
-                    Text(conversation.title)
-                        .font(.system(size: 12))
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .foregroundStyle(isHidden ? .secondary : .primary)
-                }
+                Text(conversation.title)
+                    .font(.system(size: 12))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let snippet = hit?.snippet {
                     Text(snippet).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 }
@@ -476,8 +464,6 @@ private struct ConversationRow: View {
         .accessibilityAction { pick() }
         .accessibilityAction(named: "Resume") { resume() }
         .accessibilityAction(named: "Hand Off") { model.requestHandoff(conversation) }
-        .accessibilityAction(named: isPinned ? "Unpin" : "Pin") { store.pin(conversation, !isPinned) }
-        .accessibilityAction(named: isHidden ? "Show Again" : "Hide") { store.hide(conversation, !isHidden) }
         .accessibilityAction(named: "Delete") { store.deleting = conversation }
     }
 }

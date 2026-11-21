@@ -638,7 +638,6 @@ public final class HostServer {
             // What AgentTerm tells each agent, for its MCP server to give.
             writePromptsForServers()
             loadSchedules()
-            loadHistoryMarks()
             alertWaitingNotices()
             startAtLoginByDefault()
             let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -1336,31 +1335,6 @@ public final class HostServer {
     /// How many older conversations are given at a time.
     private static let historyPage = 200
 
-    /// The conversations the user pinned and hid, by `Conversation.id`.
-    private struct HistoryMarks: Codable {
-        var pinned: Set<String> = []
-        var hidden: Set<String> = []
-    }
-    private var historyMarks = HistoryMarks()
-    private var historyMarksFile: URL? { configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("history.json") }
-
-    private func loadHistoryMarks() {
-        guard let file = historyMarksFile, let data = FileManager.default.contents(atPath: file.path) else { return }
-        historyMarks = MessageCoding.decode(HistoryMarks.self, from: data) ?? HistoryMarks()
-    }
-
-    private func saveHistoryMarks() {
-        guard let file = historyMarksFile else { return }
-        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? MessageCoding.encode(historyMarks).write(to: file, options: .atomic)
-    }
-
-    private var historyMarksMessage: ServerMessage { .historyMarks(pinned: historyMarks.pinned.sorted(), hidden: historyMarks.hidden.sorted()) }
-
-    private func broadcastHistoryMarks() {
-        for client in clients.values where client.authenticated { send(historyMarksMessage, to: client) }
-    }
-
     private func searchHistory(search: Int, in path: String?, query: String, titlesOnly: Bool = false, for client: Client) {
         // One at a time for each list, everywhere's and a folder's, which
         // the Mac shows side by side; a search for text is another's.
@@ -1407,21 +1381,16 @@ public final class HostServer {
                 server.send(.error(problem), to: client)
                 return
             }
-            server.historyMarks.pinned.remove(id)
-            server.historyMarks.hidden.remove(id)
-            server.saveHistoryMarks()
-            server.broadcastHistoryMarks()
             for other in server.clients.values where other.authenticated { server.send(.conversationDeleted(id: id), to: other) }
         }
     }
 
     /// Several conversations deleted at once (#50): those named, or every
-    /// one on the host when `ids` is nil. Never one that is pinned, nor one
-    /// a session is having, whose agent may be writing to it; Antigravity's
-    /// are refused by `AgentHistory.delete` and kept.
+    /// one on the host when `ids` is nil. Never one a session is having,
+    /// whose agent may be writing to it; Antigravity's are refused by
+    /// `AgentHistory.delete` and kept.
     private func deleteConversations(_ ids: [String]?, for client: Client) {
         let home = configuration.home
-        let pinned = historyMarks.pinned
         let inSession = Set(sessions.values.compactMap { session in session.info.conversationID.map { (session.info.agent ?? "") + ":" + $0 } })
         let wanted = ids.map(Set.init)
         work(
@@ -1432,8 +1401,7 @@ public final class HostServer {
                 var deleted: [String] = []
                 var kept = 0
                 for conversation in named {
-                    // Pinned is kept, as the question says: unpinned first.
-                    if pinned.contains(conversation.id) || inSession.contains(conversation.id) {
+                    if inSession.contains(conversation.id) {
                         kept += 1
                     } else if AgentHistory.delete(conversation, home: home) == nil {
                         deleted.append(conversation.id)
@@ -1444,14 +1412,6 @@ public final class HostServer {
                 return (deleted, kept)
             }
         ) { server, client, result in
-            for id in result.deleted {
-                server.historyMarks.pinned.remove(id)
-                server.historyMarks.hidden.remove(id)
-            }
-            if !result.deleted.isEmpty {
-                server.saveHistoryMarks()
-                server.broadcastHistoryMarks()
-            }
             for other in server.clients.values where other.authenticated {
                 for id in result.deleted { server.send(.conversationDeleted(id: id), to: other) }
             }
@@ -1780,6 +1740,15 @@ public final class HostServer {
         }
     }
 
+    /// Says in the host's log which message could not be read (#214): who
+    /// sent it and its name, never what it held. Until then nothing told
+    /// which message an app of another release had sent.
+    private static func logUnread(_ data: Data?, from client: String) {
+        let key = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?.keys.first ?? ""
+        let name = key.count <= 40 && !key.isEmpty && key.allSatisfy { $0.isLetter && $0.isASCII } ? key : "not a message"
+        FileHandle.standardError.write(Data("agenttermd: a message from \(client.isEmpty ? "a client" : client) could not be read: \(name)\n".utf8))
+    }
+
     private func receive(from client: Client) {
         client.connection.receiveMessage { [weak self, weak client] data, context, _, error in
             guard let self, let client else { return }
@@ -1790,9 +1759,13 @@ public final class HostServer {
             let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
             switch metadata?.opcode {
             case .text:
-                if let data, let message = MessageCoding.decode(ClientMessage.self, from: data) {
+                // A host told to be of an earlier protocol (`--protocol-version`,
+                // for tests) does not have what came after it, as the real
+                // one of that release would not (#214).
+                if let data, let message = MessageCoding.decode(ClientMessage.self, from: data), message.isKnown(toHostAt: self.configuration.protocolVersion) {
                     self.handle(message, from: client)
                 } else {
+                    Self.logUnread(data, from: client.name)
                     self.send(.error("malformed message"), to: client)
                 }
             case .binary:
@@ -2579,11 +2552,6 @@ public final class HostServer {
             }
         case .searchHistory(let search, let path, let query, let titlesOnly):
             searchHistory(search: search, in: path, query: query, titlesOnly: titlesOnly ?? false, for: client)
-        case .markConversation(let id, let pinned, let hidden):
-            if let pinned { if pinned { historyMarks.pinned.insert(id) } else { historyMarks.pinned.remove(id) } }
-            if let hidden { if hidden { historyMarks.hidden.insert(id) } else { historyMarks.hidden.remove(id) } }
-            saveHistoryMarks()
-            broadcastHistoryMarks()
         case .deleteConversation(let agent, let sessionID, let cwd):
             deleteConversation(agent: agent, sessionID: sessionID, cwd: cwd, for: client)
         case .deleteConversations(let ids):
@@ -3141,7 +3109,6 @@ public final class HostServer {
         send(.browserTabs(browserTabsList), to: client)
         send(agentPromptsMessage, to: client)
         send(shellSettingsMessage, to: client)
-        send(historyMarksMessage, to: client)
         send(.commitWriter(commitWriter), to: client)
         if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
         // Without any yet, the client is sent none and hands over its own.

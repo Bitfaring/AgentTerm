@@ -242,7 +242,7 @@ Client to host:
 | `setDisplaySettings(settings)` | How things are shown on every device: the temperature's unit, diffs in one panel or two, changes as a list or a tree. The host keeps it in `settings.json` and passes it on as `displaySettings`. A host that keeps none yet sends nil, and the client hands it its own. Each app also writes the values to its own preferences, which is what its views read. |
 | `sshHosts` / `connectSSH(host, size)` | The hosts of the Mac's SSH configuration, and `ssh <host>` in a new session. |
 | `history(path)` | Conversations agents had in a folder, or everywhere when `path` is nil. |
-| `historyOlder(path, before)` / `readConversation(agent, sessionID, cwd)` / `searchHistory(search, path, query, titlesOnly)` / `markConversation(id, pinned, hidden)` / `deleteConversation(…)` / `deleteConversations(ids)` / `exportConversation(…)` | What History does with the conversations (#46), answered with `historyOlder(path, conversations, more)`, `conversationRead(id, details)`, `historyFound(search, hits)` and `historySearchEnded(search)`, `historyMarks(pinned, hidden)` to every device (and to one that connects), `conversationDeleted(id)` to every device, `conversationExported(id, path)`. With `titlesOnly` a search reads no file (#50). `deleteConversations` deletes those named, or every one on the host when `ids` is nil, leaving the pinned ones and those a session is having, Antigravity's being refused by `AgentHistory.delete`; each deleted is told to every device with `conversationDeleted`, and the sender gets `conversationsDeleted(deleted, kept)` (#50). The host does all of it, for the Mac it runs on too, so that every device shows the same. A conversation is named by its agent, its id and its folder and looked up among the agents' own files (`AgentHistory.conversation`), never taken as a path from a client. `AgentHistory.details` reads a file line by line into `ConversationDetails`: entries (user, agent, tool), first and last time, model, tokens, branch, files written; how each agent writes these was read from the files of the versions in use on 2026-11-14 (Claude Code 2.1, Codex CLI 0.169, Copilot CLI 1.0.112, Antigravity CLI). `AgentHistory.search` looks first at the file's bytes and reads a file as a conversation only when they hold the words. A client has one search of the history going for each of the two lists the Mac shows side by side, everywhere's and a folder's, and its searches for text apart: each kind is numbered by the client by itself (#50). Pins and hidden ones are kept in `history.json`; a transcript is written to `transcripts/` in the host's own folder. Filtering and grouping are `HistoryFilter` in `AgentTermProtocol`, which both apps apply to what was listed. |
+| `historyOlder(path, before)` / `readConversation(agent, sessionID, cwd)` / `searchHistory(search, path, query, titlesOnly)` / `deleteConversation(…)` / `deleteConversations(ids)` / `exportConversation(…)` | What History does with the conversations (#46), answered with `historyOlder(path, conversations, more)`, `conversationRead(id, details)`, `historyFound(search, hits)` and `historySearchEnded(search)`, `conversationDeleted(id)` to every device, `conversationExported(id, path)`. With `titlesOnly` a search reads no file (#50). `deleteConversations` deletes those named, or every one on the host when `ids` is nil, leaving those a session is having, Antigravity's being refused by `AgentHistory.delete`; each deleted is told to every device with `conversationDeleted`, and the sender gets `conversationsDeleted(deleted, kept)` (#50). The host does all of it, for the Mac it runs on too, so that every device shows the same. A conversation is named by its agent, its id and its folder and looked up among the agents' own files (`AgentHistory.conversation`), never taken as a path from a client. `AgentHistory.details` reads a file line by line into `ConversationDetails`: entries (user, agent, tool), first and last time, model, tokens, branch, files written; how each agent writes these was read from the files of the versions in use on 2026-11-14 (Claude Code 2.1, Codex CLI 0.169, Copilot CLI 1.0.112, Antigravity CLI). `AgentHistory.search` looks first at the file's bytes and reads a file as a conversation only when they hold the words. A client has one search of the history going for each of the two lists the Mac shows side by side, everywhere's and a folder's, and its searches for text apart: each kind is numbered by the client by itself (#50). A transcript is written to `transcripts/` in the host's own folder. Filtering and grouping are `HistoryFilter` in `AgentTermProtocol`, which both apps apply to what was listed. |
 | `resume(agent, sessionID, cwd, size)` | Reopen a conversation in its agent, in a new session. |
 | `handoffPlan(agent)` | What the receiving agent would be told, to show it before handing off. |
 | `handoff(agent, sessionID, cwd, target, plan, prompt, note, size, folder, worktree)` | Hand a conversation to another agent, in a new session; in `folder`, or with `worktree` in a new worktree of it, made first (#150, protocol 31). |
@@ -273,7 +273,31 @@ Host…, which asks first. It never restarts it by itself (decided by the
 owner on 2026-11-17), and a release that changes nothing of the host says
 nothing. A build outside an app bundle has no revision, and is not compared.
 
-The protocol version is 36. 36 added `deviceInBackground`, which a
+A host of an earlier protocol is sent nothing it does not have (#214).
+Right after an update the app talks to the host it found running, of the
+release before, until the user restarts it; a message that host cannot read
+it answers with `error("malformed message")`. Each message added to the
+protocol is named in `ClientMessage.since` with the number it came in (from
+33: `readNotices`, 36: `deviceInBackground`), and `AgentTermConnection`,
+which keeps the number the host's `welcome` gave, leaves unsent what the
+host does not have, for both apps. Found with a host built from v0.12.0
+(protocol 32) and the app of 0.13.0: what it refused was `readNotices`,
+which the Mac app sends in answer to `noticeLog` for what was read in its
+Inbox. While the host is an earlier one the Mac app says so in its banner
+only, with Restart Host…, and a "malformed message" from it is not said a
+second time as a notice; a notice about an older host is taken away once a
+host of the app's own release answers. A message whose content changed is
+not covered: nothing is owed to an earlier build (principle 6). A host
+that cannot read a message writes to its log who sent it and the
+message's name, never its content. `--protocol-version`, which tests give a
+host to have it stand for an earlier one, also has it refuse what came
+after that number.
+
+The protocol version is 37. 37 took away `markConversation` and
+`historyMarks`: a conversation in History is no longer pinned or hidden, on
+either app, and the host no longer reads, keeps or sends which ones were; the
+`history.json` an earlier build left in the host's folder is not read, and
+`deleteConversations` keeps none for being pinned (#219). 36 added `deviceInBackground`, which a
 device's app sends for going to the background and coming back, in place
 of the `appInFront` 35 had it send (#190), so that `appInFront` is only the
 Mac app's; and `CreateRequest.requestID`, a number the client picks for a
@@ -828,7 +852,7 @@ is a file pointing into the repository's own `worktrees` folder: a
 worktree made inside the repository (#43), which `git status` lists as a
 folder nobody tracks. Both apps ask for the list again when the changes on
 show change in number, in branch or in what they are ahead by, so that a
-chip's counts are not stale.
+worktree's counts are not stale.
 
 Messages: `createInWorktree(request:branch:from:)`, `listWorktrees(folder:)`,
 `finishWorktree(folder:path:finish:deleteBranch:)` (refused while a session
@@ -837,6 +861,11 @@ runs in it); answered with `worktrees(folder:list:)` and
 command of #34 was taken away on 2026-11-16 (#75), and a `worktrees.json`
 an earlier build kept is no longer read. What both apps say of a worktree
 is in `WorktreeWords` and `WorktreeInfo.chipTitle/chipCounts/chipHelp`.
+The worktrees are picked from a list with a search (#217): a popover on the
+Mac (`WorktreePicker`, as `BranchMenu`), a sheet on the iPhone
+(`WorktreeViews.swift`, as its branches'); what the search finds is
+`WorktreeInfo.matches(search:)`, and what the button outside says is
+`pickerCounts` and `pickerLabel`.
 `SessionInfo.branch` names a session's worktree branch; `WorktreePath`
 tells which folder a session in `.agentterm/worktrees` belongs to.
 

@@ -41,6 +41,19 @@ final class DependentSwitchTests: XCTestCase {
         XCTAssertFalse(DependentSwitch.pushAlso(stored: true, notifications: false, channel: .release).shown)
     }
 
+    /// NOTIFY-6 (#213): "Also While the App Is Closed" while iOS has
+    /// notifications turned off for the app.
+    func testAlsoWhileTheAppIsClosedShowsOffWhileIOSHasNotificationsOff() {
+        let refused = DependentSwitch.pushAlso(stored: true, notifications: true, channel: .release, allowed: false)
+        XCTAssertFalse(refused.shown, "Also While the App Is Closed shows on while iOS has notifications off")
+        XCTAssertFalse(refused.isEnabled)
+        XCTAssertEqual(refused.stoppedBy, PushWords.notAllowed)
+        XCTAssertTrue(refused.stored, "the user's choice was not kept")
+        // A build with no push says that first: allowing them would not help.
+        XCTAssertEqual(DependentSwitch.pushAlso(stored: true, notifications: true, channel: .dev, allowed: false).stoppedBy, PushWords.notInThisBuild)
+        XCTAssertTrue(DependentSwitch.pushAlso(stored: true, notifications: true, channel: .release, allowed: true).shown)
+    }
+
     /// LIVE-7 (#212): the Live Activity switch while iOS has Live
     /// Activities turned off for the app.
     func testTheLiveActivitySwitchShowsOffWhileIOSTurnsThemOff() {

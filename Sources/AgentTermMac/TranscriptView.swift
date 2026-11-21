@@ -16,19 +16,13 @@ struct ConversationTranscript: View {
     @AppStorage("transcriptMarkdown") private var markdown = false
 
     private var agentName: String { model.agents.first { $0.id == conversation.agent }?.name ?? conversation.agent }
-    private var isPinned: Bool { store.pinned.contains(conversation.id) }
-    private var isHidden: Bool { store.hidden.contains(conversation.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 Text("Transcript").font(.system(size: 13, weight: .semibold))
                 Spacer(minLength: 0)
-                // Each in view, not in a menu: there is room for them here.
-                Button(isPinned ? "Unpin" : "Pin") { store.pin(conversation, !isPinned) }
-                    .accessibilityIdentifier("conversation-pin")
-                Button(isHidden ? "Show Again in the List" : "Hide from the List") { store.hide(conversation, !isHidden) }
-                    .accessibilityIdentifier("conversation-hide")
+                // In view, not in a menu: there is room for it here.
                 Button("Delete…", role: .destructive) {
                     // Asked over the window, not over the sheet this may be in.
                     model.panelConversation = nil

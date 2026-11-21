@@ -198,22 +198,18 @@ public struct HistoryFilter: Equatable, Sendable {
     public var folder: String?
     public var when = When.any
     public var grouping = Grouping.agent
-    /// Hidden conversations are shown too.
-    public var showsHidden = false
 
-    public init(agent: String? = nil, folder: String? = nil, when: When = .any, grouping: Grouping = .agent, showsHidden: Bool = false) {
+    public init(agent: String? = nil, folder: String? = nil, when: When = .any, grouping: Grouping = .agent) {
         self.agent = agent
         self.folder = folder
         self.when = when
         self.grouping = grouping
-        self.showsHidden = showsHidden
     }
 
     /// Whether anything is left out by it.
     public var isActive: Bool { agent != nil || folder != nil || when != .any }
 
-    public func allows(_ conversation: Conversation, hidden: Set<String> = [], now: Date = Date(), calendar: Calendar = .current) -> Bool {
-        if !showsHidden, hidden.contains(conversation.id) { return false }
+    public func allows(_ conversation: Conversation, now: Date = Date(), calendar: Calendar = .current) -> Bool {
         if let agent, conversation.agent != agent { return false }
         if let folder, !WorktreePath.belongs(conversation.cwd, to: folder) { return false }
         switch when {
@@ -233,18 +229,14 @@ public struct HistoryFilter: Equatable, Sendable {
         public var conversations: [Conversation]
     }
 
-    /// The conversations it allows, grouped: the pinned ones first in a
-    /// group of their own, then by agent in the order given, or by day,
-    /// the newest day first.
+    /// The conversations it allows, grouped by agent in the order given,
+    /// or by day, the newest day first.
     public func groups(
-        _ conversations: [Conversation], pinned: Set<String> = [], hidden: Set<String> = [], agentNames: [(id: String, name: String)],
+        _ conversations: [Conversation], agentNames: [(id: String, name: String)],
         now: Date = Date(), calendar: Calendar = .current
     ) -> [Group] {
-        let allowed = conversations.filter { allows($0, hidden: hidden, now: now, calendar: calendar) }.sorted { $0.updatedAt > $1.updatedAt }
+        let rest = conversations.filter { allows($0, now: now, calendar: calendar) }.sorted { $0.updatedAt > $1.updatedAt }
         var groups: [Group] = []
-        let kept = allowed.filter { pinned.contains($0.id) }
-        if !kept.isEmpty { groups.append(Group(id: "pinned", title: "Pinned", conversations: kept)) }
-        let rest = allowed.filter { !pinned.contains($0.id) }
         switch grouping {
         case .agent:
             var known = agentNames
@@ -297,7 +289,7 @@ public struct DeleteConversationsQuestion: Equatable, Sendable {
         } else {
             title = count == nil ? "Delete every conversation on this Mac?" : "Delete \(them)?"
             message =
-                "This deletes the agents' own records of \(count == 1 ? "it" : "them"), not only the rows here. Pinned ones stay, as does one a session is having, and Antigravity's, which are deleted in Antigravity."
+                "This deletes the agents' own records of \(count == 1 ? "it" : "them"), not only the rows here. One a session is having stays, as do Antigravity's, which are deleted in Antigravity."
             confirm = "Delete…"
         }
     }
@@ -306,7 +298,7 @@ public struct DeleteConversationsQuestion: Equatable, Sendable {
     public static func done(deleted: Int, kept: Int) -> String {
         let gone = deleted == 1 ? "1 conversation was deleted." : "\(deleted) conversations were deleted."
         guard kept > 0 else { return gone }
-        return gone + " \(kept) \(kept == 1 ? "was" : "were") kept: pinned, having a session, or of Antigravity."
+        return gone + " \(kept) \(kept == 1 ? "was" : "were") kept: having a session, or of Antigravity."
     }
 }
 
@@ -327,7 +319,7 @@ public struct DeleteConversationQuestion: Equatable, Sendable {
         } else {
             title = "Delete this conversation?"
             message =
-                "This deletes \(agentName)'s own record of “\(conversation.title)”, not only its row here. To take it out of this list and keep it, hide it instead."
+                "This deletes \(agentName)'s own record of “\(conversation.title)”, not only its row here."
             confirm = "Delete…"
         }
     }

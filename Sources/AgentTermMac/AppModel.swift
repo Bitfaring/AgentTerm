@@ -1772,9 +1772,15 @@ final class AppModel: ObservableObject {
             tellWhetherInFront()
             refreshSSHHosts()
             refreshAgentSetup()
+            // The folder's worktrees were forgotten with the last host
+            // (#215), and the host says them only when asked.
+            if let selectedFolder { listWorktrees(selectedFolder) }
             hostMatch = ProtocolMatch(host: version)
             otherBuildOfHost = hostMatch == .same ? Self.otherBuild(release: release, revision: revision) : nil
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
+            // Said of the host that was there before, an older one: over
+            // once a host of this release answers (#214, principle 3).
+            if hostMatch == .same, notice == HostErrorWords.olderHost { notice = nil }
             wasConnected = true
             hostBroken = false
             // The host the app started, itself or through launchd, is the
@@ -1822,7 +1828,7 @@ final class AppModel: ObservableObject {
             worktrees[folder] = list
         case .filesFound, .textFound, .searchEnded:
             search.handle(message)
-        case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .historyMarks, .conversationDeleted, .conversationsDeleted, .conversationExported:
+        case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .conversationDeleted, .conversationsDeleted, .conversationExported:
             historyStore.handle(message, folderPath: panelFolder)
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
@@ -1981,6 +1987,10 @@ final class AppModel: ObservableObject {
                 files.requestFailed()
             }
             if text == "malformed message" { writingCommitMessage = [] }
+            // A host of an earlier release that could not read something:
+            // the banner already says it is one, with Restart Host, and
+            // stays for as long as that is so (#214). Not said twice.
+            if text == "malformed message", hostMatch == .hostOlder { return }
             // Always said, where the user is looking (#66): never only kept.
             notice = HostErrorWords.words(for: text)
         case .pairingCode(let code, let expiresAt):

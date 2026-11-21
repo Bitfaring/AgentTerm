@@ -165,6 +165,48 @@ final class SessionTests: MacUITestCase {
         return script
     }
 
+    /// INBOX-13 (#218): a long answer is its end in the list, three lines
+    /// at most with "…" in front, and all of it in the item's detail, where
+    /// a button shows it with its Markdown rendered and as written again.
+    func testALongAnswerIsCutInTheListAndWholeInItsDetail() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        let words = (1...200).map { "word\($0)" }.joined(separator: " ")
+        let said = "# Result\\n\\n\(words)\\n\\n- the last point"
+        let agent = try standInAgent("long", hook: "Stop", event: #"{"hook_event_name":"Stop","last_assistant_message":"\#(said)"}"#)
+        phone.send(.create(CreateRequest(command: agent.path, cwd: project.path, title: "long")))
+        wait("the agent done", timeout: 20) { phone.sessions.contains { $0.title == "long" && $0.state?.isWorking == false } }
+        let long = try XCTUnwrap(phone.sessions.first { $0.title == "long" }?.id)
+        bringAppToFront()
+        app.press(.id("session-\(shell)"))
+
+        app.press(.id("place-inbox"))
+        app.wait(for: .id(phone.inboxRow(long)))
+        let row = try XCTUnwrap(app.first(.id(phone.inboxRow(long)))?.label)
+        XCTAssertTrue(row.contains(Inbox.cutMark), "a row that leaves out the beginning does not mark it: \(row)")
+        XCTAssertTrue(row.hasSuffix("- the last point"), "a row does not show the end: \(row)")
+        XCTAssertFalse(row.contains("word1 "), "a row shows the beginning of a long answer: \(row)")
+        shot("inbox-long-row")
+
+        // Picked: all of it, as it was written.
+        app.press(.id(phone.inboxRow(long)))
+        app.wait(for: .id("inbox-detail-text"))
+        let whole = try XCTUnwrap(app.first(.id("inbox-detail-text"))?.text)
+        XCTAssertTrue(whole.contains("# Result") && whole.contains("word1 ") && whole.contains("- the last point"), "the detail leaves something out")
+
+        // Rendered, then as written again, in History's words.
+        app.press(.id("inbox-markdown"))
+        app.wait(for: .id("inbox-detail-markdown"))
+        XCTAssertNil(app.first(.id("inbox-detail-text")))
+        app.wait(for: .button(ConversationDetails.showAsText))
+        shot("inbox-markdown")
+        app.press(.id("inbox-markdown"))
+        app.wait(for: .id("inbox-detail-text"))
+        app.wait(for: .button(ConversationDetails.previewMarkdown))
+    }
+
     /// INBOX-3 (#67, #66): the Inbox is this Mac's history of what it was
     /// told, with how many are unread on its place in the rail; the item
     /// picked is shown in the middle, the terminals hidden as in History,

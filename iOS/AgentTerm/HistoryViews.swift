@@ -16,8 +16,6 @@ struct TranscriptScreen: View {
     @AppStorage("transcriptMarkdown") private var markdown = false
 
     private var agentName: String { model.agents.first { $0.id == conversation.agent }?.name ?? conversation.agent }
-    private var isPinned: Bool { model.pinnedConversations.contains(conversation.id) }
-    private var isHidden: Bool { model.hiddenConversations.contains(conversation.id) }
 
     var body: some View {
         ScrollView {
@@ -39,17 +37,6 @@ struct TranscriptScreen: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button {
-                        model.markConversation(conversation, pinned: !isPinned)
-                    } label: {
-                        Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
-                    }
-                    Button {
-                        model.markConversation(conversation, hidden: !isHidden)
-                    } label: {
-                        Label(isHidden ? "Show Again in the List" : "Hide from the List", systemImage: isHidden ? "eye" : "eye.slash")
-                    }
-                    Divider()
                     Button(role: .destructive) {
                         deleting = conversation
                     } label: {
@@ -328,7 +315,6 @@ struct HistoryControls: View {
                     Button("This Week") { filter.when = .thisWeek }
                     Button("On a Day…") { pickingDay = true }
                 }
-                Toggle("Show Hidden", isOn: $filter.showsHidden)
                 if filter.isActive {
                     Button("Clear Filters") {
                         filter.agent = nil

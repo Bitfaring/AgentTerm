@@ -36,6 +36,26 @@ final class WorktreeTests: XCTestCase {
         try text.write(to: (directory ?? project).appendingPathComponent(name), atomically: true, encoding: .utf8)
     }
 
+    /// WT-21 (#216): a submodule's own worktree is its folder: git names the
+    /// repository's folder under the parent's `.git/modules` instead.
+    func testASubmodulesOwnWorktreeIsItsFolder() throws {
+        let parent = root.appendingPathComponent("parent")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        git("init", "-q", "-b", "main", in: parent)
+        git("config", "user.name", "Test", in: parent)
+        git("config", "user.email", "test@example.com", in: parent)
+        git("config", "commit.gpgsign", "false", in: parent)
+        git("-c", "protocol.file.allow=always", "submodule", "add", "-q", project.path, "sub", in: parent)
+        git("commit", "-q", "-m", "sub", in: parent)
+        let sub = parent.appendingPathComponent("sub")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sub.appendingPathComponent("a.txt").path), "the submodule is checked out")
+
+        let list = GitWorktrees.list(folder: sub.path)
+        XCTAssertEqual(list.map(\.path), [sub.path])
+        XCTAssertEqual(list.first?.isMain, true)
+        XCTAssertEqual(list.first?.branch, "main")
+    }
+
     /// WT-1: a worktree on a branch of its own, cut from the current commit,
     /// inside the project, bringing nothing along, which git does not see.
     func testANewWorktreeIsACleanCheckoutOnABranchOfItsOwn() throws {

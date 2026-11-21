@@ -112,6 +112,16 @@ public enum WorktreeWords {
 
     public static func merge(into main: WorktreeInfo?) -> String { "Merge into \(main?.branch ?? "the folder's branch")" }
     public static let pullRequest = "Open a Pull Request"
+    public static let throwAway = "Throw Away…"
+
+    /// The list the worktrees are picked from (#217): its name, what its
+    /// search field asks for, and what is said when the search finds none.
+    public static let listTitle = "Worktrees"
+    public static let searchPrompt = "Find a worktree"
+    public static func noMatch(_ search: String) -> String { "No worktree matches “\(search.trimmingCharacters(in: .whitespaces))”." }
+    public static let newHelp = "A new branch in a new worktree, with an agent or a shell started there"
+    public static let actions = "Worktree Actions"
+    public static func actionsHelp(_ worktree: WorktreeInfo) -> String { "Merge \(worktree.chipTitle), open a pull request for it, or throw it away" }
 }
 
 extension WorktreeInfo {
@@ -142,6 +152,32 @@ extension WorktreeInfo {
         }
         return parts.joined(separator: ", ")
     }
+}
+
+extension WorktreeInfo {
+    /// What the button that opens the list of worktrees says of the one on
+    /// show after its name (#217): its changed files, as the branch's
+    /// button would.
+    public var pickerCounts: String {
+        if missing { return "missing" }
+        return changed > 0 ? "\(changed) changed" : ""
+    }
+
+    /// The same button, for assistive tools: its name and all of it in a sentence.
+    public var pickerLabel: String { "Worktree \(chipTitle), \(chipHelp)" }
+
+    /// Whether a search of the list finds it: by its branch or by the name
+    /// of its folder, whatever the case; an empty search finds every one.
+    public func matches(search: String) -> Bool {
+        let wanted = search.trimmingCharacters(in: .whitespaces).lowercased()
+        if wanted.isEmpty { return true }
+        return (branch ?? "").lowercased().contains(wanted) || (path as NSString).lastPathComponent.lowercased().contains(wanted)
+    }
+}
+
+extension Sequence where Element == WorktreeInfo {
+    /// Those a search of the list leaves, in their order.
+    public func matching(search: String) -> [WorktreeInfo] { filter { $0.matches(search: search) } }
 }
 
 extension WorktreeInfo {

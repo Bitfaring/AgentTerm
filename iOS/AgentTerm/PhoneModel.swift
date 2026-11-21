@@ -743,12 +743,36 @@ final class PhoneModel: ObservableObject {
     /// host's ticket from the relay stays fresh.
     private var pushAsked = false
 
+    /// Whether iOS has notifications turned off for the app, as its
+    /// Settings say when the app comes to the front (#213).
+    @Published private(set) var notificationsRefused = false
+
+    /// Whether iOS lets the app notify: the switch shows off while it does
+    /// not (#213), and the footnote says why.
+    var pushAllowed: Bool { !notificationsRefused && pushProblem != PushWords.notAllowed }
+
+    /// Reads what the iPhone's Settings say of the app's notifications:
+    /// they are changed there, while the app is away.
+    private func readNotificationPermission() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            let refused = settings.authorizationStatus == .denied
+            Task { @MainActor [weak self] in
+                guard let self, self.notificationsRefused != refused else { return }
+                self.notificationsRefused = refused
+                // Allowed again: registered now, not at the next connection.
+                if !refused, self.pushProblem == PushWords.notAllowed { self.pushProblem = nil }
+                self.updatePush()
+            }
+        }
+    }
+
     /// What the switch's footnote says (principle 3): what holds it back,
     /// else what the Mac says.
     var pushState: PushState? {
         guard notifyAgents else { return nil }
         // Said whatever the switch keeps, which shows off then (#212).
         if AppChannel.current != .release { return .unavailable(reason: PushWords.notInThisBuild) }
+        if !pushAllowed { return .unavailable(reason: PushWords.notAllowed) }
         guard pushAlso else { return nil }
         if let pushProblem { return .unavailable(reason: pushProblem) }
         return hostPushState
@@ -757,7 +781,8 @@ final class PhoneModel: ObservableObject {
     /// Registers with the Mac on screen, or no longer, as the switches say.
     private func updatePush() {
         guard status == .connected, let connection, let pairing else { return }
-        guard notifyAgents, pushAlso, AppChannel.current == .release else {
+        // Nor while iOS has them off (#213): the switch shows off then.
+        guard notifyAgents, pushAlso, AppChannel.current == .release, !notificationsRefused else {
             if hostPushState == .on { connection.send(.pushUnregister) }
             return
         }
@@ -1173,6 +1198,7 @@ final class PhoneModel: ObservableObject {
         loadInbox()
         notifications.model = self
         checkNotificationAsk()
+        readNotificationPermission()
         pushTokenWatch = PushToken.shared.$token.receive(on: DispatchQueue.main).sink { [weak self] token in
             self?.deviceToken = token
             self?.updatePush()
@@ -1533,6 +1559,7 @@ final class PhoneModel: ObservableObject {
         active = true
         // Changed in the iPhone's Settings while the app was away.
         liveActivityAllowedChanged(ActivityAuthorizationInfo().areActivitiesEnabled)
+        readNotificationPermission()
         if status == .connected { connection?.send(.deviceInBackground(false)) }
         if backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTask)
@@ -1776,9 +1803,6 @@ final class PhoneModel: ObservableObject {
             runOutputs[ScheduleOverview.Run.id(schedule: id, at: at)] = .some(text)
         case .worktrees(let folder, let list):
             worktrees[folder] = list
-        case .historyMarks(let pinned, let hidden):
-            pinnedConversations = Set(pinned)
-            hiddenConversations = Set(hidden)
         case .conversationRead(let id, let details):
             conversationDetails[id] = .some(details)
             // The last few are kept: each may be large.
@@ -2350,10 +2374,8 @@ final class PhoneModel: ObservableObject {
         connection?.send(.history(path: folder))
     }
 
-    // MARK: History: search, read, pin, hide, delete (#46)
+    // MARK: History: search, read, delete (#46)
 
-    @Published private(set) var pinnedConversations: Set<String> = []
-    @Published private(set) var hiddenConversations: Set<String> = []
     /// Conversations as they were read, by their id; nil inside for one
     /// that is no longer there.
     @Published private(set) var conversationDetails: [String: ConversationDetails?] = [:]
@@ -2405,10 +2427,6 @@ final class PhoneModel: ObservableObject {
 
     func readConversation(_ conversation: Conversation) {
         connection?.send(.readConversation(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd))
-    }
-
-    func markConversation(_ conversation: Conversation, pinned: Bool? = nil, hidden: Bool? = nil) {
-        connection?.send(.markConversation(id: conversation.id, pinned: pinned, hidden: hidden))
     }
 
     /// Deletes a conversation's record on the Mac, once the user was asked twice.

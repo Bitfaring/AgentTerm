@@ -20,7 +20,7 @@ struct RightPanel: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             Theme.hairline.frame(height: 1)
-            WorktreeBar()
+            WorktreePicker()
             if tab == "history" {
                 HistoryView(ofFolder: true)
             } else if tab == "files" {

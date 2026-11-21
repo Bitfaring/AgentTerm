@@ -341,7 +341,7 @@ extension AgentHistory {
             guard path.hasPrefix(home + "/.copilot/session-state/"), path.hasSuffix("/events.jsonl") else { return "That is not a conversation of Copilot." }
             target = (path as NSString).deletingLastPathComponent
         case "agy":
-            return "Antigravity keeps its list of conversations in a file of its own, which AgentTerm does not rewrite: this one can be hidden here, and deleted in Antigravity."
+            return "Antigravity keeps its list of conversations in a file of its own, which AgentTerm does not rewrite: this one is deleted in Antigravity."
         default:
             return "Conversations of this agent cannot be deleted here."
         }

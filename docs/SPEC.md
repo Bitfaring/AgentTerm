@@ -126,17 +126,25 @@ says names the device it runs on.
   the iPhone. Selecting it, the Git, History and Files tabs show its
   worktree; on the iPhone its menu has "Changes, History and Files",
   which opens its folder on that worktree.
-- **The worktree bar** (#33, #43): at the top of the side panel of a
-  folder that is a repository, its worktrees as chips. The folder's own
+- **The worktrees' button** (#33, #43, #217): at the top of the side
+  panel of a folder that is a repository, one button, which names the
+  worktree on show (its branch, or its folder with a detached HEAD) and
+  how many files are changed in it. A folder that is no repository has
+  none. Pressed, it opens a popup like the branch's, with a field that
+  narrows the worktrees down by their branch or the name of their folder,
+  whatever the case; a choice or Escape closes it, the arrows and Return
+  pick from the keyboard. Nothing else of the worktrees is outside it.
+- In the popup, a row for each worktree. The folder's own
   branch is always the first; each worktree follows, whoever made it
   (AgentTerm, Claude Code in `.claude/worktrees`, `git worktree add`), with
   how many files are changed in it, how many commits it is ahead by, a dot
-  when a session runs in it, and "missing" when its folder is gone. A
-  click makes Git, History and Files about that one, with the same actions
-  as the folder; the first chip goes back to the folder. A worktree that
+  when a session runs in it, and "missing" when its folder is gone; the
+  one on show has a mark. A click makes Git, History and Files about that
+  one, with the same actions as the folder, and closes the popup; the
+  first row goes back to the folder. A worktree that
   lies inside the repository is not listed among the folder's changes as
   a file nobody tracks.
-- **+** makes a new one: the branch's name, suggested and editable, the
+- **New Worktree**, in the popup, makes a new one: the branch's name, suggested and editable, the
   branch it starts from (the folder's own unless another, local or of a
   remote, is picked; the new branch follows none), and what is started
   there, an agent or a shell. The sheet says when the folder has changes
@@ -146,14 +154,21 @@ says names the device it runs on.
   handoff file says to work there only, not at the folder's paths the
   conversation names. Its own conversation is not resumed there: it holds
   the folder's paths, and the agent would go on changing the folder.
-- **⋯** is for the worktree on show: merge its branch into the folder's
+- **⋯**, on the row of each worktree in the popup, is for that
+  worktree: merge its branch into the folder's
   and remove it (with its branch, for one AgentTerm made), open a pull
   request with `gh`, or throw it away, which asks first and says what is
-  not merged; the folder's own chip has none. A merge that conflicts is
+  not merged; the folder's own row has none. A pull request is offered
+  when the worktree's branch is known to have a remote to be pushed to,
+  which its changes say: on the Mac that is the worktree on show, on the
+  iPhone one whose changes were read. A merge that conflicts is
   left in the folder to be resolved and continued, or aborted, as any
   other, and the worktree is kept. A worktree a session runs in is not
   removed.
-- The iPhone has all of it, the same, in a folder's screen (#34); "Start
+- The iPhone has all of it, the same, in a folder's screen (#34): one
+  control that names the worktree on show, which opens a list shaped as
+  its list of branches is, with the search, the same rows with their ⋯,
+  and New Worktree (#217); "Start
   … in a New Worktree…" in the menu of a launch button opens the same
   sheet.
 - `.agentterm/` is listed in the repository's own exclude file and is not
@@ -235,7 +250,7 @@ says names the device it runs on.
 - **A worktree of its own.** A schedule may have each run in a new
   worktree of the folder, on a branch named after the schedule and the
   time, with its submodules checked out; the worktree is kept afterwards,
-  in the folder's worktree bar, to
+  in the folder's list of worktrees, to
   be looked at, merged or thrown away.
 - **Changes to a schedule** are kept with it, the last twenty: when, and
   what was changed, in words.
@@ -291,7 +306,12 @@ happened; the Live Activity shows the host's state now (below).
   either; what it was set to is kept, and shown again once notifications
   are turned on (#211). In a build with no push (a development build) it
   shows off and dimmed too, whatever it was set to, and its footnote says
-  why (#212). What it says is encrypted on the Mac for that device
+  why (#212). The same while notifications are turned off for the app in
+  the iPhone's Settings, read each time the app comes to the front: it
+  shows off and dimmed, the footnote says so, and the Mac is no longer
+  asked to tell this iPhone through Apple (#213). "Tell me when an agent
+  is done or needs me" stays as it is set then: it also stands for the
+  banner in the app, which still shows. What it says is encrypted on the Mac for that device
   alone; one that cannot be opened says "An agent needs you". A
   notification handled elsewhere while the app is asleep is taken back by
   a background push, which iOS limits and does not deliver to an app the
@@ -356,8 +376,18 @@ happened; the Live Activity shows the host's state now (below).
   item, all of it, with Open for its session; it never opens the session
   by itself: an agent done whose session runs shows what its turn came to,
   anything else what was said or asked, its choices, and how it was
-  handled. Each item of the list shows all of what was said, not its end
-  only (the owner's decisions, 2026-11-21).
+  handled. Each item of the list shows the end of what was said, three
+  lines of it at most, with "…" in front when the beginning is left out;
+  a short one is shown whole. All of it is in the item once it is touched
+  or clicked (#218, the owner's decision, 2026-11-21, in place of the one
+  of the same day that had the list show all of it). There, what an agent
+  said has a button, **Preview Markdown**, that shows it with its Markdown
+  rendered, and **Show as Text**, that shows it again as it was written,
+  as a transcript in History has: on the Mac beside "What it said", on the
+  iPhone above it, in a notice's screen and in what a turn came to. Which
+  of the two was chosen is kept for the next item, on that device, apart
+  from History's. What an agent asks and what a failure says stay as
+  written.
 - **What a turn came to** (#71): an agent that is done shows, in the
   Inbox, what it was asked, what it answered, the commands it ran with
   their exit codes, and the files of its folder that changed while it
@@ -1158,7 +1188,7 @@ panel.
     waiting ("Push 1 commit"), next to the name of the branch it follows.
     A number in the panel says what it counts beside it (#50): the lines
     put in and taken out of what is not committed ("+5 −0 lines"), the
-    files of each list ("Changes 3 files"), and on a worktree's chip its
+    files of each list ("Changes 3 files"), and on a worktree's row its
     files changed and commits ahead ("3 changed · 2 ahead"); a file's own
     "+1 −0" is its lines, as git writes it. Fetch asks the
     remotes for what is new and changes neither the branch nor the files.
@@ -1261,7 +1291,10 @@ panel.
     submodule inside a submodule is listed the same way under it. A new
     worktree has its submodules checked out, theirs too, before its
     session starts; when one cannot be fetched the worktree is made all the
-    same, and the banner says so.
+    same, and the banner says so. A submodule opened as a folder has
+    worktrees of its own, as any repository: the first is the submodule's
+    folder itself (#216), not the place under the parent's `.git/modules`
+    that git names for it.
     Not part of it:
     choosing a remote, and adding, removing or updating submodules from
     their remotes.
@@ -1307,9 +1340,6 @@ panel.
       as it was written; the choice is kept for the next transcript, on
       each device (#50). Each thing asked and answered has its own
       **Copy**, which copies it as it was written (#50).
-    - **Pin** keeps a conversation in a group of its own at the top;
-      **Hide** takes it out of the list, until Show Hidden is chosen.
-      Both are kept by the Mac and are the same on every device.
     - **Delete…** deletes the agent's own record of the conversation,
       after two questions: its file is moved to the Trash of the Mac. A
       conversation a session is having is not deleted; Antigravity's
@@ -1318,9 +1348,9 @@ panel.
       (#50): a click ticks one instead of opening it, and **Delete N…**
       deletes those picked after two questions. In History, not in a
       folder's list, **Delete All…** deletes every conversation on the Mac,
-      after two questions too. Either way pinned ones stay, as does one a
-      session is having, and Antigravity's; how many were kept is said,
-      and nothing more when none was. **Done** ends the picking.
+      after two questions too. Either way one a session is having stays,
+      as do Antigravity's; how many were kept is said, and nothing more
+      when none was. **Done** ends the picking.
     - **Show Older Conversations**, at the end of a full list, brings the
       next 200.
 
@@ -1437,6 +1467,13 @@ Mac app checks which program is the host. When it is not the one the app
 ships with, a banner says so, with the other host's path, and offers **Use
 This App's Host…**: the other host is stopped, after asking since its
 sessions end with it, and the app's own is started.
+
+Until then the app works with the host it found, and sends it nothing a
+host of that release does not have (#214): what is new since is simply not
+done, and the banner about the host is what says so. The app never
+replaces the host by itself, since its sessions would end without the user
+being asked. A notice that said the host was from an older release goes by
+itself once a host of the app's own release answers.
 
 Another copy's host is a program named `agenttermd`. When what listens on
 the port is any other program (a proxy in front of the host, say), the
@@ -1651,7 +1688,7 @@ button at the top right of Sessions goes back to the list of Macs.
   agent. **History**: the conversations each agent had in the
   folder only, as on the Mac; every conversation is in the History tab; both
   searched, grouped and filtered, a conversation read as a transcript
-  ("Read the Transcript"), pinned, hidden and deleted as on the Mac (#46). **Files**: see
+  ("Read the Transcript") and deleted as on the Mac (#46). **Files**: see
   Files above.
 - A conversation can be resumed in its agent, or handed off to another
   installed agent. The handoff sheet shows the prompt the agent will start

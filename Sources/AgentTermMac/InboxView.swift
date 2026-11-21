@@ -1,3 +1,4 @@
+import AgentTermEditor
 import AgentTermProtocol
 import SwiftUI
 
@@ -72,8 +73,10 @@ private struct InboxRow: View {
                 .frame(width: 14)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
-                // All of what was said, not a few lines (the owner's
-                // decision, 2026-11-21).
+                // Whose it is and why, whole; of what was said, its end,
+                // `Inbox.rowLines` lines of it, and all of it in the detail
+                // (#218, the owner's decision, 2026-11-21, in place of the
+                // one of the same day that had a row show all of it).
                 Text(words.title)
                     .font(.system(size: 12.5, weight: item.read ? .regular : .semibold))
                     .fixedSize(horizontal: false, vertical: true)
@@ -81,12 +84,7 @@ private struct InboxRow: View {
                     .font(.system(size: 11))
                     .foregroundStyle(words.waits ? Color.orange : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if let detail = words.detail {
-                    Text(detail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                if let detail = words.detail { InboxRowText(texts: Inbox.rowTexts(detail)) }
             }
             Spacer(minLength: 0)
             if hovering, item.canBeDismissed {
@@ -114,10 +112,45 @@ private struct InboxRow: View {
             if item.canBeDismissed { Button(InboxWords.deleteOne) { model.dismiss(item) } }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([words.title, words.why, words.detail].compactMap { $0 }.joined(separator: ", "))
+        // What a row shows of it at its widest, not all of it (#218).
+        .accessibilityLabel([words.title, words.why, words.detail.flatMap { Inbox.rowTexts($0).first }].compactMap { $0 }.joined(separator: ", "))
         .accessibilityIdentifier("inbox-\(item.id)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.pick(item) }
+    }
+}
+
+/// What a row shows of what was said (#218): the longest of `texts`
+/// (`Inbox.rowTexts`) that fits in `Inbox.rowLines` lines at the list's
+/// width, which is its end with "…" in front when the beginning is cut.
+private struct InboxRowText: View {
+    let texts: [String]
+    private static let size: CGFloat = 11
+
+    var body: some View {
+        if texts.count == 1, let whole = texts.first {
+            // Short: whole, as high as it is.
+            line(whole)
+        } else {
+            // Cut: the room of `Inbox.rowLines` lines, measured by lines
+            // of the same font rather than reckoned from the font's
+            // figures, which are not what SwiftUI lays a line out at.
+            line(String(repeating: "\n", count: Inbox.rowLines - 1))
+                .hidden()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .topLeading) {
+                    ViewThatFits(in: .vertical) {
+                        ForEach(texts, id: \.self) { line($0) }
+                    }
+                }
+        }
+    }
+
+    private func line(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: Self.size))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -126,6 +159,10 @@ private struct InboxRow: View {
 /// in Sessions.
 struct InboxDetail: View {
     @EnvironmentObject private var model: AppModel
+    /// What an agent said shown with its Markdown rendered (#218), as a
+    /// transcript in History is (#50): kept for the next item, on this
+    /// Mac, apart from History's own.
+    @AppStorage("inboxMarkdown") private var markdown = false
 
     var body: some View {
         if let item = model.inboxShown {
@@ -208,7 +245,7 @@ struct InboxDetail: View {
                     section(TurnResult.asked, text: request, or: "", id: "inbox-request")
                 }
                 let text = (result?.reply ?? said)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                section(Inbox.said, text: text?.isEmpty == false ? text : nil, or: Inbox.nothingSaid)
+                section(Inbox.said, text: text?.isEmpty == false ? text : nil, or: Inbox.nothingSaid, previews: true)
                 if let result {
                     TurnCommands(result: result)
                     TurnChanges(result: result)
@@ -233,7 +270,9 @@ struct InboxDetail: View {
             section(nil, text: failure.details.isEmpty ? nil : failure.details, or: "")
         case .notice(let notice):
             // Over: as it was told, and how it was handled.
-            section(notice.state.map { $0.isWaiting ? Inbox.asks : Inbox.said }, text: notice.fullBody.isEmpty ? nil : notice.fullBody, or: "")
+            section(
+                notice.state.map { $0.isWaiting ? Inbox.asks : Inbox.said }, text: notice.fullBody.isEmpty ? nil : notice.fullBody, or: "",
+                previews: notice.state.map { !$0.isWaiting } ?? false)
             if let handled = notice.handledWords { note(handled) }
         }
     }
@@ -250,10 +289,31 @@ struct InboxDetail: View {
             .foregroundStyle(warning ? Color.orange : .secondary)
     }
 
-    private func section(_ title: String?, text: String?, or missing: String, id: String = "inbox-detail-text") -> some View {
+    /// A part of the item: its heading and its text, all of it. `previews`
+    /// is for what an agent said, which is Markdown: a button beside the
+    /// heading shows it rendered, or as it was written (#218).
+    private func section(_ title: String?, text: String?, or missing: String, id: String = "inbox-detail-text", previews: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let title { heading(title) }
-            if let text {
+            if title != nil || previews && text != nil {
+                HStack(spacing: 10) {
+                    if let title { heading(title) }
+                    if previews, text != nil {
+                        Spacer(minLength: 0)
+                        Button {
+                            markdown.toggle()
+                        } label: {
+                            Label(markdown ? ConversationDetails.showAsText : ConversationDetails.previewMarkdown, systemImage: markdown ? "text.alignleft" : "doc.richtext")
+                        }
+                        .controlSize(.small)
+                        .help(markdown ? "Show what was said as it was written" : "Show what was said with its Markdown rendered")
+                        .accessibilityIdentifier("inbox-markdown")
+                    }
+                }
+            }
+            if let text, previews, markdown {
+                MarkdownText(text, size: 13)
+                    .accessibilityIdentifier("inbox-detail-markdown")
+            } else if let text {
                 Text(text)
                     .font(.system(size: 13))
                     .lineSpacing(2)
