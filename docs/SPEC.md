@@ -825,7 +825,9 @@ processor in use across all cores, memory in use (as a share, and as
 gigabytes of what is installed), network speed down and up, temperature,
 battery, and how long the Mac has been up. On the iPhone they are the
 figures of the Mac it is connected to, not the phone's own. They update
-every three seconds.
+every three seconds. On the Mac the line is there from the start, each
+figure shown as not known ("—") until the host's first come, so that
+nothing under it moves when they do (#206).
 
 The temperature is shown in Celsius or Fahrenheit, chosen in Settings >
 General on the Mac or in the iPhone's Settings tab. Like the other choices

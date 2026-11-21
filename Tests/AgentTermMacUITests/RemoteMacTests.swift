@@ -184,10 +184,10 @@ final class RemoteMacTests: MacUITestCase {
 
         // Drawn: white, against the dark the view shows before a picture.
         // Looked for well inside the picture, 100 points down, and where
-        // the view is read each time: the page moves 24 points down within
-        // a second of being shown, and accessibility tells of it later
-        // still, so a point 20 points down was in the picture at one look
-        // and above it at the next (MacUITestCase.wait looks twice).
+        // the view is read each time: the page moved 24 points down within
+        // a second of being shown, before the line of figures had its place
+        // from the start (#206, SYS-4), and a point 20 points down was in
+        // the picture at one look and above it at the next.
         wait("the picture drawn", timeout: 15) {
             guard let page = self.app.frame(of: .id("remote-page")),
                 let color = self.app.color(at: CGPoint(x: page.midX, y: page.minY + 100))?.usingColorSpace(.sRGB)
@@ -212,6 +212,32 @@ final class RemoteMacTests: MacUITestCase {
         // Answered with nothing, so that the test leaves this Mac's pasteboard as it is.
         browser.send(.browserReply(id: copy.id, result: .text("")))
         wait("the click sent once the copy is answered", timeout: 15) { taps().count == clicked + 1 }
+    }
+
+    /// SYS-4 (#206): the line of the Mac's figures has its place from the
+    /// start, so the page under it does not move when they come. Before
+    /// the fix the line was not there until the host's first figures, which
+    /// came a moment after the other Mac's page was shown, and the page
+    /// moved 24 points down: read at (344, 187, 821, 705), then at
+    /// (344, 211, 821, 681).
+    func testTheOtherMacsPageStaysWhereItIsShownWhenTheFiguresCome() throws {
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        pair()
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        let first = try XCTUnwrap(app.frame(of: .id("remote-page")))
+        shot("first")
+        // The figures, measured: a number where the line had none.
+        wait("the other Mac's figures", timeout: 15) { self.app.first(.id("system-cpu"))?.label.contains { $0.isNumber } ?? false }
+        // Accessibility tells of a move a moment after it is drawn.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        let later = try XCTUnwrap(app.frame(of: .id("remote-page")))
+        shot("later")
+        XCTAssertEqual(first, later, "the page moved once it was shown")
     }
 
     func testPairingShowsTheOtherMacAndWorkingOnItChangesItsDisk() throws {

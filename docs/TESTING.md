@@ -290,6 +290,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SYS-1 | A host with a client connected | Three seconds pass | The six figures are measured and sent | H |
 | SYS-2 | The app connected | Look under the launch buttons in Sessions (Mac), above the sessions (iPhone) | Processor, memory, network down and up, temperature, battery, uptime, and the memory in gigabytes ("Memory 12.4/32 GB", #154) are shown | P, M |
 | SYS-3 | Temperature in Celsius | A second device chooses Fahrenheit | The Mac's line shows °F | H, M |
+| SYS-4 (#206) | Another Mac's page shown, the host's figures not come yet | The figures come | The page stays where it was shown: the line of figures has its place from the start, its figures "—" until then. Before the fix the line came with the figures and the page moved 24 points down, from (344, 187, 821, 705) to (344, 211, 821, 681) | M |
 
 ### Terminal size
 
