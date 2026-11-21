@@ -119,7 +119,9 @@ final class DevToolsSession {
             loaded = true
         case "Page.screencastFrame":
             guard let session = params["sessionId"] as? Int else { return }
-            if let base64 = params["data"] as? String, let jpeg = Data(base64Encoded: base64) { screencastFrame?(jpeg) }
+            if let base64 = params["data"] as? String, let jpeg = Data(base64Encoded: base64) {
+                screencastFrame?(jpeg, Self.streamedSize(params["metadata"] as? [String: Any]))
+            }
             // The next one is sent once this one is acknowledged: in a
             // tenth of a second, as many as a device needs.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
@@ -545,9 +547,9 @@ final class DevToolsSession {
         // What is drawn, as it is drawn: a clip, or a scale, has Chromium
         // lay the page out again for the picture (#100). Made smaller here
         // instead.
-        let answer = try await call("Page.captureScreenshot", ["format": "jpeg", "quality": 55, "optimizeForSpeed": true], seconds: 10)
+        let answer = try await call("Page.captureScreenshot", ["format": "jpeg", "quality": PagePicture.quality, "optimizeForSpeed": true], seconds: 10)
         guard let base64 = answer["data"] as? String, let data = Data(base64Encoded: base64) else { throw Failure(text: "The page gave no picture.") }
-        return (Self.shrunk(data, width: max(width, 160)) ?? data, size.width, size.height)
+        return (Self.fitted(data, width: width), size.width, size.height)
     }
 
     /// The size in CSS pixels of what the page shows.
@@ -559,20 +561,61 @@ final class DevToolsSession {
         return (values[0], values[1])
     }
 
+    /// What Chromium says a streamed picture shows (`Page.screencastFrame`'s
+    /// `metadata`): its size in the window's points, and how much the page
+    /// is zoomed in it. Only written down for now (`FrameLog`).
+    struct StreamedSize {
+        let width: Double
+        let height: Double
+        let pageScale: Double
+    }
+
+    static func streamedSize(_ metadata: [String: Any]?) -> StreamedSize? {
+        guard let metadata, let width = metadata["deviceWidth"] as? Double, let height = metadata["deviceHeight"] as? Double else { return nil }
+        return StreamedSize(width: width, height: height, pageScale: metadata["pageScaleFactor"] as? Double ?? 1)
+    }
+
     /// What is streamed of the page: each picture Chromium draws, as a JPEG.
-    private var screencastFrame: ((Data) -> Void)?
+    private var screencastFrame: ((Data, StreamedSize?) -> Void)?
 
     /// Streams what the page draws as it draws it, at most `width` pixels
     /// wide and about ten pictures a second, to `frame`; nil stops it.
-    func screencast(width: Int, _ frame: ((Data) -> Void)?) {
+    /// Chromium gives a pixel to the page's point at most, whatever is
+    /// asked and whatever the screen has (found by trying, CEF 156, #107).
+    func screencast(width: Int, _ frame: ((Data, StreamedSize?) -> Void)?) {
         let streaming = screencastFrame != nil
         screencastFrame = frame
         if frame != nil, !streaming {
             let wide = max(width, 160)
-            send("Page.startScreencast", ["format": "jpeg", "quality": 55, "maxWidth": wide, "maxHeight": wide * 4, "everyNthFrame": 1]) { _ in }
+            send("Page.startScreencast", ["format": "jpeg", "quality": PagePicture.quality, "maxWidth": wide, "maxHeight": wide * 4, "everyNthFrame": 1]) { _ in }
         } else if frame == nil, streaming {
             send("Page.stopScreencast") { _ in }
         }
+    }
+
+    /// A JPEG's size in pixels, read from its header.
+    static func pixels(of jpeg: Data) -> (width: Int, height: Int)? {
+        guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+            let wide = properties[kCGImagePropertyPixelWidth] as? Int, let high = properties[kCGImagePropertyPixelHeight] as? Int, wide > 0, high > 0
+        else { return nil }
+        return (wide, high)
+    }
+
+    /// A JPEG made no wider than `width` pixels, and narrower still, by a
+    /// quarter at a time, until it weighs no more than a message may carry
+    /// (`PagePicture.mostBytes`): one too large would close the connection
+    /// it is sent on.
+    static func fitted(_ jpeg: Data, width: Int, mostBytes: Int = PagePicture.mostBytes) -> Data {
+        var wide = max(width, 160)
+        var picture = shrunk(jpeg, width: wide) ?? jpeg
+        if picture.count > mostBytes, let real = pixels(of: picture) { wide = min(wide, real.width) }
+        while picture.count > mostBytes, wide > 160 {
+            wide = max(wide * 3 / 4, 160)
+            guard let smaller = shrunk(jpeg, width: wide) else { break }
+            picture = smaller
+        }
+        return picture
     }
 
     /// A JPEG made no wider than `width` pixels.
@@ -589,7 +632,7 @@ final class DevToolsSession {
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         let out = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.55] as CFDictionary)
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: Double(PagePicture.quality) / 100] as CFDictionary)
         return CGImageDestinationFinalize(destination) ? out as Data : nil
     }
 

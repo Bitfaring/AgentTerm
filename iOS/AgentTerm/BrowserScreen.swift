@@ -148,6 +148,10 @@ struct LivePageView: View {
     /// What of a drag was already sent to the page as scrolling.
     @State private var scrolled: CGSize = .zero
     @State private var typed = TypedText()
+    /// The width in pixels the page's pictures are asked at; 0 before the
+    /// room is known.
+    @State private var askedWidth = 0
+    @Environment(\.displayScale) private var displayScale
 
     private var tab: BrowserTabInfo? { model.browserTabs.first { $0.id == tabID } }
 
@@ -192,7 +196,7 @@ struct LivePageView: View {
         .onAppear {
             let tab = tabID
             typed.send = { [weak model] text in model?.useBrowser(.text(tab: tab, text: text)) }
-            model.watch(tabID, true)
+            // Watched once the room is known, at its width (`watch(room:)`).
             address = Self.shown(self.tab?.url)
             // A new tab, empty: where it goes is asked first.
             if address.isEmpty { editingAddress = true }
@@ -200,6 +204,7 @@ struct LivePageView: View {
         .onDisappear {
             typed.flush()
             model.watch(tabID, false)
+            askedWidth = 0
         }
         .onChange(of: tab?.url) { _, url in
             if !editingAddress { address = Self.shown(url) }
@@ -330,76 +335,91 @@ struct LivePageView: View {
 
     private var page: some View {
         GeometryReader { room in
-            if let frame = model.browserFrames[tabID], frame.width > 0, frame.height > 0 {
-                // The page fitted to the room, top first: its CSS pixels to
-                // this screen's points. In the picture's own shape, never
-                // squeezed into another: what the Mac shows of the page is
-                // what is here, and the rest is reached by scrolling it.
-                let picture = frame.image.size
-                let high = picture.width > 0 && picture.height > 0 ? frame.width * picture.height / picture.width : frame.height
-                let fit = min(room.size.width / frame.width, room.size.height / high)
-                let shown = CGSize(width: frame.width * fit, height: high * fit)
-                Image(uiImage: frame.image)
-                    .resizable()
-                    .frame(width: shown.width, height: shown.height)
-                    .contentShape(Rectangle())
-                    // Where it lands on the picture, whatever its zoom.
-                    .gesture(SpatialTapGesture().onEnded { touch in tap(at: touch.location, fit: fit, page: frame) })
-                    .scaleEffect(zoom)
-                    .offset(pan)
-                    .frame(width: room.size.width, height: room.size.height, alignment: .top)
-                    .clipped()
-                    .contentShape(Rectangle())
-                    .gesture(drag(fit: fit, shown: shown))
-                    .simultaneousGesture(magnify(shown: shown))
-                    .overlay(alignment: .topTrailing) {
-                        if zoom > 1.01 {
-                            Button("1×") {
-                                withAnimation(.snappy) {
-                                    zoom = 1
-                                    zoomBefore = 1
-                                    pan = .zero
-                                    panBefore = .zero
+            Group {
+                if let frame = model.browserFrames[tabID],
+                    let fit = PageFit(
+                        pageWidth: frame.width, pageHeight: frame.height, pictureWidth: frame.image.size.width, pictureHeight: frame.image.size.height,
+                        roomWidth: room.size.width, roomHeight: room.size.height)
+                {
+                    // The page fitted to the room, top first: its CSS pixels to
+                    // this screen's points. In the picture's own shape, never
+                    // squeezed into another (`PageFit`): what the Mac shows of
+                    // the page is what is here, and the rest is reached by
+                    // scrolling it.
+                    let shown = CGSize(width: fit.width, height: fit.height)
+                    Image(uiImage: frame.image)
+                        .resizable()
+                        .frame(width: shown.width, height: shown.height)
+                        .contentShape(Rectangle())
+                        // Where it lands on the picture, whatever its zoom.
+                        .gesture(SpatialTapGesture().onEnded { touch in tap(at: touch.location, fit: fit) })
+                        .scaleEffect(zoom)
+                        .offset(pan)
+                        .frame(width: room.size.width, height: room.size.height, alignment: .top)
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .gesture(drag(fit: fit, shown: shown))
+                        .simultaneousGesture(magnify(shown: shown))
+                        .overlay(alignment: .topTrailing) {
+                            if zoom > 1.01 {
+                                Button("1×") {
+                                    withAnimation(.snappy) {
+                                        zoom = 1
+                                        zoomBefore = 1
+                                        pan = .zero
+                                        panBefore = .zero
+                                    }
                                 }
+                                .font(.footnote.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(.ultraThinMaterial))
+                                .padding(8)
+                                .accessibilityLabel("Fit the Page")
                             }
-                            .font(.footnote.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Capsule().fill(.ultraThinMaterial))
-                            .padding(8)
-                            .accessibilityLabel("Fit the Page")
                         }
-                    }
-                    .accessibilityElement()
-                    .accessibilityLabel("The page, live")
-                    .accessibilityValue("\(Int(frame.width))×\(Int(frame.height))")
-                    .accessibilityIdentifier("browser-live")
-            } else if model.status == .connected {
-                LoadingView("Asking the Mac for the page…").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                // Nothing can be asked until the Mac is back (#209): the
-                // line at the top says it is reconnecting, and the page is
-                // asked for again once it is.
-                Color.clear
+                        .accessibilityElement()
+                        .accessibilityLabel("The page, live")
+                        .accessibilityValue("\(Int(frame.width))×\(Int(frame.height))")
+                        .accessibilityIdentifier("browser-live")
+                } else if model.status == .connected {
+                    LoadingView("Asking the Mac for the page…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    // Nothing can be asked until the Mac is back (#209): the
+                    // line at the top says it is reconnecting, and the page is
+                    // asked for again once it is.
+                    Color.clear
+                }
             }
+            .onAppear { watch(room: room.size.width) }
+            .onChange(of: room.size.width) { _, wide in watch(room: wide) }
         }
         .background(Palette.canvas)
     }
 
-    private func tap(at point: CGPoint, fit: CGFloat, page: PhoneModel.BrowserFrame) {
+    /// Asks for the page's pictures as wide as the room has pixels (#107):
+    /// as the page is opened, and again when the room's width changed
+    /// much, the screen turned or the window made another size.
+    private func watch(room wide: CGFloat) {
+        guard wide >= 1 else { return }
+        let width = PagePicture.width(points: wide, scale: displayScale)
+        guard askedWidth == 0 || abs(width - askedWidth) > 80 else { return }
+        askedWidth = width
+        model.watch(tabID, true, width: width)
+    }
+
+    private func tap(at point: CGPoint, fit: PageFit) {
         editingAddress = false
         typed.flush()
-        // A finger a little past the picture's edge, which iOS still counts
-        // as on it, means the edge, not a point outside the page.
-        let x = min(max(point.x / fit, 0), page.width - 1), y = min(max(point.y / fit, 0), page.height - 1)
-        model.useBrowser(.tap(tab: tabID, x: x, y: y)) { result in
+        let place = fit.pagePoint(x: point.x, y: point.y)
+        model.useBrowser(.tap(tab: tabID, x: place.x, y: place.y)) { result in
             // A field took the keyboard: this one comes up for it.
             if case .touched(let field) = result { typing = field }
         }
     }
 
     /// Scrolls the page as the finger goes; moves the picture when zoomed.
-    private func drag(fit: CGFloat, shown: CGSize) -> some Gesture {
+    private func drag(fit: PageFit, shown: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 10)
             .onChanged { drag in
                 if zoom > 1.01 {
@@ -409,7 +429,7 @@ struct LivePageView: View {
                 let step = CGSize(width: drag.translation.width - scrolled.width, height: drag.translation.height - scrolled.height)
                 guard abs(step.width) >= 24 || abs(step.height) >= 24 else { return }
                 scrolled = drag.translation
-                model.useBrowser(.scroll(tab: tabID, ref: nil, x: -step.width / fit / zoom, y: -step.height / fit / zoom))
+                model.useBrowser(.scroll(tab: tabID, ref: nil, x: -fit.pageDistance(step.width, zoom: zoom), y: -fit.pageDistance(step.height, zoom: zoom)))
             }
             .onEnded { drag in
                 if zoom > 1.01 {
@@ -417,7 +437,7 @@ struct LivePageView: View {
                 } else {
                     let step = CGSize(width: drag.translation.width - scrolled.width, height: drag.translation.height - scrolled.height)
                     if abs(step.width) >= 1 || abs(step.height) >= 1 {
-                        model.useBrowser(.scroll(tab: tabID, ref: nil, x: -step.width / fit, y: -step.height / fit))
+                        model.useBrowser(.scroll(tab: tabID, ref: nil, x: -fit.pageDistance(step.width), y: -fit.pageDistance(step.height)))
                     }
                 }
                 scrolled = .zero

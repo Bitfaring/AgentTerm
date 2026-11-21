@@ -7,6 +7,30 @@ final class WorktreeUITests: MacUITestCase {
     /// What the button that opens the worktrees says: the one on show (#217).
     private func pickerLabel() -> String { app.first(.id("worktree-picker"))?.label ?? "" }
 
+    /// WT-21 (#216): a submodule opened as a folder has worktrees of its
+    /// own, the first its own folder: the button names its branch and
+    /// counts what is changed in it. Before the fix the first was the
+    /// parent's `.git/modules` folder, where nothing is ever changed.
+    func testASubmoduleOpenedAsAFolderHasItsOwnWorktrees() throws {
+        let phone = try device()
+        app.wait(for: .text("project, folder"), timeout: 15)
+        let parent = root.appendingPathComponent("parent")
+        try makeRepository(parent, remote: nil)
+        git("-c", "protocol.file.allow=always", "submodule", "add", "-q", project.path, "sub", in: parent)
+        git("commit", "-q", "-m", "sub", in: parent)
+        let sub = parent.appendingPathComponent("sub")
+        try "changed here\n".write(to: sub.appendingPathComponent("in-the-submodule.txt"), atomically: true, encoding: .utf8)
+
+        phone.send(.addFolder(path: sub.path))
+        app.wait(for: .text("sub, folder"))
+        app.press(.text("sub, folder"))
+        app.press(.button("Git"))
+        app.wait(for: .id("worktree-picker"), timeout: 15)
+        app.wait(for: .containing("in-the-submodule.txt"), timeout: 15)
+        app.wait("the worktrees' button to count the submodule's change", timeout: 15) { self.pickerLabel().contains("1 file changed") }
+        shot("submodule")
+    }
+
     /// WT-7: the session is listed under its project with its branch;
     /// picking it shows its worktree's changes, not the project's.
     func testASessionInAWorktreeIsUnderItsProjectAndThePanelFollowsIt() throws {

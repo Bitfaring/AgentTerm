@@ -23,7 +23,9 @@ final class HostReleaseTests: MacUITestCase {
     /// The test's host says it is from an earlier release; built from other
     /// sources, or from the same ones, as the test's name says.
     override var hostArguments: [String] {
-        ["--app-version", "0.0.1", "--host-revision", name.contains("SameSources") ? bundleRevision : "0000000000000000"]
+        // Of an earlier protocol too (#214): it refuses what came after it.
+        if name.contains("EarlierProtocol") { return ["--protocol-version", "32"] }
+        return ["--app-version", "0.0.1", "--host-revision", name.contains("SameSources") ? bundleRevision : "0000000000000000"]
     }
 
     override func setUpWithError() throws {
@@ -49,6 +51,23 @@ final class HostReleaseTests: MacUITestCase {
         app.press(.button("Restart Host…"))
         app.press(.button("Restart Host"))
         app.waitGone(.containing("The host that is running is from AgentTerm"), timeout: 30)
+        app.wait(for: .id("mac-switcher"))
+    }
+
+    /// HOST-14 (#214): the host left running by an update is of an earlier
+    /// protocol. The banner says so, with Restart Host…; the app goes on
+    /// with it meanwhile, and no notice says "from an older release" a
+    /// second time; restarted, the banner goes.
+    func testAHostOfAnEarlierProtocolIsSaidInTheBannerOnly() throws {
+        app.wait(for: .containing("The host that is running is from an older version of AgentTerm."), timeout: 20)
+        // Connected all the same: the project's folder is listed.
+        app.wait(for: .id("folder-\(project.path)"), timeout: 20)
+        RunLoop.current.run(until: Date().addingTimeInterval(3))
+        XCTAssertFalse(app.exists(.containing(HostErrorWords.olderHost)), "the older host is said a second time, as a notice")
+        shot("earlier-protocol")
+        app.press(.button("Restart Host…"))
+        app.press(.button("Restart Host"))
+        app.waitGone(.containing("The host that is running is from"), timeout: 30)
         app.wait(for: .id("mac-switcher"))
     }
 

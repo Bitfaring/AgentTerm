@@ -668,8 +668,11 @@ user sees.
   agent the rest; a screen taller than its room has the room's height, never
   drawn smaller: the page is as wide as the device's screen, the rest of
   it is reached by scrolling, and the page is still told the device's
-  whole screen. The devices watching it are sent what the Mac shows, as
-  sharp, and show it in its own shape, never squeezed into another), opens Chromium's own Developer Tools
+  whole screen. The devices watching it are sent what the Mac shows, and
+  show it whole, in its own shape, never squeezed into another: softer than
+  the Mac while the page changes, and as sharp as the Mac draws it once it
+  stands still, but for a page shown as a device whose pixels are not the
+  Mac's screen's, which stays soft while the Mac shows it), opens Chromium's own Developer Tools
   (⌥⌘I) with the console, sends an element to an agent, and closes it. Text is selected, copied
   and pasted as anywhere. A page that opens a window opens a tab instead,
   in the same project and for the same agent, which keeps its opener: a

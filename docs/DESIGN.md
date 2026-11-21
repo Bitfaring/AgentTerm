@@ -1712,7 +1712,37 @@ stream, and a picture is taken about five times a second
 it differs from the last. Not taken while the Mac draws it: for a page
 shown as a device whose pixels are not the screen's, Chromium lays the
 page out again for each picture, a clip or a scale given or not, and the
-Mac shows it in between, the page shaking (#100). A page shown as a device
+Mac shows it in between, the page shaking (#100). What is streamed has a
+pixel to the page's point at most, whatever `maxWidth` asks and whatever
+the screen has, which a device draws two or three times larger, blurred.
+So a page that is streamed and has stood still for 0.7 seconds, longer
+than a caret's blink, has one picture taken of it, with all the pixels it
+is drawn with, sent in place of the last streamed one and not taken again
+until the page changes (`PageStills`): only where a picture taken has more
+pixels than a streamed one, and where taking it leaves the Mac's page as
+it is, the page shown as itself or as a device with the screen's pixels.
+A page shown as a device whose pixels are not the screen's (a phone of
+three on a screen of two) stays as streamed, soft: sharpening it costs the
+Mac's page a shake each time it comes to rest, which is the owner's to
+decide (`AGENTTERM_STILLS_OF_ANY_PAGE`, set, tries it). Taking a picture
+has Chromium draw the page once more, streamed the same as the last: a
+streamed picture the same as the last is not sent and is not a change, or
+pictures would be taken without end. A device asks its pictures as wide as
+the room it draws them in has pixels (`PagePicture.width`, asked again
+when the room's width changes by more than 80), which bounds a picture
+taken, made smaller with ImageIO; one streamed has fewer anyway. JPEGs are
+of quality 80 (`PagePicture.quality`; 55 before, whose losses were what
+was seen first once drawn larger), and one that weighs more than 2.5 MB
+is made narrower until it does not (`DevToolsSession.fitted`): in base64
+it must stay under the 4 MB a message may be. A device lays a picture into
+its room whole, in the picture's own shape counted from its pixels, as
+large as the room lets it be, and places a touch by the size sent with it
+(`PageFit`). With `AGENTTERM_LOG_FRAMES` set the Mac app writes a line for
+each picture it sends, one a second at most for each tab and path
+(`screencast`, `still`, `capture`): its pixels, the size sent with it,
+whether the two are of one shape, what the page is shown as, its pane and
+the screen's pixels, and what Chromium says the streamed picture shows; to
+stderr, or to the file the variable names (`FrameLog`). A page shown as a device
 whose screen is taller than its pane has the pane's height
 (`Emulation.setDeviceMetricsOverride`'s `height`, set again when the pane
 changes size; `screenWidth` and `screenHeight` stay the device's), on a
@@ -1724,8 +1754,8 @@ in the picture's shape (#107, the owner's decision of 2026-11-16. Before,
 the Mac drew the screen's top only, and the devices drew that part
 squeezed into the screen's shape; then the screen was drawn smaller to
 fit, `scale`, which Chromium streams as the whole surface with the page
-small in a corner, and too few pixels for a device). Streamed, a picture is as sharp as the Mac draws it; taken,
-as sharp as the device asks for. A touch is placed in CSS
+small in a corner, and too few pixels for a device). Streamed, a picture has a pixel to the page's point; taken,
+as many as the page is drawn with, up to what the device asks for. A touch is placed in CSS
 pixels by that size and clicked with `Input.dispatchMouseEvent`; text is
 `Input.insertText`. Acting on an agent's tab from a device makes it the
 user's, as a click on the Mac does.
