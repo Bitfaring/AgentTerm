@@ -547,6 +547,9 @@ final class EndToEndTests: XCTestCase {
             XCTAssertFalse(host.isKeepingAwake)
             mac.connection.send(.create(CreateRequest(command: "sleep 30", cwd: nil, title: nil, size: .default)))
             waitUntil("awake with a session") { host.isKeepingAwake }
+            // The host keeps awake as it starts the session, before the
+            // Mac is told it is attached: waited for, not assumed (#205).
+            waitUntil("the Mac attached to it") { mac.attached != nil }
             let id = try XCTUnwrap(mac.attached?.id)
             mac.connection.send(.kill(session: id))
             waitUntil("asleep again without one") { !host.isKeepingAwake }
