@@ -1,28 +1,10 @@
 import AgentTermProtocol
 import SwiftUI
 
-/// The parts of a split Shells tab (the owner's request, 2026-11-21): the
-/// shell picked on the left, as an agent is in its area, a shell on the
-/// right and one below, each turned on and off from the end of the row.
-/// Shells only: the Browser tab is not split.
-enum ShellPart: String, Hashable {
-    case main, right, below
-}
-
-/// What a split Shells tab shows besides its shell picked, and the shares
-/// its dividers give.
-struct ShellSplit: Equatable {
-    /// The shell on the right, by its tab id.
-    var right: String?
-    /// The shell below the others.
-    var below: String?
-    /// The left's share of the width, beside the right.
-    var across = 0.5
-    /// The share of the height above the one below.
-    var down = 0.62
-}
-
 extension AppModel {
+    // What a split Shells tab shows is `ShellSplit`'s (AgentTermProtocol),
+    // given the tab's shells and the one picked, `groupShown`.
+
     /// Whether a Shells tab shows more than its one shell.
     func isShellsSplit(_ group: String) -> Bool { shownShellParts(of: group).count > 1 }
 
@@ -30,26 +12,13 @@ extension AppModel {
     /// and the one below while they are turned on with a shell still there.
     func shownShellParts(of group: String) -> [ShellPart] {
         guard TabID.holder(of: group)?.kind == .shells, let split = shellSplits[group] else { return [.main] }
-        let list = Set(members(of: group))
-        var parts: [ShellPart] = [.main]
-        if let right = split.right, list.contains(right) { parts.append(.right) }
-        if let below = split.below, list.contains(below) { parts.append(.below) }
-        return parts
+        return split.parts(in: members(of: group))
     }
 
     /// The shell a part shows. Its own is the one picked, else the first
     /// not shown in another part.
     func shell(in part: ShellPart, of group: String) -> String? {
-        let list = members(of: group)
-        let split = shellSplits[group] ?? ShellSplit()
-        switch part {
-        case .right: return split.right.flatMap { list.contains($0) ? $0 : nil }
-        case .below: return split.below.flatMap { list.contains($0) ? $0 : nil }
-        case .main:
-            if let shown = groupShown[group], list.contains(shown) { return shown }
-            let others = Set([split.right, split.below].compactMap { $0 })
-            return list.first { !others.contains($0) } ?? list.first
-        }
+        (shellSplits[group] ?? ShellSplit()).shell(in: part, picked: groupShown[group], members: members(of: group))
     }
 
     /// The shells on show, as the row marks them.
@@ -67,50 +36,53 @@ extension AppModel {
         guard part != .main, let holder = TabID.holder(of: group), holder.kind == .shells else { return }
         var split = shellSplits[group] ?? ShellSplit()
         if isShellPartOn(part, of: group) {
-            if part == .right { split.right = nil } else { split.below = nil }
+            split.turnOff(part)
             shellSplits[group] = split
             if shellSplitFocus[group] == part { shellSplitFocus[group] = .main }
             adoptFocusedFront()
             focusKeyboard()
             return
         }
-        let shown = shellsOnShow(of: group)
-        if let free = members(of: group).first(where: { !shown.contains($0) }) {
-            if part == .right { split.right = free } else { split.below = free }
+        switch split.turnOn(part, picked: groupShown[group], members: members(of: group)) {
+        case .shown:
             shellSplits[group] = split
             focusShellPart(part, of: group)
-        } else {
-            // None left to show: a new one, which goes there once it runs.
+        case .waiting:
+            // None left to show: a new one, which goes there once it is in
+            // the row (#189). The part waits until then, or until the host
+            // says the launch failed or goes, either of which is said.
+            guard status == .connected else { return }
             shellSplits[group] = split
-            shellPartWaiting = (group, part)
             launch(nil)
-            // Not waited for for ever: a shell that opened elsewhere, or
-            // never, leaves the next one to be picked as any other.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-                if self?.shellPartWaiting?.group == group, self?.shellPartWaiting?.part == part { self?.shellPartWaiting = nil }
-            }
         }
     }
 
     /// Shows a shell in a part, the part turned on if it was off, with the
     /// keyboard: from its menu in the row or dropped there. One shown in
-    /// another part changes places with what the part showed.
+    /// another part changes places with what the part showed; a shell is
+    /// never in two parts (#188). The left's shell, with none free to take
+    /// its place, stays, and the user is told why.
     func showShell(_ item: String, in part: ShellPart, of group: String) {
         guard TabID.holder(of: group)?.kind == .shells, members(of: group).contains(item) else { return }
         var split = shellSplits[group] ?? ShellSplit()
-        let before = shell(in: part, of: group)
-        let from = shownShellParts(of: group).first { shell(in: $0, of: group) == item }
-        func set(_ part: ShellPart, _ shell: String?) {
-            switch part {
-            case .main: groupShown[group] = shell
-            case .right: split.right = shell
-            case .below: split.below = shell
-            }
+        var picked = groupShown[group]
+        guard split.show(item, in: part, picked: &picked, members: members(of: group)) else {
+            notice = ShellSplitWords.leftKeepsIt
+            return
         }
-        if let from, from != part, let before { set(from, before) }
-        set(part, item)
+        if groupShown[group] != picked { groupShown[group] = picked }
         shellSplits[group] = split
         focusShellPart(part, of: group)
+    }
+
+    /// No part of a Shells tab waits for a new shell any more: the host
+    /// refused a launch, or the connection went (#189).
+    func stopShellPartWaits() {
+        for (group, split) in shellSplits where !split.waits.isEmpty {
+            var stopped = split
+            stopped.stopWaiting()
+            shellSplits[group] = stopped
+        }
     }
 
     /// A shell picked up from the row: dropped on a part, it is shown there.
@@ -148,13 +120,11 @@ extension AppModel {
     /// False when the tab is not split, nor about to be.
     func placeInShellSplit(_ item: String, group: String) -> Bool {
         guard TabID.holder(of: group)?.kind == .shells else { return false }
-        // A new shell asked for by a part turned on: shown there.
-        if let waiting = shellPartWaiting, waiting.group == group, !shellsOnShow(of: group).contains(item) {
-            shellPartWaiting = nil
-            var split = shellSplits[group] ?? ShellSplit()
-            if waiting.part == .right { split.right = item } else { split.below = item }
+        // A new shell asked for by a part turned on: shown there. Only one
+        // the tab did not have when the part was turned on (#189).
+        if var split = shellSplits[group], let part = split.takeNew(item, picked: groupShown[group], members: members(of: group)) {
             shellSplits[group] = split
-            shellSplitFocus[group] = waiting.part
+            shellSplitFocus[group] = part
             return true
         }
         guard isShellsSplit(group) else { return false }
@@ -173,13 +143,15 @@ extension AppModel {
         return true
     }
 
-    /// Parts whose shell ended close; the keyboard goes back to the left.
+    /// Parts whose shell ended close, and the keyboard goes back to the
+    /// left; a part waiting for a new shell takes it once it is in the row,
+    /// put in front or not (#189).
     func tidyShellSplits() {
         for (group, split) in shellSplits {
-            let list = Set(members(of: group))
             var tidy = split
-            if let right = tidy.right, !list.contains(right) { tidy.right = nil }
-            if let below = tidy.below, !list.contains(below) { tidy.below = nil }
+            var picked = groupShown[group]
+            tidy.tidy(picked: &picked, members: members(of: group))
+            if groupShown[group] != picked { groupShown[group] = picked }
             if tidy != split { shellSplits[group] = tidy }
             if let focus = shellSplitFocus[group], !shownShellParts(of: group).contains(focus) { shellSplitFocus[group] = .main }
         }
@@ -299,11 +271,4 @@ struct ShellSplitToggles: View {
         .accessibilityValue(isOn ? "shown" : "hidden")
         .accessibilityIdentifier("shells-part-\(part.rawValue)")
     }
-}
-
-/// What a shell's menu in the row says.
-enum ShellSplitWords {
-    static let left = "Show on the Left"
-    static let right = "Show on the Right"
-    static let below = "Show Below"
 }

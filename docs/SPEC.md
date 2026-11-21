@@ -957,14 +957,25 @@ panel.
   an agent's area does (the owner's request, 2026-11-21): the two buttons
   at the end of its row show a shell on the right and one below, the first
   not on show, or a new one when none is left; the shell picked stays on
-  the left. The parts are parted and framed as an agent's area's, and
-  dragged the same; a click in a part, or its shell picked in the row,
-  puts the keyboard there, and a shell picked that is not on show is shown
-  in the part the keyboard is in. A shell's menu in the row shows it on
-  the left, on the right or below, and a shell dragged from the row and
-  dropped on a part is shown there; either turns that part on, and one
-  already shown in another part changes places with it. Turned off, a part's shell keeps running
-  and stays in the row. The Browser tab is not split; the split is not
+  the left. A part waiting for its new shell takes that one only, once it
+  is in the row, not a shell the tab already had; the right and below can
+  both wait, each for its own (#189). A launch the host refuses ends the
+  wait, and the refusal is said. The parts are parted and framed as an
+  agent's area's, and dragged the same; a click in a part, or its shell
+  picked in the row, puts the keyboard there, and a shell picked that is
+  not on show is shown in the part the keyboard is in. A shell's menu in
+  the row shows it on the left, on the right or below, and a shell
+  dragged from the row and dropped on a part is shown there; either turns
+  that part on, and one already shown in another part changes places with
+  it. A shell is never shown in two parts (#188): the left's shell moved
+  to a part that was off leaves the left the first shell not on show,
+  and with none the move is refused, the app saying why at once ("The
+  left always shows a shell, and this tab has none free to take this
+  one's place. Open another shell first."); a shell moved from the right
+  or below to a part that was off leaves the part it was in turned off;
+  the left's shell ended with every other one on show, the right's (else
+  the one below's) moves to the left. Turned off, a part's shell keeps
+  running and stays in the row. The Browser tab is not split; the split is not
   kept when the app quits. A tab is started from the header
   (the agents, Shell, Browser) or the File and Browser menus. Command and
   a number (⌘1 to ⌘9) shows the tab in that place of the strip, ⌘⇧] and

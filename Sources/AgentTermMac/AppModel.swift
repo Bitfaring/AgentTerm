@@ -270,13 +270,11 @@ final class AppModel: ObservableObject {
     @Published var agentAreaAlone: [String: AgentAreaPart] = [:]
     /// The user's Shells tabs split as an agent's area is, by the group's
     /// tab: a shell on the right and one below (the owner's request,
-    /// 2026-11-21); not kept when the app quits.
+    /// 2026-11-21), and the parts waiting for a new shell; not kept when
+    /// the app quits.
     @Published var shellSplits: [String: ShellSplit] = [:]
     /// The part of a split Shells tab the keyboard is in.
     @Published var shellSplitFocus: [String: ShellPart] = [:]
-    /// A part turned on with no shell left to show in it: the new shell
-    /// it opened goes there.
-    var shellPartWaiting: (group: String, part: ShellPart)?
     /// A shell of a Shells tab's row being dragged to a part of it.
     @Published var draggedShell: String?
 
@@ -1624,6 +1622,7 @@ final class AppModel: ObservableObject {
         }
         tabLayoutKnown = false
         sessions = []
+        stopShellPartWaits()
         foreignSizes = [:]
         selectedSession = nil
     }
@@ -1923,6 +1922,9 @@ final class AppModel: ObservableObject {
             }
         case .error(let text):
             starting = nil
+            // A part waiting for a new shell waits no more: the launch may be
+            // what failed, and what failed is said below (#189).
+            stopShellPartWaits()
             if isRemote, text == "invalid token", let mac = remote {
                 // The other Mac took this one off its paired devices. What
                 // was not saved there cannot be saved any more.

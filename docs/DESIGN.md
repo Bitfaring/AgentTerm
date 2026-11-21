@@ -1872,6 +1872,31 @@ neither what has the keyboard nor, when one was picked, what its part
 shows. A click in a part puts the keyboard in it (`paneClicked`, by the
 frames `PaneFrameReader` reports for each part).
 
+**A Shells tab split in three** (the owner's request, 2026-11-21). What a
+split Shells tab of the user's shows is a `ShellSplit`
+(`AgentTermProtocol`, a pure value the Mac app keeps in `shellSplits`, by
+the group's tab, not kept when the app quits): the shell on the right, the
+one below, the dividers' shares, and the parts waiting for a new shell.
+The left shows the shell picked, the group's `groupShown`; every answer of
+`ShellSplit` takes that and the tab's shells, and none ever has a shell in
+two parts (#188). The left never shows a shell the right or below shows;
+`show` moves a shell to a part, changing places with what that part
+showed, and when the part was off fills the left from the shells not on
+show (refusing, with `ShellSplitWords.leftKeepsIt` said in the window's
+notice, when there are none) or turns off the right or below it leaves;
+`tidy`, after the tab's shells change, closes a part whose shell ended
+and gives the left the right's shell, else the one below's, when the
+left's ended with every other one on show. A part turned on with no shell
+left to show is a `Wait` that remembers the shells the tab had then; the
+first shell the tab gets that is not among them, put in front or only in
+the row, goes to the first part waiting (#189), so the right and below can
+wait at once, each for its own, and a shell the tab already had is never
+taken. There is no request id in `CreateRequest`, so a shell new to the
+tab from elsewhere while a part waits (File > New Shell, the iPhone) is
+taken as well. The waits end when the host sends an error (a launch it
+refused, said in the notice) and when the connection goes; there is no
+timeout that ends them without a word.
+
 ## A part that stopped
 
 A part of AgentTerm that stops without being asked to is reported to every

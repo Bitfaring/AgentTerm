@@ -51,6 +51,45 @@ final class FocusUITests: MacUITestCase {
         XCTAssertEqual(phone.sessions.count, 3, "turning the right off ended its shell")
     }
 
+    /// SHELL-SPLIT-2 (#188): the left's shell shown on the right, which was
+    /// off, is there alone, with the keyboard, and the left shows the other
+    /// shell. Before the fix it was in both parts, one of them blank, and
+    /// the keyboard went back to the left.
+    func testTheLeftsShellShownOnTheRightLeavesTheLeftAnother() throws {
+        let phone = try device()
+        let first = try newShell(phone, count: 1)
+        let second = try newShell(phone, count: 2)
+        app.press(.id("item-\(first.id)"))
+        app.waitForKeyboard(in: "terminal-\(first.id)", "the first shell")
+        XCTAssertEqual(app.first(.id("shells-part-right"))?.value, "hidden")
+        app.perform(ShellSplitWords.right, on: .id("item-\(first.id)"))
+        app.wait(for: .id("terminal-\(second.id)"), timeout: 10)
+        app.waitForKeyboard(in: "terminal-\(first.id)", "the first, now on the right")
+        XCTAssertEqual(app.all(.id("terminal-\(first.id)")).count, 1, "the first shell is in two parts")
+        XCTAssertEqual(app.first(.id("shells-part-right"))?.value, "shown")
+        wait("the second on the left of the first") {
+            guard let left = self.app.frame(of: .id("terminal-\(second.id)")), let right = self.app.frame(of: .id("terminal-\(first.id)")) else { return false }
+            return right.minX > left.maxX - 1
+        }
+    }
+
+    /// SHELL-SPLIT-3 (#188): the one shell of the tab, on the left, cannot
+    /// be shown on the right, which would leave the left with none: the
+    /// app says so at once, and nothing moves.
+    func testTheLeftsOnlyShellStaysAndTheAppSaysWhy() throws {
+        let phone = try device()
+        let only = try newShell(phone, count: 1)
+        app.waitForKeyboard(in: "terminal-\(only.id)", "the shell")
+        app.perform(ShellSplitWords.right, on: .id("item-\(only.id)"))
+        app.wait(for: .text(ShellSplitWords.leftKeepsIt))
+        app.press(.button("OK"))
+        app.waitGone(.text(ShellSplitWords.leftKeepsIt))
+        XCTAssertEqual(app.all(.id("terminal-\(only.id)")).count, 1)
+        XCTAssertEqual(app.first(.id("shells-part-right"))?.value, "hidden")
+        app.waitForKeyboard(in: "terminal-\(only.id)", "the shell, still on the left")
+        XCTAssertEqual(phone.sessions.count, 1, "a shell was started")
+    }
+
     /// PANE-26 (#171): each of the first nine items of the row says the
     /// keys that pick it, always, at its end, as each tab of the strip says
     /// its ⌘ and number (the owner's decision, 2026-11-21). Before, only a
@@ -151,5 +190,97 @@ final class FocusUITests: MacUITestCase {
         app.wait("the second diff by its number, with the keyboard") { keyboard(in: "a file that is new") }
         app.menu(["View", "Next Item in Group"])
         app.wait("round to the first, as before") { keyboard(in: "second line") && !keyboard(in: "a file that is new") }
+    }
+}
+
+/// A Shells tab's parts waiting for new shells while the host's answers
+/// are held back (`SlowProxy`), so that what comes in between is certain:
+/// SHELL-SPLIT-4 and SHELL-SPLIT-5 in docs/TESTING.md (#189).
+final class ShellSplitWaitTests: MacUITestCase {
+    private var proxy: SlowProxy!
+    private var proxyPort: UInt16 = 0
+    override var appPort: UInt16 { proxyPort }
+
+    override func beforeTheAppStarts() throws {
+        // As fast as the host: held only while a test says so.
+        proxy = try SlowProxy(to: port, bytesPerSecond: 50_000_000)
+        proxyPort = proxy.start()
+    }
+
+    override func tearDown() {
+        proxy?.stop()
+        super.tearDown()
+    }
+
+    @discardableResult
+    private func newShell(_ phone: Device, count: Int) throws -> SessionInfo {
+        app.menu(["File", "New Shell"])
+        let shell = try started(phone, count: count)
+        app.wait(for: .id("item-\(shell.id)"))
+        return shell
+    }
+
+    /// The host has a new shell, whether the app was told yet or not.
+    private func started(_ phone: Device, count: Int) throws -> SessionInfo {
+        wait("shell \(count) to start on the host") { phone.sessions.count == count }
+        return try XCTUnwrap(phone.sessions.max { $0.id < $1.id })
+    }
+
+    /// SHELL-SPLIT-4: the right and then below turned on before the first
+    /// new shell is in the app: each shows a new shell of its own. Before
+    /// the fix below took the right's wait, and the right stayed off.
+    func testTheRightAndBelowEachGetANewShell() throws {
+        let phone = try device()
+        let first = try newShell(phone, count: 1)
+        app.waitForKeyboard(in: "terminal-\(first.id)", "the shell")
+        proxy.hold(true)
+        app.press(.id("shells-part-right"))
+        let second = try started(phone, count: 2)
+        app.press(.id("shells-part-below"))
+        let third = try started(phone, count: 3)
+        proxy.hold(false)
+        app.wait(for: .id("terminal-\(second.id)"), timeout: 15)
+        app.wait(for: .id("terminal-\(third.id)"), timeout: 15)
+        XCTAssertTrue(app.exists(.id("terminal-\(first.id)")), "the left's shell went")
+        XCTAssertEqual(app.first(.id("shells-part-right"))?.value, "shown")
+        XCTAssertEqual(app.first(.id("shells-part-below"))?.value, "shown")
+        wait("the second on the right, the third below") {
+            guard let left = self.app.frame(of: .id("terminal-\(first.id)")), let right = self.app.frame(of: .id("terminal-\(second.id)")),
+                let below = self.app.frame(of: .id("terminal-\(third.id)"))
+            else { return false }
+            return right.minX > left.maxX - 1 && below.minY > left.maxY - 1 && below.minY > right.maxY - 1
+        }
+    }
+
+    /// SHELL-SPLIT-5: while below waits for its new shell, a shell the tab
+    /// already had, picked in the row, is not taken for it: it is shown
+    /// where the keyboard is, and below gets the new one. Before the fix
+    /// below took the shell picked.
+    func testAWaitingPartTakesOnlyItsNewShell() throws {
+        let phone = try device()
+        let first = try newShell(phone, count: 1)
+        let second = try newShell(phone, count: 2)
+        app.press(.id("item-\(first.id)"))
+        app.waitForKeyboard(in: "terminal-\(first.id)", "the first shell")
+        app.press(.id("shells-part-right"))
+        app.waitForKeyboard(in: "terminal-\(second.id)", "the shell on the right")
+        proxy.hold(true)
+        app.press(.id("shells-part-below"))
+        let third = try started(phone, count: 3)
+        // The right off, then its shell picked in the row: the left shows it.
+        app.press(.id("shells-part-right"))
+        app.waitGone(.id("terminal-\(second.id)"))
+        app.press(.id("item-\(second.id)"))
+        app.waitForKeyboard(in: "terminal-\(second.id)", "the second, picked")
+        app.waitGone(.id("terminal-\(first.id)"))
+        XCTAssertEqual(app.first(.id("shells-part-below"))?.value, "hidden", "below took a shell the tab had")
+        proxy.hold(false)
+        app.wait(for: .id("terminal-\(third.id)"), timeout: 15)
+        XCTAssertEqual(app.first(.id("shells-part-below"))?.value, "shown")
+        XCTAssertEqual(app.all(.id("terminal-\(second.id)")).count, 1, "the second is in two parts")
+        wait("the third below the second") {
+            guard let top = self.app.frame(of: .id("terminal-\(second.id)")), let below = self.app.frame(of: .id("terminal-\(third.id)")) else { return false }
+            return below.minY > top.maxY - 1
+        }
     }
 }
