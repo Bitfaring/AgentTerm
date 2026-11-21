@@ -52,7 +52,14 @@ after (#203): `WaitingTests` stopped its proxy first, and the app, finding
 its host gone, started one of its own on the proxy's port, which no one
 stopped. Every test now checks, as it ends, that no program of the build
 with its state folder is still running (TEST-9): one that is, is named and
-ended, and the test fails. All
+ended, and the test fails. While a `SlowProxy` stands on the app's port,
+the program the app finds listening there is the test runner itself
+(`xctest`), not the app's own host, so the app shows its banner of another
+copy's host (HOST-1), naming `xctest`, in every picture of those tests
+(#204). It is what the app does for any program not its own host on its
+port; no other host, left behind or the installed app's, is involved. Its
+"Use This App's Host…" would stop the test runner: no test presses it
+there. All
 layers use state folders, ports, a home folder and preferences of their own,
 and stand-in agents (small scripts) instead of the installed ones: the
 installed app, its sessions, its paired devices and the user's accounts are
