@@ -21,8 +21,9 @@ final class RemoteMacTests: MacUITestCase {
         try startHost(state: otherState, home: otherHome, port: otherPort)
     }
 
-    private func pair() {
-        let link = pairingLink(state: otherState, port: otherPort, name: "Other Mac")
+    /// Pairs with the other Mac, on its host's port or on one in front of it.
+    private func pair(through port: UInt16? = nil) {
+        let link = pairingLink(state: otherState, port: port ?? otherPort, name: "Other Mac")
         XCTAssertFalse(link.isEmpty, "the other host gave no pairing link")
         app.press(.id("mac-switcher"))
         app.press(.button("Pair with Another Mac…"), menus: true)
@@ -609,6 +610,40 @@ final class RemoteMacTests: MacUITestCase {
         // run stopped in the middle was found on the Tailscale address.
         let addresses = listeningAddresses(on: port)
         XCTAssertTrue(addresses.allSatisfy { $0.hasPrefix("127.0.0.1:") || $0.hasPrefix("[::1]:") }, "the host the app started listens on \(addresses)")
+    }
+
+    /// REMOTE-30 (#209): this Mac showing the other Mac's page when the
+    /// connection to that Mac drops and comes back (a proxy in front of its
+    /// host, stopped and made again on the same port). The page is shown
+    /// again by itself and watched again: nothing is shown as live without
+    /// being watched. Checked for #209's gap on the iPhone, which the Mac
+    /// does not have: the page's view is made again with the connection.
+    func testAPageOfTheOtherMacShownAcrossAReconnectIsWatchedAgain() throws {
+        try startOtherMac()
+        let browser = try device("Mac", state: otherState, port: otherPort)
+        browser.send(.browserProvider(true))
+        browser.send(.browserTabs([BrowserTabInfo(id: "7", title: "Shop", url: "http://localhost:3000/", project: "", profile: "Default")]))
+        func watches() -> Int {
+            browser.messages.filter { if case .browserCall(_, _, .watch("7", true, _)) = $0 { return true } else { return false } }.count
+        }
+        var proxy = try SlowProxy(to: otherPort, bytesPerSecond: 50_000_000)
+        let proxyPort = proxy.start()
+        defer { proxy.stop() }
+        pair(through: proxyPort)
+        app.wait(for: .id("sidebar-browser"), timeout: 20)
+        app.press(.id("sidebar-browser"))
+        app.wait(for: .id("remote-page"), timeout: 15)
+        wait("the page watched", timeout: 15) { watches() == 1 }
+
+        // The link drops, and comes back on the same port.
+        proxy.stop()
+        app.waitGone(.id("remote-page"), timeout: 15)
+        proxy = try SlowProxy(to: otherPort, bytesPerSecond: 50_000_000, port: proxyPort)
+        XCTAssertEqual(proxy.start(), proxyPort)
+        // Shown again by itself, and watched again.
+        app.wait(for: .id("remote-page"), timeout: 30)
+        wait("the page shown again watched again", timeout: 15) { watches() == 2 }
+        shot("watched-again")
     }
 
     /// REMOTE-19: the other Mac's host dies and is started again there.

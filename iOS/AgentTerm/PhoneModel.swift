@@ -154,9 +154,14 @@ final class PhoneModel: ObservableObject {
 
     @Published private(set) var browserFrames: [String: BrowserFrame] = [:]
 
+    /// The pages whose screen is open, watched again when the connection
+    /// comes back (#209): the Mac's watch ended with the connection.
+    private var watchedPages: Set<String> = []
+
     /// Starts or stops being sent a page's pictures, as wide as this
     /// screen's pixels.
     func watch(_ tab: String, _ on: Bool) {
+        if on { watchedPages.insert(tab) } else { watchedPages.remove(tab) }
         askBrowser(.watch(tab: tab, on: on, width: on ? 1290 : 0)) { [weak self] result in
             // Watched again once the Mac is back: what was refused while it
             // was not is no longer so (#198).
@@ -1640,6 +1645,9 @@ final class PhoneModel: ObservableObject {
             writingCommitMessage = []
             remoteWork.forgetAll()
             connection?.send(.agents(refresh: false))
+            // A page left open while the connection was away is watched
+            // again, as if opened now (#209).
+            for tab in watchedPages.sorted() { watch(tab, true) }
             // A Mac from before 0.4.0 does not know the request, and would
             // answer with an error for the user to wonder about.
             hostVersion = version

@@ -374,8 +374,13 @@ struct LivePageView: View {
                     .accessibilityLabel("The page, live")
                     .accessibilityValue("\(Int(frame.width))×\(Int(frame.height))")
                     .accessibilityIdentifier("browser-live")
-            } else {
+            } else if model.status == .connected {
                 LoadingView("Asking the Mac for the page…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Nothing can be asked until the Mac is back (#209): the
+                // line at the top says it is reconnecting, and the page is
+                // asked for again once it is.
+                Color.clear
             }
         }
         .background(Palette.canvas)

@@ -761,7 +761,11 @@ user sees.
   the Mac had not answered when the connection to it closes, or when
   another Mac is picked, is answered at once as on the Mac: refused, in
   words that name the Mac and say it may not have been done, under the
-  page or where opening it is said (#198).
+  page or where opening it is said (#198). A page left open while the connection
+  is away says it asks nothing then, and is asked for again by itself when
+  the connection comes back, the line under it gone once the Mac answers
+  (#209); on the Mac, another Mac's page shown again with the connection
+  is asked for again too.
 
 ### Usage
 

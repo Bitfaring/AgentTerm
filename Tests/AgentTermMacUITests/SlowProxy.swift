@@ -13,10 +13,14 @@ final class SlowProxy {
     private let pause: TimeInterval = 0.02
     private var held = false
 
-    init(to target: UInt16, bytesPerSecond: Int) throws {
+    /// On `port`, or on one of its own: a proxy stopped and made again on
+    /// the same port stands for a link that drops and comes back.
+    init(to target: UInt16, bytesPerSecond: Int, port: UInt16? = nil) throws {
         self.target = target
         piece = max(1, Int(Double(bytesPerSecond) * pause))
-        listener = try NWListener(using: .tcp, on: .any)
+        let parameters = NWParameters.tcp
+        parameters.allowLocalEndpointReuse = true
+        listener = try NWListener(using: parameters, on: port.flatMap { NWEndpoint.Port(rawValue: $0) } ?? .any)
         listener.newConnectionHandler = { [weak self] client in self?.accept(client) }
     }
 
