@@ -247,6 +247,11 @@ final class BrowserTab: ObservableObject, Identifiable {
     /// Its page's two modes: browsing, or picking its elements to send to
     /// an agent, one after another, until turned off.
     @Published var picking = false
+    /// What was written in the sheet that sends an element of this page to
+    /// an agent, kept until it is sent (#232): cancelled, as while its agent
+    /// asks and Send is held, it is there again the next time. In memory,
+    /// for the app's life.
+    var pickNote = ""
     /// A page asking for a permission: the number to answer, who, and what.
     @Published var permission: (id: Int32, origin: String, what: String)?
     @Published var downloads: [BrowserDownload] = []

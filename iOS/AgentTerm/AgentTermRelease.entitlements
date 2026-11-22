@@ -11,5 +11,9 @@
 		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 		<string>$(AppIdentifierPrefix)$(PUSH_KEYCHAIN_GROUP)</string>
 	</array>
+	<!-- A notification of an agent that asks, is done or stopped, shown
+	     during a Focus too (#233). -->
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
 </dict>
 </plist>

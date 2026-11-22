@@ -94,7 +94,8 @@ the source yourself sends nothing at all.
 - **The Live Activity through Apple (iPhone, released app).** While agents work, and for 15 minutes
   after the last one stops, the Mac keeps the iPhone's Live Activity up to date through the same relay and Apple. Unlike a notification it
   cannot be encrypted for the iPhone, because iOS draws it from what the push carries: how many
-  agents work, wait, are done or stopped, and the names of the sessions that wait or are done. It
+  agents work, wait, are done or stopped, and the names of the sessions that wait or are done,
+  with whether the change needs you, so that Apple shows it at once. It
   never carries what an agent said. The relay keeps none of it. "Live Activity of the Mac's agents"
   in the iPhone's Settings turns it off.
 - **To the services of the coding agents you use.** To show what your account has left (the figures

@@ -1075,7 +1075,8 @@ A device that types or takes control of a session makes it no one there,
 whatever the two say, until this Mac's own app types, takes control or
 says `used` (a key or a click in its window, sent once after it was told
 no one is there) (NOTE-7). Every client is told `macInUse(Bool)`. Since
-#66 it holds no notice back: every device is told, whoever is at the Mac.
+#66 it holds no notice back: every device is told, whoever is at the Mac,
+and since #234 no notification waits for it either.
 
 **On the iPhone.** Since #66 iOS's own banner, in front as behind, for a
 session other than the one on screen (`AgentNotifications`, from the
@@ -1141,19 +1142,15 @@ Mac's own app as `local`.
   the device's Inbox; then `noticeAlert(id:)` for each one due, not
   handled nor read, that it was not shown yet. A new notice is `notice` to
   every client at once, for the Inbox and the Mac's floating notice. When it
-  `alerts`, its time to be a notification comes at once, or after
-  `Notice.pushWait` (30 s, `Configuration.pushWait`) when
-  `Notice.pushWaits(macInUse:)` says so: a done agent always, anything else
-  while someone is at the Mac (#180, decided 2026-11-20). Then, if it is
-  still not handled nor read (`NoticeCenter.pending`), it is due
-  (`becameDue`). When it waits, when its time comes is kept in
-  `notices.json` (`NoticeCenter.waits`), and a host that starts again
-  alerts what still waits once the rest of the wait is over, or at once
-  when it is over already (`alertWaitingNotices`, #193): only a failure can still be
-  waiting then, since the host marks what agents asked as over. Due, it
-  is `noticeAlert(id:)` to every client in front and a push
-  to each registered device that is away, not connected or in the
-  background (#190), at the same moment.
+  `alerts`, it is a notification at once, in the same turn of the host's
+  queue (`tellEveryone` → `alert`): nothing waits, whether someone is at
+  the Mac or not, a done agent included (decided 2026-11-22, #234, which
+  took away the 30 seconds #180 had made a done agent, and anything while
+  someone was at the Mac, wait). It is due (`becameDue`, kept in
+  `notices.json`), and is `noticeAlert(id:)` to every client in front and a
+  push to each registered device that is away, not connected or in the
+  background (#190), at the same moment. The Mac posts its macOS
+  notification on `noticeAlert` as before, so it too is at once.
 - **Read** (#180) is the host's too: `readNotices(ids:)` from a device marks
   them read in the log (`Notice.read`, `NoticeCenter.read`), and every
   client is told `noticesRead(ids:)`; each device that had one through
@@ -1236,7 +1233,8 @@ connection registers again, so the ticket (30 days) stays fresh.
   nothing; it holds the APNs key (Production, restricted to the topic
   `com.manhpham.agentterm`), signs the provider token (ES256) and passes
   the sealed notice on as `e`, with the identifier as `i`, under an `aps`
-  that says "An agent needs you" with `mutable-content`. It signs tickets
+  that says "An agent needs you" with `mutable-content`, `sound` and
+  `interruption-level: time-sensitive`, at priority 10 (#233). It signs tickets
   with HMAC over the token and their expiry, and refuses a push without
   one or too large; it asks Cloudflare's rate limiting binding to hold a
   device to 30 pushes a minute and an address to 5 registrations, which
@@ -1253,7 +1251,47 @@ connection registers again, so the ticket (30 days) stays fresh.
   sends `answer` with the session's state only when its digest is the
   same, else it says `PushWords.movedOn`. The device token comes from
   `registerForRemoteNotifications`, in the released build only, whose
-  entitlements alone have `aps-environment`.
+  entitlements alone have `aps-environment`. `NoticeContent` makes every
+  notification `.timeSensitive` (#233), whether the app posts it or the
+  extension makes it from a push, which needs
+  `com.apple.developer.usernotifications.time-sensitive` in the app's
+  entitlements (both builds); without it iOS shows them as active.
+- **Priorities** (#233, decided by the owner on 2026-11-22), for the
+  notifications and the Live Activity alike (`PushPriority`,
+  `AgentTermProtocol`):
+
+  | Level | When | Notification | Live Activity |
+  |---|---|---|---|
+  | High | An agent asks a question or a permission | At once, sound, time-sensitive | `apns-priority: 10` |
+  | High | An agent is done | At once, sound, time-sensitive | 10 |
+  | High | A part failed that stopped work (`Notice.tells`) | At once, sound, time-sensitive | 10 |
+  | High | An agent stops asking (answered on the Mac or elsewhere) | None; the earlier one taken back | 10 |
+  | Low | An agent works, progress, how many run, a done one seen, the end | None | 5 |
+  | Low | A notice handled on another device | Taken back (background push at 5, or the filtering alert) | 5 |
+
+  Every notice the host pushes is high (`Notice.alerts`). For the Live
+  Activity, `AgentsStatus.priority(since:)` compares the status about to
+  be sent with the last one sent (`activityStatus`, kept whether or not a
+  device was away then): high when the waiting ones change (their counts,
+  names or first), one becomes done, or a failure appears; low otherwise.
+  `PushCenter.activity` sends it as `urgent` in `activity`; the relay
+  sends `start` and an `urgent: true` update or end at 10, anything else
+  at 5. A relay of an earlier release ignores `urgent` and sends 5, as
+  before; nothing else changes for it.
+- **The host's log** (#233): each push gets one line on the host's
+  standard error, `agenttermd: push to <device id, 8 characters>: <kind>,
+  <high|low> (<apns-priority>)` (`PushCenter.logLine`), the kind being a
+  notification, an activity's start, update or end, or a take back (whose
+  priority is the relay's). Never what it says.
+- **A device is as its newest connection says** (#233). The host counts a
+  device present (`presentDevices`) while a connection of it is open and
+  not in the background. A connection the phone left behind, say when it
+  changed networks, is not closed on the Mac until TCP gives up on it,
+  and says nothing more: it kept the device present though its newest
+  connection said it was in the background, so nothing went through
+  Apple. A device that connects again marks its earlier connections
+  `superseded` (`admit`), which count as away (`Client.away`) for
+  notices and the Live Activity.
 
 **The Live Activity through Apple** (#168). Its content is `AgentsStatus`
 (`AgentTermProtocol`), the same struct the host pushes: counts of working,
@@ -1264,7 +1302,7 @@ with `pushType: .token` in the released build and hands the host
 `liveActivity(token:startToken:)`, the activity's push token and the
 push-to-start token (iOS 17.2), kept with the device's registration. While
 the device is away, a change of `AgentsStatus` is sent 3 s later (a burst
-is one update) to the relay as `{activity: {token, event, state, mac}}`:
+is one update) to the relay as `{activity: {token, event, state, mac, urgent}}`:
 `update` to the activity's token, `start` to the start token when there is
 none and an agent works or waits, `end` once none has for
 `LiveActivityRule.keptIdle` (15 minutes, `Configuration.activityKeptIdle`;
@@ -1288,8 +1326,9 @@ updates it (`takeUpShownActivity`): one the Mac started while it slept is
 watched for its token, and one that ended is let go, so that a new one is
 asked for rather than an ended one updated. The relay sends
 `apns-push-type: liveactivity` to the topic
-`com.manhpham.agentterm.push-type.liveactivity`, priority 5 (10 to
-start), with `stale-date` 30 minutes on and, for `end`, `dismissal-date`.
+`com.manhpham.agentterm.push-type.liveactivity`, priority 10 to start and
+for an update or end marked `urgent`, 5 otherwise (#233, above), with
+`stale-date` 30 minutes on and, for `end`, `dismissal-date`.
 While connected and in front, the app updates the activity itself.
 
 **On the Mac.** The agents' notices float over the middle of the window
@@ -2049,7 +2088,11 @@ the same folder can therefore be mixed up; the History tab is exact.
   only while the agent is still in that state. The prompt's draft is
   `PhoneModel`'s per session, kept in `UserDefaults`; the answer's is kept
   in memory for that session and that state, and goes when the state does.
-  The Mac's "Send to an Agent" sheet goes by the same decision for its note.
+  The Mac's "Send to an Agent" sheet goes by the same decision for its note,
+  and keeps that note in its page's tab (`BrowserTab.pickNote`, in memory)
+  while it is written, so that one cancelled while the agent asks is there
+  again the next time the sheet opens for that tab, until it is sent
+  (#232).
 
 ## macOS app structure
 

@@ -1425,6 +1425,51 @@ final class BrowserUITests: MacUITestCase {
         app.wait(for: .button("Pick an Element for an Agent"))
     }
 
+    /// BROWSER-56 (#232): what is written in the sheet is kept for the tab
+    /// until it is sent: cancelled (as while its agent asks, which holds
+    /// Send), the next element picked in that page opens the sheet with
+    /// the note still in it; sent, the next opens empty.
+    func testANoteCancelledIsThereAgainUntilItIsSent() throws {
+        let page = try makeSite()
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
+        let middle = "(() => { const r = document.getElementById('greet').getBoundingClientRect(); return (r.x + r.width / 2) + ',' + (r.y + r.height / 2); })()"
+        let place = server.text("browser_evaluate", ["tab": tab, "script": middle])
+        let point = place.text.split(whereSeparator: { !"0123456789.,".contains($0) }).joined().split(separator: ",").compactMap { Double($0) }
+        XCTAssertEqual(point.count, 2, place.text)
+        let device = try self.device()
+        device.send(.attach(session: agent.id, size: .default))
+        func click() { device.send(.browserAsk(id: Int.random(in: 3000..<9000), request: .tap(tab: tab, x: point[0], y: point[1]))) }
+
+        app.press(.id("browser-pick"))
+        app.wait(for: .button("Stop Picking"))
+        click()
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        app.write("Make this button blue", into: .id("pick-note"))
+        app.press(.button("Cancel"))
+        app.wait("the sheet closed") { !self.app.exists(.text("Send to an Agent")) }
+        XCTAssertFalse(device.text(agent.id).contains("Make this button blue"), "sent though it was cancelled")
+
+        // Picked again in the same page: the note is there.
+        click()
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        app.wait("the note kept") { self.app.value(of: .id("pick-note")) == "Make this button blue" }
+        shot("note-kept")
+        app.press(.button("Send"))
+        wait("the note typed into the agent's session", timeout: 15) { device.text(agent.id).contains("Make this button blue") }
+
+        // Sent: the next opens empty.
+        app.wait(for: .button("Stop Picking"))
+        click()
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        XCTAssertEqual(app.value(of: .id("pick-note")) ?? "", "", "the note sent is there again")
+        app.press(.button("Cancel"))
+    }
+
     /// BROWSER-48 (#164): an element the page replaces right after it is
     /// picked, as a page that renders again does, reaches the agent with
     /// its styles, or said to be gone from the page: never with empty ones.

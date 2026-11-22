@@ -115,21 +115,19 @@ final class NoticeCenterTests: XCTestCase {
         XCTAssertNil(center.log.first { $0.id == third.id }?.read, "moved on is not read")
     }
 
-    /// NOTICE-6 (#193): a notice that waits to be a notification is kept
-    /// waiting, with when its time comes, by a host that starts again; it
-    /// waits no longer once due, read or handled.
-    func testWhatWaitsIsKeptWhenTheHostStartsAgain() throws {
+    /// NOTICE-6 (#193, #234): nothing waits to be a notification; what
+    /// was made one, and which device was shown it, is kept by a host that
+    /// starts again: a device shown it is not shown it again, one that was
+    /// not is, until it is read.
+    func testWhatWasShownIsKeptWhenTheHostStartsAgain() throws {
         let center = NoticeCenter(file: file)
         let stopped = try XCTUnwrap(center.report(PartFailure(part: .session, name: "build", at: now, restarted: false), now: now))
-        let other = try XCTUnwrap(center.report(PartFailure(part: .schedule, name: "nightly", at: now, restarted: false), now: now))
-        center.waits(stopped.id, until: now.addingTimeInterval(30))
-        center.waits(other.id, until: now.addingTimeInterval(20))
+        center.becameDue(stopped.id)
+        center.told(stopped.id, to: "local", throughApple: false)
         let again = NoticeCenter(file: file)
-        XCTAssertEqual(again.waiting.map(\.id), [other.id, stopped.id])
-        XCTAssertEqual(again.waiting.last?.until, now.addingTimeInterval(30))
-        again.becameDue(other.id)
-        XCTAssertEqual(again.waiting.map(\.id), [stopped.id])
+        XCTAssertEqual(again.untold(to: "local").map(\.id), [], "shown again where it was shown")
+        XCTAssertEqual(again.untold(to: "phone").map(\.id), [stopped.id], "not shown where it was not")
         _ = again.read([stopped.id])
-        XCTAssertEqual(again.waiting.map(\.id), [], "read: no longer waits")
+        XCTAssertEqual(again.untold(to: "phone").map(\.id), [], "read: shown nowhere")
     }
 }

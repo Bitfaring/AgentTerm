@@ -100,8 +100,10 @@ public final class PushCenter {
     /// forgotten, the activity being gone (#194); or, with none, one that
     /// starts it, when an agent works or waits, once until the device gives
     /// the new activity's token (`setActivity`). Nil when there is nothing
-    /// to send.
-    func activity(_ status: AgentsStatus, end: Bool, mac: String, to device: String) -> Push? {
+    /// to send. `priority` says how soon Apple is to show it (#233): sent
+    /// as `urgent`, which a relay of an earlier release does not read and
+    /// sends at 5 as it always did; a start is always high.
+    func activity(_ status: AgentsStatus, end: Bool, priority: PushPriority, mac: String, to device: String) -> Push? {
         guard relay != nil, var target = targets[device] else { return nil }
         guard let state = try? JSONSerialization.jsonObject(with: MessageCoding.encode(status)) else { return nil }
         if let token = target.activity {
@@ -111,13 +113,15 @@ public final class PushCenter {
                 targets[device] = target
                 save()
             }
-            return request(target, device: device, ["activity": ["token": token, "event": event, "state": state, "mac": mac]])
+            let fields: [String: Any] = ["token": token, "event": event, "state": state, "mac": mac, "urgent": priority == .high]
+            return request(target, device: device, kind: "activity \(event)", priority: priority, ["activity": fields])
         }
         guard status.isActive, let start = target.activityStart, target.activityStarted != true else { return nil }
         target.activityStarted = true
         targets[device] = target
         save()
-        return request(target, device: device, ["activity": ["token": start, "event": "start", "state": state, "mac": mac]])
+        let fields: [String: Any] = ["token": start, "event": "start", "state": state, "mac": mac, "urgent": true]
+        return request(target, device: device, kind: "activity start", priority: .high, ["activity": fields])
     }
 
     func unregister(device: String) {
@@ -127,19 +131,26 @@ public final class PushCenter {
 
     // MARK: Telling
 
-    /// A push to send: the device, and the request to the relay.
+    /// A push to send: the device, and the request to the relay; what it
+    /// is and how soon it is asked to be shown, for the host's log (#233).
     struct Push: Equatable {
         var device: String
         var body: Data
+        var kind: String
+        /// Nil where the relay alone decides: a notification taken back.
+        var priority: PushPriority?
     }
 
     /// A notice for one device, encrypted with its key; nil when the
-    /// device is not registered or there is no relay.
+    /// device is not registered or there is no relay. Every notice pushed
+    /// is one of the high kinds (#233): an agent that asks or is done, a
+    /// failure that stopped work (`Notice.alerts`); the relay sends it at
+    /// once, with sound, time-sensitive.
     func push(_ notice: Notice, to device: String) -> Push? {
         guard relay != nil, let target = targets[device] else { return nil }
         let identifier = PushNotice.identifier(mac: target.mac, notice: notice.id)
         guard let sealed = try? PushSeal.seal(PushNotice(notice), identifier: identifier, key: target.key) else { return nil }
-        return request(target, device: device, ["payload": sealed, "collapse": identifier])
+        return request(target, device: device, kind: "notification", priority: .high, ["payload": sealed, "collapse": identifier])
     }
 
     /// Takes a notice back from a device it reached through Apple: the
@@ -148,14 +159,21 @@ public final class PushCenter {
     /// away without showing anything.
     func takeBack(_ notice: UInt64, from device: String) -> Push? {
         guard relay != nil, let target = targets[device] else { return nil }
-        return request(target, device: device, ["gone": PushNotice.identifier(mac: target.mac, notice: notice)])
+        return request(target, device: device, kind: "take back", priority: nil, ["gone": PushNotice.identifier(mac: target.mac, notice: notice)])
     }
 
-    private func request(_ target: Target, device: String, _ fields: [String: Any]) -> Push? {
+    private func request(_ target: Target, device: String, kind: String, priority: PushPriority?, _ fields: [String: Any]) -> Push? {
         var body: [String: Any] = ["token": target.token, "ticket": target.ticket, "expires": target.expires]
         body.merge(fields) { _, new in new }
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        return Push(device: device, body: data)
+        return Push(device: device, body: data, kind: kind, priority: priority)
+    }
+
+    /// The line the host's log gets for a push (#233): the device's id cut
+    /// short, what it is, how soon; never what it says.
+    static func logLine(_ push: Push) -> String {
+        let level = push.priority.map { ", \($0.rawValue) (\($0.apns))" } ?? ""
+        return "agenttermd: push to \(push.device.prefix(8)): \(push.kind)\(level)\n"
     }
 
     /// Sends one; `failed` gets the reason in words when it did not go.

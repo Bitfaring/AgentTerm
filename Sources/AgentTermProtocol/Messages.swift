@@ -735,10 +735,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Something to tell the user of: new, for the Inbox and the app's own
     /// banner. A notification only once `noticeAlert` says so.
     case notice(Notice)
-    /// Time to show this notice as a notification (#66): at once, or after
-    /// `Notice.pushWait` when it waits, and still not handled nor read. The
-    /// same moment on every device; sent once to each, and on connecting
-    /// for what came due while it was away.
+    /// Show this notice as a notification (#66): right after its `notice`
+    /// when it alerts, nothing waiting (#234). The same moment on every
+    /// device; sent once to each, and on connecting for what came while it
+    /// was away and is still not handled nor read.
     case noticeAlert(id: UInt64)
     /// A notice was handled, on some device or by its agent moving on: it
     /// is taken away wherever it is shown.

@@ -15,8 +15,22 @@ no push (principle 7); a build made from the source has none either.
 |---|---|---|
 | `POST /v1/register` | `{token}` | `{ticket, expires}`: an HMAC of the token and its expiry, 30 days |
 | `POST /v1/push` | `{token, ticket, expires, gone}` | Takes back the notification named `gone`, handled on another device: a background push that wakes the app, or, with `FILTERING=on` once the app has Apple's filtering entitlement, an alert its extension removes it with and hides |
-| `POST /v1/push` | `{token, ticket, expires, activity: {token, event, state, mac}}` | The Live Activity (#168): `liveactivity` to the activity's own token (or its push-to-start token for `start`), at `<topic>.push-type.liveactivity`, priority 5 (10 to start); `state` is `AgentsStatus`, in the clear, since iOS draws the activity from it |
-| `POST /v1/push` | `{token, ticket, expires, payload, collapse?}` | `{ok: true}`; 400 for a payload that is not a sealed notice (base64, 3000 characters at most); 401 for a ticket it did not sign or that expired; 410 for a token APNs no longer knows; 429 for more than 30 a minute to one device; 502 with APNs' reason otherwise |
+| `POST /v1/push` | `{token, ticket, expires, activity: {token, event, state, mac, urgent?}}` | The Live Activity (#168): `liveactivity` to the activity's own token (or its push-to-start token for `start`), at `<topic>.push-type.liveactivity`, priority 10 to start and for an update or end marked `urgent: true`, 5 otherwise (#233); `state` is `AgentsStatus`, in the clear, since iOS draws the activity from it |
+| `POST /v1/push` | `{token, ticket, expires, payload, collapse?}` | An alert at priority 10, with sound, `interruption-level: time-sensitive` (#233); `{ok: true}`; 400 for a payload that is not a sealed notice (base64, 3000 characters at most); 401 for a ticket it did not sign or that expired; 410 for a token APNs no longer knows; 429 for more than 30 a minute to one device; 502 with APNs' reason otherwise |
+
+## Priorities (#233)
+
+Decided by the owner on 2026-11-22. What needs the user is high: a
+notification (every notice a host pushes is an agent that asks or is done,
+or a part that failed and stopped work) goes at `apns-priority: 10`, with
+sound, time-sensitive, so that it shows during a Focus; a Live Activity's
+start, and an update or end the host marks `urgent` (an agent starts or
+stops asking, one becomes done, a failure appears), at 10 too. Everything
+else is low: a Live Activity update at 5, which Apple delivers when it sees
+fit, so that the high ones keep within the budget iOS gives an app for 10.
+A relay of an earlier release does not read `urgent`, and sends every update
+at 5 as it did; a host of an earlier release does not send it, and its
+updates go at 5.
 
 ## Tests
 

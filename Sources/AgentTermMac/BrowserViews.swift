@@ -509,7 +509,8 @@ struct SendToAgentSheet: View {
 
     /// Why the note is not sent now: the agent asks something, and would
     /// take what is typed into its session as the answer (#232). The note
-    /// stays, and can be sent once the agent has its answer.
+    /// stays, and can be sent once the agent has its answer; closed
+    /// meanwhile, the tab keeps it (`BrowserTab.pickNote`) until it is sent.
     private var held: String? {
         guard let agent, case .held(let why) = ComposeSend.send(state: model.sessions.first(where: { $0.id == agent })?.state, side: .prompt) else {
             return nil
@@ -572,7 +573,10 @@ struct SendToAgentSheet: View {
                     DispatchQueue.main.async {
                         // The agent may have started to ask meanwhile.
                         guard held == nil else { return }
-                        if let agent { model.send(pick, note: note, to: agent) }
+                        if let agent {
+                            model.send(pick, note: note, to: agent)
+                            pick.tab.pickNote = ""
+                        }
                         dismiss()
                     }
                 }
@@ -582,6 +586,10 @@ struct SendToAgentSheet: View {
         }
         .padding(20)
         .frame(width: 560)
-        .onAppear { agent = model.pickRecipients(of: pick.tab).first?.id }
+        .onAppear {
+            agent = model.pickRecipients(of: pick.tab).first?.id
+            note = pick.tab.pickNote
+        }
+        .onChange(of: note) { _, written in pick.tab.pickNote = written }
     }
 }

@@ -277,17 +277,21 @@ happened; the Live Activity shows the host's state now (below).
   is left out, the one in front included (#180): being in front does not
   make it seen, something the user does there does (choosing it, typing
   into it, the notification).
-- **When it is a notification** (#180, decided by the owner on
-  2026-11-20): every notice is in each device's Inbox, and floats over the
-  Mac's window, at once; it is a notification on the Mac and on every iPhone or
-  iPad **at the same moment**, which the host says. An agent that is done
-  waits 30 seconds first, always; anything else waits 30 seconds while
-  someone is at the Mac, and is told at once otherwise. Handled or read
-  within those 30 seconds (the agent works again; opened, answered,
-  dismissed or read on some device), it is a notification nowhere. Short
-  turns that end one after the other do not buzz the phone each time. A
-  host that starts again within the wait still tells it once the wait is
-  over (#193).
+- **When it is a notification** (#180; the wait taken away by the owner
+  on 2026-11-22, #234): every notice is in each device's Inbox, and floats
+  over the Mac's window, at once; it is a notification on the Mac and on
+  every iPhone or iPad **at once and at the same moment**, which the host
+  says: through Apple to each one that is away, whether someone is at the
+  Mac or not, an agent that is done as much as one that asks. Nothing
+  waits to see whether it is handled or read first; what is handled or
+  read afterwards on one device is taken back from the others. A host
+  that starts again shows nothing twice.
+- **How they sound** (#233, decided by the owner on 2026-11-22): every
+  notification is of something that needs the user (an agent asks or is
+  done, a part failed and stopped work), so each comes at once, with
+  sound, and is **time-sensitive** on the iPhone: shown during a Focus,
+  as iOS lets the user allow for the app. An agent that stops asking
+  brings no new notification: the earlier one is taken back.
 - **Handled on one, gone from all**: answered, opened or dismissed (from
   the Mac's floating notice, from Notification Center) on one device, or its agent moving
   on, and the notification goes from every other device.
@@ -467,6 +471,18 @@ shows the host's state now rather than events.
   is sent the end when it goes (#192). A new turn within those 15 minutes updates it rather
   than starting another, whose start through Apple comes with an alert. Without push (a development
   build), it goes out of date ten minutes after the app last updated it.
+- **How soon an update is shown** (#233, decided by the owner on
+  2026-11-22): an update that changes what needs the user (an agent starts
+  or stops asking, answered on the Mac or another device; one becomes
+  done; a session or the host stopped) is sent to be shown at once; any
+  other (agents working, how many, progress, a done one seen, the end) is
+  delivered when iOS sees fit, so that the ones that matter keep within
+  what iOS allows an app to show at once.
+- **An iPhone is as its newest connection says** (#233): one that connected
+  again (say, after it changed networks) while its earlier connection was
+  never closed on the Mac is away as soon as the newest connection says
+  its app went to the background, and is told through Apple, notifications
+  and Live Activity alike.
 - "Live Activity of the Mac's agents" in the iPhone's Settings turns it
   off, apart from notifications. While iOS has Live Activities turned off
   for the app (in the iPhone's Settings) the switch shows off and dimmed,
@@ -1712,6 +1728,10 @@ button at the top right of Sessions goes back to the list of Macs.
   agent no longer asks, the place to answer goes and the prompt is shown
   again, as it was. On the Mac, "Send to an Agent" from a page holds its
   note the same way while the agent picked asks, with the same words.
+  Whatever is written in that sheet is kept for its page's tab until it is
+  sent (#232): cancelled, as while the agent asks, the next element picked
+  in that page opens the sheet with the note in it. It is kept in memory
+  while the app runs, not on disk.
 - Quick launch for the installed agents, and for the hosts of the Mac's
   SSH configuration, in any folder known to the Mac.
 - A folder picker browses the Mac's folders, starting at home, to start an

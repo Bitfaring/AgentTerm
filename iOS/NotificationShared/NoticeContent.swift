@@ -45,6 +45,10 @@ enum NoticeContent {
     ) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.sound = .default
+        // Every notice that is a notification needs the user (#233): shown
+        // during a Focus too, as the push says to iOS before the extension
+        // makes this from it.
+        content.interruptionLevel = .timeSensitive
         content.threadIdentifier = mac
         var info: [String: Any] = ["mac": mac, "notice": String(id)]
         if let notice {

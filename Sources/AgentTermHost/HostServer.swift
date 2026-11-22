@@ -78,9 +78,6 @@ public final class HostServer {
         /// How long an agent's hooks and MCP server have to be heard from
         /// before its session says they are missing (#129). Tests shorten it.
         public var linkGrace: TimeInterval = 20
-        /// How long a notice that waits is kept from being a notification
-        /// (`Notice.pushWaits`). Tests shorten it.
-        public var pushWait: TimeInterval = Notice.pushWait
         /// How long the Live Activity is kept, updated, with nothing
         /// working or waiting (`LiveActivityRule.keptIdle`). Tests shorten it.
         public var activityKeptIdle: TimeInterval = LiveActivityRule.keptIdle
@@ -186,6 +183,13 @@ public final class HostServer {
         /// connection open while it is suspended. What it is told goes
         /// through Apple until it is in front again.
         var inBackground = false
+        /// The same device connected again since (#233): this connection
+        /// may be one the device left behind, say when it changed networks,
+        /// which nothing told the host is gone. The newest one says whether
+        /// the device is in front; this one counts as away.
+        var superseded = false
+        /// Away, as far as notices and the Live Activity go.
+        var away: Bool { inBackground || superseded }
         /// Numbers the large messages sent in pieces.
         var nextMessage: UInt32 = 0
         /// The searches for text this client has going (#45), by its number.
@@ -640,7 +644,6 @@ public final class HostServer {
             // What AgentTerm tells each agent, for its MCP server to give.
             writePromptsForServers()
             loadSchedules()
-            alertWaitingNotices()
             startAtLoginByDefault()
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + min(1, configuration.scheduleInterval), repeating: configuration.scheduleInterval)
@@ -1894,13 +1897,16 @@ public final class HostServer {
         let end = decision != .show
         // Ended once; nothing more until something works again.
         if end && activityEnded { return }
+        // Shown at once when it changes what needs the user, since the
+        // last one sent (#233).
+        let priority = status.priority(since: activityStatus)
         activityEnded = end
         activityStatus = status
         activitySentAt = now
         let mac = Host.current().localizedName ?? "Mac"
         for device in push.activityDevices where !presentDevices.contains(device) {
             if end { activityEndSent.insert(device) }
-            if let item = push.activity(status, end: end, mac: mac, to: device) { sendPush(item) }
+            if let item = push.activity(status, end: end, priority: priority, mac: mac, to: device) { sendPush(item) }
         }
     }
 
@@ -1912,7 +1918,7 @@ public final class HostServer {
             push.activityDevices.contains(device)
         else { return }
         activityEndSent.insert(device)
-        if let item = push.activity(status, end: true, mac: Host.current().localizedName ?? "Mac", to: device) { sendPush(item) }
+        if let item = push.activity(status, end: true, priority: .low, mac: Host.current().localizedName ?? "Mac", to: device) { sendPush(item) }
     }
 
     // MARK: Notices, on every device (#66)
@@ -1933,7 +1939,7 @@ public final class HostServer {
     private var presentDevices: Set<String> {
         Set(
             clients.values.compactMap { client -> String? in
-                if case .device(let id) = client.identity, !client.inBackground { return id }
+                if case .device(let id) = client.identity, !client.away { return id }
                 return nil
             })
     }
@@ -1944,43 +1950,24 @@ public final class HostServer {
         for notice in handled { tellHandled(notice) }
     }
 
-    /// A new notice: to every client's Inbox at once; a notification on
-    /// every device at once, or after `Notice.pushWait` when it waits and
-    /// is still not handled nor read by then (the owner's decision,
-    /// 2026-11-20).
+    /// A new notice: to every client's Inbox at once, and when it alerts,
+    /// a notification on every device at once too: nothing waits, whoever
+    /// is at the Mac (the owner's decision, 2026-11-22, #234).
     private func tellEveryone(_ notice: Notice) {
         for client in clients.values where client.authenticated && noticeKey(of: client) != nil {
             send(.notice(notice), to: client)
         }
-        guard notice.alerts else { return }
-        let wait = notice.pushWaits(macInUse: macInUse) ? configuration.pushWait : 0
-        if wait <= 0 { return alert(notice.id) }
-        notices.waits(notice.id, until: configuration.now().addingTimeInterval(wait))
-        queue.asyncAfter(deadline: .now() + wait) { [weak self] in self?.alert(notice.id) }
+        if notice.alerts { alert(notice.id) }
     }
 
-    /// On starting: what waited to be a notification when the last host
-    /// stopped is one now, or once the rest of its wait is over (#193).
-    private func alertWaitingNotices() {
-        let now = configuration.now()
-        for (id, until) in notices.waiting {
-            let rest = until.timeIntervalSince(now)
-            if rest <= 0 {
-                alert(id)
-            } else {
-                queue.asyncAfter(deadline: .now() + rest) { [weak self] in self?.alert(id) }
-            }
-        }
-    }
-
-    /// Its time has come: a notification on every device, over the
-    /// connection or, for a device that is away, through Apple: only that
-    /// way for one in the background (#190), so it is not shown twice.
+    /// A notification on every device, over the connection or, for a
+    /// device that is away, through Apple: only that way for one in the
+    /// background (#190), so it is not shown twice.
     private func alert(_ id: UInt64) {
         guard let notice = notices.pending(id) else { return }
         notices.becameDue(id)
         var reached: Set<String> = []
-        for client in clients.values where client.authenticated && !client.inBackground {
+        for client in clients.values where client.authenticated && !client.away {
             guard let key = noticeKey(of: client), !reached.contains(key) else { continue }
             send(.noticeAlert(id: id), to: client)
             reached.insert(key)
@@ -1993,7 +1980,7 @@ public final class HostServer {
         }
     }
 
-    /// What came due that this client was not shown, here or through
+    /// What alerted that this client was not shown, here or through
     /// Apple: on connecting, and for a device back in front (#190).
     private func tellUntold(_ client: Client) {
         guard let key = noticeKey(of: client) else { return }
@@ -2034,6 +2021,7 @@ public final class HostServer {
     }
 
     private func sendPush(_ item: PushCenter.Push) {
+        FileHandle.standardError.write(Data(PushCenter.logLine(item).utf8))
         push.send(item) { [weak self] reason, forgotten in
             self?.queue.async { self?.pushFailed(device: item.device, reason: reason, forgotten: forgotten) }
         }
@@ -3084,6 +3072,10 @@ public final class HostServer {
 
     private func admit(_ client: Client, as identity: DeviceRegistry.Identity) {
         client.identity = identity
+        // A device is as its newest connection says (#233).
+        if case .device = identity {
+            for other in clients.values where other !== client && other.identity == identity { other.superseded = true }
+        }
         send(
             .welcome(
                 version: configuration.protocolVersion, host: Host.current().localizedName ?? "Mac", release: configuration.release,
