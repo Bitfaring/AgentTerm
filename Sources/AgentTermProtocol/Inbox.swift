@@ -90,7 +90,7 @@ public enum Inbox {
     /// the whole of it when it is short, else its end, begun at a word,
     /// with `cutMark` in front. Line breaks become spaces, so that an
     /// answer's last paragraphs are not three short lines. Never empty
-    /// unless `full` is.
+    /// unless `full` is, and no text is in it twice.
     public static func rowTexts(_ full: String) -> [String] {
         let text = full.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !text.isEmpty else { return [] }
@@ -107,7 +107,12 @@ public enum Inbox {
             if let space = end.firstIndex(of: " "), end.distance(from: end.startIndex, to: space) < length / 3 {
                 end = end[end.index(after: space)...]
             }
-            texts.append(cutMark + end)
+            // Two lengths may come to the same text once begun at a word:
+            // it is given once, as the Mac's row names each by its text
+            // and one given twice crashed the app (#240). The texts get
+            // shorter, each the end of `text`, so the same one is the last.
+            let cut = cutMark + end
+            if texts.last != cut { texts.append(cut) }
         }
         return texts
     }
