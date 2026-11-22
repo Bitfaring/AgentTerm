@@ -65,6 +65,11 @@ Tried then with a made-up device token: `/v1/register` gave a ticket, and
 `/v1/push` reached APNs Production over HTTP/2, which accepted the provider
 token and refused the device token (`BadDeviceToken`).
 
+Deployed again on 2026-11-22 with the priorities of #233 (version
+`5de7c1de`), the secrets kept as they were, and tried the same way: a
+ticket, then an `urgent` Live Activity update that reached APNs, which
+refused the made-up token (`BadDeviceToken`).
+
 Once Apple grants the filtering entitlement, `npx wrangler deploy --var FILTERING:on`, with the
 entitlement added to the extension's entitlements, takes notifications back at once.
 
