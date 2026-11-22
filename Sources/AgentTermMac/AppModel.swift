@@ -428,7 +428,7 @@ final class AppModel: ObservableObject {
     /// The window's places, chosen in the bar at its left edge, as the
     /// iPhone's tabs are. The Inbox (#67), as History and Schedules, has
     /// what it shows in the middle; its items are opened in Sessions.
-    enum Place: String { case sessions, inbox, history, memory, schedules, settings }
+    enum Place: String { case sessions, inbox, history, schedules, settings }
     @Published private(set) var place = Place.sessions
     /// The conversation picked in History, shown in the middle of the window.
     @Published var historySelection: Conversation?
@@ -1138,8 +1138,6 @@ final class AppModel: ObservableObject {
     let search = SearchModel()
     /// History's filters, search, transcripts and pins (#46).
     let historyStore = HistoryStore()
-    /// The agents' memory: its lists, what was read and what was changed (#220).
-    let memoryStore = MemoryStore()
     /// The run whose output is on show.
     @Published var shownRun: ScheduleOverview.Run?
 
@@ -1227,8 +1225,6 @@ final class AppModel: ObservableObject {
         folderChanged()
         // History's reading, pins and searches are the host's, for this Mac too (#46).
         historyStore.send = { [weak self] message in self?.connection?.send(message) }
-        memoryStore.send = { [weak self] message in self?.connection?.send(message) }
-        memoryStore.say = { [weak self] said in self?.notice = said }
         historyStore.exported = { [weak self] path in
             // A transcript written out as a file opens as any file, in Sessions.
             self?.panelConversation = nil
@@ -1734,7 +1730,6 @@ final class AppModel: ObservableObject {
             files.connectionLost()
             search.connectionLost()
             historyStore.reset()
-            memoryStore.reset()
             forgetHostState()
             retryConnection(reason: reason)
         }
@@ -1870,8 +1865,6 @@ final class AppModel: ObservableObject {
             search.handle(message)
         case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .conversationDeleted, .conversationsDeleted, .conversationExported:
             historyStore.handle(message, folderPath: panelFolder)
-        case .memories, .memoryRead, .memorySaved, .memoryDeleted, .memoryRefused:
-            memoryStore.handle(message)
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
         case .macInUse(let inUse):
@@ -2409,7 +2402,6 @@ final class AppModel: ObservableObject {
         files.setRoot(panelFolder)
         search.setRoot(panelFolder)
         historyStore.folderChanged()
-        memoryStore.folderChanged()
         refreshDiff()
         folderHistory = nil
         refreshHistory(ofFolder: true)

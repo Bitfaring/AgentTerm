@@ -488,7 +488,7 @@ final class PhoneModel: ObservableObject {
 
     /// The last notice the Mac was told is seen, so it is told once.
     private var noticeSeenTold: (session: SessionID, state: AgentState)?
-    /// The tab in front: "sessions", "history", "memory", "schedules" or "settings".
+    /// The tab in front: "sessions", "history", "schedules" or "settings".
     @Published var tab = "sessions"
     /// A folder's uncommitted changes, by folder. Without the diffs.
     @Published private(set) var diffs: [String: DiffSnapshot] = [:]
@@ -1415,6 +1415,21 @@ final class PhoneModel: ObservableObject {
         if composeDrafts.count != before { UserDefaults.standard.set(composeDrafts, forKey: Self.composeDraftsKey) }
     }
 
+    /// What is written in answer to what an agent asks (#232), apart from
+    /// the prompt: for that session and that question only, gone when the
+    /// agent asks something else or nothing. In memory, as the question
+    /// lasts only while the agent waits.
+    private var answerDrafts: [String: (state: AgentState, text: String)] = [:]
+
+    func answerDraft(for id: SessionID, to state: AgentState) -> String {
+        composeDraftKey(for: id).flatMap { answerDrafts[$0] }.flatMap { $0.state == state ? $0.text : nil } ?? ""
+    }
+
+    func setAnswerDraft(_ text: String, for id: SessionID, to state: AgentState) {
+        guard let key = composeDraftKey(for: id) else { return }
+        if text.isEmpty { answerDrafts[key] = nil } else { answerDrafts[key] = (state: state, text: text) }
+    }
+
     /// The session whose terminal is on screen, if one is on top.
     var openSessionID: SessionID? {
         if case .session(let id)? = path.last { return id }
@@ -1550,7 +1565,6 @@ final class PhoneModel: ObservableObject {
         savingFile = nil
         createdFile = nil
         histories = [:]
-        forgetMemories()
         listing = nil
         handoffPlan = nil
     }
@@ -1832,8 +1846,6 @@ final class PhoneModel: ObservableObject {
             if kept > 0 { self.message = DeleteConversationsQuestion.done(deleted: deleted, kept: kept) }
         case .conversationExported(_, let path):
             exportedTranscript = path
-        case .memories, .memoryRead, .memorySaved, .memoryDeleted, .memoryRefused:
-            handleMemory(message)
         case .filesFound(let search, let files, let among):
             guard search == searchNumber else { break }
             foundFiles = files
@@ -2371,101 +2383,6 @@ final class PhoneModel: ObservableObject {
                 return
             }
             ask("undo", in: pending.folder, .gitUndoCommit(path: pending.folder))
-        }
-    }
-
-    // MARK: Memory (#220)
-
-    /// The agents' memories, as the Mac listed them, by the list they are
-    /// for (a folder, "" for every one on the Mac); none until it answered.
-    @Published private(set) var memories: [String: [AgentMemory]] = [:]
-    /// Memories as they were read, by path, and why one could not be.
-    @Published private(set) var memoryContents: [String: AgentMemoryContent] = [:]
-    @Published private(set) var memoryProblems: [String: String] = [:]
-    /// What was sent to be written and is not answered yet, by path.
-    @Published private(set) var savingMemories: [String: String] = [:]
-    /// The memories deleted since the app started, here or on another
-    /// device: a screen that shows one closes.
-    @Published private(set) var deletedMemories: Set<String> = []
-
-    /// Asked when Memory is opened or pulled down, never by itself.
-    /// `folder` nil loads every memory on the Mac.
-    func loadMemories(_ folder: String?) {
-        connection?.send(.memories(path: folder))
-    }
-
-    func readMemory(_ memory: AgentMemory) {
-        connection?.send(.readMemory(path: memory.path))
-    }
-
-    /// Writes a memory's text. `seen` is the date the file had when the
-    /// change began: the Mac refuses, in words, to write over a file that
-    /// changed since.
-    func saveMemory(_ memory: AgentMemory, text: String, seen: Date) {
-        guard savingMemories[memory.path] == nil else { return }
-        guard status == .connected else {
-            message = MemoryWords.notConnected
-            return
-        }
-        savingMemories[memory.path] = text
-        connection?.send(.writeMemory(path: memory.path, text: text, seen: seen))
-    }
-
-    /// Moves a memory to the Mac's Trash, once the user was asked.
-    func deleteMemory(_ memory: AgentMemory) {
-        connection?.send(.deleteMemory(path: memory.path))
-    }
-
-    private func forgetMemories() {
-        memories = [:]
-        memoryContents = [:]
-        memoryProblems = [:]
-        savingMemories = [:]
-    }
-
-    /// A memory as it is now, in every list that has it: under the folder
-    /// each list has it for.
-    private func replaceMemory(_ memory: AgentMemory) {
-        for key in memories.keys {
-            memories[key] = memories[key]?.map { old in
-                guard old.path == memory.path else { return old }
-                var new = memory
-                new.folder = old.folder
-                return new
-            }
-        }
-    }
-
-    private func handleMemory(_ message: ServerMessage) {
-        switch message {
-        case .memories(let folder, let list):
-            memories[folder ?? ""] = list
-        case .memoryRead(let path, let content, let problem):
-            if let content {
-                memoryContents[path] = content
-                memoryProblems[path] = nil
-                replaceMemory(content.memory)
-            } else {
-                memoryContents[path] = nil
-                memoryProblems[path] = problem ?? MemoryWords.gone
-            }
-        case .memorySaved(let memory):
-            if let text = savingMemories.removeValue(forKey: memory.path) {
-                memoryContents[memory.path] = AgentMemoryContent(memory: memory, text: text)
-            }
-            replaceMemory(memory)
-        case .memoryRefused(let path, let problem):
-            // The edits stay in the editor, and why is said at once.
-            savingMemories[path] = nil
-            self.message = problem
-        case .memoryDeleted(let path):
-            deletedMemories.insert(path)
-            memoryContents[path] = nil
-            memoryProblems[path] = nil
-            savingMemories[path] = nil
-            for key in memories.keys { memories[key]?.removeAll { $0.path == path } }
-        default:
-            break
         }
     }
 

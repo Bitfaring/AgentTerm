@@ -1011,8 +1011,8 @@ conversation over to a neighbouring project.
 
 Like a code editor: a bar of places at the left edge, then three panes. The
 bar has the window's places, as the iPhone has its tabs: **Sessions**,
-**Inbox** (with how many items it holds), **History**, **Memory** and
-**Schedules** at its top, **Settings** (⌘,) at its foot. The
+**Inbox** (with how many items it holds), **History** and **Schedules** at
+its top, **Settings** (⌘,) at its foot. The
 place shown is marked; pressing it again hides its list, and pressing it
 once more shows it. The toolbar follows the panes: the launch buttons for
 the agents are in the middle, followed by the pairing button, which is filled so it
@@ -1155,8 +1155,7 @@ panel.
   the place it is dropped in, pinned among the pinned. Tab groups, with
   their names and colors, were taken away (#127): the user's shells,
   pages, diffs and files are each held in one tab instead.
-- **Right: side panel**, with four tabs, Git, History, Files and Memory (see
-  "The agents' memory"). The panel can be hidden. It is there in Sessions only, and so is its button: in History, Schedules and Settings what is in the middle is what the window is about.
+- **Right: side panel**, with three tabs, Git, History and Files. The panel can be hidden. It is there in Sessions only, and so is its button: in History, Schedules and Settings what is in the middle is what the window is about.
   - **History** of the panel: the conversations each agent had in the
     selected folder only; conversations that ran in a subfolder belong to
     that subfolder. One picked there is shown in a sheet over Sessions, with
@@ -1393,88 +1392,6 @@ panel.
 
     History's list is wider than the other places' lists, for the titles
     and what a search found in them (#50); it can be made wider still.
-
-### The agents' memory
-
-Some agents save notes by themselves, about a folder, and read them again
-in every later session there: what they learned of the project, what they
-were told to do differently. **Memory** shows these notes, to be read,
-changed and deleted (#220). It is where History is, on both apps, and made
-as History is. It is not about the processor or the memory of the Mac.
-
-- **What is a memory.** Only what an agent saved by itself, in a file
-  AgentTerm knows it to keep, and only one that exists: today the notes
-  Claude Code keeps for a folder, `MEMORY.md`, their index, first.
-  `docs/DESIGN.md` says how that was found.
-- **What is not.** The instructions a person writes for an agent,
-  `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, rules and the like, in a folder or
-  under the user's home, are files of the folder and the user: they are
-  not listed in Memory, and nothing there reads, changes or deletes them.
-  They are opened as any file, in Files.
-- **Memory**, the place in the bar at the left, after History: every
-  memory on the Mac, whatever folder it is about and whether or not that
-  folder is in the app's list, as History has every conversation on the
-  Mac. They are under their agent as History's conversations are, each
-  row naming its folder; one whose folder the agent's files do not tell
-  says "Folder not known" with the name the agent gave it, and is read,
-  changed and deleted as the others. Its list is wide, as History's is.
-  One picked is shown in the middle of the window.
-- **Nothing is explained under a list.** A list with no memory says one
-  short line, as History's does: "No agent has saved a memory on this Mac
-  yet.", or "No agent has saved a memory of this folder yet." in a
-  folder's. What is not known of the other agents is in `docs/DESIGN.md`,
-  not in the app.
-- **Memory** of the side panel, after History and Files: the memories of
-  the folder on show only, under their agent. One picked is shown in a
-  sheet over Sessions; Sessions stays.
-- **A row** says the file's name, when it changed, in the place its
-  folder, and "Changed, not saved" while it has a change that is not
-  saved; its tip is where the file is.
-- **A memory** is shown whole: its agent, when it changed and its size,
-  its name, its folder, where the file is, and its text in the app's own
-  editor. **Preview Markdown** shows it with its Markdown rendered and
-  **Show as Text** as it is written, the words History uses; the choice is
-  kept.
-- **A note's front matter.** A note Claude Code writes opens with a block
-  between two lines of `---`. In the preview it is not drawn as text:
-  what it says the note is about comes first, then its type and when it
-  changed (its name too when that is not the file's), and only the rest
-  is rendered; the ids it keeps are not shown. Show as Text has the whole
-  file as written.
-- **Changed as text only.** In Show as Text the note is in the editor and
-  is typed into at once, with no step before, as a file of the Files tab
-  is. In the preview nothing is typed and there is no Save: it says "Show
-  as Text to change it.", and shows a change not saved yet as it would
-  look.
-- **Changed.** The text is changed in the editor and written with **Save**
-  to the file its agent reads, all at once; **Revert** drops the change and
-  reads the file again. Nothing is written before Save, and a change is
-  kept while the app runs when another memory is looked at. A file that
-  changed on the Mac after it was read is not written over: the Mac says
-  so with the memory, and Revert reads it again.
-- **Deleted.** **Delete…**, on the memory or in its row's menu, asks first:
-  "Delete “MEMORY.md”?", which agent saved it and about which folder, and
-  that the file is moved to the Trash of the Mac, from where it can be put
-  back. Every device is told and drops its row.
-- **Not more.** A memory is not added and not moved to another folder.
-  AgentTerm never changes or deletes one by itself.
-- **Refused in words.** A file that is not in the Mac's own list of
-  memories is not read, written or deleted, whatever a device asks, the
-  folder's `CLAUDE.md` as any other; a memory that is gone, is not text or
-  could not be written says so at once.
-- **When it is read.** Only while Memory is open, in the place or the
-  panel: asked for when it is opened, and again every 15 seconds while it
-  is shown and the app is in front. When a running agent reads a changed
-  memory again is its own matter and is not known here.
-- **On the iPhone** Memory is where History is: a tab **Memory** beside
-  History, with every memory on the Mac, each row naming its folder, and
-  **Memory** as the fourth tab of a folder's screen, beside Git, History
-  and Files, with that folder's only. Both are under their agent, with
-  the same short line when there is none; pulled down, they are read
-  again. One picked opens in a sheet: read, with **Preview Markdown** and
-  **Show as Text**, changed in the iPhone's editor with **Save** and
-  **Revert**, and deleted with the same question. Closing with a change
-  that is not saved asks first.
 
 ### What the app reports
 
@@ -1754,10 +1671,10 @@ The app opens on **Macs**, the list of the Macs it is paired with, each with
 whether it is connected and how many sessions it has. Picking one goes into
 that Mac; pairing another adds it to the list, and holding a Mac forgets it.
 
-Inside a Mac there are five tabs, the places of the Mac's bar but the
+Inside a Mac there are four tabs, the places of the Mac's bar but the
 Inbox: **Sessions** (the Inbox when it holds something, how the Mac is
 doing, then the folders and their sessions), **History**
-(every conversation on the Mac), **Memory** (every memory the agents saved on the Mac, #220), **Schedules** (as the Mac's Schedules
+(every conversation on the Mac), **Schedules** (as the Mac's Schedules
 shows them, #50) and **Settings**, in the order of the Mac's Settings: General
 (keeping the Mac awake with its options, the temperature's unit), Git
 (commit messages, diffs), Privacy, then the Mac itself (switching to
@@ -1778,6 +1695,23 @@ button at the top right of Sessions goes back to the list of Macs.
   Shift+Tab, Ctrl, arrows, and Enter.
 - A compose field for writing a prompt with the normal iOS keyboard,
   autocorrect and input methods, sent to the terminal in one go.
+- The prompt and the answer to what the agent asks are two texts (#232,
+  the owner's decision, 2026-11-22). While the agent asks something (a
+  question or a permission), an "Answer the Agent" button is over the
+  field, also with nothing written. It opens the place to answer: what the
+  agent asks, shortened, its choices as buttons where it has some (a
+  permission's are only in the terminal, which says so), and a field of
+  its own for an answer in the user's words; "Back to Your Prompt" goes
+  back. Each keeps its text while the other is shown; the prompt's is kept
+  as before, the answer's for that session and that question only. While
+  the agent asks, Send in the prompt does not send, or the agent would take
+  the prompt as its answer: it says so (`ComposeWords.held`), and the
+  prompt keeps its text. An answer goes with the state it answers, as a
+  notification's reply does, so the host types it only while the agent
+  still asks that, and otherwise says that the agent has moved on. Once the
+  agent no longer asks, the place to answer goes and the prompt is shown
+  again, as it was. On the Mac, "Send to an Agent" from a page holds its
+  note the same way while the agent picked asks, with the same words.
 - Quick launch for the installed agents, and for the hosts of the Mac's
   SSH configuration, in any folder known to the Mac.
 - A folder picker browses the Mac's folders, starting at home, to start an
@@ -1808,7 +1742,7 @@ button at the top right of Sessions goes back to the list of Macs.
   folder only, as on the Mac; every conversation is in the History tab; both
   searched, grouped and filtered, a conversation read as a transcript
   ("Read the Transcript") and deleted as on the Mac (#46). **Files**: see
-  Files above. **Memory**: see "The agents' memory" above.
+  Files above.
 - A conversation can be resumed in its agent, or handed off to another
   installed agent. The handoff sheet shows the prompt the agent will start
   with, which can be edited and reset, and takes optional instructions. Both

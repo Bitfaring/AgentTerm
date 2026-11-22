@@ -2,7 +2,7 @@ import AgentTermProtocol
 import AppKit
 import SwiftUI
 
-/// The bar at the window's left edge: Sessions, History, Memory, Schedules and
+/// The bar at the window's left edge: Sessions, History, Schedules and
 /// Settings, the window's places, as the iPhone's tabs are. The place shown hides
 /// its list when pressed again.
 struct ActivityBar: View {
@@ -13,7 +13,6 @@ struct ActivityBar: View {
             item(.sessions, "Sessions", "terminal")
             item(.inbox, Inbox.title, "tray", count: model.inbox.unread)
             item(.history, "History", "clock.arrow.circlepath")
-            item(.memory, MemoryWords.title, "brain")
             item(.schedules, "Schedules", "calendar.badge.clock")
             Spacer(minLength: 0)
             item(.settings, "Settings", "gearshape")

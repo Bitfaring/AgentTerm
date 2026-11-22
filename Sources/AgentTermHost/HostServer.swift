@@ -2440,8 +2440,6 @@ public final class HostServer {
             files(for: client, in: (path as NSString).deletingLastPathComponent) {
                 try FileBrowser.trash(path); return nil
             }
-        case .memories, .readMemory, .writeMemory, .deleteMemory:
-            memory(message, for: client)
         case .gitStage(let path, let files):
             git(for: client, in: path) { GitActions.stage(files, in: path) }
         case .gitUnstage(let path, let files):
@@ -4007,48 +4005,6 @@ public final class HostServer {
             send(.exited(session: id, status: status), to: client)
         }
         broadcastSessions()
-    }
-}
-
-// MARK: The agents' memory (#220)
-
-extension HostServer {
-    /// Lists, reads, writes and deletes the agents' memories. Whatever path
-    /// a client sends, `AgentMemories` does it only to a file it lists
-    /// itself; what it refuses is said at once.
-    private func memory(_ message: ClientMessage, for client: Client) {
-        let home = configuration.home
-        switch message {
-        case .memories(let path):
-            work(for: client, { path.map { AgentMemories.memories(of: $0, home: home) } ?? AgentMemories.allMemories(home: home) }) {
-                server, client, list in
-                server.send(.memories(path: path, list: list), to: client)
-            }
-        case .readMemory(let path):
-            work(for: client, { AgentMemories.read(path, home: home) }) { server, client, result in
-                switch result {
-                case .success(let content): server.send(.memoryRead(path: path, content: content, problem: nil), to: client)
-                case .failure(let refusal): server.send(.memoryRead(path: path, content: nil, problem: refusal.description), to: client)
-                }
-            }
-        case .writeMemory(let path, let text, let seen):
-            work(for: client, { AgentMemories.write(text, to: path, seen: seen, home: home) }) { server, client, result in
-                switch result {
-                case .success(let memory): server.send(.memorySaved(memory), to: client)
-                case .failure(let refusal): server.send(.memoryRefused(path: path, problem: refusal.description), to: client)
-                }
-            }
-        case .deleteMemory(let path):
-            work(for: client, { AgentMemories.delete(path, home: home) }) { server, client, result in
-                switch result {
-                case .success(let memory):
-                    for other in server.clients.values where other.authenticated { server.send(.memoryDeleted(path: memory.path), to: other) }
-                case .failure(let refusal): server.send(.memoryRefused(path: path, problem: refusal.description), to: client)
-                }
-            }
-        default:
-            break
-        }
     }
 }
 #endif

@@ -110,7 +110,11 @@ INBOX_DONE_AFTER=""
 if [ "${INBOX:-}" = only ]; then INBOX_DONE_AFTER=8; fi
 # NOTNOW=only too: a notice after Not Now asks nothing of iOS (NOTIFY-2).
 if [ "${NOTNOW:-}" = only ]; then INBOX_DONE_AFTER=8; fi
-HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
+# ASK=only has it ask a question with choices a while after it starts, time
+# enough for the test to write a prompt first (IOS-12, #232).
+ASK_AFTER=""
+if [ "${ASK:-}" = only ]; then ASK_AFTER=15; fi
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_ASK_AFTER="$ASK_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
 AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only --protocol-version 1 > "$SECOND_STATE/daemon.log" 2>&1 &
@@ -181,6 +185,10 @@ if [ -n "${TOUCHES:-}" ]; then export TEST_RUNNER_AGENTTERM_TOUCH_LOG="$TOUCHES"
 # INBOX=only checks the Inbox at the top of the Sessions list (INBOX-4), and
 # nothing else.
 if [ "${INBOX:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_INBOX=1; fi
+# ASK=only writes a prompt in a stand-in Claude Code's session, answers the
+# question it asks meanwhile from the place to answer, then sends the prompt
+# (IOS-12), and nothing else. What the stand-in received is checked after.
+if [ "${ASK:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_ASK=1; fi
 # NOTE=only reads a stand-in agent's note on its row (IOS-9), and nothing else.
 if [ "${NOTE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NOTE=1; fi
 # NARROW=only narrows the iPad's window and looks at the list (IPAD-2), and
@@ -220,6 +228,23 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${IDLE:-}" = only ]; then grep -E "MEASURE idle" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (idle waits measured)."; rm -f "$LOG"; exit 0; fi
     if [ "${NOTE:-}" = only ]; then echo "iOS UI test passed (a note read only)."; rm -f "$LOG"; exit 0; fi
     if [ "${INBOX:-}" = only ]; then echo "iOS UI test passed (the Inbox only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${ASK:-}" = only ]; then
+        # IOS-12: the answer went in while the stand-in asked, as the keys of
+        # its second choice; the prompt only after the question was over.
+        INPUT="$FAKE_HOME/.demo-agent/claude-input"
+        line() { { grep -nF -- "$1" "$INPUT" 2>/dev/null || true; } | head -1 | cut -d: -f1; }
+        asked="$(line ASKED)"
+        answered="$(line ANSWERED)"
+        answer="$(line 'INPUT "\u001b[B\n"')"
+        prompt="$(line 'add tests for the JSON parser first')"
+        if [ -z "$asked" ] || [ -z "$answered" ] || [ -z "$answer" ] || [ -z "$prompt" ] \
+            || [ "$answer" -le "$asked" ] || [ "$answer" -ge "$answered" ] || [ "$prompt" -le "$answered" ]; then
+            echo "test-ios.sh: the prompt and the answer did not go where they were meant to; the stand-in received:" >&2
+            cat "$INPUT" >&2 2>/dev/null || echo "(nothing)" >&2
+            exit 1
+        fi
+        echo "iOS UI test passed (prompt and answer only)."; rm -f "$LOG"; exit 0
+    fi
     if [ "${MARKDOWN:-}" = only ]; then grep -E "MEASURE markdown" "$LOG" | sed 's/^.*MEASURE //' | sort -u; echo "iOS UI test passed (Markdown measured only)."; rm -f "$LOG"; exit 0; fi
     if [ "${NARROW:-}" = only ]; then grep -E "MEASURE narrow" "$LOG" | sed 's/^.*MEASURE //'; echo "iOS UI test passed (the window narrowed only)."; rm -f "$LOG"; exit 0; fi
     if [ -n "${MENU:-}" ]; then grep -E "MEASURE menu" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (menu touches counted)."; rm -f "$LOG"; exit 0; fi

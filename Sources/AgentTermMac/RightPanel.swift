@@ -5,14 +5,13 @@ import Combine
 import SwiftUI
 
 /// The right side of the window: the folder's git changes, the history of
-/// conversations each agent had in it, its files, or the agents' memory of
-/// it (#220).
+/// conversations each agent had in it, or its files.
 struct RightPanel: View {
     @AppStorage("rightPanelTab") private var tab = "git"
 
     var body: some View {
         VStack(spacing: 0) {
-            // Four tabs do not always fit the panel with their names. A
+            // The tabs do not always fit the panel with their names. A
             // name is never broken inside a word (#223): where they do not
             // all fit, only the tab on show keeps its name, and the others
             // are their symbols, named in their tooltips and to VoiceOver.
@@ -28,8 +27,6 @@ struct RightPanel: View {
                 HistoryView(ofFolder: true)
             } else if tab == "files" {
                 FilesView()
-            } else if tab == "memory" {
-                MemoryView(ofFolder: true)
             } else {
                 DiffView()
             }
@@ -40,10 +37,9 @@ struct RightPanel: View {
     /// The panel's tabs: each with its name, or only the one on show.
     private func tabs(named: Bool) -> some View {
         HStack(spacing: 4) {
-            PanelTab(title: "Git", symbol: "arrow.triangle.branch", selected: tab != "history" && tab != "files" && tab != "memory", named: named) { tab = "git" }
+            PanelTab(title: "Git", symbol: "arrow.triangle.branch", selected: tab != "history" && tab != "files", named: named) { tab = "git" }
             PanelTab(title: "History", symbol: "clock.arrow.circlepath", selected: tab == "history", named: named) { tab = "history" }
             PanelTab(title: "Files", symbol: "folder", selected: tab == "files", named: named) { tab = "files" }
-            PanelTab(title: MemoryWords.title, symbol: "brain", selected: tab == "memory", named: named) { tab = "memory" }
             Spacer(minLength: 0)
         }
     }

@@ -293,11 +293,13 @@ message's name, never its content. `--protocol-version`, which tests give a
 host to have it stand for an earlier one, also has it refuse what came
 after that number.
 
-The protocol version is 38. 38 added the agents' memory (#220): `memories`,
-`readMemory`, `writeMemory` and `deleteMemory` from a client, each named in
-`ClientMessage.since` with 38, so that a host of an earlier release is not
-sent them (#214), and `memories`, `memoryRead`, `memorySaved`,
-`memoryDeleted` and `memoryRefused` from the host. 37 took away `markConversation` and
+The protocol version is 39. 39 took away the agents' memory again (#220,
+the owner's decision of 2026-11-22): the messages 38 had added, `memories`,
+`readMemory`, `writeMemory` and `deleteMemory` from a client, which
+`ClientMessage.since` named with 38 so that a host of an earlier release
+was not sent them (#214), and `memories`, `memoryRead`, `memorySaved`,
+`memoryDeleted` and `memoryRefused` from the host, are gone, and a host
+reads none of them. 37 took away `markConversation` and
 `historyMarks`: a conversation in History is no longer pinned or hidden, on
 either app, and the host no longer reads, keeps or sends which ones were; the
 `history.json` an earlier build left in the host's folder is not read, and
@@ -789,92 +791,6 @@ iPhone asks the host with `history`, `resume` and `handoff`. For `resume` the
 host builds the command itself from the agent and the id, after checking
 both; for `handoff` it looks the conversation up again on its own disk, so a
 client only ever names a conversation and never supplies a path or command.
-
-## The agents' memory
-
-`AgentMemories` (in `AgentTermHost`) lists what an agent saves by itself
-for a folder and reads again in its later sessions there (#220). As the
-owner narrowed it (2026-11-21), memory is only that: the instructions a
-person writes for an agent (`CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules`,
-`AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`, and each
-agent's own under the user's home) are the folder's and the user's files,
-and are never listed, read, written or deleted through Memory. Only what
-was established of each agent at the version in use is listed (principle
-5). A file that is not there is not listed, and nothing is added.
-
-| Agent | What it saves by itself | How it was established |
-|---|---|---|
-| Claude Code 2.1.330 | `~/.claude/projects/<folder>/memory/*.md`, `MEMORY.md` first, listed | its `--help` names "auto-memory" and "memory paths"; the folders are on this Mac, beside the folder's conversations; a session of it in this repository is given its `MEMORY.md`. `<folder>` is named as for History (`AgentHistory.claudeProjectName`) |
-| Codex 0.170.0 | not known, nothing listed | its own text names files under a `memories` folder (`MEMORY.md`, `memory_summary.md`), and `~/.codex/memories_1.sqlite` is on this Mac, but no such folder is: where it writes them was not established |
-| Antigravity 1.5.12 | not known, nothing listed | nothing it writes by itself was established; its `/learn` adds to its rules, which are instructions |
-| Copilot CLI 1.0.114 | on GitHub, not in a file, nothing listed | `copilot help config` says so of its `memory` setting |
-
-"Its own text" is what the program installed on the Mac holds, read with
-`strings`; no session of an agent was started for this, and nothing of the
-user's own was read. What is not known of Codex, Antigravity and Copilot
-CLI is written here only: the apps no longer say it under the list, as
-the owner asked (2026-11-22), and say one short line when a list is empty.
-Whether an agent that is running reads a memory again once it was changed,
-or only at its next session, was not tried: the apps say nothing of it.
-
-**Every memory on the Mac, and its folder.** As History lists every
-conversation on the Mac, `AgentMemories.allMemories` lists the notes of
-every project under `~/.claude/projects`, whether or not the app lists
-that folder. Claude Code names a project by the folder with every
-character that is no letter or digit as "-", which cannot be turned back
-into a path ("apps-web" is `apps/web` as well as `apps-web`). So the
-folder is found as History finds it: from the `cwd` a conversation of that
-project recorded (`claudeFolder(of:in:)`: the project's newest five
-conversations, the first lines of each, taking a `cwd` only when the
-project's name is that folder's). When none tells it, `AgentMemory.folder`
-is nil and the row says "Folder not known" with the project's name as
-Claude Code wrote it (`AgentMemory.project`); the memory is read, changed
-and deleted as any other. A project with an empty `memory` lists nothing
-and is not looked into. For one folder, `memories(of:)` takes the project
-of that folder's own name, as `AgentHistory.conversations(in:)` does for
-its conversations: the side panel and the iPhone's folder show that only.
-
-A memory (`AgentMemory`) has its path, its file's name, its agent, the
-folder it is about and its project. It is given by its real path, links
-resolved; a note that a link leads to outside the folder of notes is not
-listed, nor are notes whose folder is a link to outside the user's home.
-
-**The path check.** `readMemory`, `writeMemory` and `deleteMemory` carry a
-path only. The host lists every memory again and does it only to a file
-in that list, compared after `..` is taken out of what the client sent
-(`AgentMemories.memory(at:)`): so only a note, by its real path, in the
-`memory` folder of one of Claude Code's projects. A client never has the
-host read, write or trash a path of its choosing, as it does with the
-Files tab's messages, which take any path and so were not used here. A
-folder's `CLAUDE.md` sent through these messages is refused as any other
-path that is not listed. `writeMemory` also carries the date the file had
-when the client read it; when the file has another date now, nothing is
-written and `memoryRefused` says so in words. A write replaces the file
-all at once (`Data.write(.atomic)`); a delete is `FileBrowser.trash`, the
-Trash of the Mac, or `AGENTTERM_TRASH_DIR` in a test. What is refused is
-answered at once: `memoryRead` with its `problem` for a read,
-`memoryRefused` for a write or a delete, both in `MemoryWords`' sentences;
-`memoryDeleted` goes to every device.
-
-Nothing is listed or read before the user opens Memory; the list is asked
-for again every 15 seconds while it is shown and the Mac app is in front,
-as History's is, and on the iPhone when it is opened or pulled down. So
-there is no switch for it in Settings (principle 4). The words, the
-grouping by agent as History groups (`AgentMemory.groups`) and the
-question before a delete (`DeleteMemoryQuestion`) are in
-`AgentTermProtocol/AgentMemory.swift`, for both apps (principle 9).
-
-Memory is where History is, on both apps. On the Mac, `MemoryStore` keeps
-the two lists, what was read, and what was changed and not saved, by path,
-with the date each change began from; `MemoryView` shows them as
-`HistoryView` does: `MemorySidebar` and `MemoryDetail` in the place of the
-bar at the left, every memory on the Mac, each row naming its folder, and
-`MemoryView(ofFolder: true)` in the side panel, the folder on show's, with
-a sheet over Sessions. On the iPhone, `MemoryList(folder:)` is used as
-`HistoryList(folder:)` is: with nil in a tab of `RootTabs` beside History,
-every memory on the Mac, and with the folder as the fourth tab of
-`FolderScreen`; `MemoryScreen` is the sheet a memory is read, changed and
-deleted in. Both apps go through the host for all of it, this Mac's too.
 
 ## Session names
 
@@ -2119,9 +2035,21 @@ the same folder can therefore be mixed up; the History tab is exact.
   which the emulator knows from the program's output or from the screen the
   host writes out on attaching): 4,000 characters were then submitted by
   the Return 80 ms after them in all four agents. Shorter text is typed as
-  it is, as is anything sent while the agent asks a question, which was
-  tried typed only, and anything to a program that did not ask, which would
-  show the brackets.
+  it is, as is anything to a program that did not ask, which would show the
+  brackets.
+- iPhone: the message field never types into an agent that asks something
+  (#232). Which of the two texts is shown, and what Send does with it, is
+  decided in `AgentTermProtocol` (`ComposeSend`), from the session's
+  `AgentState` and the side picked: the prompt is typed as above only
+  while the agent asks nothing (or its state is not known, as for a
+  shell); while it asks, the prompt is held with `ComposeWords.held`, and
+  the answer, written in its own field or picked from the question's
+  choices, is sent as a notification's reply is,
+  `answer(session:to:text:)`, which the host types by `AgentAnswer.steps`
+  only while the agent is still in that state. The prompt's draft is
+  `PhoneModel`'s per session, kept in `UserDefaults`; the answer's is kept
+  in memory for that session and that state, and goes when the state does.
+  The Mac's "Send to an Agent" sheet goes by the same decision for its note.
 
 ## macOS app structure
 

@@ -2,8 +2,8 @@ import AgentTermProtocol
 import AgentTermTerminal
 import SwiftUI
 
-/// A folder's git changes, the conversations agents had in it, its files
-/// and the agents' memory of it (#220): what the Mac shows in its side panel.
+/// A folder's git changes, the conversations agents had in it and its
+/// files: what the Mac shows in its side panel.
 struct FolderScreen: View {
     @EnvironmentObject private var model: PhoneModel
     /// The folder, or a worktree of one: the screen is then that folder's,
@@ -48,7 +48,6 @@ struct FolderScreen: View {
                 Text("Git").tag("git")
                 Text("History").tag("history")
                 Text("Files").tag("files")
-                Text(MemoryWords.title).tag("memory")
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
@@ -58,8 +57,6 @@ struct FolderScreen: View {
                 HistoryList(folder: folder)
             } else if tab == "files" {
                 FilesList(folder: folder)
-            } else if tab == "memory" {
-                MemoryList(folder: folder)
             } else {
                 ChangesList(folder: folder)
             }

@@ -4,8 +4,7 @@ import AgentTermTerminal
 import SwiftUI
 
 /// The app's places inside a Mac, as the Mac's bar of places has them: its
-/// sessions, every conversation, the agents' memory, the schedules, and
-/// the settings.
+/// sessions, every conversation, the schedules, and the settings.
 struct RootTabs: View {
     @EnvironmentObject private var model: PhoneModel
 
@@ -22,16 +21,6 @@ struct RootTabs: View {
             }
             .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
             .tag("history")
-            // What the agents saved by themselves, every one on the Mac (#220):
-            // where History is, as on the Mac.
-            NavigationStack {
-                MemoryList(folder: nil)
-                    .readableWidth()
-                    .background(Palette.canvas.ignoresSafeArea())
-                    .navigationTitle(MemoryWords.title)
-            }
-            .tabItem { Label(MemoryWords.title, systemImage: "brain") }
-            .tag("memory")
             // A place of its own, as on the Mac, not a row of Settings.
             NavigationStack {
                 SchedulesScreen()

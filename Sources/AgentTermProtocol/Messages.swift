@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 38
+public let agenttermProtocolVersion = 39
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -545,23 +545,6 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Merges, opens a pull request for, or throws away a worktree, and
     /// removes it (but for a pull request), its branch too when asked.
     case finishWorktree(folder: String, path: String, finish: WorktreeFinish, deleteBranch: Bool)
-    /// Asks for the agents' memories (#220), what each saved by itself: of
-    /// a folder, or, when `path` is nil, every one on the host, whatever
-    /// folder it is about, as `history` does. Sent when Memory is opened,
-    /// never by itself. Answered with `memories`.
-    case memories(path: String?)
-    /// Reads a memory. The host reads only a file it lists itself as a
-    /// memory, whatever `path` says. Answered with `memoryRead`.
-    case readMemory(path: String)
-    /// Replaces a memory's text. `seen` is the date the file had when the
-    /// client read it: when the file changed since, nothing is written and
-    /// `memoryRefused` says so. Answered with `memorySaved`, or with
-    /// `memoryRefused`.
-    case writeMemory(path: String, text: String, seen: Date)
-    /// Moves a memory to the Mac's Trash. Sent only after the user was
-    /// asked. Answered with `memoryDeleted` to every device, or with
-    /// `memoryRefused`.
-    case deleteMemory(path: String)
 }
 
 extension ClientMessage {
@@ -574,7 +557,6 @@ extension ClientMessage {
         switch self {
         case .readNotices: return 33
         case .deviceInBackground: return 36
-        case .memories, .readMemory, .writeMemory, .deleteMemory: return 38
         default: return 0
         }
     }
@@ -787,20 +769,6 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// A `findText` is over: whether there were more lines than were
     /// given, and why it could not be done, when it could not.
     case searchEnded(search: Int, truncated: Bool, problem: String?)
-    /// The agents' memories (#220), as `ClientMessage.memories` asked: a
-    /// folder's, or every one on the host when `path` is nil. Only files
-    /// that exist.
-    case memories(path: String?, list: [AgentMemory])
-    /// A memory as it was read. `content` is nil when it could not be: it
-    /// is gone, is not one the host lists, or is not text, as `problem` says.
-    case memoryRead(path: String, content: AgentMemoryContent?, problem: String?)
-    /// A memory was written: what it is now, with its new date.
-    case memorySaved(AgentMemory)
-    /// A memory went to the Trash: told to every device.
-    case memoryDeleted(path: String)
-    /// A memory was not written or not deleted, and why, in words
-    /// (`MemoryWords`): said at once where the memory is shown.
-    case memoryRefused(path: String, problem: String)
 }
 
 public enum MessageCoding {

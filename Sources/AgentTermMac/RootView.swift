@@ -22,7 +22,7 @@ struct RootView: View {
             if model.showSidebar {
                 // History's list of conversations is the place's own and
                 // reads better wide (#50); the others' lists are narrow.
-                let wide = model.place == .history || model.place == .memory
+                let wide = model.place == .history
                 PlaceList()
                     .frame(minWidth: wide ? 340 : 210, idealWidth: wide ? 420 : 250, maxWidth: wide ? 640 : 380)
             }
@@ -204,7 +204,6 @@ private struct WindowQuestions: ViewModifier {
                 Text("The branch does not follow a branch on a remote yet. It is pushed as \(push.remote)/\(push.branch), which it follows from then on.")
             }
             .modifier(DeleteConversationQuestions(store: model.historyStore))
-            .modifier(MemoryWindow(store: model.memoryStore))
             .modifier(CloseGroupQuestion())
     }
 }
@@ -842,7 +841,6 @@ private struct PlaceList: View {
         case .sessions: SidebarView()
         case .inbox: InboxList()
         case .history: HistorySidebar()
-        case .memory: MemorySidebar()
         case .schedules: SchedulesSidebar()
         case .settings: SettingsSections()
         }
@@ -928,7 +926,6 @@ private struct PlaceInTheMiddle: View {
         case .sessions: EmptyView()
         case .inbox: InboxDetail().background(Theme.canvas)
         case .history: ConversationDetail()
-        case .memory: MemoryDetail()
         case .schedules: SchedulesView().background(Theme.canvas)
         case .settings: SettingsPane()
         }
