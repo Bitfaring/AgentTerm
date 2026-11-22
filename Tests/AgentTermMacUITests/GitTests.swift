@@ -218,6 +218,32 @@ final class GitTests: MacUITestCase {
         XCTAssertEqual(read("notes.txt"), "first line\n")
     }
 
+    /// GIT-41 (#241): a branch whose name is wider than the panel does not
+    /// widen the popup of what the commits are of past it: "Commits of"
+    /// stays beside it, in one line, under the tabs.
+    func testABranchWiderThanThePanelLeavesCommitsOfInOneLine() throws {
+        git("branch", "dependabot/github_actions/actions-6d1c06d137-with-a-name-far-wider-than-the-panel-is", in: project)
+
+        app.press(.button("Git"))
+        app.press(.button("Commits"))
+        app.wait(for: .id("commits-branch"))
+        // Once more, with the branches already read: the popup is made with them.
+        app.press(.button("Changes"))
+        app.press(.button("Commits"))
+        app.wait(for: .id("commits-branch"))
+        shot("long-branch")
+
+        let tabs = try XCTUnwrap(app.frame(of: .button("Commits")))
+        let popup = try XCTUnwrap(app.frame(of: .id("commits-branch")))
+        let label = try XCTUnwrap(app.frame(of: .id("commits-of")), "\"Commits of\" is not shown")
+        XCTAssertLessThan(label.height, 30, "\"Commits of\" is broken over lines: \(label)")
+        XCTAssertLessThan(popup.minY - tabs.maxY, 30, "room between the tabs and the popup: \(popup) under \(tabs)")
+        XCTAssertLessThanOrEqual(label.maxX, popup.minX, "\"Commits of\" is not beside the popup")
+        // The tabs span the panel, but for its margins.
+        let first = try XCTUnwrap(app.frame(of: .button("Changes")))
+        XCTAssertGreaterThanOrEqual(label.minX, first.minX - 20, "\"Commits of\" is out of the panel: \(label)")
+    }
+
     /// GIT-47 (#38): the changes are stashed under a name, new files too;
     /// the stash opens out to its files; popped, the changes are back and
     /// the stash is empty; a stash is dropped after being asked.

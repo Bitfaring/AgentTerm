@@ -23,16 +23,24 @@ struct CommitsList: View {
 
     private var chooser: some View {
         HStack(spacing: 6) {
+            // Never squeezed: given no width, it was broken over a line a
+            // letter and taken out of sight (#241).
             Text("Commits of").font(.system(size: 11)).foregroundStyle(.secondary)
-            Picker("Commits of", selection: chosen) {
-                Text(currentTitle).tag("")
-                ForEach(others) { branch in
-                    Text(branch.name).tag(branch.name)
+                .fixedSize()
+                .accessibilityIdentifier("commits-of")
+            // As wide as its longest branch, which macOS gives a popup, but
+            // never wider than what the panel leaves it: a branch wider than
+            // the panel made the row wider than the panel (#241).
+            NoWiderThanOffered {
+                Picker("Commits of", selection: chosen) {
+                    Text(currentTitle).tag("")
+                    ForEach(others) { branch in
+                        Text(branch.name).tag(branch.name)
+                    }
                 }
+                .labelsHidden()
+                .controlSize(.small)
             }
-            .labelsHidden()
-            .controlSize(.small)
-            .fixedSize()
             .accessibilityIdentifier("commits-branch")
             Spacer(minLength: 0)
         }
@@ -100,6 +108,21 @@ struct CommitsList: View {
             }
             .padding(.vertical, 4)
         }
+    }
+}
+
+/// Its one view as wide as it would be, but never wider than it is offered:
+/// a popup otherwise either takes all the room it is offered, or, made its
+/// own size, as much as its longest item wants (#241).
+private struct NoWiderThanOffered: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let view = subviews.first else { return .zero }
+        let ideal = view.sizeThatFits(.unspecified)
+        return CGSize(width: min(ideal.width, proposal.width ?? ideal.width), height: ideal.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
     }
 }
 
