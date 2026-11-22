@@ -216,13 +216,19 @@ if [ "${NARROW:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NARROW=1; fi
 if [ "${MARKDOWN:-}" = only ]; then
     export TEST_RUNNER_AGENTTERM_ONLY_MARKDOWN=1 TEST_RUNNER_AGENTTERM_MEASURE_MAIN="$STATE/main-thread.txt"
 fi
+# Every run starts from the app installed afresh (#236): a run that left
+# a Live Activity on (a NOTNOW run's agent, done) had iOS launch the app in
+# the background once the next run installed it again, to say the activity
+# ended; the test's launch then brought that process to the front, without
+# the variables the test launches it with, and the first screen did not
+# show, every time. Installed afresh, nothing of an earlier run is left,
+# and iOS was not asked whether the app may notify.
+xcrun simctl uninstall "$DEVICE" com.manhpham.agentterm.dev || true
 # NOTNOW=only answers Not Now on the first screen, pairs, and checks that
 # iOS is not asked and the app's notifications are off (NOTIFY-2), and
-# nothing else. The app is installed afresh for it, so that iOS was not
-# asked before.
+# nothing else.
 if [ "${NOTNOW:-}" = only ]; then
     export TEST_RUNNER_AGENTTERM_ONLY_NOT_NOW=1
-    xcrun simctl uninstall "$DEVICE" com.manhpham.agentterm.dev || true
 fi
 # PAGES=only checks that a long session's earlier lines come a page at a time.
 if [ "${PAGES:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_HISTORY=1; fi

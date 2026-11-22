@@ -154,8 +154,10 @@ What they need, once:
   Accessibility. Without it the Mac tests are skipped, not failed: a run
   that says "Executed 0 tests" or lists them as skipped checked nothing.
 - For P, L and X: Xcode with an iPhone simulator (an iPad one too, for the
-  iPad), and `brew install xcodegen`. Name the simulator: the test resets its keychain, so it should
-  not be the one an app you use is paired in. `scripts/test-ios.sh --list`
+  iPad), and `brew install xcodegen`. Name the simulator: the test resets its keychain, and
+  `test-ios.sh` installs the app in it afresh for every run (#236: a Live
+  Activity an earlier run left on had iOS launch the app before the test
+  did), so it should not be the one an app you use is paired in. `scripts/test-ios.sh --list`
   shows the simulators.
 
 One test, or a few:
