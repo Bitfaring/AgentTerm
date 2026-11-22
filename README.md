@@ -73,8 +73,8 @@ can see, use and take over.
   days on each device; read on one device is read on all of them.
 - **Notifications on the Mac and the iPhone at once**, through Apple while the
   iPhone app is asleep, end-to-end encrypted for your iPhone. Answer from the
-  notification. A finished agent is told after 30 seconds, and not at all if
-  you already looked.
+  notification. Told at once, a finished agent too, and taken back
+  everywhere once you looked on one device.
 - **A Live Activity** on the iPhone's lock screen with what the Mac's agents
   are doing.
 
@@ -131,6 +131,7 @@ use versions from the same row.
 
 | Mac app | iPhone app | Protocol |
 |---|---|---|
+| 0.14.x | 0.14.x | 39 |
 | 0.13.x | 0.13.x | 36 |
 | 0.12.x | 0.12.x | 32 |
 | 0.11.x | 0.11.x | 31 |

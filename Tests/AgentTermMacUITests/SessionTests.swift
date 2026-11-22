@@ -1,4 +1,5 @@
 import AgentTermProtocol
+import ApplicationServices
 import XCTest
 
 /// Starting sessions from the Mac app, and what it shows of the Mac.
@@ -163,6 +164,48 @@ final class SessionTests: MacUITestCase {
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         return script
+    }
+
+    /// INBOX-13 (#218): a long answer is its end in the list, three lines
+    /// at most with "…" in front, and all of it in the item's detail, where
+    /// a button shows it with its Markdown rendered and as written again.
+    func testALongAnswerIsCutInTheListAndWholeInItsDetail() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        let words = (1...200).map { "word\($0)" }.joined(separator: " ")
+        let said = "# Result\\n\\n\(words)\\n\\n- the last point"
+        let agent = try standInAgent("long", hook: "Stop", event: #"{"hook_event_name":"Stop","last_assistant_message":"\#(said)"}"#)
+        phone.send(.create(CreateRequest(command: agent.path, cwd: project.path, title: "long")))
+        wait("the agent done", timeout: 20) { phone.sessions.contains { $0.title == "long" && $0.state?.isWorking == false } }
+        let long = try XCTUnwrap(phone.sessions.first { $0.title == "long" }?.id)
+        bringAppToFront()
+        app.press(.id("session-\(shell)"))
+
+        app.press(.id("place-inbox"))
+        app.wait(for: .id(phone.inboxRow(long)))
+        let row = try XCTUnwrap(app.first(.id(phone.inboxRow(long)))?.label)
+        XCTAssertTrue(row.contains(Inbox.cutMark), "a row that leaves out the beginning does not mark it: \(row)")
+        XCTAssertTrue(row.hasSuffix("- the last point"), "a row does not show the end: \(row)")
+        XCTAssertFalse(row.contains("word1 "), "a row shows the beginning of a long answer: \(row)")
+        shot("inbox-long-row")
+
+        // Picked: all of it, as it was written.
+        app.press(.id(phone.inboxRow(long)))
+        app.wait(for: .id("inbox-detail-text"))
+        let whole = try XCTUnwrap(app.first(.id("inbox-detail-text"))?.text)
+        XCTAssertTrue(whole.contains("# Result") && whole.contains("word1 ") && whole.contains("- the last point"), "the detail leaves something out")
+
+        // Rendered, then as written again, in History's words.
+        app.press(.id("inbox-markdown"))
+        app.wait(for: .id("inbox-detail-markdown"))
+        XCTAssertNil(app.first(.id("inbox-detail-text")))
+        app.wait(for: .button(ConversationDetails.showAsText))
+        shot("inbox-markdown")
+        app.press(.id("inbox-markdown"))
+        app.wait(for: .id("inbox-detail-text"))
+        app.wait(for: .button(ConversationDetails.previewMarkdown))
     }
 
     /// INBOX-3 (#67, #66): the Inbox is this Mac's history of what it was
@@ -387,6 +430,152 @@ final class SessionTests: MacUITestCase {
         app.waitGone(.containing("needs permission"))
     }
 
+    /// How long a notice of a done agent floats, for the tests that are
+    /// about that time (NOTE-20) or that read one for longer than it stays.
+    override func beforeTheAppStarts() throws {
+        if name.contains("GoesAfterItsTime") { appEnvironment[FloatingNotices.staysVariable] = "4" }
+        if name.contains("OpensOutToAll") || name.contains("LeavesTheTerminalItsSize") || name.contains("AreStacked") {
+            appEnvironment[FloatingNotices.staysVariable] = "120"
+        }
+    }
+
+    /// A stand-in for Claude Code that tells its hooks it is done, so many
+    /// seconds after it starts.
+    private func standInDone(_ name: String, after seconds: Int, said: String) throws -> URL {
+        let folder = root.appendingPathComponent("stand-in-\(name)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let script = folder.appendingPathComponent("claude")
+        let event = #"{"hook_event_name":"Stop","last_assistant_message":"\#(said)"}"#
+        try "#!/bin/sh\nsleep \(seconds)\nprintf '%s' '\(event)' | '\(hostExecutable.path)' hook claude Stop\nexec sleep 600\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    /// NOTE-18 (#225): an agent's notice floats over the terminal and takes
+    /// no room from it: the session in front has the same rows, and its
+    /// terminal the same place, before the notice shows, while it is on
+    /// show and after it is dismissed. Before the change the notice was a
+    /// banner above the terminal, which lost its height while it showed.
+    func testAFloatingNoticeLeavesTheTerminalItsSize() throws {
+        let phone = try device()
+        let script = try standInDone("build", after: 10, said: "The build passes.")
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "build")))
+        wait("the agent's session") { phone.sessions.count == 1 }
+        let agent = try XCTUnwrap(phone.sessions.first?.id)
+        bringAppToFront()
+        app.press(.id("session-\(agent)"))
+        app.wait(for: .id("terminal-\(agent)"))
+        func rows() -> Int? { phone.sessions.first { $0.id == agent }?.size.rows }
+        func place() -> CGRect? { app.frame(of: .id("terminal-\(agent)")) }
+        // The size the Mac shows it at, once it has settled.
+        var before = rows()
+        wait("the terminal's size to settle", timeout: 8) {
+            Thread.sleep(forTimeInterval: 1)
+            defer { before = rows() }
+            return before != nil && before == rows()
+        }
+        let rowsBefore = try XCTUnwrap(rows())
+        let placeBefore = try XCTUnwrap(place())
+        XCTAssertFalse(app.exists(.id("floating-notice-\(agent)")), "the agent was done before its terminal was measured")
+
+        // Done: its notice shows, the session in front as any other (#180).
+        app.wait(for: .id("floating-notice-\(agent)"), timeout: 20)
+        app.wait(for: .containing("is done"))
+        app.wait(for: .containing("The build passes."))
+        // Long enough for a new size to reach the host, if there were one.
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertEqual(rows(), rowsBefore, "the terminal changed size when the notice showed")
+        XCTAssertEqual(place(), placeBefore, "the terminal moved when the notice showed")
+        // Over the terminal, at its top, in the centre of the middle.
+        let card = try XCTUnwrap(app.frame(of: .id("floating-notice-\(agent)")))
+        XCTAssertTrue(placeBefore.insetBy(dx: -20, dy: -20).contains(card), "the notice is not over the terminal: \(card) in \(placeBefore)")
+        XCTAssertEqual(card.midX, placeBefore.midX, accuracy: 4, "the notice is not in the centre of the middle")
+        XCTAssertLessThanOrEqual(card.width, 560)
+        shot("floating-notice")
+
+        app.press(.id("floating-notice-dismiss-\(agent)"))
+        app.waitGone(.id("floating-notice-\(agent)"))
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertEqual(rows(), rowsBefore, "the terminal changed size when the notice went")
+        XCTAssertEqual(place(), placeBefore, "the terminal moved when the notice went")
+    }
+
+    /// NOTE-19 (#225): two agents done are two notices, each a card with
+    /// its own buttons, the newest on top; one dismissed leaves the other.
+    func testTheNoticesOfTwoAgentsAreStacked() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        phone.send(.create(CreateRequest(command: try standInDone("tests", after: 3, said: "All tests pass.").path, cwd: project.path, title: "tests")))
+        phone.send(.create(CreateRequest(command: try standInDone("docs", after: 7, said: "The docs are written.").path, cwd: project.path, title: "docs")))
+        wait("the agents' sessions") { phone.sessions.count == 3 }
+        let tests = try XCTUnwrap(phone.sessions.first { $0.title == "tests" }?.id)
+        let docs = try XCTUnwrap(phone.sessions.first { $0.title == "docs" }?.id)
+        bringAppToFront()
+        app.press(.id("session-\(shell)"))
+
+        app.wait(for: .id("floating-notice-\(tests)"), timeout: 20)
+        app.wait(for: .id("floating-notice-\(docs)"), timeout: 20)
+        XCTAssertNotNil(app.first(.id("floating-notice-\(tests)")), "the first notice went when the second came")
+        XCTAssertTrue(app.exists(.containing("All tests pass.")) && app.exists(.containing("The docs are written.")))
+        for session in [tests, docs] {
+            XCTAssertNotNil(app.first(.id("floating-notice-open-\(session)")), "a notice without its Open")
+            XCTAssertNotNil(app.first(.id("floating-notice-dismiss-\(session)")), "a notice without its Dismiss")
+        }
+        // The newest on top: accessibility counts from the top of the screen.
+        wait("the notices in their places") {
+            guard let older = self.app.frame(of: .id("floating-notice-\(tests)")), let newer = self.app.frame(of: .id("floating-notice-\(docs)")) else { return false }
+            return newer.maxY <= older.minY
+        }
+        shot("floating-notices-stacked")
+
+        app.press(.id("floating-notice-dismiss-\(docs)"))
+        app.waitGone(.id("floating-notice-\(docs)"))
+        XCTAssertNotNil(app.first(.id("floating-notice-\(tests)")), "dismissing one notice took the other")
+        // Open shows the other's session, and its notice goes.
+        app.press(.id("floating-notice-open-\(tests)"))
+        app.wait(for: .id("terminal-\(tests)"))
+        app.waitGone(.id("floating-notice-\(tests)"))
+    }
+
+    /// NOTE-20 (#225): a notice of an agent that is done goes by itself
+    /// after its time (10 seconds; 4 here, `AGENTTERM_NOTICE_SECONDS`) and
+    /// is still in the Inbox; one of an agent that waits is still there
+    /// after that time.
+    func testADoneNoticeGoesAfterItsTimeAndOneThatWaitsStays() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        let asks = try standInAgent(
+            "asks", hook: "PermissionRequest", event: #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make deploy"}}"#)
+        phone.send(.create(CreateRequest(command: asks.path, cwd: project.path, title: "deploy")))
+        phone.send(.create(CreateRequest(command: try standInDone("tests", after: 3, said: "All tests pass.").path, cwd: project.path, title: "tests")))
+        wait("the agents' sessions") { phone.sessions.count == 3 }
+        let deploy = try XCTUnwrap(phone.sessions.first { $0.title == "deploy" }?.id)
+        let tests = try XCTUnwrap(phone.sessions.first { $0.title == "tests" }?.id)
+        bringAppToFront()
+        app.press(.id("session-\(shell)"))
+
+        app.wait(for: .id("floating-notice-\(deploy)"), timeout: 20)
+        app.wait(for: .id("floating-notice-\(tests)"), timeout: 20)
+        let shown = Date()
+        // Gone by itself, not before its time.
+        app.waitGone(.id("floating-notice-\(tests)"), timeout: 15)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(shown), 2, "the notice went before its time")
+        XCTAssertEqual(phone.sessions.first { $0.id == tests }?.unseen, true, "a notice that went by itself was seen")
+        app.wait(for: .containing("Inbox, 2 items"))
+        // The one that waits: still there after that time again.
+        Thread.sleep(forTimeInterval: 6)
+        XCTAssertNotNil(app.first(.id("floating-notice-\(deploy)")), "a notice of an agent that waits went by itself")
+        XCTAssertTrue(app.exists(.containing("needs permission")))
+        // And the done one is in the Inbox.
+        app.press(.id("place-inbox"))
+        app.wait(for: .id(phone.inboxRow(tests)))
+    }
+
     func testStartingSessionsAndFindingThemAgainAfterReopeningTheApp() throws {
         let phone = try device()
         // SES-2: a shell from the launch buttons.
@@ -514,5 +703,84 @@ final class SessionTests: MacUITestCase {
         app.press(.button("SSH"))
         app.wait(for: .button("build-server"), menus: true)
         XCTAssertFalse(app.nodes(menus: true).contains { $0.title.contains("internal") }, "a pattern is offered as a host")
+    }
+}
+
+/// LAUNCH-9 (#223): with the four agents installed, the buttons in the
+/// middle of an empty folder are seven, and do not fit in one row beside
+/// the side panel.
+final class LaunchButtonsTests: MacUITestCase {
+    /// Stand-ins for the two agents the other tests leave not installed.
+    /// They are only listed here, never started.
+    override func beforeTheHostStarts() throws {
+        for name in ["agy", "copilot"] {
+            let file = root.appendingPathComponent("agents").appendingPathComponent(name)
+            try "#!/bin/sh\nexit 0\n".write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
+    }
+
+    private static let titles = ["Claude Code", "Codex", "Antigravity", "Copilot CLI", "Shell", "Browser", "SSH"]
+
+    /// Where each button of the middle is: the one under the sentence, not
+    /// the header's of the same name.
+    private func middleButtons() -> [String: CGRect] {
+        guard let sentence = app.frame(of: .containing("Start an agent in this folder.")) else { return [:] }
+        var found: [String: CGRect] = [:]
+        for title in Self.titles {
+            found[title] = app.all(.button(title)).compactMap { MacDriver.frame($0.element) }.first { $0.minY >= sentence.maxY }
+        }
+        return found
+    }
+
+    /// The app's window at its smallest, 940 × 540, which is asked for by
+    /// name: nothing here relies on the window refusing a smaller one.
+    private func shrinkTheWindow() throws -> CGRect {
+        var value: CFTypeRef?
+        AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.pid), kAXMainWindowAttribute as CFString, &value)
+        let window = try XCTUnwrap(value.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }, "the app has no main window")
+        var wanted = CGSize(width: 940, height: 540)
+        let size = try XCTUnwrap(AXValueCreate(.cgSize, &wanted))
+        XCTAssertEqual(AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, size), .success, "the window was not resized")
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        return try XCTUnwrap(MacDriver.frame(window))
+    }
+
+    /// LAUNCH-9 (#223): each of the seven keeps its label whole on one
+    /// line, with the side panel open and the window at its smallest: as
+    /// wide as in a wide window, as tall as the shortest, inside the
+    /// window and over no other. Before the fix they were squeezed into
+    /// one row and their labels broke inside words ("Antigra/vity").
+    func testTheLaunchButtonsOfAnEmptyFolderKeepTheirLabelsOnOneLine() throws {
+        app.wait(for: .text("project, folder"), timeout: 15)
+        app.press(.id("folder-\(project.path)"))
+        app.wait(for: .containing("Start an agent in this folder."), timeout: 15)
+        app.wait("the seven buttons in the middle", timeout: 20) { self.middleButtons().count == Self.titles.count }
+        // As the window opens, each as wide as its label asks.
+        let wide = middleButtons()
+
+        app.press(.button("Git"))
+        app.wait(for: .id("worktree-picker"), timeout: 15)
+        let window = try shrinkTheWindow()
+        XCTAssertEqual(window.width, 940, accuracy: 1, "the window is not at its smallest width")
+        XCTAssertTrue(app.exists(.id("worktree-picker")), "the side panel is no longer open")
+        app.wait("the seven buttons still in the middle", timeout: 15) { self.middleButtons().count == Self.titles.count }
+        let narrow = middleButtons()
+        shot("launch-buttons")
+
+        let oneLine = try XCTUnwrap(narrow.values.map(\.height).min())
+        XCTAssertLessThan(oneLine, 44, "no button is one line tall")
+        for title in Self.titles {
+            let frame = try XCTUnwrap(narrow[title], "\(title) has no button in the middle")
+            // A second line would add its height, about 16 points; a menu's button may differ from a plain one by a point or two.
+            XCTAssertLessThan(frame.height, oneLine + 6, "\(title) takes more than one line: \(frame)")
+            XCTAssertEqual(frame.width, wide[title]?.width ?? 0, accuracy: 0.5, "\(title) is squeezed, its label cut or broken: \(frame)")
+            XCTAssertTrue(window.contains(frame), "\(title) is cut by the window \(window): \(frame)")
+            for other in Self.titles where other != title {
+                XCTAssertFalse(frame.intersects(narrow[other] ?? .null), "\(title) is over \(other)")
+            }
+        }
+        // They do not fit in one row there: on more than one, then.
+        XCTAssertGreaterThan(Set(narrow.values.map { $0.minY.rounded() }).count, 1, "seven buttons in one row of a window \(window.width) wide")
     }
 }

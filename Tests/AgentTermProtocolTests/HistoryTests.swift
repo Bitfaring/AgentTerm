@@ -25,8 +25,8 @@ final class HistoryTests: XCTestCase {
         ]
     }
 
-    private func ids(_ filter: HistoryFilter, pinned: Set<String> = [], hidden: Set<String> = []) -> [String] {
-        filter.groups(all, pinned: pinned, hidden: hidden, agentNames: [("claude", "Claude Code"), ("codex", "Codex")], now: now, calendar: calendar)
+    private func ids(_ filter: HistoryFilter) -> [String] {
+        filter.groups(all, agentNames: [("claude", "Claude Code"), ("codex", "Codex")], now: now, calendar: calendar)
             .map { $0.title + ": " + $0.conversations.map(\.sessionID).joined(separator: ",") }
     }
 
@@ -45,18 +45,18 @@ final class HistoryTests: XCTestCase {
     }
 
     /// HIST-16: grouped by day, the newest first, with today and
-    /// yesterday named; the pinned ones first in either grouping; a hidden
-    /// one left out unless hidden ones are shown.
-    func testConversationsAreGroupedByDayPinnedFirstAndHiddenLeftOut() {
+    /// yesterday named, or by agent in the order given; no group but
+    /// those (#219: none of pinned ones).
+    func testConversationsAreGroupedByDayOrByAgent() {
         let byDay = ids(HistoryFilter(grouping: .day))
         XCTAssertEqual(byDay.count, 4)
         XCTAssertEqual(byDay[0], "Today: a,b")
         XCTAssertEqual(byDay[1], "Yesterday: c")
         XCTAssertTrue(byDay[2].hasSuffix(": d") && byDay[3].hasSuffix(": e"))
-        XCTAssertEqual(ids(HistoryFilter(), pinned: ["claude:e", "codex:b"]), ["Pinned: b,e", "Claude Code: a,c", "Codex: d"])
-        XCTAssertEqual(ids(HistoryFilter(grouping: .day), pinned: ["claude:a"]).prefix(2), ["Pinned: a", "Today: b"])
-        XCTAssertEqual(ids(HistoryFilter(), hidden: ["claude:a", "codex:b"]), ["Claude Code: c,e", "Codex: d"])
-        XCTAssertEqual(ids(HistoryFilter(showsHidden: true), hidden: ["claude:a"]), ["Claude Code: a,c,e", "Codex: b,d"])
+        XCTAssertEqual(ids(HistoryFilter(grouping: .agent)), ["Claude Code: a,c,e", "Codex: b,d"])
+        XCTAssertEqual(ids(HistoryFilter(agent: "claude", grouping: .day)).prefix(2), ["Today: a", "Yesterday: c"], "the filter holds in either grouping")
+        let groups = HistoryFilter().groups(all, agentNames: [("codex", "Codex"), ("claude", "Claude Code")], now: now, calendar: calendar)
+        XCTAssertEqual(groups.map(\.id), ["agent:codex", "agent:claude"], "the agents in the order given, and no other group")
         // An agent that is not among the known ones still has its group.
         let unknown = HistoryFilter().groups([conversation("z", agent: "new", hoursAgo: 1)], agentNames: [("claude", "Claude Code")], now: now, calendar: calendar)
         XCTAssertEqual(unknown.map(\.title), ["new"])
@@ -88,24 +88,30 @@ final class HistoryTests: XCTestCase {
 
         let first = DeleteConversationQuestion(conversation("a", hoursAgo: 1), agentName: "Claude Code", again: false)
         XCTAssertEqual(first.title, "Delete this conversation?")
-        XCTAssertTrue(first.message.contains("hide it instead"))
+        XCTAssertEqual(first.message, "This deletes Claude Code's own record of “title a”, not only its row here.")
+        XCTAssertFalse(first.message.lowercased().contains("hide"), "it offers to hide it, which is gone (#219)")
         let second = DeleteConversationQuestion(conversation("a", hoursAgo: 1), agentName: "Claude Code", again: true)
         XCTAssertEqual(second.title, "Delete it for good from Claude Code?")
         XCTAssertEqual(second.confirm, "Delete Conversation")
     }
 
     /// HIST-24 (#50): the two questions before several conversations are
-    /// deleted, those picked or every one, and what is said after.
+    /// deleted, those picked or every one, and what is said after, which
+    /// say that Antigravity's are kept (#224).
     func testTheQuestionsBeforeSeveralConversationsAreDeleted() {
         XCTAssertEqual(DeleteConversationsQuestion(count: 1, again: false).title, "Delete 1 conversation?")
         XCTAssertEqual(DeleteConversationsQuestion(count: 3, again: false).title, "Delete 3 conversations?")
-        XCTAssertTrue(DeleteConversationsQuestion(count: 3, again: false).message.contains("Pinned ones stay"))
+        let asked = DeleteConversationsQuestion(count: 3, again: false).message
+        XCTAssertTrue(asked.hasSuffix("One a session is having stays, as do Antigravity's, which are deleted in Antigravity."))
+        XCTAssertFalse(asked.lowercased().contains("pinned"), "it speaks of pinned ones, which are gone (#219)")
         XCTAssertEqual(DeleteConversationsQuestion(count: nil, again: false).title, "Delete every conversation on this Mac?")
         XCTAssertEqual(DeleteConversationsQuestion(count: 1, again: true).confirm, "Delete Conversation")
         XCTAssertEqual(DeleteConversationsQuestion(count: 3, again: true).confirm, "Delete 3 Conversations")
         XCTAssertEqual(DeleteConversationsQuestion(count: nil, again: true).confirm, "Delete Every Conversation")
         XCTAssertTrue(DeleteConversationsQuestion(count: nil, again: true).message.contains("every conversation on this Mac can no longer be resumed"))
         XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 1, kept: 0), "1 conversation was deleted.")
-        XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 0, kept: 1), "0 conversations were deleted. 1 was kept: pinned, having a session, or of Antigravity.")
+        XCTAssertEqual(DeleteConversationsQuestion.done(deleted: 0, kept: 1), "0 conversations were deleted. 1 was kept: a session is having it, it is Antigravity's, or it could not be deleted.")
+        XCTAssertEqual(
+            DeleteConversationsQuestion.done(deleted: 2, kept: 2), "2 conversations were deleted. 2 were kept: a session is having them, they are Antigravity's, or they could not be deleted.")
     }
 }

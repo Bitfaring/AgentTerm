@@ -1,4 +1,5 @@
 import AgentTermProtocol
+import SQLite3
 import XCTest
 
 @testable import AgentTermHost
@@ -218,10 +219,274 @@ final class AgentHistoryTests: XCTestCase {
         XCTAssertTrue(history("/nonexistent/place").isEmpty)
     }
 
+    private let antigravity = ".gemini/antigravity-cli"
+    private var antigravityListFile: URL { home.appendingPathComponent("\(antigravity)/cache/conversation_metadata.json") }
+
+    /// Every file under the test's home, with what it holds.
+    private func everything() throws -> [String: Data] {
+        var files: [String: Data] = [:]
+        let root = home.resolvingSymlinksInPath()
+        for case let url as URL in FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])! {
+            if (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true {
+                files[String(url.resolvingSymlinksInPath().path.dropFirst(root.path.count))] = try Data(contentsOf: url)
+            }
+        }
+        return files
+    }
+
+    private func listed(_ id: String) throws -> Conversation {
+        try XCTUnwrap(history().first { $0.agent == "agy" && $0.sessionID == id })
+    }
+
+    // MARK: Antigravity's store of its conversations (#224)
+
+    private let storeRows = [
+        AntigravityStoreFixture.Row(id: "5d0c1a52-0d0e-4b7c-9a43-1f2e3d4c5b6a", title: "Plan the release", modified: "2026-11-20 01:02:03.123456+07:00", workspaces: ["file:///Users/me/Dev/my.app"]),
+        AntigravityStoreFixture.Row(
+            id: "6e1d2b63-1e1f-4c8d-8b54-2a3f4e5d6c7b", title: "", preview: "tidy the README", modified: "2026-11-21 09:00:00.5+07:00", workspaces: ["file:///Users/me/Dev/my.app"]),
+        AntigravityStoreFixture.Row(id: "7f2e3c74-2f2a-4d9e-9c65-3b4a5f6e7d8c", title: "Elsewhere", modified: "2026-11-21 10:00:00.000001+07:00", workspaces: ["file:///Users/me/Dev/other"]),
+        // Nothing was said in it: Antigravity's own list leaves it out too.
+        AntigravityStoreFixture.Row(id: "8a3f4d85-3a3b-4eaf-8d76-4c5b6a7f8e9d", title: "", modified: "2026-11-21 11:00:00.000001+07:00", workspaces: ["file:///Users/me/Dev/my.app"]),
+    ]
+
+    /// HIST-27 (#224): Antigravity 1.5.12 keeps its list in a SQLite store
+    /// and writes no `conversation_metadata.json`: its conversations are
+    /// listed from the store.
+    func testAntigravityListsTheConversationsOfItsStore() throws {
+        try AntigravityStoreFixture.make(in: home, rows: storeRows)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: antigravityListFile.path))
+
+        let found = history()
+        XCTAssertEqual(found.map(\.id), ["agy:6e1d2b63-1e1f-4c8d-8b54-2a3f4e5d6c7b", "agy:5d0c1a52-0d0e-4b7c-9a43-1f2e3d4c5b6a"], "newest first; another folder's and an empty one left out")
+        XCTAssertEqual(found.map(\.title), ["tidy the README", "Plan the release"], "its title, else what was first said")
+        XCTAssertEqual(found[1].cwd, project)
+        XCTAssertEqual(found[1].resumeCommand, "agy --conversation 5d0c1a52-0d0e-4b7c-9a43-1f2e3d4c5b6a")
+        XCTAssertEqual(found[1].updatedAt.timeIntervalSince1970, 1_795_111_323.123, accuracy: 0.01)
+        XCTAssertNil(found[1].source, "no transcript file was written for it")
+        XCTAssertEqual(AgentHistory.allConversations(home: home.path).count, 3)
+
+        try write("\(antigravity)/brain/\(storeRows[0].id)/.system_generated/logs/transcript.jsonl", ["{}"])
+        try write("\(antigravity)/brain/\(storeRows[0].id)/.system_generated/logs/transcript_full.jsonl", ["{}"])
+        XCTAssertTrue(history()[1].source?.hasSuffix("/brain/\(storeRows[0].id)/.system_generated/logs/transcript_full.jsonl") == true, "the untruncated file is preferred")
+    }
+
+    /// HIST-27 (#224): a folder that has the earlier list beside the store
+    /// lists a conversation once, as the store says; one only the earlier
+    /// list has is still listed.
+    func testAntigravityListsAConversationOnceWhenItsStoreAndItsEarlierListHaveIt() throws {
+        try AntigravityStoreFixture.make(in: home, rows: storeRows)
+        let both = storeRows[0].id, moved = storeRows[2].id
+        try write(
+            "\(antigravity)/cache/conversation_metadata.json",
+            [
+                """
+                {"conversations":{
+                  "\(both)":{"summary":{"Title":"Its earlier title","UpdatedAt":"2026-11-10T17:00:22Z","WorkspaceURIs":["file:///Users/me/Dev/my.app"]}},
+                  "\(moved)":{"summary":{"Title":"Was here","UpdatedAt":"2026-11-10T17:00:22Z","WorkspaceURIs":["file:///Users/me/Dev/my.app"]}},
+                  "conv-1":{"summary":{"Title":"Only in the list","UpdatedAt":"2026-11-09T17:00:22Z","WorkspaceURIs":["file:///Users/me/Dev/my.app"]}}
+                }}
+                """
+            ])
+        let found = history()
+        XCTAssertEqual(found.map(\.sessionID), [storeRows[1].id, both, "conv-1"], "once each; the one the store has in another folder is not this folder's")
+        XCTAssertEqual(found[1].title, "Plan the release", "the store's, which the Antigravity in use writes")
+        XCTAssertEqual(found[1].updatedAt.timeIntervalSince1970, 1_795_111_323.123, accuracy: 0.01)
+        XCTAssertEqual(AgentHistory.allConversations(home: home.path).filter { $0.sessionID == moved }.map(\.cwd), ["/Users/me/Dev/other"])
+        XCTAssertNil(AgentHistory.antigravityProblem(home: home.path))
+    }
+
+    /// HIST-27 (#224): a store that cannot be read, or whose table is not
+    /// the one known, is said to be so with the reason. Nothing is
+    /// guessed from it, nothing is written, and what the earlier list
+    /// holds is still listed.
+    func testAntigravitysStoreThatCannotBeReadIsSaid() throws {
+        XCTAssertNil(AgentHistory.antigravityProblem(home: home.path), "no store is no problem")
+        try write(
+            "\(antigravity)/cache/conversation_metadata.json",
+            [#"{"conversations":{"conv-1":{"summary":{"Title":"Only in the list","UpdatedAt":"2026-11-09T17:00:22Z","WorkspaceURIs":["file:///Users/me/Dev/my.app"]}}}}"#])
+        let store = AntigravityStoreFixture.file(in: home)
+        let said = "Antigravity's conversations are not listed: its database of them could not be read. "
+
+        // Not a database at all.
+        try Data("these bytes are not what SQLite writes, however long they go on".utf8).write(to: store)
+        var before = try everything()
+        XCTAssertEqual(history().map(\.sessionID), ["conv-1"])
+        var problem = try XCTUnwrap(AgentHistory.antigravityProblem(home: home.path))
+        XCTAssertTrue(problem.hasPrefix(said + "It is not a database that can be read"), problem)
+        XCTAssertEqual(try everything(), before)
+
+        // A database of a later version: the table under another name.
+        try FileManager.default.removeItem(at: store)
+        try AntigravityStoreFixture.make(in: home, rows: [], schema: ["CREATE TABLE summaries (conversation_id TEXT PRIMARY KEY, title TEXT)", "INSERT INTO summaries VALUES ('a-1', 'Renamed')"])
+        before = try everything()
+        XCTAssertEqual(history().map(\.sessionID), ["conv-1"])
+        XCTAssertEqual(AgentHistory.antigravityProblem(home: home.path), said + "It has no table “conversation_summaries”, so it is not of a version of Antigravity that AgentTerm knows.")
+        XCTAssertEqual(try everything(), before)
+
+        // The table, without the columns the folder and the time are in.
+        try FileManager.default.removeItem(at: store)
+        try AntigravityStoreFixture.make(
+            in: home, rows: [],
+            schema: [
+                "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, workspaces BLOB)",
+                "INSERT INTO conversation_summaries VALUES ('a-1', 'Reshaped', '', x'00')",
+            ])
+        before = try everything()
+        XCTAssertEqual(history().map(\.sessionID), ["conv-1"], "guessed at")
+        problem = try XCTUnwrap(AgentHistory.antigravityProblem(home: home.path))
+        XCTAssertEqual(problem, said + "Its table “conversation_summaries” has no “last_modified_time”, “workspace_uris”, so it is not of a version of Antigravity that AgentTerm knows.")
+        XCTAssertEqual(try everything(), before)
+    }
+
+    /// HIST-27 (#224): the store is read while an Antigravity has it open
+    /// and writes to it, without a file made beside it and without a lock
+    /// in its way. What is still only in its write-ahead log is not seen
+    /// until Antigravity brings it into the store.
+    func testAntigravitysStoreIsReadWhileItIsWrittenAndNothingIsMadeBesideIt() throws {
+        let writer = try XCTUnwrap(try AntigravityStoreFixture.make(in: home, rows: [storeRows[0]], open: true))
+        var closed = false
+        defer { if !closed { sqlite3_close(writer) } }
+        // As it is between two of Antigravity's checkpoints.
+        try AntigravityStoreFixture.run("PRAGMA wal_autocheckpoint=0", in: writer)
+        try AntigravityStoreFixture.run("PRAGMA wal_checkpoint(TRUNCATE)", in: writer)
+        try AntigravityStoreFixture.insert(storeRows[1], in: writer)
+        let folder = home.appendingPathComponent(antigravity)
+        let names = { try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted() }
+        XCTAssertEqual(try names(), ["conversation_summaries.db", "conversation_summaries.db-shm", "conversation_summaries.db-wal"])
+
+        // In the middle of a change of Antigravity's too.
+        try AntigravityStoreFixture.run("BEGIN IMMEDIATE", in: writer)
+        try AntigravityStoreFixture.insert(storeRows[3], in: writer)
+        XCTAssertEqual(history().map(\.sessionID), [storeRows[0].id], "what the store holds; the one in the write-ahead log is not seen yet")
+        XCTAssertNil(AgentHistory.antigravityProblem(home: home.path))
+        try AntigravityStoreFixture.run("COMMIT", in: writer)
+        // Nothing of the reader's holds the checkpoint back.
+        try AntigravityStoreFixture.run("PRAGMA wal_checkpoint(TRUNCATE)", in: writer)
+        XCTAssertEqual(history().map(\.sessionID), [storeRows[1].id, storeRows[0].id])
+
+        // With no Antigravity running there is the one file, and a reader
+        // that opened it the ordinary way would make two beside it.
+        closed = true
+        try AntigravityStoreFixture.close(writer, in: home)
+        XCTAssertEqual(try names(), ["conversation_summaries.db"])
+        let before = try everything()
+        XCTAssertEqual(history().count, 2)
+        XCTAssertEqual(try names(), ["conversation_summaries.db"])
+        XCTAssertEqual(try everything(), before)
+    }
+
+    /// HIST-26 (#224): a conversation of Antigravity is not deleted,
+    /// whether it is listed from its store, from the list of an earlier
+    /// version or from both: refused with where to delete it, and nothing
+    /// under the home is rewritten, moved or made.
+    func testAConversationOfAntigravityIsNotDeleted() throws {
+        let trash = home.appendingPathComponent("trash")
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        setenv(FileBrowser.trashVariable, trash.path, 1)
+        addTeardownBlock { unsetenv(FileBrowser.trashVariable) }
+        try AntigravityStoreFixture.make(in: home, rows: storeRows)
+        let id = storeRows[0].id
+        let entry = { (title: String) in #"{"summary": {"Title": "\#(title)", "UpdatedAt": "2026-11-09T17:00:22Z", "WorkspaceURIs": ["file:///Users/me/Dev/my.app"]}}"# }
+        try write("\(antigravity)/cache/conversation_metadata.json", [#"{"conversations": {"\#(id)": \#(entry("Its earlier title")), "conv-1": \#(entry("Only in the list"))}}"#])
+        for kept in [id, storeRows[1].id, "conv-1"] {
+            try write("\(antigravity)/brain/\(kept)/.system_generated/logs/transcript_full.jsonl", [#"{"type":"USER_INPUT","source":"USER_EXPLICIT","content":"said"}"#])
+            try write("\(antigravity)/conversations/\(kept).db", ["steps"])
+            try write("\(antigravity)/annotations/\(kept).pbtxt", ["title:\"t\""])
+        }
+        let before = try everything()
+        XCTAssertEqual(
+            AgentHistory.antigravityNotDeleted, "Antigravity keeps its conversations in a store of its own, which AgentTerm does not write to: this one is deleted in Antigravity.")
+        for kept in [id, storeRows[1].id, "conv-1"] {
+            XCTAssertEqual(AgentHistory.delete(try listed(kept), home: home.path), AgentHistory.antigravityNotDeleted, kept)
+        }
+        XCTAssertEqual(try everything(), before)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: trash.path), [])
+        XCTAssertEqual(history().count, 3, "no longer listed")
+    }
+
     func testDatesWithAnyFractionParse() {
         XCTAssertNotNil(AgentHistory.parseDate("2026-11-11T04:32:36Z"))
         XCTAssertNotNil(AgentHistory.parseDate("2026-11-11T04:32:36.5Z"))
         XCTAssertNotNil(AgentHistory.parseDate("2026-11-10T17:00:22.474318735+07:00"))
         XCTAssertNil(AgentHistory.parseDate("yesterday"))
+    }
+}
+
+/// Antigravity's store of its conversations, `conversation_summaries.db`,
+/// made here with the schema Antigravity 1.5.12 gave it (read on
+/// 2026-11-21 from a copy of the real one) and rows made up (#224).
+enum AntigravityStoreFixture {
+    struct Row {
+        var id: String
+        var title: String
+        var preview = ""
+        /// As Antigravity writes it: "2026-11-20 01:02:03.123456+07:00".
+        var modified: String
+        var workspaces: [String]
+    }
+
+    static let schema = [
+        """
+        CREATE TABLE `conversation_summaries` (`conversation_id` text,`title` text NOT NULL DEFAULT "",`preview` text NOT NULL DEFAULT "",\
+        `step_count` integer NOT NULL DEFAULT 0,`last_modified_time` datetime NOT NULL,`workspace_uris` text NOT NULL,`status` text NOT NULL DEFAULT "",\
+        `source` text NOT NULL DEFAULT "",`project_id` text NOT NULL DEFAULT "",`agent_name` text NOT NULL DEFAULT "",\
+        `parent_conversation_id` text NOT NULL DEFAULT "",`nesting_depth` integer NOT NULL DEFAULT 0,`battle_id` text NOT NULL DEFAULT "",\
+        `winning_conversation_id` text NOT NULL DEFAULT "",`not_fully_idle` numeric NOT NULL DEFAULT false,`killed` numeric NOT NULL DEFAULT false,\
+        `last_user_input_time` datetime NOT NULL,`last_user_input_step_index` integer NOT NULL DEFAULT -1,`app_data_dir` text NOT NULL DEFAULT "",\
+        `raw_summary` blob,`group_id` text NOT NULL DEFAULT "",PRIMARY KEY (`conversation_id`))
+        """,
+        "CREATE INDEX `idx_conversation_summaries_last_user_input_time` ON `conversation_summaries`(`last_user_input_time`)",
+        "CREATE INDEX `idx_conversation_summaries_last_modified_time` ON `conversation_summaries`(`last_modified_time`)",
+        "CREATE TABLE search_schema_version (version INTEGER PRIMARY KEY)",
+        "INSERT INTO search_schema_version VALUES (3)",
+        """
+        CREATE VIRTUAL TABLE conversations_fts USING fts5(conversation_id UNINDEXED, chunk_index UNINDEXED, chunk_first_step UNINDEXED, \
+        chunk_last_step UNINDEXED, last_modified_time UNINDEXED, step_count UNINDEXED, last_step_created_at UNINDEXED, archived UNINDEXED, \
+        user_step_byte_offsets UNINDEXED, agent_step_byte_offsets UNINDEXED, title, workspace, project, user_body, agent_body, \
+        tokenize = 'unicode61 remove_diacritics 2', prefix = '1 2 3')
+        """,
+        "CREATE TABLE conversation_parents (conversation_id TEXT PRIMARY KEY, parent_id TEXT NOT NULL) WITHOUT ROWID",
+    ]
+
+    static func file(in home: URL) -> URL { home.appendingPathComponent(".gemini/antigravity-cli/conversation_summaries.db") }
+
+    /// Writes the store, in the write-ahead mode Antigravity's is in. It
+    /// is closed again, which leaves the one file, unless `open`: then
+    /// the connection is given, as a running Antigravity holds one.
+    @discardableResult
+    static func make(in home: URL, rows: [Row], schema: [String] = schema, open: Bool = false) throws -> OpaquePointer? {
+        let file = file(in: home)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var database: OpaquePointer?
+        guard sqlite3_open(file.path, &database) == SQLITE_OK, let database else { throw CocoaError(.fileWriteUnknown) }
+        try run("PRAGMA journal_mode=WAL", in: database)
+        for statement in schema { try run(statement, in: database) }
+        for row in rows { try insert(row, in: database) }
+        if open { return database }
+        try close(database, in: home)
+        return nil
+    }
+
+    /// Closes it as Antigravity does on its way out: everything brought
+    /// into the store, and the one file left. The system's SQLite leaves
+    /// the two others, emptied, where Antigravity's own removes them.
+    static func close(_ database: OpaquePointer, in home: URL) throws {
+        try run("PRAGMA wal_checkpoint(TRUNCATE)", in: database)
+        guard sqlite3_close(database) == SQLITE_OK else { throw CocoaError(.fileWriteUnknown) }
+        for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: file(in: home).path + suffix) }
+    }
+
+    static func insert(_ row: Row, in database: OpaquePointer) throws {
+        let workspaces = String(decoding: try JSONSerialization.data(withJSONObject: row.workspaces, options: .withoutEscapingSlashes), as: UTF8.self)
+        let values = [row.id, row.title, row.preview, row.modified, workspaces, row.modified].map { "'" + $0.replacingOccurrences(of: "'", with: "''") + "'" }
+        try run(
+            "INSERT INTO conversation_summaries (conversation_id, title, preview, last_modified_time, workspace_uris, last_user_input_time, step_count, status, app_data_dir, raw_summary) "
+                + "VALUES (\(values.joined(separator: ", ")), 4, 'CASCADE_RUN_STATUS_IDLE', 'antigravity-cli', x'0A00')", in: database)
+    }
+
+    static func run(_ statement: String, in database: OpaquePointer) throws {
+        guard sqlite3_exec(database, statement, nil, nil, nil) == SQLITE_OK else {
+            throw NSError(domain: "sqlite", code: Int(sqlite3_errcode(database)), userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(database))])
+        }
     }
 }

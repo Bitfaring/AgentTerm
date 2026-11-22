@@ -204,8 +204,8 @@ private struct InboxSection: View {
     }
 }
 
-/// One thing the Mac told of: what, all of what was said, where, how it was
-/// handled. Touched, it is read and shown whole (`NoticeScreen`).
+/// One thing the Mac told of: what, the end of what was said, where, how it
+/// was handled. Touched, it is read and shown whole (`NoticeScreen`).
 struct InboxRow: View {
     @EnvironmentObject private var model: PhoneModel
     let entry: InboxBook.Entry
@@ -224,12 +224,24 @@ struct InboxRow: View {
                     Text(notice.title(on: model.pairing?.name))
                         .font(.subheadline.weight(entry.read ? .regular : .semibold))
                         .foregroundStyle(notice.state?.isWaiting == true && notice.handled == nil ? Color.orange : .primary)
-                    // All of it, not a few lines (the owner's decision, 2026-11-21).
-                    if !notice.fullBody.isEmpty {
-                        Text(notice.fullBody)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.leading)
+                    // Its end, `Inbox.rowLines` lines of it, with "…" in
+                    // front when the beginning is cut; all of it once
+                    // touched (#218, the owner's decision, 2026-11-21, in
+                    // place of the one of the same day that showed all).
+                    let texts = Inbox.rowTexts(notice.fullBody)
+                    if texts.count == 1, let whole = texts.first {
+                        said(whole)
+                    } else if !texts.isEmpty {
+                        // The room of that many lines, measured by lines
+                        // of the same font, and the longest that fits it.
+                        said(String(repeating: "\n", count: Inbox.rowLines - 1))
+                            .hidden()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .overlay(alignment: .topLeading) {
+                                ViewThatFits(in: .vertical) {
+                                    ForEach(texts, id: \.self) { said($0) }
+                                }
+                            }
                     }
                     Text(
                         [notice.place(macName: model.pairing?.name ?? "the Mac"), notice.at.formatted(date: .abbreviated, time: .shortened), notice.handledWords]
@@ -245,6 +257,15 @@ struct InboxRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("inbox-\(entry.id)")
+    }
+
+    /// A row's line of what was said.
+    private func said(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

@@ -242,7 +242,7 @@ Client to host:
 | `setDisplaySettings(settings)` | How things are shown on every device: the temperature's unit, diffs in one panel or two, changes as a list or a tree. The host keeps it in `settings.json` and passes it on as `displaySettings`. A host that keeps none yet sends nil, and the client hands it its own. Each app also writes the values to its own preferences, which is what its views read. |
 | `sshHosts` / `connectSSH(host, size)` | The hosts of the Mac's SSH configuration, and `ssh <host>` in a new session. |
 | `history(path)` | Conversations agents had in a folder, or everywhere when `path` is nil. |
-| `historyOlder(path, before)` / `readConversation(agent, sessionID, cwd)` / `searchHistory(search, path, query, titlesOnly)` / `markConversation(id, pinned, hidden)` / `deleteConversation(…)` / `deleteConversations(ids)` / `exportConversation(…)` | What History does with the conversations (#46), answered with `historyOlder(path, conversations, more)`, `conversationRead(id, details)`, `historyFound(search, hits)` and `historySearchEnded(search)`, `historyMarks(pinned, hidden)` to every device (and to one that connects), `conversationDeleted(id)` to every device, `conversationExported(id, path)`. With `titlesOnly` a search reads no file (#50). `deleteConversations` deletes those named, or every one on the host when `ids` is nil, leaving the pinned ones and those a session is having, Antigravity's being refused by `AgentHistory.delete`; each deleted is told to every device with `conversationDeleted`, and the sender gets `conversationsDeleted(deleted, kept)` (#50). The host does all of it, for the Mac it runs on too, so that every device shows the same. A conversation is named by its agent, its id and its folder and looked up among the agents' own files (`AgentHistory.conversation`), never taken as a path from a client. `AgentHistory.details` reads a file line by line into `ConversationDetails`: entries (user, agent, tool), first and last time, model, tokens, branch, files written; how each agent writes these was read from the files of the versions in use on 2026-11-14 (Claude Code 2.1, Codex CLI 0.169, Copilot CLI 1.0.112, Antigravity CLI). `AgentHistory.search` looks first at the file's bytes and reads a file as a conversation only when they hold the words. A client has one search of the history going for each of the two lists the Mac shows side by side, everywhere's and a folder's, and its searches for text apart: each kind is numbered by the client by itself (#50). Pins and hidden ones are kept in `history.json`; a transcript is written to `transcripts/` in the host's own folder. Filtering and grouping are `HistoryFilter` in `AgentTermProtocol`, which both apps apply to what was listed. |
+| `historyOlder(path, before)` / `readConversation(agent, sessionID, cwd)` / `searchHistory(search, path, query, titlesOnly)` / `deleteConversation(…)` / `deleteConversations(ids)` / `exportConversation(…)` | What History does with the conversations (#46), answered with `historyOlder(path, conversations, more)`, `conversationRead(id, details)`, `historyFound(search, hits)` and `historySearchEnded(search)`, `conversationDeleted(id)` to every device, `conversationExported(id, path)`. With `titlesOnly` a search reads no file (#50). `deleteConversations` deletes those named, or every one on the host when `ids` is nil, leaving those a session is having, Antigravity's being refused by `AgentHistory.delete`; each deleted is told to every device with `conversationDeleted`, and the sender gets `conversationsDeleted(deleted, kept)` (#50). The host does all of it, for the Mac it runs on too, so that every device shows the same. A conversation is named by its agent, its id and its folder and looked up among the agents' own files (`AgentHistory.conversation`), never taken as a path from a client. `AgentHistory.details` reads a file line by line into `ConversationDetails`: entries (user, agent, tool), first and last time, model, tokens, branch, files written; how each agent writes these was read from the files of the versions in use on 2026-11-14 (Claude Code 2.1, Codex CLI 0.169, Copilot CLI 1.0.112, Antigravity CLI). `AgentHistory.search` looks first at the file's bytes and reads a file as a conversation only when they hold the words. A client has one search of the history going for each of the two lists the Mac shows side by side, everywhere's and a folder's, and its searches for text apart: each kind is numbered by the client by itself (#50). A transcript is written to `transcripts/` in the host's own folder. Filtering and grouping are `HistoryFilter` in `AgentTermProtocol`, which both apps apply to what was listed. |
 | `resume(agent, sessionID, cwd, size)` | Reopen a conversation in its agent, in a new session. |
 | `handoffPlan(agent)` | What the receiving agent would be told, to show it before handing off. |
 | `handoff(agent, sessionID, cwd, target, plan, prompt, note, size, folder, worktree)` | Hand a conversation to another agent, in a new session; in `folder`, or with `worktree` in a new worktree of it, made first (#150, protocol 31). |
@@ -273,7 +273,37 @@ Host…, which asks first. It never restarts it by itself (decided by the
 owner on 2026-11-17), and a release that changes nothing of the host says
 nothing. A build outside an app bundle has no revision, and is not compared.
 
-The protocol version is 36. 36 added `deviceInBackground`, which a
+A host of an earlier protocol is sent nothing it does not have (#214).
+Right after an update the app talks to the host it found running, of the
+release before, until the user restarts it; a message that host cannot read
+it answers with `error("malformed message")`. Each message added to the
+protocol is named in `ClientMessage.since` with the number it came in (from
+33: `readNotices`, 36: `deviceInBackground`), and `AgentTermConnection`,
+which keeps the number the host's `welcome` gave, leaves unsent what the
+host does not have, for both apps. Found with a host built from v0.12.0
+(protocol 32) and the app of 0.13.0: what it refused was `readNotices`,
+which the Mac app sends in answer to `noticeLog` for what was read in its
+Inbox. While the host is an earlier one the Mac app says so in its banner
+only, with Restart Host…, and a "malformed message" from it is not said a
+second time as a notice; a notice about an older host is taken away once a
+host of the app's own release answers. A message whose content changed is
+not covered: nothing is owed to an earlier build (principle 6). A host
+that cannot read a message writes to its log who sent it and the
+message's name, never its content. `--protocol-version`, which tests give a
+host to have it stand for an earlier one, also has it refuse what came
+after that number.
+
+The protocol version is 39. 39 took away the agents' memory again (#220,
+the owner's decision of 2026-11-22): the messages 38 had added, `memories`,
+`readMemory`, `writeMemory` and `deleteMemory` from a client, which
+`ClientMessage.since` named with 38 so that a host of an earlier release
+was not sent them (#214), and `memories`, `memoryRead`, `memorySaved`,
+`memoryDeleted` and `memoryRefused` from the host, are gone, and a host
+reads none of them. 37 took away `markConversation` and
+`historyMarks`: a conversation in History is no longer pinned or hidden, on
+either app, and the host no longer reads, keeps or sends which ones were; the
+`history.json` an earlier build left in the host's folder is not read, and
+`deleteConversations` keeps none for being pinned (#219). 36 added `deviceInBackground`, which a
 device's app sends for going to the background and coming back, in place
 of the `appInFront` 35 had it send (#190), so that `appInFront` is only the
 Mac app's; and `CreateRequest.requestID`, a number the client picks for a
@@ -652,7 +682,7 @@ projects does not list every project's conversations as its own:
 |---|---|---|---|
 | Claude Code | `~/.claude/projects/<folder>/<session>.jsonl` | newest `ai-title` line, else the first prompt | `claude --resume <id>` |
 | Codex | `~/.codex/sessions/**/rollout-*.jsonl` (first line has id and directory) | first prompt, from `~/.codex/history.jsonl` | `codex resume <id>` |
-| Antigravity | `~/.gemini/antigravity-cli/cache/conversation_metadata.json` | its `Title` | `agy --conversation <id>` |
+| Antigravity | `~/.gemini/antigravity-cli/conversation_summaries.db` (SQLite, since 1.0.16), and `cache/conversation_metadata.json` of an earlier version | its `title`, else its `preview` | `agy --conversation <id>` |
 | Copilot CLI | `~/.copilot/session-state/<id>/workspace.yaml` | its `name`, else the first prompt | `copilot --resume=<id>` |
 
 None of these are documented formats, so every reader treats missing or
@@ -661,6 +691,100 @@ until the reader is adjusted. Session files grow to many megabytes, so only
 the first 256 KB and the last 64 KB are read. Session ids are put on a command
 line that a shell runs, so ids with anything but letters, digits, `-`, `_` and
 `.` are dropped.
+
+### Antigravity's store
+
+Antigravity 1.5.12 keeps the list of its conversations in a SQLite store,
+`conversation_summaries.db`, and writes no `cache/conversation_metadata.json`
+(#224). `AntigravityStore` reads the store with the system's SQLite
+(`import SQLite3`, no dependency added). What was found on 2026-11-21 in a
+copy of the store of a home that 1.5.12 made, without starting a session:
+
+- Its table `conversation_summaries` has a row for each conversation, of 21
+  columns. History takes five: `conversation_id` (the id `agy --conversation`
+  takes, and the name of `conversations/<id>.db`, `brain/<id>/` and
+  `annotations/<id>.pbtxt`), `title`, `preview`, `last_modified_time` (text,
+  as `2026-11-20 01:02:03.123456+07:00`) and `workspace_uris` (text, a JSON
+  list of `file://` addresses). The others are not read, among them
+  `parent_conversation_id`, `nesting_depth`, `agent_name`, `source`,
+  `status`, `step_count` and `raw_summary` (a protobuf). Beside the table
+  are a search index (`conversations_fts`, FTS5), `search_schema_version` and
+  `conversation_parents`.
+- The transcript is where it was: `brain/<id>/.system_generated/logs/transcript_full.jsonl`
+  and `transcript.jsonl`, lines with `source`, `type`, `content`,
+  `created_at`, `status`, `step_index`, and for a model's line `model` and
+  its tokens. `AgentTranscript` reads them as before.
+- The store is in SQLite's write-ahead mode (its header says so; its
+  changelog says it checkpoints when it exits). With no Antigravity running
+  only the one file is there, without `-wal` and `-shm`.
+
+How it is opened, and why: read-only, by its address with `immutable=1`.
+Tried with the system's SQLite 3.54.0 on a copy: a read-only connection of
+the ordinary kind does not read such a file at all ("unable to open database
+file"), and one that may write makes `-wal` and `-shm` beside it and takes
+locks in them, which Antigravity's own checkpoint then has to wait behind.
+With `immutable=1` SQLite reads the one file, makes nothing in Antigravity's
+folder and takes no lock, so nothing AgentTerm does can hold Antigravity up
+or change what it keeps. The price is that what Antigravity has written to
+its `-wal` and not yet brought into the store is not seen: a conversation of
+a session still running may be listed late, or with the title and time it had
+before. Reading without a lock, the file is looked at before and after (its
+size, time and number): when it changed, or SQLite could not read it, it is
+read again, three times in a tenth of a second, and then given up, never
+waited on.
+
+When the store is there and not read, or its table has not the five columns,
+nothing is guessed from it: its conversations are not listed, and
+`AgentHistory.antigravityProblem` gives the reason in words ("Antigravity's
+conversations are not listed: its database of them could not be read. …").
+No message of the protocol carries that sentence to the apps yet, so it is
+not shown: that is still to be decided (#224).
+
+A folder brought over from an earlier version may hold the earlier list
+beside the store; whether Antigravity leaves it there was not seen, since
+the one home looked at was made new by 1.5.12, whose binary still names the
+file. Both are read. A conversation that both have is listed once, as the
+store says, since the store is what the Antigravity in use reads and writes;
+one only the earlier list has is listed from it.
+
+Not established, since each needs a session of a signed-in Antigravity:
+whether a row with a `parent_conversation_id` (a subagent's, a swarm
+worker's) is one Antigravity's own `/resume` lists, so every row with a
+title or a preview is listed; how long a running Antigravity leaves a new
+conversation in its `-wal`; and from which version on the earlier list is
+no longer written.
+
+### Deleting a conversation
+
+Deleting (`AgentHistory.delete`) moves the agent's own record to the Trash
+(`FileBrowser.trash`), whatever a client names being looked up again and
+kept to the agent's folder: Claude Code's and Codex's file, Copilot CLI's
+folder.
+
+A conversation of Antigravity is never deleted, whichever of its two lists
+it was read from (#224, and #222, which was not done). Antigravity has no
+file for each conversation: its store holds them all, with the search index
+made from them, and AgentTerm never writes to that store, nor to the earlier
+list, `history.jsonl` or `cache/last_conversations.json`. Taking a
+conversation's files away while its row stays would leave it listed with
+nothing behind it. So it is refused in words, "Antigravity keeps its
+conversations in a store of its own, which AgentTerm does not write to: this
+one is deleted in Antigravity.", and when several are deleted together
+Antigravity's are among those kept, which the question says before and the
+answer after (`DeleteConversationsQuestion`).
+
+What was found in Antigravity 1.5.12 on 2026-11-21 about deleting, by reading
+what it keeps and what its binary and `agy changelog` say, without starting
+a session:
+
+- A conversation is named by its row in `conversation_summaries.db` and the
+  index beside it, `conversations/<id>.db` (its steps, SQLite since 1.0.4),
+  `brain/<id>/`, `annotations/<id>.pbtxt` (its title), `presence/<id>.lock`,
+  lines of `history.jsonl`, `cache/last_conversations.json` (the last one of
+  each folder) and `jetbox_summaries_proto.pb`.
+- Deleting in Antigravity itself (F4 in the list of `/resume`) removes the
+  conversation's SQLite file, its annotation since 1.1.24, and its subagents
+  and their worktrees since 1.4.8, as its changelog says.
 
 The Mac app calls this directly, since it runs where the files are. The
 iPhone asks the host with `history`, `resume` and `handoff`. For `resume` the
@@ -828,7 +952,7 @@ is a file pointing into the repository's own `worktrees` folder: a
 worktree made inside the repository (#43), which `git status` lists as a
 folder nobody tracks. Both apps ask for the list again when the changes on
 show change in number, in branch or in what they are ahead by, so that a
-chip's counts are not stale.
+worktree's counts are not stale.
 
 Messages: `createInWorktree(request:branch:from:)`, `listWorktrees(folder:)`,
 `finishWorktree(folder:path:finish:deleteBranch:)` (refused while a session
@@ -837,6 +961,11 @@ runs in it); answered with `worktrees(folder:list:)` and
 command of #34 was taken away on 2026-11-16 (#75), and a `worktrees.json`
 an earlier build kept is no longer read. What both apps say of a worktree
 is in `WorktreeWords` and `WorktreeInfo.chipTitle/chipCounts/chipHelp`.
+The worktrees are picked from a list with a search (#217): a popover on the
+Mac (`WorktreePicker`, as `BranchMenu`), a sheet on the iPhone
+(`WorktreeViews.swift`, as its branches'); what the search finds is
+`WorktreeInfo.matches(search:)`, and what the button outside says is
+`pickerCounts` and `pickerLabel`.
 `SessionInfo.branch` names a session's worktree branch; `WorktreePath`
 tells which folder a session in `.agentterm/worktrees` belongs to.
 
@@ -946,7 +1075,8 @@ A device that types or takes control of a session makes it no one there,
 whatever the two say, until this Mac's own app types, takes control or
 says `used` (a key or a click in its window, sent once after it was told
 no one is there) (NOTE-7). Every client is told `macInUse(Bool)`. Since
-#66 it holds no notice back: every device is told, whoever is at the Mac.
+#66 it holds no notice back: every device is told, whoever is at the Mac,
+and since #234 no notification waits for it either.
 
 **On the iPhone.** Since #66 iOS's own banner, in front as behind, for a
 session other than the one on screen (`AgentNotifications`, from the
@@ -1011,20 +1141,16 @@ Mac's own app as `local`.
 - On connecting, after `sessions`: `noticeLog([Notice])`, the 30 days, for
   the device's Inbox; then `noticeAlert(id:)` for each one due, not
   handled nor read, that it was not shown yet. A new notice is `notice` to
-  every client at once, for the Inbox and the Mac's banner. When it
-  `alerts`, its time to be a notification comes at once, or after
-  `Notice.pushWait` (30 s, `Configuration.pushWait`) when
-  `Notice.pushWaits(macInUse:)` says so: a done agent always, anything else
-  while someone is at the Mac (#180, decided 2026-11-20). Then, if it is
-  still not handled nor read (`NoticeCenter.pending`), it is due
-  (`becameDue`). When it waits, when its time comes is kept in
-  `notices.json` (`NoticeCenter.waits`), and a host that starts again
-  alerts what still waits once the rest of the wait is over, or at once
-  when it is over already (`alertWaitingNotices`, #193): only a failure can still be
-  waiting then, since the host marks what agents asked as over. Due, it
-  is `noticeAlert(id:)` to every client in front and a push
-  to each registered device that is away, not connected or in the
-  background (#190), at the same moment.
+  every client at once, for the Inbox and the Mac's floating notice. When it
+  `alerts`, it is a notification at once, in the same turn of the host's
+  queue (`tellEveryone` → `alert`): nothing waits, whether someone is at
+  the Mac or not, a done agent included (decided 2026-11-22, #234, which
+  took away the 30 seconds #180 had made a done agent, and anything while
+  someone was at the Mac, wait). It is due (`becameDue`, kept in
+  `notices.json`), and is `noticeAlert(id:)` to every client in front and a
+  push to each registered device that is away, not connected or in the
+  background (#190), at the same moment. The Mac posts its macOS
+  notification on `noticeAlert` as before, so it too is at once.
 - **Read** (#180) is the host's too: `readNotices(ids:)` from a device marks
   them read in the log (`Notice.read`, `NoticeCenter.read`), and every
   client is told `noticesRead(ids:)`; each device that had one through
@@ -1034,7 +1160,7 @@ Mac's own app as `local`.
   it read while not connected (`InboxBook.readHere(notTold:)`).
 - A notice is handled once (`Notice.Handled`: answered, opened, dismissed,
   moved on): by `answer`, by `noticeSeen` for its session and state, by
-  `handleNotice(id:how:)` (dismissed from a banner or Notification
+  `handleNotice(id:how:)` (dismissed from a floating notice or Notification
   Center, `customDismissAction`), by `dismissFailure` for a failure's, or
   when its agent's state changes or its session ends. Every client is told
   `noticeHandled(id:handled:)`; each device that had it through Apple and
@@ -1045,7 +1171,7 @@ Mac's own app as `local`.
   extension), named `"<mac>-<notice id>"`, the name APNs gives a pushed
   one, and shows it in front too (`willPresent` → banner, list, sound),
   except for the session on screen, which it then sees. The Mac shows its
-  banner on `notice` and posts a macOS notification on `noticeAlert`, in
+  floating notice on `notice` and posts a macOS notification on `noticeAlert`, in
   front too and for the session in front too (`MacNotifications`,
   `willPresent` → banner, list, sound; `notifyOnMac`). On the Mac the
   session in front is seen only when the user does something
@@ -1107,7 +1233,8 @@ connection registers again, so the ticket (30 days) stays fresh.
   nothing; it holds the APNs key (Production, restricted to the topic
   `com.manhpham.agentterm`), signs the provider token (ES256) and passes
   the sealed notice on as `e`, with the identifier as `i`, under an `aps`
-  that says "An agent needs you" with `mutable-content`. It signs tickets
+  that says "An agent needs you" with `mutable-content`, `sound` and
+  `interruption-level: time-sensitive`, at priority 10 (#233). It signs tickets
   with HMAC over the token and their expiry, and refuses a push without
   one or too large; it asks Cloudflare's rate limiting binding to hold a
   device to 30 pushes a minute and an address to 5 registrations, which
@@ -1124,7 +1251,47 @@ connection registers again, so the ticket (30 days) stays fresh.
   sends `answer` with the session's state only when its digest is the
   same, else it says `PushWords.movedOn`. The device token comes from
   `registerForRemoteNotifications`, in the released build only, whose
-  entitlements alone have `aps-environment`.
+  entitlements alone have `aps-environment`. `NoticeContent` makes every
+  notification `.timeSensitive` (#233), whether the app posts it or the
+  extension makes it from a push, which needs
+  `com.apple.developer.usernotifications.time-sensitive` in the app's
+  entitlements (both builds); without it iOS shows them as active.
+- **Priorities** (#233, decided by the owner on 2026-11-22), for the
+  notifications and the Live Activity alike (`PushPriority`,
+  `AgentTermProtocol`):
+
+  | Level | When | Notification | Live Activity |
+  |---|---|---|---|
+  | High | An agent asks a question or a permission | At once, sound, time-sensitive | `apns-priority: 10` |
+  | High | An agent is done | At once, sound, time-sensitive | 10 |
+  | High | A part failed that stopped work (`Notice.tells`) | At once, sound, time-sensitive | 10 |
+  | High | An agent stops asking (answered on the Mac or elsewhere) | None; the earlier one taken back | 10 |
+  | Low | An agent works, progress, how many run, a done one seen, the end | None | 5 |
+  | Low | A notice handled on another device | Taken back (background push at 5, or the filtering alert) | 5 |
+
+  Every notice the host pushes is high (`Notice.alerts`). For the Live
+  Activity, `AgentsStatus.priority(since:)` compares the status about to
+  be sent with the last one sent (`activityStatus`, kept whether or not a
+  device was away then): high when the waiting ones change (their counts,
+  names or first), one becomes done, or a failure appears; low otherwise.
+  `PushCenter.activity` sends it as `urgent` in `activity`; the relay
+  sends `start` and an `urgent: true` update or end at 10, anything else
+  at 5. A relay of an earlier release ignores `urgent` and sends 5, as
+  before; nothing else changes for it.
+- **The host's log** (#233): each push gets one line on the host's
+  standard error, `agenttermd: push to <device id, 8 characters>: <kind>,
+  <high|low> (<apns-priority>)` (`PushCenter.logLine`), the kind being a
+  notification, an activity's start, update or end, or a take back (whose
+  priority is the relay's). Never what it says.
+- **A device is as its newest connection says** (#233). The host counts a
+  device present (`presentDevices`) while a connection of it is open and
+  not in the background. A connection the phone left behind, say when it
+  changed networks, is not closed on the Mac until TCP gives up on it,
+  and says nothing more: it kept the device present though its newest
+  connection said it was in the background, so nothing went through
+  Apple. A device that connects again marks its earlier connections
+  `superseded` (`admit`), which count as away (`Client.away`) for
+  notices and the Live Activity.
 
 **The Live Activity through Apple** (#168). Its content is `AgentsStatus`
 (`AgentTermProtocol`), the same struct the host pushes: counts of working,
@@ -1135,7 +1302,7 @@ with `pushType: .token` in the released build and hands the host
 `liveActivity(token:startToken:)`, the activity's push token and the
 push-to-start token (iOS 17.2), kept with the device's registration. While
 the device is away, a change of `AgentsStatus` is sent 3 s later (a burst
-is one update) to the relay as `{activity: {token, event, state, mac}}`:
+is one update) to the relay as `{activity: {token, event, state, mac, urgent}}`:
 `update` to the activity's token, `start` to the start token when there is
 none and an agent works or waits, `end` once none has for
 `LiveActivityRule.keptIdle` (15 minutes, `Configuration.activityKeptIdle`;
@@ -1159,14 +1326,45 @@ updates it (`takeUpShownActivity`): one the Mac started while it slept is
 watched for its token, and one that ended is let go, so that a new one is
 asked for rather than an ended one updated. The relay sends
 `apns-push-type: liveactivity` to the topic
-`com.manhpham.agentterm.push-type.liveactivity`, priority 5 (10 to
-start), with `stale-date` 30 minutes on and, for `end`, `dismissal-date`.
+`com.manhpham.agentterm.push-type.liveactivity`, priority 10 to start and
+for an update or end marked `urgent`, 5 otherwise (#233, above), with
+`stale-date` 30 minutes on and, for `end`, `dismissal-date`.
 While connected and in front, the app updates the activity itself.
 
-**On the Mac.** A banner over the window for a session that is not the one
-selected while the app is in front.
+**On the Mac.** The agents' notices float over the middle of the window
+(#225). Until 0.14.0 a notice was a banner in the middle column's
+`VStack`, above the terminals: it took its height from them, so the
+terminal in front lost two or three rows while it showed and got them
+back when it went, its text moved, and the agent was told a new size each
+time. Now `MiddleColumn` draws `FloatingNoticeStack` as an
+`.overlay(alignment: .top)` on the `ZStack` of the terminals and the
+place shown over them: an overlay is laid out in the room of what it is
+over and gives it none of its own, which is why the terminal keeps its
+size. It is inside the middle column only, under the banners of what
+stopped (`Banners`, still in the flow), and not over the toolbar, the
+list or the side panel. The stack is 560 points wide at most
+(`FloatingNoticeStack.width`), each notice a card (`FloatingNoticeCard`,
+the banner's content and buttons) on an opaque background with a shadow.
+Nothing but the cards is drawn, so the pointer reaches the terminal
+around them; a stack taller than the middle is put in a scroll view
+(`ViewThatFits`), which only then takes the pointer over its column.
 
-A banner is dropped when its session comes to the front (#60): on the Mac
+Which notices are on show is `FloatingNotices` (`AgentTermProtocol`), a
+value with no clock of its own: `show(_:id:at:)` for each `notice` the
+host tells (the same number again takes its own place; another of the
+same session takes that session's; an eleventh takes the place of the
+oldest that does not wait, or of the oldest), `remove(ids:)` for
+`noticesRead` and `noticeHandled`, `remove(session:)` when its session is
+opened or comes to the front, `keep(where:)` with each list of sessions,
+`hover(_:_:at:)` from the card's `onHover`, and `expire(at:)`. One of an
+agent that is done has `goes`, 10 seconds on (`FloatingNotices.stays`;
+`AGENTTERM_NOTICE_SECONDS` for the tests); one that waits, or is under
+the pointer, has none. `AppModel.floatingNotices` holds it and keeps one
+timer for `nextGoes`; a notice that goes by itself tells the host
+nothing, and stays unread in the Inbox. The app posts an accessibility
+announcement for each notice shown while VoiceOver is on.
+
+A notice is dropped when its session comes to the front (#60): on the Mac
 when the session is selected with Sessions shown and the app in front of
 the others (`selectedSession`, `show(_:)`, and when the app becomes
 active: a session chosen in a window behind another app's is not before
@@ -1683,7 +1881,41 @@ stream, and a picture is taken about five times a second
 it differs from the last. Not taken while the Mac draws it: for a page
 shown as a device whose pixels are not the screen's, Chromium lays the
 page out again for each picture, a clip or a scale given or not, and the
-Mac shows it in between, the page shaking (#100). A page shown as a device
+Mac shows it in between, the page shaking (#100). What is streamed has a
+pixel to the page's point at most, whatever `maxWidth` asks and whatever
+the screen has, which a device draws two or three times larger, blurred.
+So a page that is streamed and has stood still for 0.7 seconds, longer
+than a caret's blink, has one picture taken of it, with all the pixels it
+is drawn with, sent in place of the last streamed one and not taken again
+until the page changes (`PageStills`): only where a picture taken has more
+pixels than a streamed one, and where taking it leaves the Mac's page as
+it is, the page shown as itself or as a device with the screen's pixels.
+A page shown as a device whose pixels are not the screen's (a phone of
+three on a screen of two) stays as streamed, soft: sharpening it costs the
+Mac's page a shake each time it comes to rest, which the owner decided
+against (2026-11-21). Measured that day on a screen of two pixels to a
+point, with `AGENTTERM_LOG_FRAMES`: the stream had two pixels to a point
+there, 814 × 1094 for a page of 407 × 547, and the picture taken of the
+page at rest had the same; one pixel to a point is what was measured
+earlier (#107) on another screen. Taking a picture
+has Chromium draw the page once more, streamed the same as the last: a
+streamed picture the same as the last is not sent and is not a change, or
+pictures would be taken without end. A device asks its pictures as wide as
+the room it draws them in has pixels (`PagePicture.width`, asked again
+when the room's width changes by more than 80), which bounds a picture
+taken, made smaller with ImageIO; one streamed has fewer anyway. JPEGs are
+of quality 80 (`PagePicture.quality`; 55 before, whose losses were what
+was seen first once drawn larger), and one that weighs more than 2.5 MB
+is made narrower until it does not (`DevToolsSession.fitted`): in base64
+it must stay under the 4 MB a message may be. A device lays a picture into
+its room whole, in the picture's own shape counted from its pixels, as
+large as the room lets it be, and places a touch by the size sent with it
+(`PageFit`). With `AGENTTERM_LOG_FRAMES` set the Mac app writes a line for
+each picture it sends, one a second at most for each tab and path
+(`screencast`, `still`, `capture`): its pixels, the size sent with it,
+whether the two are of one shape, what the page is shown as, its pane and
+the screen's pixels, and what Chromium says the streamed picture shows; to
+stderr, or to the file the variable names (`FrameLog`). A page shown as a device
 whose screen is taller than its pane has the pane's height
 (`Emulation.setDeviceMetricsOverride`'s `height`, set again when the pane
 changes size; `screenWidth` and `screenHeight` stay the device's), on a
@@ -1695,8 +1927,8 @@ in the picture's shape (#107, the owner's decision of 2026-11-16. Before,
 the Mac drew the screen's top only, and the devices drew that part
 squeezed into the screen's shape; then the screen was drawn smaller to
 fit, `scale`, which Chromium streams as the whole surface with the page
-small in a corner, and too few pixels for a device). Streamed, a picture is as sharp as the Mac draws it; taken,
-as sharp as the device asks for. A touch is placed in CSS
+small in a corner, and too few pixels for a device). Streamed, a picture has a pixel to the page's point; taken,
+as many as the page is drawn with, up to what the device asks for. A touch is placed in CSS
 pixels by that size and clicked with `Input.dispatchMouseEvent`; text is
 `Input.insertText`. Acting on an agent's tab from a device makes it the
 user's, as a click on the Mac does.
@@ -1842,9 +2074,25 @@ the same folder can therefore be mixed up; the History tab is exact.
   which the emulator knows from the program's output or from the screen the
   host writes out on attaching): 4,000 characters were then submitted by
   the Return 80 ms after them in all four agents. Shorter text is typed as
-  it is, as is anything sent while the agent asks a question, which was
-  tried typed only, and anything to a program that did not ask, which would
-  show the brackets.
+  it is, as is anything to a program that did not ask, which would show the
+  brackets.
+- iPhone: the message field never types into an agent that asks something
+  (#232). Which of the two texts is shown, and what Send does with it, is
+  decided in `AgentTermProtocol` (`ComposeSend`), from the session's
+  `AgentState` and the side picked: the prompt is typed as above only
+  while the agent asks nothing (or its state is not known, as for a
+  shell); while it asks, the prompt is held with `ComposeWords.held`, and
+  the answer, written in its own field or picked from the question's
+  choices, is sent as a notification's reply is,
+  `answer(session:to:text:)`, which the host types by `AgentAnswer.steps`
+  only while the agent is still in that state. The prompt's draft is
+  `PhoneModel`'s per session, kept in `UserDefaults`; the answer's is kept
+  in memory for that session and that state, and goes when the state does.
+  The Mac's "Send to an Agent" sheet goes by the same decision for its note,
+  and keeps that note in its page's tab (`BrowserTab.pickNote`, in memory)
+  while it is written, so that one cancelled while the agent asks is there
+  again the next time the sheet opens for that tab, until it is sent
+  (#232).
 
 ## macOS app structure
 

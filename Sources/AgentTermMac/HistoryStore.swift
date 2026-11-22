@@ -23,8 +23,6 @@ final class HistoryStore: ObservableObject {
 
     @Published var all = Scope()
     @Published var folder = Scope()
-    @Published private(set) var pinned: Set<String> = []
-    @Published private(set) var hidden: Set<String> = []
     /// Conversations as they were read, by their id; nil for one that is
     /// no longer there.
     @Published private(set) var details: [String: ConversationDetails?] = [:]
@@ -175,9 +173,6 @@ final class HistoryStore: ObservableObject {
         send?(.exportConversation(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd))
     }
 
-    func pin(_ conversation: Conversation, _ pinned: Bool) { send?(.markConversation(id: conversation.id, pinned: pinned, hidden: nil)) }
-    func hide(_ conversation: Conversation, _ hidden: Bool) { send?(.markConversation(id: conversation.id, pinned: nil, hidden: hidden)) }
-
     /// Deleting is asked about twice: it is the agent's own record that
     /// goes. The second question comes once the first has left the screen.
     func firstQuestionConfirmed() {
@@ -202,9 +197,6 @@ final class HistoryStore: ObservableObject {
     /// - Parameter folderPath: The folder the side panel shows.
     func handle(_ message: ServerMessage, folderPath: String?) {
         switch message {
-        case .historyMarks(let pinned, let hidden):
-            self.pinned = Set(pinned)
-            self.hidden = Set(hidden)
         case .conversationRead(let id, let read):
             details[id] = .some(read)
             // The last few are kept: each may be megabytes.

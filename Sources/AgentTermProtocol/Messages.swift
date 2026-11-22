@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 36
+public let agenttermProtocolVersion = 39
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -407,17 +407,13 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// searches of each kind by themselves. With `titlesOnly`, what was
     /// said is not searched, only the titles (#50).
     case searchHistory(search: Int, path: String?, query: String, titlesOnly: Bool? = nil)
-    /// Pins a conversation or takes its pin away, hides it or shows it
-    /// again; what is nil is left as it is. `id` is `Conversation.id`. The
-    /// host keeps both, and tells every device with `historyMarks`.
-    case markConversation(id: String, pinned: Bool?, hidden: Bool?)
     /// Deletes a conversation: its agent's own record of it goes to the
     /// Trash. Sent once the user was asked twice. Answered with
     /// `conversationDeleted`, or with `error` and why not.
     case deleteConversation(agent: String, sessionID: String, cwd: String)
     /// Deletes several conversations at once (#50): those named by
     /// `Conversation.id`, or every conversation on the host when `ids` is
-    /// nil, but never one that is pinned, one a session is having, or one
+    /// nil, but never one a session is having, or one
     /// of Antigravity (`AgentHistory.delete`). Sent once the user was asked
     /// twice (`DeleteConversationsQuestion`). Each one deleted is told to
     /// every device with `conversationDeleted`; the sender then gets
@@ -551,6 +547,24 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case finishWorktree(folder: String, path: String, finish: WorktreeFinish, deleteBranch: Bool)
 }
 
+extension ClientMessage {
+    /// The first protocol this message is in, for those added since 33:
+    /// a host of an earlier one cannot read it, and answers "malformed
+    /// message" (#214). Right after an update the app talks for a moment
+    /// to the host it found running, which is of the release before. A
+    /// message added to the protocol is named here with its number.
+    public var since: Int {
+        switch self {
+        case .readNotices: return 33
+        case .deviceInBackground: return 36
+        default: return 0
+        }
+    }
+
+    /// Whether a host at this protocol has the message.
+    public func isKnown(toHostAt version: Int) -> Bool { since <= version }
+}
+
 /// JSON text frames sent by the host.
 public enum ServerMessage: Codable, Equatable, Sendable {
     /// `release`: the version of AgentTerm the host is from ("0.10.0"), as
@@ -627,11 +641,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case conversationRead(id: String, details: ConversationDetails?)
     case historyFound(search: Int, hits: [HistoryHit])
     case historySearchEnded(search: Int)
-    /// The conversations that are pinned, and those that are hidden, by `Conversation.id`.
-    case historyMarks(pinned: [String], hidden: [String])
     case conversationDeleted(id: String)
     /// What came of `deleteConversations`: how many were deleted, and how
-    /// many were kept (pinned, having a session, Antigravity's, or failed).
+    /// many were kept (having a session, Antigravity's, or failed).
     case conversationsDeleted(deleted: Int, kept: Int)
     /// Where a conversation was written out as a file, on the host.
     case conversationExported(id: String, path: String)
@@ -723,10 +735,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Something to tell the user of: new, for the Inbox and the app's own
     /// banner. A notification only once `noticeAlert` says so.
     case notice(Notice)
-    /// Time to show this notice as a notification (#66): at once, or after
-    /// `Notice.pushWait` when it waits, and still not handled nor read. The
-    /// same moment on every device; sent once to each, and on connecting
-    /// for what came due while it was away.
+    /// Show this notice as a notification (#66): right after its `notice`
+    /// when it alerts, nothing waiting (#234). The same moment on every
+    /// device; sent once to each, and on connecting for what came while it
+    /// was away and is still not handled nor read.
     case noticeAlert(id: UInt64)
     /// A notice was handled, on some device or by its agent moving on: it
     /// is taken away wherever it is shown.

@@ -126,17 +126,25 @@ says names the device it runs on.
   the iPhone. Selecting it, the Git, History and Files tabs show its
   worktree; on the iPhone its menu has "Changes, History and Files",
   which opens its folder on that worktree.
-- **The worktree bar** (#33, #43): at the top of the side panel of a
-  folder that is a repository, its worktrees as chips. The folder's own
+- **The worktrees' button** (#33, #43, #217): at the top of the side
+  panel of a folder that is a repository, one button, which names the
+  worktree on show (its branch, or its folder with a detached HEAD) and
+  how many files are changed in it. A folder that is no repository has
+  none. Pressed, it opens a popup like the branch's, with a field that
+  narrows the worktrees down by their branch or the name of their folder,
+  whatever the case; a choice or Escape closes it, the arrows and Return
+  pick from the keyboard. Nothing else of the worktrees is outside it.
+- In the popup, a row for each worktree. The folder's own
   branch is always the first; each worktree follows, whoever made it
   (AgentTerm, Claude Code in `.claude/worktrees`, `git worktree add`), with
   how many files are changed in it, how many commits it is ahead by, a dot
-  when a session runs in it, and "missing" when its folder is gone. A
-  click makes Git, History and Files about that one, with the same actions
-  as the folder; the first chip goes back to the folder. A worktree that
+  when a session runs in it, and "missing" when its folder is gone; the
+  one on show has a mark. A click makes Git, History and Files about that
+  one, with the same actions as the folder, and closes the popup; the
+  first row goes back to the folder. A worktree that
   lies inside the repository is not listed among the folder's changes as
   a file nobody tracks.
-- **+** makes a new one: the branch's name, suggested and editable, the
+- **New Worktree**, in the popup, makes a new one: the branch's name, suggested and editable, the
   branch it starts from (the folder's own unless another, local or of a
   remote, is picked; the new branch follows none), and what is started
   there, an agent or a shell. The sheet says when the folder has changes
@@ -146,14 +154,23 @@ says names the device it runs on.
   handoff file says to work there only, not at the folder's paths the
   conversation names. Its own conversation is not resumed there: it holds
   the folder's paths, and the agent would go on changing the folder.
-- **⋯** is for the worktree on show: merge its branch into the folder's
+- **⋯**, on the row of each worktree in the popup, is for that
+  worktree: merge its branch into the folder's
   and remove it (with its branch, for one AgentTerm made), open a pull
   request with `gh`, or throw it away, which asks first and says what is
-  not merged; the folder's own chip has none. A merge that conflicts is
+  not merged; the folder's own row has none. A pull request can be opened
+  from the row of the worktree on show only, when its branch has a remote
+  to be pushed to, which its changes say; on every other row the entry is
+  off (#217). A worktree whose folder is missing has Throw Away… alone,
+  which makes git forget it, with its branch when asked (#217). Both are
+  the same on the Mac and on the iPhone. A merge that conflicts is
   left in the folder to be resolved and continued, or aborted, as any
   other, and the worktree is kept. A worktree a session runs in is not
   removed.
-- The iPhone has all of it, the same, in a folder's screen (#34); "Start
+- The iPhone has all of it, the same, in a folder's screen (#34): one
+  control that names the worktree on show, which opens a list shaped as
+  its list of branches is, with the search, the same rows with their ⋯,
+  and New Worktree (#217); "Start
   … in a New Worktree…" in the menu of a launch button opens the same
   sheet.
 - `.agentterm/` is listed in the repository's own exclude file and is not
@@ -235,7 +252,7 @@ says names the device it runs on.
 - **A worktree of its own.** A schedule may have each run in a new
   worktree of the folder, on a branch named after the schedule and the
   time, with its submodules checked out; the worktree is kept afterwards,
-  in the folder's worktree bar, to
+  in the folder's list of worktrees, to
   be looked at, merged or thrown away.
 - **Changes to a schedule** are kept with it, the last twenty: when, and
   what was changed, in words.
@@ -260,19 +277,23 @@ happened; the Live Activity shows the host's state now (below).
   is left out, the one in front included (#180): being in front does not
   make it seen, something the user does there does (choosing it, typing
   into it, the notification).
-- **When it is a notification** (#180, decided by the owner on
-  2026-11-20): every notice is in each device's Inbox, and the Mac's
-  banner, at once; it is a notification on the Mac and on every iPhone or
-  iPad **at the same moment**, which the host says. An agent that is done
-  waits 30 seconds first, always; anything else waits 30 seconds while
-  someone is at the Mac, and is told at once otherwise. Handled or read
-  within those 30 seconds (the agent works again; opened, answered,
-  dismissed or read on some device), it is a notification nowhere. Short
-  turns that end one after the other do not buzz the phone each time. A
-  host that starts again within the wait still tells it once the wait is
-  over (#193).
+- **When it is a notification** (#180; the wait taken away by the owner
+  on 2026-11-22, #234): every notice is in each device's Inbox, and floats
+  over the Mac's window, at once; it is a notification on the Mac and on
+  every iPhone or iPad **at once and at the same moment**, which the host
+  says: through Apple to each one that is away, whether someone is at the
+  Mac or not, an agent that is done as much as one that asks. Nothing
+  waits to see whether it is handled or read first; what is handled or
+  read afterwards on one device is taken back from the others. A host
+  that starts again shows nothing twice.
+- **How they sound** (#233, decided by the owner on 2026-11-22): every
+  notification is of something that needs the user (an agent asks or is
+  done, a part failed and stopped work), so each comes at once, with
+  sound, and is **time-sensitive** on the iPhone: shown during a Focus,
+  as iOS lets the user allow for the app. An agent that stops asking
+  brings no new notification: the earlier one is taken back.
 - **Handled on one, gone from all**: answered, opened or dismissed (from
-  the banner, from Notification Center) on one device, or its agent moving
+  the Mac's floating notice, from Notification Center) on one device, or its agent moving
   on, and the notification goes from every other device.
 - **Read on one, read on all** (#180, replacing what #66 decided): a
   notice read on one device (picked in the Inbox, its session opened, its
@@ -291,7 +312,12 @@ happened; the Live Activity shows the host's state now (below).
   either; what it was set to is kept, and shown again once notifications
   are turned on (#211). In a build with no push (a development build) it
   shows off and dimmed too, whatever it was set to, and its footnote says
-  why (#212). What it says is encrypted on the Mac for that device
+  why (#212). The same while notifications are turned off for the app in
+  the iPhone's Settings, read each time the app comes to the front: it
+  shows off and dimmed, the footnote says so, and the Mac is no longer
+  asked to tell this iPhone through Apple (#213). "Tell me when an agent
+  is done or needs me" stays as it is set then: it also stands for the
+  banner in the app, which still shows. What it says is encrypted on the Mac for that device
   alone; one that cannot be opened says "An agent needs you". A
   notification handled elsewhere while the app is asleep is taken back by
   a background push, which iOS limits and does not deliver to an app the
@@ -309,12 +335,36 @@ happened; the Live Activity shows the host's state now (below).
   pushes) waits for the user's answer, and is not told no while the
   question is still on screen (#200).
 - **On the Mac**, a banner while the app is in front, which opens the
-  session; and a macOS notification, with the app in front or not (#180),
+  session and floats over the window (below); and a macOS notification, with the app in front or not (#180),
   with Reply and the choices as on the iPhone: "Notify when an agent is
   done or needs you" in Settings > General, on by default. macOS is asked
   whether the app may notify in the onboarding's Permissions step, where
-  Notifications is one of the permissions listed. The banner shows what the agent said on up to six lines; Show
+  Notifications is one of the permissions listed. The notice shows what the agent said on up to six lines; Show
   All opens it out.
+- **The Mac's notice of an agent floats** (#225, decided by the owner on
+  2026-11-22): it is drawn over the content of the window's middle, at
+  its top, in the centre, 560 points wide at most, and takes no room: the
+  terminal under it keeps its size and its text does not move when a
+  notice shows or goes. It does not cover the toolbar, the list at the
+  left or the side panel, and what is around it can be clicked and typed
+  into as before. Each notice is a card with what the agent said, **Show
+  All**, **Open** and **Dismiss**; touching it opens its session.
+  - One of an agent that is **done stays 10 seconds**, then goes by
+    itself; it is still in the Inbox, unread, and no device is told it
+    was seen. One of an agent that **waits** (a question, a permission)
+    stays until it is answered, opened or dismissed. While the pointer is
+    over a notice it does not go; its 10 seconds start again when the
+    pointer leaves.
+  - **Several are stacked**, the newest on top, **10 at most**, one for a
+    session. An eleventh takes the place of the oldest that does not
+    wait; when all ten wait, of the oldest, which stays in the Inbox.
+  - Handled, read or seen on another device, or its agent moving on, a
+    notice goes from the stack as the banner did.
+  - VoiceOver says a notice when it appears, and reaches its buttons.
+  - **What stopped does not float**: the host that stopped, an older
+    host, another copy's host, a port in use, a part that failed and the
+    states of the connection stay banners fixed at the top, which take
+    their room, until they are over or closed (principle 3).
 - A notification for a question, or for a finished task, takes a short
   reply, written or dictated, sent as the next message; on the iPhone it
   asks for the phone to be unlocked first. A question's choices are
@@ -356,8 +406,18 @@ happened; the Live Activity shows the host's state now (below).
   item, all of it, with Open for its session; it never opens the session
   by itself: an agent done whose session runs shows what its turn came to,
   anything else what was said or asked, its choices, and how it was
-  handled. Each item of the list shows all of what was said, not its end
-  only (the owner's decisions, 2026-11-21).
+  handled. Each item of the list shows the end of what was said, three
+  lines of it at most, with "…" in front when the beginning is left out;
+  a short one is shown whole. All of it is in the item once it is touched
+  or clicked (#218, the owner's decision, 2026-11-21, in place of the one
+  of the same day that had the list show all of it). There, what an agent
+  said has a button, **Preview Markdown**, that shows it with its Markdown
+  rendered, and **Show as Text**, that shows it again as it was written,
+  as a transcript in History has: on the Mac beside "What it said", on the
+  iPhone above it, in a notice's screen and in what a turn came to. Which
+  of the two was chosen is kept for the next item, on that device, apart
+  from History's. What an agent asks and what a failure says stay as
+  written.
 - **What a turn came to** (#71): an agent that is done shows, in the
   Inbox, what it was asked, what it answered, the commands it ran with
   their exit codes, and the files of its folder that changed while it
@@ -411,6 +471,18 @@ shows the host's state now rather than events.
   is sent the end when it goes (#192). A new turn within those 15 minutes updates it rather
   than starting another, whose start through Apple comes with an alert. Without push (a development
   build), it goes out of date ten minutes after the app last updated it.
+- **How soon an update is shown** (#233, decided by the owner on
+  2026-11-22): an update that changes what needs the user (an agent starts
+  or stops asking, answered on the Mac or another device; one becomes
+  done; a session or the host stopped) is sent to be shown at once; any
+  other (agents working, how many, progress, a done one seen, the end) is
+  delivered when iOS sees fit, so that the ones that matter keep within
+  what iOS allows an app to show at once.
+- **An iPhone is as its newest connection says** (#233): one that connected
+  again (say, after it changed networks) while its earlier connection was
+  never closed on the Mac is away as soon as the newest connection says
+  its app went to the background, and is told through Apple, notifications
+  and Live Activity alike.
 - "Live Activity of the Mac's agents" in the iPhone's Settings turns it
   off, apart from notifications. While iOS has Live Activities turned off
   for the app (in the iPhone's Settings) the switch shows off and dimmed,
@@ -638,8 +710,11 @@ user sees.
   agent the rest; a screen taller than its room has the room's height, never
   drawn smaller: the page is as wide as the device's screen, the rest of
   it is reached by scrolling, and the page is still told the device's
-  whole screen. The devices watching it are sent what the Mac shows, as
-  sharp, and show it in its own shape, never squeezed into another), opens Chromium's own Developer Tools
+  whole screen. The devices watching it are sent what the Mac shows, and
+  show it whole, in its own shape, never squeezed into another: softer than
+  the Mac while the page changes, and as sharp as the Mac draws it once it
+  stands still, but for a page shown as a device whose pixels are not the
+  Mac's screen's, which stays soft while the Mac shows it), opens Chromium's own Developer Tools
   (⌥⌘I) with the console, sends an element to an agent, and closes it. Text is selected, copied
   and pasted as anywhere. A page that opens a window opens a tab instead,
   in the same project and for the same agent, which keeps its opener: a
@@ -905,7 +980,10 @@ under 20% that is not charging turns amber.
   installer by itself. **Look Again** has the agents looked for again; once
   it is found, the sheet says so and starts it. Everywhere else, the menus,
   the empty folder's buttons and the iPhone, list the agents that are
-  installed only.
+  installed only. The buttons in the middle of an empty folder keep each
+  label whole on one line: when they do not fit in one row, with the four
+  agents and the side panel open, they go onto a second, centred as the
+  first (#223).
 - An **SSH** menu lists the hosts of the Mac's `~/.ssh/config`, the files it
   includes too, and opens `ssh <host>` as a session with one click. Entries
   that are patterns (`*`, `?`, `!`) are not hosts and are left out. The menu
@@ -1158,7 +1236,7 @@ panel.
     waiting ("Push 1 commit"), next to the name of the branch it follows.
     A number in the panel says what it counts beside it (#50): the lines
     put in and taken out of what is not committed ("+5 −0 lines"), the
-    files of each list ("Changes 3 files"), and on a worktree's chip its
+    files of each list ("Changes 3 files"), and on a worktree's row its
     files changed and commits ahead ("3 changed · 2 ahead"); a file's own
     "+1 −0" is its lines, as git writes it. Fetch asks the
     remotes for what is new and changes neither the branch nor the files.
@@ -1261,7 +1339,10 @@ panel.
     submodule inside a submodule is listed the same way under it. A new
     worktree has its submodules checked out, theirs too, before its
     session starts; when one cannot be fetched the worktree is made all the
-    same, and the banner says so.
+    same, and the banner says so. A submodule opened as a folder has
+    worktrees of its own, as any repository: the first is the submodule's
+    folder itself (#216), not the place under the parent's `.git/modules`
+    that git names for it.
     Not part of it:
     choosing a remote, and adding, removing or updating submodules from
     their remotes.
@@ -1307,20 +1388,21 @@ panel.
       as it was written; the choice is kept for the next transcript, on
       each device (#50). Each thing asked and answered has its own
       **Copy**, which copies it as it was written (#50).
-    - **Pin** keeps a conversation in a group of its own at the top;
-      **Hide** takes it out of the list, until Show Hidden is chosen.
-      Both are kept by the Mac and are the same on every device.
     - **Delete…** deletes the agent's own record of the conversation,
       after two questions: its file is moved to the Trash of the Mac. A
       conversation a session is having is not deleted; Antigravity's
-      cannot be, and it says why.
+      cannot be, and it says why: Antigravity keeps its conversations in
+      a store of its own, which AgentTerm reads (History lists them from
+      it, and they are read, resumed and handed off as the others) and
+      does not write to, so one of them is deleted in Antigravity (#224).
     - **Select**, above the list, picks conversations to delete together
       (#50): a click ticks one instead of opening it, and **Delete N…**
       deletes those picked after two questions. In History, not in a
       folder's list, **Delete All…** deletes every conversation on the Mac,
-      after two questions too. Either way pinned ones stay, as does one a
-      session is having, and Antigravity's; how many were kept is said,
-      and nothing more when none was. **Done** ends the picking.
+      after two questions too. Either way one a session is having stays,
+      as do Antigravity's and one that could not be deleted; how many
+      were kept is said, and nothing more when none was. **Done** ends
+      the picking.
     - **Show Older Conversations**, at the end of a full list, brings the
       next 200.
 
@@ -1437,6 +1519,13 @@ Mac app checks which program is the host. When it is not the one the app
 ships with, a banner says so, with the other host's path, and offers **Use
 This App's Host…**: the other host is stopped, after asking since its
 sessions end with it, and the app's own is started.
+
+Until then the app works with the host it found, and sends it nothing a
+host of that release does not have (#214): what is new since is simply not
+done, and the banner about the host is what says so. The app never
+replaces the host by itself, since its sessions would end without the user
+being asked. A notice that said the host was from an older release goes by
+itself once a host of the app's own release answers.
 
 Another copy's host is a program named `agenttermd`. When what listens on
 the port is any other program (a proxy in front of the host, say), the
@@ -1622,6 +1711,27 @@ button at the top right of Sessions goes back to the list of Macs.
   Shift+Tab, Ctrl, arrows, and Enter.
 - A compose field for writing a prompt with the normal iOS keyboard,
   autocorrect and input methods, sent to the terminal in one go.
+- The prompt and the answer to what the agent asks are two texts (#232,
+  the owner's decision, 2026-11-22). While the agent asks something (a
+  question or a permission), an "Answer the Agent" button is over the
+  field, also with nothing written. It opens the place to answer: what the
+  agent asks, shortened, its choices as buttons where it has some (a
+  permission's are only in the terminal, which says so), and a field of
+  its own for an answer in the user's words; "Back to Your Prompt" goes
+  back. Each keeps its text while the other is shown; the prompt's is kept
+  as before, the answer's for that session and that question only. While
+  the agent asks, Send in the prompt does not send, or the agent would take
+  the prompt as its answer: it says so (`ComposeWords.held`), and the
+  prompt keeps its text. An answer goes with the state it answers, as a
+  notification's reply does, so the host types it only while the agent
+  still asks that, and otherwise says that the agent has moved on. Once the
+  agent no longer asks, the place to answer goes and the prompt is shown
+  again, as it was. On the Mac, "Send to an Agent" from a page holds its
+  note the same way while the agent picked asks, with the same words.
+  Whatever is written in that sheet is kept for its page's tab until it is
+  sent (#232): cancelled, as while the agent asks, the next element picked
+  in that page opens the sheet with the note in it. It is kept in memory
+  while the app runs, not on disk.
 - Quick launch for the installed agents, and for the hosts of the Mac's
   SSH configuration, in any folder known to the Mac.
 - A folder picker browses the Mac's folders, starting at home, to start an
@@ -1651,7 +1761,7 @@ button at the top right of Sessions goes back to the list of Macs.
   agent. **History**: the conversations each agent had in the
   folder only, as on the Mac; every conversation is in the History tab; both
   searched, grouped and filtered, a conversation read as a transcript
-  ("Read the Transcript"), pinned, hidden and deleted as on the Mac (#46). **Files**: see
+  ("Read the Transcript") and deleted as on the Mac (#46). **Files**: see
   Files above.
 - A conversation can be resumed in its agent, or handed off to another
   installed agent. The handoff sheet shows the prompt the agent will start

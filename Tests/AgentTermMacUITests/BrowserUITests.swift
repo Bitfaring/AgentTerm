@@ -14,6 +14,9 @@ final class BrowserUITests: MacUITestCase {
     private var site: URL!
     /// Where the app writes the places a click finds, for PANE-28.
     private let places = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-places-\(UUID().uuidString).txt")
+    /// Where the app writes the sizes of the pictures it sends of a page,
+    /// for BROWSER-27 and BROWSER-55 (#107).
+    private let frameLog = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-frames-\(UUID().uuidString).txt")
     /// The app was started once in this test: what it kept is kept when
     /// it is started again.
     private var launched = false
@@ -23,6 +26,7 @@ final class BrowserUITests: MacUITestCase {
         // What a page holds, readable as VoiceOver reads it (BROWSER-37).
         if name.contains("RightClick") || name.contains("ExtensionTrial") { appEnvironment["AGENTTERM_WEB_ACCESSIBILITY"] = "1" }
         if name.contains("ClickFindsTheAgent") { appEnvironment["AGENTTERM_PANE_PLACES"] = places.path }
+        if name.contains("ShownAsADevice") || name.contains("StandsStill") { appEnvironment["AGENTTERM_LOG_FRAMES"] = frameLog.path }
         try super.setUpWithError()
     }
 
@@ -1046,6 +1050,7 @@ final class BrowserUITests: MacUITestCase {
     /// part squeezed into it. While the Mac does not draw it, the pictures
     /// are as sharp as the device asked for, the page drawn as the device.
     func testAPageShownAsADeviceIsSentWholeInItsShape() throws {
+        defer { printFrameLog() }
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
@@ -1120,6 +1125,132 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertEqual(hidden.red, [true, false], "the page does not fill the picture taken while the Mac does not draw it")
         let wanted = min(Double(asked), Double(phone.width) * phone.scale)
         XCTAssertGreaterThanOrEqual(Double(hidden.pixels.width), wanted * 0.9, "a picture \(Int(hidden.pixels.width)) pixels wide, where \(Int(wanted)) were asked for")
+    }
+
+    /// What the app wrote of the pictures it sent (`AGENTTERM_LOG_FRAMES`),
+    /// printed for whoever reads the run: their pixels and the sizes sent
+    /// with them, on each path (#107).
+    private func printFrameLog() {
+        let lines = (try? String(contentsOf: frameLog, encoding: .utf8)) ?? ""
+        print("The pictures the app sent (\(name)):\n" + (lines.isEmpty ? "none written down\n" : lines))
+        // Kept beside the pictures when they are (`SHOTS`): a run that
+        // passes leaves no log of its own.
+        if let shots = ProcessInfo.processInfo.environment["SHOTS"], !shots.isEmpty {
+            let file = URL(fileURLWithPath: shots).appendingPathComponent(name.filter { $0.isLetter || $0.isNumber } + "-frames.log")
+            try? lines.write(to: file, atomically: true, encoding: .utf8)
+        }
+        try? FileManager.default.removeItem(at: frameLog)
+    }
+
+    /// BROWSER-55 (#107): a page the Mac draws is streamed with a pixel to
+    /// its point, which a device draws blurred. Once it has stood still for
+    /// a moment a picture is taken of it, with the pixels the Mac draws it
+    /// with, once and not again until the page changes; every picture is
+    /// in the shape of the size sent with it; and none is taken of a page
+    /// shown as a device whose pixels are not the screen's, which would
+    /// shake on the Mac (#100).
+    func testAStreamedPageIsSentSharpOnceItStandsStill() throws {
+        defer { printFrameLog() }
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
+        // The pixels to a point of the screen the app's window is on: those
+        // of a picture of the window to the window's points.
+        let window = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []).first {
+            ($0[kCGWindowOwnerPID as String] as? Int32) == app.pid && (($0[kCGWindowLayer as String] as? Int) ?? 1) == 0
+        }
+        let bounds = try XCTUnwrap((window?[kCGWindowBounds as String] as? [String: Any]).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) })
+        let shot = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-still-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: shot) }
+        app.capture(to: shot)
+        let whole = try XCTUnwrap(NSImage(contentsOf: shot)?.representations.first as? NSBitmapImageRep, "no picture of the window")
+        let screen = (Double(whole.pixelsWide) / Double(bounds.width)).rounded()
+        XCTAssertGreaterThanOrEqual(screen, 1)
+
+        let device = try self.device()
+        // As an iPad lying on its side asks: more than the page has.
+        let asked = PagePicture.widths.upperBound
+        struct Sent {
+            let pixels: CGSize
+            let width: Double
+            let height: Double
+            /// The picture's pixels to a point of the page.
+            var sharpness: Double { Double(pixels.width) / width }
+        }
+        func frames() -> [Sent] {
+            device.messages.compactMap {
+                guard case .browserFrame(tab, let jpeg, let width, let height) = $0, let image = NSBitmapImageRep(data: jpeg) else { return nil }
+                return Sent(pixels: CGSize(width: image.pixelsWide, height: image.pixelsHigh), width: width, height: height)
+            }
+        }
+        func inItsShape(_ sent: [Sent], _ when: String) {
+            for frame in sent {
+                let shape = frame.width / frame.height
+                XCTAssertEqual(
+                    Double(frame.pixels.width / frame.pixels.height), shape, accuracy: shape * 0.03,
+                    "\(when): a picture of \(Int(frame.pixels.width)) × \(Int(frame.pixels.height)) pixels sent as \(frame.width) × \(frame.height)")
+            }
+        }
+        /// As sharp as the Mac draws the page, or as was asked for.
+        func wanted(_ frame: Sent) -> Double { min(Double(asked), frame.width * screen) }
+
+        // Drawn by the Mac and standing still: streamed, then taken once.
+        device.send(.browserAsk(id: 2201, request: .watch(tab: tab, on: true, width: asked)))
+        wait("a picture of the page", timeout: 15) { !frames().isEmpty }
+        RunLoop.current.run(until: Date().addingTimeInterval(2.5))
+        let still = frames()
+        inItsShape(still, "drawn")
+        let last = try XCTUnwrap(still.last)
+        XCTAssertGreaterThanOrEqual(
+            Double(last.pixels.width), wanted(last) * 0.95,
+            "the page stood still and its last picture is \(Int(last.pixels.width)) pixels wide for \(last.width) points on a screen of \(screen) to the point")
+        // Nothing more of a page that does not change: no picture taken
+        // because one was taken.
+        RunLoop.current.run(until: Date().addingTimeInterval(3))
+        XCTAssertEqual(frames().count, still.count, "pictures of a page that did not change")
+
+        // It changes: streamed again, and taken again once it stands still.
+        XCTAssertFalse(server.text("browser_evaluate", ["tab": tab, "script": "document.getElementById('out').textContent = 'changed'; 1"]).failed)
+        wait("a picture of the page changed", timeout: 15) { frames().count > still.count }
+        RunLoop.current.run(until: Date().addingTimeInterval(2.5))
+        let changed = frames()
+        inItsShape(Array(changed.dropFirst(still.count)), "changed")
+        let after = try XCTUnwrap(changed.last)
+        XCTAssertGreaterThanOrEqual(Double(after.pixels.width), wanted(after) * 0.95, "the page changed and stood still, and its last picture is \(Int(after.pixels.width)) pixels wide")
+
+        // Not drawn by the Mac: taken, as sharp.
+        app.minimize(true)
+        wait("a picture of the page not drawn", timeout: 15) { frames().count > changed.count }
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        let hidden = frames()
+        app.minimize(false)
+        inItsShape(Array(hidden.dropFirst(changed.count)), "minimized")
+        let taken = try XCTUnwrap(hidden.last)
+        XCTAssertGreaterThanOrEqual(Double(taken.pixels.width), wanted(taken) * 0.9, "minimized, a picture \(Int(taken.pixels.width)) pixels wide")
+        device.send(.browserAsk(id: 2202, request: .watch(tab: tab, on: false, width: 0)))
+        app.wait("the page shown again") { self.app.value(of: .id("browser-page")) == "Test page" }
+
+        // Shown as a phone whose pixels are not the screen's: streamed
+        // only, none taken, which would shake the page on the Mac (#100).
+        let phone = try XCTUnwrap(BrowserDevice.presets.first { $0.kind == .phone && $0.scale == 3 })
+        try XCTSkipIf(screen == phone.scale, "a screen with the phone's pixels")
+        let emulated = server.text("browser_emulate", ["tab": tab, "device": phone.name])
+        XCTAssertFalse(emulated.failed, emulated.text)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        let before = frames().count
+        device.send(.browserAsk(id: 2203, request: .watch(tab: tab, on: true, width: asked)))
+        wait("a picture of the page as \(phone.name)", timeout: 15) { frames().count > before }
+        RunLoop.current.run(until: Date().addingTimeInterval(2.5))
+        device.send(.browserAsk(id: 2204, request: .watch(tab: tab, on: false, width: 0)))
+        let shown = Array(frames().dropFirst(before))
+        inItsShape(shown, "as \(phone.name)")
+        XCTAssertTrue(
+            shown.allSatisfy { $0.sharpness < 1.1 },
+            "a picture was taken of a page shown as \(phone.name) while the Mac drew it: \(shown.map { String(format: "%.2f", $0.sharpness) }) pixels to a point")
     }
 
     /// The app's page processes, by number, and their names: Chromium's
@@ -1292,6 +1423,51 @@ final class BrowserUITests: MacUITestCase {
         app.press(.button("Cancel"))
         app.press(.id("browser-pick"))
         app.wait(for: .button("Pick an Element for an Agent"))
+    }
+
+    /// BROWSER-56 (#232): what is written in the sheet is kept for the tab
+    /// until it is sent: cancelled (as while its agent asks, which holds
+    /// Send), the next element picked in that page opens the sheet with
+    /// the note still in it; sent, the next opens empty.
+    func testANoteCancelledIsThereAgainUntilItIsSent() throws {
+        let page = try makeSite()
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
+        let middle = "(() => { const r = document.getElementById('greet').getBoundingClientRect(); return (r.x + r.width / 2) + ',' + (r.y + r.height / 2); })()"
+        let place = server.text("browser_evaluate", ["tab": tab, "script": middle])
+        let point = place.text.split(whereSeparator: { !"0123456789.,".contains($0) }).joined().split(separator: ",").compactMap { Double($0) }
+        XCTAssertEqual(point.count, 2, place.text)
+        let device = try self.device()
+        device.send(.attach(session: agent.id, size: .default))
+        func click() { device.send(.browserAsk(id: Int.random(in: 3000..<9000), request: .tap(tab: tab, x: point[0], y: point[1]))) }
+
+        app.press(.id("browser-pick"))
+        app.wait(for: .button("Stop Picking"))
+        click()
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        app.write("Make this button blue", into: .id("pick-note"))
+        app.press(.button("Cancel"))
+        app.wait("the sheet closed") { !self.app.exists(.text("Send to an Agent")) }
+        XCTAssertFalse(device.text(agent.id).contains("Make this button blue"), "sent though it was cancelled")
+
+        // Picked again in the same page: the note is there.
+        click()
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        app.wait("the note kept") { self.app.value(of: .id("pick-note")) == "Make this button blue" }
+        shot("note-kept")
+        app.press(.button("Send"))
+        wait("the note typed into the agent's session", timeout: 15) { device.text(agent.id).contains("Make this button blue") }
+
+        // Sent: the next opens empty.
+        app.wait(for: .button("Stop Picking"))
+        click()
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        XCTAssertEqual(app.value(of: .id("pick-note")) ?? "", "", "the note sent is there again")
+        app.press(.button("Cancel"))
     }
 
     /// BROWSER-48 (#164): an element the page replaces right after it is

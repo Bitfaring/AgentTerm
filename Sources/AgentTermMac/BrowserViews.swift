@@ -507,6 +507,17 @@ struct SendToAgentSheet: View {
     @State private var agent: SessionID?
     @Environment(\.dismiss) private var dismiss
 
+    /// Why the note is not sent now: the agent asks something, and would
+    /// take what is typed into its session as the answer (#232). The note
+    /// stays, and can be sent once the agent has its answer; closed
+    /// meanwhile, the tab keeps it (`BrowserTab.pickNote`) until it is sent.
+    private var held: String? {
+        guard let agent, case .held(let why) = ComposeSend.send(state: model.sessions.first(where: { $0.id == agent })?.state, side: .prompt) else {
+            return nil
+        }
+        return why
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Send to an Agent").font(.headline)
@@ -544,6 +555,12 @@ struct SendToAgentSheet: View {
             }
             Text("The picture is saved in the project's .agentterm folder, and the agent is told where, with the rest.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
+            if let held {
+                Text(held)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("pick-held")
+            }
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
@@ -554,16 +571,25 @@ struct SendToAgentSheet: View {
                     // and the note is read once it has.
                     NSApp.keyWindow?.makeFirstResponder(nil)
                     DispatchQueue.main.async {
-                        if let agent { model.send(pick, note: note, to: agent) }
+                        // The agent may have started to ask meanwhile.
+                        guard held == nil else { return }
+                        if let agent {
+                            model.send(pick, note: note, to: agent)
+                            pick.tab.pickNote = ""
+                        }
                         dismiss()
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(agent == nil)
+                .disabled(agent == nil || held != nil)
             }
         }
         .padding(20)
         .frame(width: 560)
-        .onAppear { agent = model.pickRecipients(of: pick.tab).first?.id }
+        .onAppear {
+            agent = model.pickRecipients(of: pick.tab).first?.id
+            note = pick.tab.pickNote
+        }
+        .onChange(of: note) { _, written in pick.tab.pickNote = written }
     }
 }

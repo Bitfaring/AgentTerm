@@ -79,6 +79,11 @@ test("RELAY-2 a push with its ticket reaches APNs as it was encrypted, signed wi
   assert.equal(body.aps["mutable-content"], 1);
   assert.equal(body.aps.category, "reply");
   assert.equal(body.aps.alert.body, "An agent needs you");
+  // RELAY-12 (#233): every notice pushed needs the user: at once, with
+  // sound, time-sensitive so that it shows during a Focus.
+  assert.equal(request.headers["apns-priority"], "10");
+  assert.equal(body.aps.sound, "default");
+  assert.equal(body.aps["interruption-level"], "time-sensitive");
   // The JWT: its header names the key, and the key's public half verifies it.
   const [head, claims, signature] = request.headers.authorization.replace("bearer ", "").split(".");
   const decode = (part) => Buffer.from(part, "base64url");
@@ -164,7 +169,7 @@ test("RELAY-9 a notification handled elsewhere is taken back by a background pus
   assert.equal((await call("/v1/push", { token: TOKEN, ticket: "x", expires, gone: "mac-7" })).status, 401);
 });
 
-test("RELAY-10 a Live Activity is updated, started and ended with its own token, at its own topic", async () => {
+test("RELAY-10 a Live Activity is updated, started and ended with its own token, at its own topic; at 10 when urgent, else 5 (#233)", async () => {
   const { ticket: t, expires } = await ticket();
   const activityToken = "c".repeat(64);
   const state = { working: 2, permission: 0, asking: 1, done: 0, failed: 0, waiting: ["deploy"], doneNames: [] };
@@ -185,6 +190,24 @@ test("RELAY-10 a Live Activity is updated, started and ended with its own token,
   assert.equal(sent[1].headers["apns-priority"], "10");
   await call("/v1/push", { token: TOKEN, ticket: t, expires, activity: { token: activityToken, event: "end", state, mac: "Studio" } });
   assert.ok(JSON.parse(sent[2].body).aps["dismissal-date"]);
+  assert.equal(sent[2].headers["apns-priority"], "5");
+  // Marked urgent by the host (an agent starts or stops asking, is done, a
+  // part failed): at 10, an update or an end; a start always is.
+  const urgent = (event, value) => call("/v1/push", { token: TOKEN, ticket: t, expires, activity: { token: activityToken, event, state, mac: "Studio", urgent: value } });
+  await urgent("update", true);
+  assert.equal(sent[3].headers["apns-priority"], "10");
+  await urgent("end", true);
+  assert.equal(sent[4].headers["apns-priority"], "10");
+  await urgent("update", false);
+  assert.equal(sent[5].headers["apns-priority"], "5");
+  await urgent("start", false);
+  assert.equal(sent[6].headers["apns-priority"], "10");
+  // Only true itself is urgent.
+  await urgent("update", "yes");
+  assert.equal(sent[7].headers["apns-priority"], "5");
+  // What the activity shows is not marked: `urgent` is not passed on.
+  assert.equal(JSON.parse(sent[3].body).aps["content-state"].urgent, undefined);
+  assert.equal(JSON.parse(sent[3].body).urgent, undefined);
   assert.equal((await call("/v1/push", { token: TOKEN, ticket: t, expires, activity: { token: "x", event: "update", state } })).status, 400);
   assert.equal((await call("/v1/push", { token: TOKEN, ticket: t, expires, activity: { token: activityToken, event: "explode", state } })).status, 400);
   assert.equal((await call("/v1/push", { token: TOKEN, ticket: "bad", expires, activity: { token: activityToken, event: "update", state } })).status, 401);

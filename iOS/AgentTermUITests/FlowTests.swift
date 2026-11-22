@@ -310,11 +310,10 @@ final class FlowTests: XCTestCase {
     /// notifications off: iOS is not asked when the phone pairs, and the
     /// switch in Settings is off; iOS is asked once it is turned on again.
     /// The script installs the app afresh for it, so that iOS was not asked.
-    /// A notice that comes after pairing, and whose time to be a
-    /// notification comes while it is unread, does not ask iOS either: the
-    /// stand-in Claude Code says it is done (`NOTNOW=only` has it do so, as
-    /// `INBOX=only` does), and the host says its time has come 30 seconds
-    /// later (`Notice.pushWait`).
+    /// A notice that comes after pairing, and is a notification while it is
+    /// unread, does not ask iOS either: the stand-in Claude Code says it is
+    /// done (`NOTNOW=only` has it do so, as `INBOX=only` does), and the host
+    /// says to show it at once (`noticeAlert`, nothing waits since #234).
     private func notNow(_ app: XCUIApplication, link: String, launchButton: String) throws {
         app.buttons["notifications-not-now"].tap()
         XCTAssertTrue(app.buttons["notifications-not-now"].waitForNonExistence(timeout: 10), "the screen stays")
@@ -334,9 +333,9 @@ final class FlowTests: XCTestCase {
         let item = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES %@", "inbox-[0-9]+")).firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 20), "the agent that is done is not in the Inbox")
         XCTAssertTrue(item.label.contains("is done"), item.label)
-        // Unread on the list until its time has come (`Notice.pushWait`, 30
-        // seconds after it came), and some seconds on.
-        XCTAssertFalse(asked.waitForExistence(timeout: 40), "iOS asked whether the app may notify when a notice came after Not Now: \(asked.label)")
+        // Unread on the list when it is a notification, at once (#234), and
+        // some seconds on.
+        XCTAssertFalse(asked.waitForExistence(timeout: 10), "iOS asked whether the app may notify when a notice came after Not Now: \(asked.label)")
         XCTAssertTrue(item.exists, "the notice was read or went, so its notification was not due")
         capture("NN-0-notice-after-not-now")
         app.tab("Settings").tap()
@@ -472,6 +471,11 @@ final class FlowTests: XCTestCase {
         if environment["AGENTTERM_ONLY_INBOX"] != nil {
             app.navigationBars.buttons.firstMatch.tap()
             useTheInbox(app, compose: compose)
+            return
+        }
+        if environment["AGENTTERM_ONLY_ASK"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            answerWhileWritingAPrompt(app, compose: compose)
             return
         }
         if environment["AGENTTERM_ONLY_MARKDOWN"] != nil {
@@ -1221,6 +1225,66 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)[id].waitForExistence(timeout: 10), "read, it is no longer in the Inbox")
         capture("20a-inbox-all")
         app.navigationBars.buttons.firstMatch.tap()
+    }
+
+    /// IOS-12 (#232): a prompt is being written when the agent asks
+    /// something. Send in the prompt does not send it, and says why; the
+    /// question is answered from its own place, the prompt kept the while;
+    /// once the agent no longer asks, the prompt is sent. Where each went
+    /// is what the stand-in received, which scripts/test-ios.sh checks.
+    /// Before the fix the prompt went in as the answer.
+    private func answerWhileWritingAPrompt(_ app: XCUIApplication, compose: XCUIElement) {
+        let claude = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Claude Code")).firstMatch
+        XCTAssertTrue(claude.waitForExistence(timeout: 10), "no Claude Code to start")
+        claude.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10), "the Claude Code session did not open")
+        let prompt = "add tests for the JSON parser first"
+        compose.tap()
+        compose.typeText(prompt)
+        // The stand-in asks a few seconds after it starts (scripts/test-ios.sh).
+        let answerButton = app.buttons["compose-answer-button"]
+        XCTAssertTrue(answerButton.waitForExistence(timeout: 30), "no button to answer the agent with")
+        capture("21-asks-while-writing")
+        app.buttons["Send"].tap()
+        let held = app.staticTexts["compose-held"]
+        XCTAssertTrue(held.waitForExistence(timeout: 5), "Send in the prompt did not say why it was not sent")
+        XCTAssertTrue(held.label.contains("waiting for an answer"), held.label)
+        XCTAssertEqual(compose.value as? String, prompt, "the prompt was not kept")
+        capture("22-prompt-held")
+
+        // The place to answer: the question, its choices, a field of its own.
+        answerButton.tap()
+        let question = app.staticTexts["compose-question"]
+        XCTAssertTrue(question.waitForExistence(timeout: 5), "the place to answer does not show the question")
+        XCTAssertTrue(question.label.contains("Which parser"), question.label)
+        XCTAssertFalse(compose.exists, "the prompt's field is shown with the answer's")
+        let answer = app.descendants(matching: .any)["compose-answer"].firstMatch
+        XCTAssertTrue(answer.exists, "no field to answer in")
+        answer.tap()
+        answer.typeText("not this one")
+        // Back and forth: each keeps its own text.
+        app.buttons["compose-prompt-button"].tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 5), "the prompt did not come back")
+        XCTAssertEqual(compose.value as? String, prompt, "the prompt was lost while answering")
+        answerButton.tap()
+        XCTAssertTrue(answer.waitForExistence(timeout: 5), "the answer did not come back")
+        XCTAssertEqual(answer.value as? String, "not this one", "the answer was lost while the prompt was shown")
+        capture("23-answer")
+        let choice = app.buttons["compose-choice-1"]
+        XCTAssertTrue(choice.exists, "the question's choices are not offered")
+        XCTAssertEqual(choice.label, "The JSON parser")
+        choice.tap()
+
+        // Answered, the stand-in is done: the prompt is back, as it was.
+        XCTAssertTrue(answerButton.waitForNonExistence(timeout: 15), "the agent no longer asks, and the button stayed")
+        XCTAssertTrue(compose.waitForExistence(timeout: 5))
+        XCTAssertEqual(compose.value as? String, prompt, "the prompt was lost")
+        XCTAssertFalse(held.exists, "the held line stayed once the agent no longer asks")
+        capture("24-prompt-back")
+        app.buttons["Send"].tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 5))
+        let sent = NSPredicate(format: "value == nil OR value == '' OR value == 'Message'")
+        wait(for: [expectation(for: sent, evaluatedWith: compose)], timeout: 5)
     }
 
     private func readANote(_ app: XCUIApplication, compose: XCUIElement) {

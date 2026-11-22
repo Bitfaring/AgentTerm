@@ -14,6 +14,9 @@ reports usage through AgentTerm's status line, so the usage band has
 figures. With AGENTTERM_DEMO_DONE_AFTER=<seconds> as well, it tells its
 hooks that a turn began, half that time after it starts, and that it is
 done, that many seconds after (the iPhone's test of the Inbox, #67, #71).
+With AGENTTERM_DEMO_ASK_AFTER=<seconds>, `claude` asks a question with
+choices that many seconds after it starts, and is done once it is
+answered; what it is sent is written down (`ask_later`, #232).
 """
 import json
 import os
@@ -125,6 +128,61 @@ def tell_done_later():
         timer.start()
 
 
+QUESTION = "Which parser should the tests cover first?"
+CHOICES = ["The CSV parser", "The JSON parser"]
+# What the stand-in asks, while it asks (AGENTTERM_DEMO_ASK_AFTER).
+asking = threading.Event()
+redraw = threading.Event()
+
+
+def ask_later():
+    """Claude Code's question with choices (AskUserQuestion), told to its
+    hooks as it tells them, a while after it starts; and what it is sent,
+    written down, for scripts/test-ios.sh to see where the iPhone's prompt
+    and answer went (#232): `~/.demo-agent/claude-input`, a line for each
+    line received, ASKED and ANSWERED where the question began and ended."""
+    after = os.environ.get("AGENTTERM_DEMO_ASK_AFTER")
+    if not after or not TOOL:
+        return
+    folder = os.path.expanduser("~/.demo-agent")
+    os.makedirs(folder, exist_ok=True)
+    log = os.path.join(folder, NAME + "-input")
+
+    def note(line):
+        with open(log, "a") as written:
+            written.write(line + "\n")
+
+    def ask():
+        note("ASKED")
+        asking.set()
+        redraw.set()
+        options = [{"label": choice, "description": ""} for choice in CHOICES]
+        tool_input = {"questions": [{"question": QUESTION, "header": "Parser", "options": options, "multiSelect": False}]}
+        run_tool(["hook", "claude", "PreToolUse"], {"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "tool_input": tool_input})
+
+    def read():
+        while True:
+            try:
+                received = os.read(sys.stdin.fileno(), 4096)
+            except OSError:
+                return
+            if not received:
+                return
+            note("INPUT " + json.dumps(received.decode(errors="replace")))
+            if asking.is_set() and (b"\r" in received or b"\n" in received):
+                # Answered: the question is over, and the turn with it.
+                asking.clear()
+                redraw.set()
+                note("ANSWERED")
+                run_tool(["hook", "claude", "PostToolUse"], {"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion"})
+                run_tool(["hook", "claude", "Stop"], {"hook_event_name": "Stop", "last_assistant_message": "The tests start with that parser."})
+
+    threading.Thread(target=read, daemon=True).start()
+    timer = threading.Timer(float(after), ask)
+    timer.daemon = True
+    timer.start()
+
+
 def claude(cols):
     out = []
     width = max(cols - 4, 20)
@@ -149,6 +207,12 @@ def claude(cols):
     out.append("")
     rule = DIM + "─" * cols + RESET
     out.append(rule)
+    if asking.is_set():
+        # Its question, in place of its input, as Claude Code draws one.
+        out.append(BOLD + QUESTION + RESET)
+        out.extend(("❯ " if index == 0 else "  ") + f"{index + 1}. {choice}" for index, choice in enumerate(CHOICES))
+        out.append(f"  {len(CHOICES) + 1}. Type something.")
+        return out
     out.append("❯ " + ESC + "7m" + NEXT[0] + ESC + "27m" + DIM + NEXT[1:] + RESET)
     out.append(rule)
     hint = " (shift+tab to cycle)" if cols >= 46 else ""
@@ -195,13 +259,16 @@ def main():
         with open(os.path.join(folder, NAME), "a") as told:
             told.write(variable + "\n")
     os.system("stty -echo 2>/dev/null")
-    # Drawn again whenever the terminal has another size. Looked at now and
-    # then rather than on the signal: a signal in the middle of drawing
-    # would leave the screen half drawn.
+    if NAME == "claude":
+        ask_later()
+    # Drawn again whenever the terminal has another size, or the question
+    # comes or goes. Looked at now and then rather than on the signal: a
+    # signal in the middle of drawing would leave the screen half drawn.
     drawn = None
     while True:
         now = size()
-        if now != drawn:
+        if now != drawn or redraw.is_set():
+            redraw.clear()
             drawn = now
             draw(now.columns, now.lines)
         time.sleep(0.2)

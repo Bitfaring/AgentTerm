@@ -317,9 +317,18 @@ extension AgentHistory {
 
     // MARK: Deleting
 
+    /// Said of every conversation of Antigravity that is asked to be deleted.
+    public static let antigravityNotDeleted =
+        "Antigravity keeps its conversations in a store of its own, which AgentTerm does not write to: this one is deleted in Antigravity."
+
     /// Moves a conversation's record to the Trash, so that its agent no
     /// longer has it. Nil when done, or why it was not.
     public static func delete(_ conversation: Conversation, home: String = NSHomeDirectory()) -> String? {
+        // Antigravity keeps its conversations in a store of its own (a
+        // SQLite database since 1.0.16, #224), which AgentTerm reads and
+        // never writes to: none of its is deleted here, whichever of its
+        // lists it was read from.
+        if conversation.agent == "agy" { return antigravityNotDeleted }
         guard let source = conversation.source else { return "This conversation has no file of its own to delete." }
         // As real paths, the folder a file is in resolved rather than the
         // file, which may be gone: a link on the way would otherwise make
@@ -340,8 +349,6 @@ extension AgentHistory {
             // Its folder: the events, and what names the conversation.
             guard path.hasPrefix(home + "/.copilot/session-state/"), path.hasSuffix("/events.jsonl") else { return "That is not a conversation of Copilot." }
             target = (path as NSString).deletingLastPathComponent
-        case "agy":
-            return "Antigravity keeps its list of conversations in a file of its own, which AgentTerm does not rewrite: this one can be hidden here, and deleted in Antigravity."
         default:
             return "Conversations of this agent cannot be deleted here."
         }

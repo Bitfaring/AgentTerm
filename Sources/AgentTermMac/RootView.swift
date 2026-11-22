@@ -328,6 +328,8 @@ struct BrowserLaunch: View {
                         .foregroundStyle(Theme.accent(for: "browser"))
                     Text("Browser")
                         .font(.system(size: large ? 13 : 12, weight: .medium))
+                        .lineLimit(large ? 1 : nil)
+                        .fixedSize(horizontal: large, vertical: false)
                     Image(systemName: "chevron.down")
                         .font(.system(size: large ? 9 : 8, weight: .bold))
                         .foregroundStyle(.secondary)
@@ -375,6 +377,8 @@ struct SSHMenu: View {
                         .foregroundStyle(Theme.accent(for: "ssh"))
                     Text("SSH")
                         .font(.system(size: large ? 13 : 12, weight: .medium))
+                        .lineLimit(large ? 1 : nil)
+                        .fixedSize(horizontal: large, vertical: false)
                     Image(systemName: "chevron.down")
                         .font(.system(size: large ? 9 : 8, weight: .bold))
                         .foregroundStyle(.secondary)
@@ -452,8 +456,11 @@ struct LaunchButton: View {
                         .font(.system(size: large ? 12 : 10.5, weight: .semibold))
                         .foregroundStyle(.secondary)
                 } else {
+                    // In the middle of an empty folder, whole and on one line (#223).
                     Text(title)
                         .font(.system(size: large ? 13 : 12, weight: .medium))
+                        .lineLimit(large ? 1 : nil)
+                        .fixedSize(horizontal: large, vertical: false)
                 }
             }
             .opacity(notInstalled ? 0.6 : 1)
@@ -599,23 +606,71 @@ private struct AgentShellsFaultBanner: View {
     }
 }
 
-/// An agent of a session that is not in front finished its task or waits
-/// for the user (#22): which session, and why. Touching it opens it.
+/// The agents' notices, floating over the middle of the window at its top,
+/// in the centre (#225, decided by the owner on 2026-11-22): drawn over the
+/// content, they take no room from it, so the terminal under them keeps its
+/// size when one shows and when it goes. The newest is on top. Only the
+/// cards take the pointer: what is around them is the terminal's.
+private struct FloatingNoticeStack: View {
+    @EnvironmentObject private var model: AppModel
+
+    /// As wide as a notice gets, so that a long answer does not span the
+    /// window; less in a narrow middle.
+    static let width: CGFloat = 560
+
+    var body: some View {
+        let shown = model.floatingNotices.shown
+        Group {
+            if !shown.isEmpty {
+                // Scrolled only when the stack is taller than the middle:
+                // a scroll view takes the pointer over all of its room.
+                ViewThatFits(in: .vertical) {
+                    cards(shown)
+                    ScrollView { cards(shown) }.scrollIndicators(.hidden)
+                }
+                .frame(maxWidth: Self.width)
+                .padding(.horizontal, 12)
+                // No identifier of its own: with one card in it, SwiftUI
+                // gives the stack's identifier to that card, which then is
+                // not found by its own (#225). Each card is named.
+                .accessibilityElement(children: .contain)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: shown.map(\.id))
+    }
+
+    private func cards(_ shown: [FloatingNotices.Shown]) -> some View {
+        VStack(spacing: 8) {
+            ForEach(shown) { one in
+                FloatingNoticeCard(id: one.id, notice: one.notice)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .padding(.top, 10)
+        .padding(.bottom, 14)
+    }
+}
+
+/// An agent finished its task or waits for the user (#22): which session,
+/// and why. Touching it opens it.
 ///
 /// What the agent said shows on up to six lines, the end of it, where an
 /// agent comes to the point; when that leaves something out, Show All
-/// opens the banner out to the whole of it, to be scrolled when it is long
+/// opens the notice out to the whole of it, to be scrolled when it is long
 /// (#62). The session's name gives way in the middle, so that why it is
 /// told is never the part cut off.
-private struct AgentNoticeBanner: View {
+private struct FloatingNoticeCard: View {
     @EnvironmentObject private var model: AppModel
+    /// The host's number for the notice.
+    let id: UInt64
     let notice: AgentNotice
     @State private var openedOut = false
 
-    /// The lines shown before the banner is opened out.
+    /// The lines shown before the notice is opened out.
     static let lines = 6
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: AgentStateMark.symbol(for: notice.state)).foregroundStyle(AgentStateMark.color(for: notice.state))
                 .padding(.top, 2)
@@ -653,17 +708,26 @@ private struct AgentNoticeBanner: View {
             }
             Button("Open") { model.open(notice) }
                 .controlSize(.small)
-            Button("Dismiss") { model.dismissAgentNotice() }
+                .accessibilityIdentifier("floating-notice-open-\(notice.session)")
+            Button("Dismiss") { model.dismissFloatingNotice(id) }
                 .controlSize(.small)
+                .accessibilityIdentifier("floating-notice-dismiss-\(notice.session)")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(AgentStateMark.color(for: notice.state).opacity(0.12))
-        .contentShape(Rectangle())
+        .padding(.vertical, 9)
+        // Not see-through: it is read over a terminal's text.
+        .background(AgentStateMark.color(for: notice.state).opacity(0.14), in: shape)
+        .background(Theme.panel, in: shape)
+        .overlay(shape.strokeBorder(AgentStateMark.color(for: notice.state).opacity(0.45), lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 12, y: 4)
+        .contentShape(shape)
         .onTapGesture { model.open(notice) }
+        // It does not go while the pointer is over it (#225).
+        .onHover { model.hover(notice: id, $0) }
+        .onDisappear { model.hover(notice: id, false) }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("agent-notice")
-        // Another notice starts as short as the first did.
+        .accessibilityIdentifier("floating-notice-\(notice.session)")
+        // Another notice of the session starts as short as the first did.
         .onChange(of: notice) { _, _ in openedOut = false }
     }
 }
@@ -783,8 +847,9 @@ private struct PlaceList: View {
     }
 }
 
-/// The middle of the window: how the Mac is doing, what stopped, a notice,
-/// and the terminals with the place over them.
+/// The middle of the window: how the Mac is doing, what stopped, and the
+/// terminals with the place over them and the agents' notices floating
+/// over both.
 private struct MiddleColumn: View {
     @EnvironmentObject private var model: AppModel
 
@@ -799,6 +864,15 @@ private struct MiddleColumn: View {
             ZStack {
                 Terminals()
                 PlaceInTheMiddle()
+            }
+            // An agent finished, or waits for you: over the content, not
+            // above it, so that the terminal keeps its size (#225). What
+            // stopped stays a banner above, in the flow.
+            // Under the strip of tabs and the row of a tab's items, not on
+            // them: what is clicked there stays reachable (#225).
+            .overlay(alignment: .top) {
+                FloatingNoticeStack()
+                    .padding(.top, model.place == .sessions && model.selectedSession != nil ? model.tabStripHeight + GroupRow.height : 0)
             }
         }
     }
@@ -824,10 +898,6 @@ private struct Banners: View {
         // The agents cannot open shells, although that is on.
         ForEach(model.shownShellsFaults) { fault in
             AgentShellsFaultBanner(fault: fault)
-        }
-        // An agent of another session finished, or waits for you.
-        if let notice = model.agentNotice {
-            AgentNoticeBanner(notice: notice)
         }
     }
 }
@@ -928,6 +998,48 @@ struct ForeignSizeBanner: View {
     }
 }
 
+/// Lays its views out in a row, each as wide as it asks to be, and goes on
+/// in a row below when the next does not fit; every row is centred. A view
+/// is never squeezed: a label in it stays whole, on its one line (#223).
+struct CenteredRows: Layout {
+    var spacing: CGFloat = 10
+
+    /// The rows for a width: which views are in each, and what each takes.
+    private func rows(of subviews: Subviews, in width: CGFloat) -> [(items: [(index: Int, size: CGSize)], size: CGSize)] {
+        var rows: [(items: [(index: Int, size: CGSize)], size: CGSize)] = []
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            if let last = rows.indices.last, rows[last].size.width + spacing + size.width <= width {
+                rows[last].items.append((index, size))
+                rows[last].size.width += spacing + size.width
+                rows[last].size.height = max(rows[last].size.height, size.height)
+            } else {
+                // The first of a row is in it however wide: it has no row to go on to.
+                rows.append(([(index, size)], size))
+            }
+        }
+        return rows
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(of: subviews, in: proposal.width ?? .infinity)
+        let height = rows.reduce(0) { $0 + $1.size.height } + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: rows.map(\.size.width).max() ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(of: subviews, in: bounds.width) {
+            var x = bounds.midX - row.size.width / 2
+            for item in row.items {
+                subviews[item.index].place(at: CGPoint(x: x, y: y + row.size.height / 2), anchor: .leading, proposal: .unspecified)
+                x += item.size.width + spacing
+            }
+            y += row.size.height + spacing
+        }
+    }
+}
+
 struct WelcomeView: View {
     @EnvironmentObject private var model: AppModel
 
@@ -951,7 +1063,10 @@ struct WelcomeView: View {
                     .controlSize(.large)
                     .keyboardShortcut(.defaultAction)
             }
-            HStack(spacing: 10) {
+            // In rows, not one row: seven buttons do not fit beside an open
+            // side panel, and squeezed into one their labels broke inside
+            // words (#223).
+            CenteredRows(spacing: 10) {
                 ForEach(model.installedAgents) { agent in
                     LaunchButton(title: agent.name, id: agent.id, large: true) { model.launch(agent) }
                         .contextMenu { WorktreeLaunchItem(agent: agent) }

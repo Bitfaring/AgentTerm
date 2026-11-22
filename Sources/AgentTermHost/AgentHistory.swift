@@ -184,8 +184,38 @@ public enum AgentHistory {
 
     // MARK: Antigravity
 
-    /// `~/.gemini/antigravity-cli/cache/conversation_metadata.json`
+    /// Antigravity's own list of its conversations: since 1.0.16 a SQLite
+    /// store, `~/.gemini/antigravity-cli/conversation_summaries.db`
+    /// (`AntigravityStore`), and before it
+    /// `~/.gemini/antigravity-cli/cache/conversation_metadata.json`, which
+    /// 1.5.12 no longer writes (#224). Both are read: a folder brought over
+    /// from an earlier version may hold both, and then a conversation the
+    /// store has is listed once, as the store says, since the store is what
+    /// the Antigravity in use reads and writes.
     private static func antigravity(_ scope: Scope, _ home: URL) -> [Conversation] {
+        var stored: [AntigravityStore.Row] = []
+        if case .rows(let rows) = AntigravityStore.read(home: home) { stored = rows }
+        let inStore = Set(stored.map(\.id))
+        let ofStore = stored.compactMap { row -> Conversation? in
+            guard let data = row.workspaces.data(using: .utf8), let workspaces = (try? JSONSerialization.jsonObject(with: data)) as? [String] else { return nil }
+            let title = [row.title, row.preview].first { !$0.isEmpty }
+            // Written as "2026-11-20 01:02:03.123456+07:00".
+            let stamp = row.modified.split(separator: " ", maxSplits: 1).joined(separator: "T")
+            return antigravityConversation(row.id, title: title, stamp: stamp, workspaces: workspaces, scope, home)
+        }
+        return ofStore + antigravityList(scope, home).filter { !inStore.contains($0.sessionID) }
+    }
+
+    /// Why the conversations of Antigravity's store are not listed, when it
+    /// is there and cannot be read, or is of a version not known here
+    /// (#224); nil when it was read, or when there is none.
+    public static func antigravityProblem(home: String = NSHomeDirectory()) -> String? {
+        guard case .unreadable(let reason) = AntigravityStore.read(home: URL(fileURLWithPath: home, isDirectory: true)) else { return nil }
+        return "Antigravity's conversations are not listed: its database of them could not be read. \(reason)"
+    }
+
+    /// `cache/conversation_metadata.json`, of an Antigravity before 1.0.16.
+    private static func antigravityList(_ scope: Scope, _ home: URL) -> [Conversation] {
         let file = home.appendingPathComponent(".gemini/antigravity-cli/cache/conversation_metadata.json")
         guard let data = try? Data(contentsOf: file),
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -196,19 +226,24 @@ public enum AgentHistory {
                 let summary = entry["summary"] as? [String: Any], summary["Internal"] as? Bool != true,
                 let workspaces = summary["WorkspaceURIs"] as? [String]
             else { return nil }
-            let paths = workspaces.compactMap { URL(string: $0)?.standardizedFileURL.path }
-            guard let cwd = paths.first(where: scope.contains) else { return nil }
             let title = [summary["Title"], summary["Preview"]].lazy.compactMap { $0 as? String }.first { !$0.isEmpty }
             let stamp = (summary["UpdatedAt"] as? String) ?? (entry["last_modified_time"] as? String) ?? ""
-            guard let title, let date = parseDate(stamp) else { return nil }
-            // The CLI also writes each conversation as readable JSON lines;
-            // the "full" file is the one without truncated messages.
-            let logs = home.appendingPathComponent(".gemini/antigravity-cli/brain/\(id)/.system_generated/logs")
-            let transcript = ["transcript_full.jsonl", "transcript.jsonl"]
-                .map { logs.appendingPathComponent($0).path }
-                .first(where: FileManager.default.fileExists(atPath:))
-            return Conversation(agent: "agy", sessionID: id, title: clean(title), updatedAt: date, cwd: cwd, source: transcript)
+            return antigravityConversation(id, title: title, stamp: stamp, workspaces: workspaces, scope, home)
         }
+    }
+
+    /// A conversation of Antigravity as either of its lists tells it, when
+    /// it ran in the scope and has a title and a time.
+    private static func antigravityConversation(_ id: String, title: String?, stamp: String, workspaces: [String], _ scope: Scope, _ home: URL) -> Conversation? {
+        let paths = workspaces.compactMap { URL(string: $0)?.standardizedFileURL.path }
+        guard let cwd = paths.first(where: scope.contains), let title, let date = parseDate(stamp) else { return nil }
+        // The CLI also writes each conversation as readable JSON lines;
+        // the "full" file is the one without truncated messages.
+        let logs = home.appendingPathComponent(".gemini/antigravity-cli/brain/\(id)/.system_generated/logs")
+        let transcript = ["transcript_full.jsonl", "transcript.jsonl"]
+            .map { logs.appendingPathComponent($0).path }
+            .first(where: FileManager.default.fileExists(atPath:))
+        return Conversation(agent: "agy", sessionID: id, title: clean(title), updatedAt: date, cwd: cwd, source: transcript)
     }
 
     // MARK: Copilot CLI

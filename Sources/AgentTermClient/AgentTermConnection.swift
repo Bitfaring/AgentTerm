@@ -45,6 +45,18 @@ public final class AgentTermConnection: @unchecked Sendable {
     /// these wait, and follow the greeting in the order they were sent.
     private var waiting: [(data: Data, opcode: NWProtocolWebSocket.Opcode)]? = []
     private let waitingLock = NSLock()
+    /// The protocol the host said it is at, in its welcome; nil until then.
+    /// Under `waitingLock`.
+    private var hostProtocol: Int?
+
+    /// Keeps what the host's welcome says of its protocol, before the
+    /// welcome is handed on: what is sent in answer to it already goes by it.
+    private func noteProtocol(of message: ServerMessage) {
+        guard case .welcome(let version, _, _, _) = message else { return }
+        waitingLock.lock()
+        hostProtocol = version
+        waitingLock.unlock()
+    }
 
     // A connection that died without a word is the common case on a phone:
     // the network changed, the tunnel dropped, the app was asleep. Nothing
@@ -127,7 +139,15 @@ public final class AgentTermConnection: @unchecked Sendable {
         connection.start(queue: queue)
     }
 
+    /// A host of an earlier release is sent nothing it does not have (#214):
+    /// it would answer "malformed message", which says nothing the user can
+    /// act on beyond what the apps already say of a host of another
+    /// release. What it does not have is left unsent, here, for both apps.
     public func send(_ message: ClientMessage) {
+        waitingLock.lock()
+        let host = hostProtocol
+        waitingLock.unlock()
+        if let host, !message.isKnown(toHostAt: host) { return }
         send(MessageCoding.encode(message), opcode: .text)
     }
 
@@ -237,6 +257,7 @@ public final class AgentTermConnection: @unchecked Sendable {
             switch metadata?.opcode {
             case .text:
                 if let data, let message = MessageCoding.decode(ServerMessage.self, from: data) {
+                    self.noteProtocol(of: message)
                     self.deliver { if !self.closed { self.onMessage?(message) } }
                 }
             case .binary:

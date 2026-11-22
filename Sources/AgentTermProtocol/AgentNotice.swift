@@ -190,11 +190,41 @@ public struct AgentsStatus: Codable, Hashable, Sendable {
         return parts.isEmpty ? "Nothing running" : parts.joined(separator: " · ")
     }
 
+    /// How soon an update from `previous` to this is to be shown (#233,
+    /// decided by the owner on 2026-11-22): high when it changes what
+    /// needs the user, an agent that starts or stops asking (answered on
+    /// the Mac or another device), one that becomes done, or a part that
+    /// failed and stopped work; low when it needs nothing of the user, an
+    /// agent that works, progress, how many agents run, a done one seen.
+    /// Nil `previous`, nothing sent yet, is as if nothing ran.
+    public func priority(since previous: AgentsStatus?) -> PushPriority {
+        let before = previous ?? AgentsStatus()
+        let waits =
+            permission != before.permission || asking != before.asking || Set(waiting) != Set(before.waiting)
+            || firstWaiting != before.firstWaiting
+        let becameDone = done > before.done || !Set(doneNames).isSubset(of: Set(before.doneNames))
+        return waits || becameDone || failed > before.failed ? .high : .low
+    }
+
     /// The words of its switch and of the activity (principle 9).
     public static let title = "Agents on"
     public static let toggle = "Live Activity of the Mac's agents"
     /// Beside the switch while iOS stops it (#212).
     public static let notAllowed = "Live Activities are turned off for AgentTerm in the iPhone's Settings."
+}
+
+/// How soon Apple is asked to deliver a push (#233, decided by the owner
+/// on 2026-11-22). High: a notification, at once, with sound and
+/// time-sensitive, and a Live Activity updated at once (`apns-priority`
+/// 10). Low: what needs nothing of the user, a Live Activity Apple updates
+/// when it sees fit (5), so that the high ones keep within the budget iOS
+/// gives an app for 10.
+public enum PushPriority: String, Codable, Sendable {
+    case high
+    case low
+
+    /// The `apns-priority` the relay sends it with.
+    public var apns: Int { self == .high ? 10 : 5 }
 }
 
 /// When the iPhone shows the Live Activity of the agents on a Mac (#168,

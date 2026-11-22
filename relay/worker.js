@@ -9,9 +9,18 @@
 // POST /v1/push      {token, ticket, expires, gone}       takes back the
 //                     notification named `gone`, handled on another device
 // POST /v1/push      {token, ticket, expires, activity: {token, event,
-//                     state, mac}}                         updates, starts or
+//                     state, mac, urgent?}}                updates, starts or
 //                     ends the device's Live Activity (#168): `token` is the
-//                     activity's own, signed for by the device's ticket
+//                     activity's own, signed for by the device's ticket;
+//                     `urgent` true asks for it to be shown at once (#233)
+//
+// Priorities (#233, decided by the owner on 2026-11-22): a notification is
+// sent at once (apns-priority 10), with sound, time-sensitive, so that it
+// shows during a Focus; every notice a host pushes is one that needs the
+// user. A Live Activity's start, and an update or end the host marks
+// `urgent` (an agent starts or stops asking, one is done, a part failed),
+// go at 10; any other update at 5, which Apple delivers when it sees fit,
+// so that the urgent ones keep within the budget iOS gives an app for 10.
 //
 // The iPhone registers its device token and gets a ticket, which it hands to
 // the host it is paired with. A push is sent only with a ticket the relay
@@ -91,7 +100,12 @@ async function push(body, env) {
   const category = typeof body?.category === "string" ? body.category.slice(0, 64) : undefined;
   // What a device shows when its extension cannot decrypt the notice: the
   // extension replaces it with the notice itself.
-  const aps = { alert: { title: "AgentTerm", body: "An agent needs you" }, sound: "default", "mutable-content": 1 };
+  const aps = {
+    alert: { title: "AgentTerm", body: "An agent needs you" },
+    sound: "default",
+    "interruption-level": "time-sensitive",
+    "mutable-content": 1,
+  };
   if (category) aps.category = category;
   // `i` names the notification for the extension, as the collapse identifier does for iOS.
   return send(token, env, "alert", "10", collapse, collapse ? { aps, e: payload, i: collapse } : { aps, e: payload });
@@ -131,7 +145,8 @@ async function activity(deviceToken, body, env) {
     aps.attributes = { mac: String(body?.mac ?? "the Mac").slice(0, 80) };
     aps.alert = { title: "AgentTerm", body: "Agents are at work" };
   }
-  return send(token, env, "liveactivity", event === "start" ? "10" : "5", undefined, { aps }, `${env.APNS_TOPIC}.push-type.liveactivity`);
+  const priority = event === "start" || body?.urgent === true ? "10" : "5";
+  return send(token, env, "liveactivity", priority, undefined, { aps }, `${env.APNS_TOPIC}.push-type.liveactivity`);
 }
 
 async function send(token, env, type, priority, collapse, payload, topic = env.APNS_TOPIC) {

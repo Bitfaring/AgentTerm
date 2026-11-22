@@ -1,3 +1,4 @@
+import AgentTermEditor
 import AgentTermProtocol
 import AgentTermTerminal
 import SwiftUI
@@ -10,6 +11,7 @@ struct TurnResultScreen: View {
     @EnvironmentObject private var model: PhoneModel
     let session: SessionID
     @State private var next = ""
+    @AppStorage(InboxMarkdownButton.key) private var markdown = false
 
     var body: some View {
         ScrollView {
@@ -102,7 +104,13 @@ struct TurnResultScreen: View {
         let reply = (result?.reply ?? said)?.trimmingCharacters(in: .whitespacesAndNewlines)
         part(Inbox.said) {
             if let reply, !reply.isEmpty {
-                Text(reply).textSelection(.enabled).accessibilityIdentifier("result-said")
+                // Markdown, which can be shown rendered (#218).
+                InboxMarkdownButton(markdown: $markdown)
+                if markdown {
+                    MarkdownText(reply, size: 15).accessibilityIdentifier("result-said-markdown")
+                } else {
+                    Text(reply).textSelection(.enabled).accessibilityIdentifier("result-said")
+                }
             } else {
                 Text(Inbox.nothingSaid).foregroundStyle(.tertiary).accessibilityIdentifier("result-said")
             }

@@ -27,6 +27,9 @@ choose_simulator "${1:-}" "iPhone Air"
 DEVICE="$SIM_UDID"
 echo "Testing on this Mac and on $SIM_NAME ($SIM_UDID)."
 PORT=7795
+# The proxy the iPhone reaches the host through (#198).
+PROXY_PORT=$((PORT + 1))
+ports_must_be_free "$PORT" "$PROXY_PORT"
 ROOT="$(mktemp -d)"
 STATE="$ROOT/state"
 PROJECT="$ROOT/project"
@@ -75,7 +78,12 @@ MAC=""
 PROXY=""
 cleanup() {
     local status=$?
-    stop_then_remove "$MAC $PROXY $DAEMON" "$ROOT"
+    # The app first, and gone before its host is stopped: an app that
+    # loses its host starts the one in its bundle (#221).
+    stop_then_remove "$MAC"
+    stop_then_remove "$PROXY $DAEMON"
+    stop_what_is_left "$PORT $PROXY_PORT" "$ROOT"
+    stop_then_remove "" "$ROOT"
     defaults delete "$IDENTIFIER" >/dev/null 2>&1 || true
     exit "$status"
 }
@@ -96,9 +104,10 @@ if ! "${XCODEBUILD[@]}" build-for-testing > "$LOG" 2>&1; then
     exit 1
 fi
 
-# The Mac app, starting from no preferences.
+# The Mac app, starting from no preferences. A host it would start by itself
+# listens on 127.0.0.1 only, as the script's own does (#221).
 defaults delete "$IDENTIFIER" >/dev/null 2>&1 || true
-HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_NO_SYSTEM_NOTIFICATIONS=1 "$MAC_APP" > "$STATE/mac.log" 2>&1 &
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_NO_SYSTEM_NOTIFICATIONS=1 AGENTTERM_LOCAL_ONLY=1 "$MAC_APP" > "$STATE/mac.log" 2>&1 &
 MAC=$!
 
 export AGENTTERM_CROSS_PID="$MAC" AGENTTERM_CROSS_PROJECT="$PROJECT" AGENTTERM_CROSS_APP="AgentTerm Dev"
@@ -123,7 +132,6 @@ part "the Mac app first" swift test --skip-build --filter "AgentTermMacUITests.C
 
 # The iPhone reaches the host through a proxy the test can tell to hold
 # what the host sends, and to close the connection (#198).
-PROXY_PORT=$((PORT + 1))
 mkdir -p "$ROOT/proxy"
 python3 scripts/hold-proxy.py "$PROXY_PORT" "$PORT" "$ROOT/proxy" > "$STATE/proxy.log" 2>&1 &
 PROXY=$!

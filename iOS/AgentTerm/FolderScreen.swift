@@ -10,7 +10,7 @@ struct FolderScreen: View {
     /// with the worktree on show (#34).
     let folder: String
     @AppStorage("folderTab") private var tab = "git"
-    /// The worktree picked from the chips; nil for what the screen was opened with.
+    /// The worktree picked from the list of them; nil for what the screen was opened with.
     @State private var picked: String?
 
     /// The folder's worktrees are asked for under its own path; a worktree
@@ -29,7 +29,10 @@ struct FolderScreen: View {
     var body: some View {
         content(of: shownPath)
             .onAppear { model.listWorktrees(key) }
-            // What the chips say of the one on show is then stale.
+            // Forgotten with the connection, and the host says them only
+            // when asked: asked again once it is reached again (#215).
+            .onChange(of: model.status) { _, status in if status == .connected { model.listWorktrees(key) } }
+            // What the list of worktrees says of the one on show is then stale.
             .onChange(of: model.diffs[shownPath]?.files.count) { old, _ in if old != nil { model.listWorktrees(project) } }
             .onChange(of: project) { _, project in if model.worktrees[project] == nil { model.listWorktrees(project) } }
             .alert("Worktree", isPresented: Binding(get: { model.worktreeSaid != nil }, set: { if !$0 { model.worktreeSaid = nil } })) {
@@ -49,7 +52,7 @@ struct FolderScreen: View {
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            WorktreeChips(project: project, list: worktrees, picked: $picked, shownPath: folder)
+            WorktreePicker(project: project, list: worktrees, picked: $picked, shownPath: folder)
             if tab == "history" {
                 HistoryList(folder: folder)
             } else if tab == "files" {
@@ -814,10 +817,10 @@ struct HistoryList: View {
         return first + (model.olderHistory[key] ?? []).filter { !known.contains($0.id) }
     }
     private var groups: [HistoryFilter.Group] {
-        filter.groups(conversations, pinned: model.pinnedConversations, hidden: model.hiddenConversations, agentNames: model.agents.map { ($0.id, $0.name) })
+        filter.groups(conversations, agentNames: model.agents.map { ($0.id, $0.name) })
     }
     private var hits: [HistoryHit]? {
-        model.historyHits[key]?.filter { filter.allows($0.conversation, hidden: model.hiddenConversations) }.sorted { $0.conversation.updatedAt > $1.conversation.updatedAt }
+        model.historyHits[key]?.filter { filter.allows($0.conversation) }.sorted { $0.conversation.updatedAt > $1.conversation.updatedAt }
     }
     private var isSearching: Bool { model.historySearching.contains(key) }
     /// The first page is full: there may be older ones.
@@ -938,7 +941,7 @@ struct HistoryList: View {
                     if let agent {
                         Image(systemName: AgentStyle.symbol(for: agent)).font(.system(size: 12, weight: .semibold)).foregroundStyle(AgentStyle.accent(for: agent))
                     } else {
-                        Image(systemName: group.id == "pinned" ? "pin.fill" : "calendar").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                        Image(systemName: "calendar").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                     }
                     Text(group.title).font(.subheadline.weight(.semibold))
                     Spacer(minLength: 0)
@@ -956,8 +959,6 @@ struct HistoryList: View {
     private func card(_ list: [Conversation], hits: [HistoryHit]?, showsAgent: Bool) -> some View {
         VStack(spacing: 0) {
             ForEach(list) { conversation in
-                let pinned = model.pinnedConversations.contains(conversation.id)
-                let hidden = model.hiddenConversations.contains(conversation.id)
                 let isPicked = picked.contains(conversation.id)
                 Button {
                     if !picking {
@@ -970,23 +971,12 @@ struct HistoryList: View {
                 } label: {
                     ConversationRow(
                         conversation: conversation, showsFolder: showsAll, agentName: showsAgent ? model.agents.first { $0.id == conversation.agent }?.name : nil,
-                        isPinned: pinned, isHidden: hidden, hit: hits?.first { $0.id == conversation.id }, picked: picking ? isPicked : nil)
+                        hit: hits?.first { $0.id == conversation.id }, picked: picking ? isPicked : nil)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("conversation-" + conversation.sessionID)
                 .accessibilityAddTraits(picking && isPicked ? .isSelected : [])
                 .contextMenu {
-                    Button {
-                        model.markConversation(conversation, pinned: !pinned)
-                    } label: {
-                        Label(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin")
-                    }
-                    Button {
-                        model.markConversation(conversation, hidden: !hidden)
-                    } label: {
-                        Label(hidden ? "Show Again" : "Hide", systemImage: hidden ? "eye" : "eye.slash")
-                    }
-                    Divider()
                     Button(role: .destructive) {
                         deleting = conversation
                     } label: {
@@ -1011,8 +1001,6 @@ private struct ConversationRow: View {
     let showsFolder: Bool
     /// Whose it is, where the rows are not under their agent.
     var agentName: String?
-    var isPinned = false
-    var isHidden = false
     /// What a search found in it.
     var hit: HistoryHit?
     /// Whether it is picked to be deleted; nil while nothing is picked.
@@ -1026,14 +1014,10 @@ private struct ConversationRow: View {
                     .foregroundStyle(picked ? Color.accentColor : Color.secondary)
             }
             VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    if isPinned { Image(systemName: "pin.fill").font(.system(size: 10)).foregroundStyle(.orange) }
-                    Text(conversation.title)
-                        .font(.body)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .foregroundStyle(isHidden ? .secondary : .primary)
-                }
+                Text(conversation.title)
+                    .font(.body)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
                 if let snippet = hit?.snippet {
                     Text(snippet).font(.footnote).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.leading)
                 }
@@ -1045,7 +1029,6 @@ private struct ConversationRow: View {
                     }
                     Text(relativeTime(conversation.updatedAt))
                     if let hit, hit.count > 1 { Text("· \(hit.count) places") }
-                    if isHidden { Text("· hidden") }
                     if showsFolder {
                         Text("·")
                         Image(systemName: "folder").font(.system(size: 10))

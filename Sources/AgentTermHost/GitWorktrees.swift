@@ -40,6 +40,18 @@ public enum GitWorktrees {
         return top.asWritten + path.dropFirst(top.real.count)
     }
 
+    /// Where the repository's own worktree is checked out. For a submodule
+    /// git names the repository's folder under the parent's `.git/modules`
+    /// instead (#216), which holds no files; the checkout is where that
+    /// folder's `core.worktree` leads. A bare repository has none, and
+    /// keeps the path git named.
+    private static func ownCheckout(_ named: String, of folder: String) -> String {
+        guard let common = try? run(["rev-parse", "--path-format=absolute", "--git-common-dir"], in: folder), common == named,
+            let checkout = try? run(["rev-parse", "--show-toplevel"], in: named), !checkout.isEmpty
+        else { return named }
+        return checkout
+    }
+
     /// The folder's repository's worktrees, the repository's own first.
     /// `inUse` names the folders sessions run in.
     public static func list(folder: String, inUse: Set<String> = []) -> [WorktreeInfo] {
@@ -51,7 +63,10 @@ public enum GitWorktrees {
             var branch: String?
             var prunable = false
             for line in block.split(separator: "\n") {
-                if line.hasPrefix("worktree ") { path = written(String(line.dropFirst("worktree ".count)), top: top) }
+                if line.hasPrefix("worktree ") {
+                    let named = String(line.dropFirst("worktree ".count))
+                    path = written(list.isEmpty ? ownCheckout(named, of: folder) : named, top: top)
+                }
                 if line.hasPrefix("branch ") { branch = String(line.dropFirst("branch ".count)).replacingOccurrences(of: "refs/heads/", with: "") }
                 if line.hasPrefix("prunable") { prunable = true }
             }

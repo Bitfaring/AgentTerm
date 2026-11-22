@@ -480,13 +480,50 @@ final class AppModel: ObservableObject {
     /// An agent's name for the user, its id when it is not known here.
     func agentName(_ id: String) -> String { agents.first { $0.id == id }?.name ?? AgentDetector.known.first { $0.id == id }?.name ?? id }
 
-    /// An agent of a session that is not the one in front finished, or
-    /// waits for the user (#22): shown until it is opened or dismissed.
-    /// Told by the host since #66, which makes each notice for every device.
-    @Published private(set) var agentNotice: AgentNotice?
+    /// The agents that finished, or wait for the user (#22), floating over
+    /// the middle of the window (#225): a stack of ten at most, each under
+    /// the host's number for it, to take it away when it is handled. One of
+    /// an agent that is done goes by itself after its time; one that waits
+    /// stays until it is opened, answered or dismissed. Told by the host
+    /// since #66, which makes each notice for every device.
+    @Published private(set) var floatingNotices = FloatingNotices(stays: FloatingNotices.stays(in: ProcessInfo.processInfo.environment)) {
+        didSet { if floatingNotices.nextGoes != oldValue.nextGoes { waitForTheNextNoticeToGo() } }
+    }
 
-    /// The host's number for it, to take it away when it is handled.
-    private var agentNoticeID: UInt64?
+    /// Changes the stack, and tells the window only when it is another: the
+    /// sessions are told often, and most of the time nothing goes.
+    private func changeNotices(_ change: (inout FloatingNotices) -> Void) {
+        var next = floatingNotices
+        change(&next)
+        if next != floatingNotices { floatingNotices = next }
+    }
+
+    /// Wakes when the next notice is due to go by itself.
+    private var noticesTimer: Timer?
+
+    private func waitForTheNextNoticeToGo() {
+        noticesTimer?.invalidate()
+        noticesTimer = nil
+        guard let next = floatingNotices.nextGoes else { return }
+        let timer = Timer(fire: next, interval: 0, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.letNoticesGo() }
+        }
+        // While a menu is open or the window is resized too.
+        RunLoop.main.add(timer, forMode: .common)
+        noticesTimer = timer
+    }
+
+    /// Those whose time has come go from the stack; they are still in the
+    /// Inbox, unread, and no device is told anything.
+    private func letNoticesGo() {
+        noticesTimer = nil
+        changeNotices { $0.expire(at: Date()) }
+        // One that is due a moment later than the timer fired.
+        if noticesTimer == nil { waitForTheNextNoticeToGo() }
+    }
+
+    /// The pointer came over a floating notice, or left it.
+    func hover(notice id: UInt64, _ over: Bool) { changeNotices { $0.hover(id, over, at: Date()) } }
 
     /// This Mac's own Inbox of the Mac on show (#66): what it was told of,
     /// kept after it is read, for 30 days.
@@ -506,7 +543,7 @@ final class AppModel: ObservableObject {
 
     private func saveInbox() { UserDefaults.standard.set(MessageCoding.encode(inbox), forKey: inboxKey) }
 
-    /// What the host told: into the Inbox, and the app's banner. A macOS
+    /// What the host told: into the Inbox, and floating over the window. A macOS
     /// notification once the host says its time has come (`alerted`). The
     /// session in front is no exception (the owner's decision, 2026-11-20):
     /// it is seen when the user does something, not by being in front.
@@ -514,8 +551,17 @@ final class AppModel: ObservableObject {
         inbox.take([notice])
         saveInbox()
         guard notice.alerts, let agent = notice.agentNotice else { return }
-        agentNotice = agent
-        agentNoticeID = notice.id
+        changeNotices { $0.show(agent, id: notice.id, at: Date()) }
+        announce(agent)
+    }
+
+    /// Read out by VoiceOver when it appears: a notice that floats is not
+    /// where its cursor is.
+    private func announce(_ notice: AgentNotice) {
+        guard NSWorkspace.shared.isVoiceOverEnabled, let window = NSApp.mainWindow else { return }
+        NSAccessibility.post(
+            element: window, notification: .announcementRequested,
+            userInfo: [.announcement: "\(notice.name) \(notice.why)", .priority: NSAccessibilityPriorityLevel.medium.rawValue])
     }
 
     /// Time to show it as a macOS notification, in front or not, as on the
@@ -541,19 +587,13 @@ final class AppModel: ObservableObject {
         inbox.markRead(ids: ids)
         saveInbox()
         macNotifications.remove(ids)
-        if let current = agentNoticeID, ids.contains(current) {
-            agentNotice = nil
-            agentNoticeID = nil
-        }
+        changeNotices { $0.remove(ids: ids) }
     }
 
     private func noticeHandled(_ id: UInt64, _ handled: Notice.Handled) {
         inbox.handled(id, handled)
         saveInbox()
-        if agentNoticeID == id {
-            agentNotice = nil
-            agentNoticeID = nil
-        }
+        changeNotices { $0.remove(ids: [id]) }
         macNotifications.remove([id])
     }
 
@@ -583,8 +623,7 @@ final class AppModel: ObservableObject {
 
     /// Opens the session a notice is about.
     func open(_ notice: AgentNotice) {
-        agentNotice = nil
-        agentNoticeID = nil
+        changeNotices { $0.remove(session: notice.session) }
         guard let session = sessions.first(where: { $0.id == notice.session }) else { return }
         // The session is in Sessions, wherever the window was.
         show(.sessions, toggling: false)
@@ -592,10 +631,9 @@ final class AppModel: ObservableObject {
     }
 
     /// Dismissed on this Mac: handled on every device (#66).
-    func dismissAgentNotice() {
-        if let id = agentNoticeID { dismissNotice(id) }
-        agentNotice = nil
-        agentNoticeID = nil
+    func dismissFloatingNotice(_ id: UInt64) {
+        dismissNotice(id)
+        changeNotices { $0.remove(ids: [id]) }
     }
 
     // MARK: The Inbox (#67)
@@ -685,7 +723,7 @@ final class AppModel: ObservableObject {
     /// host is told, so that the other devices hide theirs.
     private func hideNoticeOfTheSessionInFront() {
         guard place == .sessions, NSApp.isActive, let front = selectedSession else { return }
-        if agentNotice?.session == front { agentNotice = nil }
+        changeNotices { $0.remove(session: front) }
         // What it said is read, on every device.
         readHere(inbox.unread(session: front))
         // Told again while the host still has it unseen (#67): the same
@@ -1772,9 +1810,15 @@ final class AppModel: ObservableObject {
             tellWhetherInFront()
             refreshSSHHosts()
             refreshAgentSetup()
+            // The folder's worktrees were forgotten with the last host
+            // (#215), and the host says them only when asked.
+            if let selectedFolder { listWorktrees(selectedFolder) }
             hostMatch = ProtocolMatch(host: version)
             otherBuildOfHost = hostMatch == .same ? Self.otherBuild(release: release, revision: revision) : nil
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
+            // Said of the host that was there before, an older one: over
+            // once a host of this release answers (#214, principle 3).
+            if hostMatch == .same, notice == HostErrorWords.olderHost { notice = nil }
             wasConnected = true
             hostBroken = false
             // The host the app started, itself or through launchd, is the
@@ -1791,10 +1835,7 @@ final class AppModel: ObservableObject {
             turnResults = turnResults.filter { id, _ in list.contains { $0.id == id } }
             browsers.sessionsChanged(list)
             if isRemote { browsers.mirror(remoteTabs, sessions: list) }
-            if let current = agentNotice, !list.contains(where: { $0.id == current.session && $0.state == current.state }) {
-                agentNotice = nil
-                agentNoticeID = nil
-            }
+            changeNotices { $0.keep { shown in list.contains { $0.id == shown.session && $0.state == shown.state } } }
             // Pick up sessions that were already running before this window opened.
             for info in list where controllers[info.id] == nil {
                 connection?.send(.attach(session: info.id, size: info.size))
@@ -1822,7 +1863,7 @@ final class AppModel: ObservableObject {
             worktrees[folder] = list
         case .filesFound, .textFound, .searchEnded:
             search.handle(message)
-        case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .historyMarks, .conversationDeleted, .conversationsDeleted, .conversationExported:
+        case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .conversationDeleted, .conversationsDeleted, .conversationExported:
             historyStore.handle(message, folderPath: panelFolder)
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
@@ -1981,6 +2022,10 @@ final class AppModel: ObservableObject {
                 files.requestFailed()
             }
             if text == "malformed message" { writingCommitMessage = [] }
+            // A host of an earlier release that could not read something:
+            // the banner already says it is one, with Restart Host, and
+            // stays for as long as that is so (#214). Not said twice.
+            if text == "malformed message", hostMatch == .hostOlder { return }
             // Always said, where the user is looking (#66): never only kept.
             notice = HostErrorWords.words(for: text)
         case .pairingCode(let code, let expiresAt):

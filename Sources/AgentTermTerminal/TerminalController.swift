@@ -208,6 +208,12 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// Asks for the next page of lines above what is loaded.
     public func loadMoreHistory() {
         guard let asked = historyAsked, hasMoreHistory, !loadingHistory, !isReplaying else { return }
+        // A program on the other screen (Claude Code, Codex, `top`) has no
+        // lines above it: its view is always "at the top", and asking then
+        // had the host replay the screen over what the program was drawing,
+        // many times a second (#235). Not called from a delegate callback,
+        // which holds the terminal's lock: `scrolled` comes here async.
+        guard view.terminalInputStateSnapshot()?.isAlternateBuffer != true else { return }
         // The view says where it is as a share of the lines above the screen.
         let loaded = min(asked, historyKept ?? asked)
         inView = (loaded, Int((view.scrollPosition * Double(loaded)).rounded()))

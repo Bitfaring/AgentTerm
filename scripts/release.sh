@@ -69,7 +69,12 @@ command -v fastlane >/dev/null || fail "fastlane is required (brew install fastl
 
 cd "$ROOT"
 # fastlane must not ask for anything or phone home about the run.
-export FASTLANE_SKIP_UPDATE_CHECK=1 FASTLANE_HIDE_CHANGELOG=1 FASTLANE_OPT_OUT_USAGE=1 CI=${CI:-}
+export FASTLANE_SKIP_UPDATE_CHECK=1 FASTLANE_HIDE_CHANGELOG=1 FASTLANE_OPT_OUT_USAGE=1
+# fastlane takes CI set to anything but no/false/off/0, an empty value too,
+# for a CI runner, and `setup_ci` then makes a keychain of its own the Mac's
+# default and takes the login keychain out of the search list (#238). On a
+# Mac, CI is not set at all.
+[ -n "${CI:-}" ] || unset CI
 # Resolving the Swift packages can take xcodebuild longer to answer than fastlane's three seconds.
 export FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT=${FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT:-180} FASTLANE_XCODEBUILD_SETTINGS_RETRIES=${FASTLANE_XCODEBUILD_SETTINGS_RETRIES:-4}
 exec fastlane "$@"

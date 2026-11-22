@@ -526,39 +526,195 @@ private struct KeyBar: View {
 ///
 /// What is written and not sent yet is kept for the session: it is there
 /// again when the terminal, or the app, is opened the next time.
+///
+/// The prompt and the answer to what the agent asks are two texts (#232):
+/// while the agent asks, a button opens the place to answer it, and Send in
+/// the prompt does not send, or the agent would take the prompt as its
+/// answer (`ComposeSend`).
 private struct ComposeBar: View {
     @EnvironmentObject private var model: PhoneModel
     let controller: TerminalController
     /// In the one row a phone on its side has for everything.
     var isOnItsSide = false
     @State private var text = ""
+    @State private var answer = ""
+    @State private var picked = ComposeSend.Side.prompt
+    /// The state an answer was sent to from here, while the agent is in it.
+    @State private var answered: AgentState?
+    /// Why the last Send did not send, until the agent's state changes.
+    @State private var held: String?
     @FocusState private var focused: Bool
 
+    private var state: AgentState? { model.session(controller.session)?.state }
+    private var side: ComposeSend.Side { ComposeSend.side(picked, state: state) }
+
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message", text: $text, axis: .vertical)
+        VStack(alignment: .leading, spacing: 6) {
+            if side == .answer, let state, let question = ComposeSend.question(of: state) {
+                answerPlace(state: state, question: question)
+            } else if state?.isWaiting == true {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let held {
+                        Text(held)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                            .lineLimit(isOnItsSide ? 1 : 3)
+                            .accessibilityIdentifier("compose-held")
+                    }
+                    Spacer(minLength: 0)
+                    Button {
+                        show(.answer)
+                    } label: {
+                        Label(ComposeWords.answerButton, systemImage: "questionmark.bubble")
+                            .font(.footnote.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("compose-answer-button")
+                }
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Group {
+                    if side == .answer {
+                        TextField(ComposeWords.answerField, text: $answer, axis: .vertical)
+                            .accessibilityIdentifier("compose-answer")
+                    } else {
+                        TextField("Message", text: $text, axis: .vertical)
+                            .accessibilityIdentifier("compose")
+                    }
+                }
                 .lineLimit(isOnItsSide ? 1...2 : 1...5)
                 .focused($focused)
-                .accessibilityIdentifier("compose")
                 .padding(.horizontal, 14)
                 .padding(.vertical, isOnItsSide ? 7 : 9)
                 .background(RoundedRectangle(cornerRadius: 19, style: .continuous).fill(Palette.raised))
-            Button(action: send) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: isOnItsSide ? 30 : 34))
-                    .symbolRenderingMode(.hierarchical)
+                Button {
+                    if side == .answer { sendAnswer(answer) } else { send() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: isOnItsSide ? 30 : 34))
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .accessibilityLabel("Send")
             }
-            .accessibilityLabel("Send")
         }
         .padding(.horizontal, isOnItsSide ? 6 : 10)
         .padding(.top, 4)
         .padding(.bottom, isOnItsSide ? 4 : 8)
         .background(Palette.panel)
-        .onAppear { text = model.composeDraft(for: controller.session) }
+        .onAppear {
+            text = model.composeDraft(for: controller.session)
+            if let state, state.isWaiting { answer = model.answerDraft(for: controller.session, to: state) }
+        }
         .onChange(of: text) { _, written in model.setComposeDraft(written, for: controller.session) }
+        .onChange(of: answer) { _, written in
+            if let state, state.isWaiting { model.setAnswerDraft(written, for: controller.session, to: state) }
+        }
+        .onChange(of: state) { _, now in
+            // Another question, or none: what was said of the last Send
+            // goes, and so does the answer to what is no longer asked. The
+            // prompt is as it was.
+            held = nil
+            if answered != now { answered = nil }
+            if let now, now.isWaiting {
+                answer = model.answerDraft(for: controller.session, to: now)
+            } else {
+                answer = ""
+                picked = .prompt
+            }
+        }
+    }
+
+    /// What the agent asks, its choices, and the way back to the prompt.
+    private func answerPlace(state: AgentState, question: AgentQuestion) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(ComposeWords.asks(state))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Spacer(minLength: 0)
+                Button {
+                    show(.prompt)
+                } label: {
+                    Label(ComposeWords.promptButton, systemImage: "arrow.uturn.backward")
+                        .font(.footnote)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("compose-prompt-button")
+            }
+            if !question.text.isEmpty {
+                Text(question.text)
+                    .font(.footnote)
+                    .lineLimit(isOnItsSide ? 1 : 3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("compose-question")
+            }
+            if !question.choices.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(question.choices.enumerated()), id: \.offset) { index, choice in
+                            Button(choice) { sendAnswer(choice) }
+                                .font(.footnote)
+                                .lineLimit(1)
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .accessibilityIdentifier("compose-choice-\(index)")
+                        }
+                    }
+                }
+            } else if case .waitingForPermission = state {
+                Text(ComposeWords.choicesInTerminal).font(.caption).foregroundStyle(.secondary)
+            }
+            if let held {
+                Text(held).font(.footnote).foregroundStyle(.orange).accessibilityIdentifier("compose-held")
+            }
+        }
+    }
+
+    /// The prompt or the answer shown, the other kept as it is; the
+    /// keyboard stays up if it was.
+    private func show(_ shown: ComposeSend.Side) {
+        let typing = focused
+        held = nil
+        picked = shown
+        if typing { DispatchQueue.main.async { focused = true } }
+    }
+
+    /// An answer, typed or one of the choices, sent with the state it
+    /// answers: the host types it only while the agent still asks that,
+    /// and says so when it no longer does.
+    private func sendAnswer(_ written: String) {
+        let reply = written.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reply.isEmpty else { return }
+        switch ComposeSend.send(state: state, side: .answer, answered: answered) {
+        case .answer(let to):
+            model.answer(session: controller.session, to: to, text: reply)
+            answered = to
+            answer = ""
+            model.setAnswerDraft("", for: controller.session, to: to)
+            held = nil
+            picked = .prompt
+        case .held(let why):
+            held = why
+        case .prompt:
+            break
+        }
     }
 
     private func send() {
+        switch ComposeSend.send(state: state, side: .prompt, answered: answered) {
+        case .prompt: break
+        case .held(let why):
+            // The agent asks something: the prompt is kept, and why it was
+            // not sent is said.
+            held = why
+            return
+        case .answer: return
+        }
         let message = text
         text = ""
         guard !message.isEmpty else {
@@ -566,14 +722,9 @@ private struct ComposeBar: View {
             return
         }
         // A long or multi-line message goes as a paste to a program that
-        // takes one (`SentText`), unless the agent asks something: what
-        // its question takes was tried typed only.
-        let asks: Bool
-        switch model.session(controller.session)?.state {
-        case .waitingForAnswer, .waitingForPermission: asks = true
-        default: asks = false
-        }
-        controller.type(Array(SentText.text(message, bracketedPaste: controller.bracketedPasteMode && !asks).utf8))
+        // takes one (`SentText`). An answer to a question goes the
+        // answer's way, as the host types it.
+        controller.type(Array(SentText.text(message, bracketedPaste: controller.bracketedPasteMode).utf8))
         // Sent separately: agents treat a burst that ends in Return as a
         // paste and would not submit it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {

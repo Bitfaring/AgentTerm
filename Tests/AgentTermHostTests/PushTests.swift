@@ -71,8 +71,6 @@ final class PushTests: XCTestCase {
     private let token = "test-token-0123456789abcdef0123456789"
     private var relay: Relay!
     private var idle: TimeInterval = 6 * 60
-    /// Shortened, as the wait of a notice that waits (#180).
-    private var pushWait: TimeInterval = 1
     private var activityKeptIdle: TimeInterval = 2
     /// Where the host keeps its notices; nil keeps them in memory.
     private var noticesFile: URL?
@@ -104,7 +102,6 @@ final class PushTests: XCTestCase {
             return self?.idle
         }
         configuration.refreshInterval = 0.2
-        configuration.pushWait = pushWait
         configuration.activityKeptIdle = activityKeptIdle
         configuration.pushRelay = url
         configuration.pushesFile = root.appendingPathComponent("pushes.json")
@@ -239,8 +236,8 @@ final class PushTests: XCTestCase {
         waitUntil("someone at the Mac") { inUse() == true }
         mac.connection.sendInput(Data("\n".utf8), to: agent)
         waitUntil("the Mac's app told") { mac.notices.count == 1 }
-        // Someone at the Mac: it waits before it is a notification (#180).
-        waitUntil("pushed after the wait") { relay.sent.count == 1 }
+        // Someone at the Mac: pushed all the same, at once (#234).
+        waitUntil("pushed at once", timeout: 0.6) { relay.sent.count == 1 }
 
         let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
         waitUntil("the phone back") { phone.log != nil }
@@ -400,6 +397,54 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(activities().last?["token"] as? String, new)
     }
 
+    /// LIVE-9 (#233): each update of a phone's Live Activity through Apple
+    /// says how soon it is to be shown: high (`urgent`) when an agent starts
+    /// or stops asking or becomes done, low when it only works or the
+    /// activity ends; the host's log names each.
+    func testALiveActivityUpdateIsUrgentOnlyWhenItChangesWhatNeedsTheUser() throws {
+        let mac = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
+        let phoneToken = try pair(mac)
+        let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
+        phone.connection.send(.pushRegister(PushRegistration(token: deviceToken, key: key, mac: macName)))
+        waitUntil("registered") { phone.pushState == .on }
+        phone.connection.send(.liveActivity(token: String(repeating: "6b", count: 32), startToken: String(repeating: "5a", count: 32)))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        phone.connection.close()
+        waitUntil("the phone gone") { mac.devices?.first?.isConnected == false }
+        func activities() -> [[String: Any]] { relay.sent.compactMap { $0["activity"] as? [String: Any] } }
+        func last() -> (state: [String: Any], urgent: Bool?, event: String?) {
+            let item = activities().last ?? [:]
+            return (item["state"] as? [String: Any] ?? [:], item["urgent"] as? Bool, item["event"] as? String)
+        }
+
+        mac.connection.send(.create(CreateRequest(command: try standIn().path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let agent = try XCTUnwrap(mac.sessions.first).id
+        mac.connection.send(.attach(session: agent, size: TermSize(cols: 80, rows: 24)))
+        func step(_ what: String, _ sent: (Int) -> Bool) {
+            let before = activities().count
+            mac.connection.sendInput(Data("\n".utf8), to: agent)
+            waitUntil(what, timeout: 10) { activities().count > before && sent(before) }
+        }
+        step("working") { _ in last().state["working"] as? Int == 1 }
+        XCTAssertEqual(last().urgent, false, "only working is urgent")
+        step("asking") { _ in last().state["permission"] as? Int == 1 }
+        XCTAssertEqual(last().urgent, true, "an agent that asks is not urgent")
+        step("answered, working again") { _ in last().state["permission"] as? Int == 0 }
+        XCTAssertEqual(last().urgent, true, "an agent that stops asking is not urgent")
+        step("done") { _ in last().state["done"] as? Int == 1 }
+        XCTAssertEqual(last().urgent, true, "an agent that is done is not urgent")
+        waitUntil("ended", timeout: 15) { last().event == "end" }
+        XCTAssertEqual(last().urgent, false, "the end is urgent")
+        XCTAssertTrue(activities().allSatisfy { $0["event"] as? String != "start" })
+        // What the host's log says of a push: the device cut short, what,
+        // how soon; never what it holds.
+        let push = PushCenter.Push(device: "0123456789abcdef", body: Data("make test".utf8), kind: "activity update", priority: .high)
+        XCTAssertEqual(PushCenter.logLine(push), "agenttermd: push to 01234567: activity update, high (10)\n")
+        let back = PushCenter.Push(device: "0123456789abcdef", body: Data(), kind: "take back", priority: nil)
+        XCTAssertEqual(PushCenter.logLine(back), "agenttermd: push to 01234567: take back\n")
+    }
+
     /// PUSH-4: a push the relay refuses is said in both apps' banner, once
     /// for the device; a token APNs no longer knows is forgotten.
     func testAPushThatFailsIsSaidAndAnUnknownTokenForgotten() throws {
@@ -457,11 +502,11 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(relay.registered, [])
     }
 
-    /// PUSH-8 (#180): while someone is at the Mac, a notice waits: it is
-    /// in the Mac's Inbox at once, and a notification nowhere before the
-    /// wait; then on the Mac and the iPhone at the same moment.
-    func testANoticeWaitsWhileSomeoneIsAtTheMacThenGoesToBoth() throws {
-        pushWait = 2
+    /// PUSH-8 (#234): nothing waits. While someone is at the Mac, an agent
+    /// that asks and an agent that is done are each a notification at
+    /// once, on the Mac (`noticeAlert`) and pushed to the phone away, at
+    /// the same moment as the notice reaches the Mac's Inbox.
+    func testEveryNoticeIsANotificationAtOnceAlsoWhileSomeoneIsAtTheMac() throws {
         // Someone at the Mac from the start.
         lock.lock(); idle = 5; lock.unlock()
         server.stop()
@@ -470,43 +515,38 @@ final class PushTests: XCTestCase {
         func inUse() -> Bool? { mac.messages.compactMap { if case .macInUse(let on) = $0 { return on } else { return nil } }.last }
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
         XCTAssertEqual(inUse(), true)
+        func pushed() -> [UInt64] { relay.sent.filter { $0["payload"] != nil }.compactMap { try? opened($0).id } }
+
         mac.connection.sendInput(Data("\n".utf8), to: agent)
-        waitUntil("in the Mac's Inbox at once") { mac.notices.count == 1 }
-        let asked = Date()
-        let id = try XCTUnwrap(mac.notices.first).id
-        RunLoop.main.run(until: Date().addingTimeInterval(1))
-        XCTAssertEqual(relay.sent.count, 0, "pushed before the wait")
-        XCTAssertEqual(mac.alerts, [], "a notification on the Mac before the wait")
-        waitUntil("on both after the wait") { relay.sent.count == 1 && mac.alerts == [id] }
-        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(asked), 1.8)
-        XCTAssertEqual(try opened(relay.sent[0]).id, id)
+        waitUntil("the question in the Mac's Inbox") { mac.notices.count == 1 }
+        let question = try XCTUnwrap(mac.notices.first).id
+        waitUntil("the question on both at once", timeout: 0.6) { pushed() == [question] && mac.alerts == [question] }
+
+        // Answered in the terminal, then done: done is told at once too.
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("done in the Mac's Inbox") { mac.notices.count == 2 }
+        let done = try XCTUnwrap(mac.notices.last)
+        XCTAssertEqual(done.state, .done(said: "All tests pass."))
+        waitUntil("done on both at once", timeout: 0.6) { pushed() == [question, done.id] && mac.alerts == [question, done.id] }
+        XCTAssertEqual(inUse(), true, "no one at the Mac by the end")
     }
 
-    /// PUSH-9 (#180): one that waits and is handled or read within the
-    /// wait is a notification nowhere; one that does not wait (no one at
-    /// the Mac, an agent asking) is one at once on both.
-    func testANoticeHandledOrReadWithinTheWaitIsShownNowhere() throws {
-        pushWait = 2
-        server.stop()
-        try start(relay: URL(string: "https://relay.test"))
+    /// PUSH-9 (#234): a done agent's notice is not held back to be read
+    /// first: it is a notification at once on both, and read on the Mac
+    /// right after, it is taken back from the phone.
+    func testADoneAgentReadOnTheMacIsTakenBackFromThePhone() throws {
         let (mac, _, agent) = try phoneAway()
-        // No one at the Mac: the question is shown at once, on both.
         mac.connection.sendInput(Data("\n".utf8), to: agent)
-        waitUntil("the question") { mac.notices.count == 1 }
-        let question = try XCTUnwrap(mac.notices.first).id
-        waitUntil("at once, on both", timeout: 1.5) { relay.sent.count == 1 && mac.alerts == [question] }
-
-        // Done always waits: read on the Mac within it, it is not shown.
         mac.connection.sendInput(Data("\n".utf8), to: agent)
         mac.connection.sendInput(Data("\n".utf8), to: agent)
         waitUntil("done") { mac.notices.count == 2 }
         let done = try XCTUnwrap(mac.notices.last).id
+        func pushed() -> [UInt64] { relay.sent.filter { $0["payload"] != nil }.compactMap { try? opened($0).id } }
+        waitUntil("done on both at once", timeout: 0.6) { pushed().contains(done) && mac.alerts.contains(done) }
         mac.connection.send(.readNotices(ids: [done]))
         waitUntil("read, said back") { mac.read == [done] }
-        RunLoop.main.run(until: Date().addingTimeInterval(2.5))
-        XCTAssertFalse(mac.alerts.contains(done), "shown on the Mac though it was read")
-        let pushed = relay.sent.filter { $0["payload"] != nil }.compactMap { try? opened($0).id }
-        XCTAssertFalse(pushed.contains(done), "pushed though it was read")
+        waitUntil("taken back from the phone") { relay.sent.contains { $0["gone"] as? String == self.identifier(done) } }
     }
 
     /// PUSH-10 (#190): a phone that says it went to the background is away,
@@ -540,6 +580,40 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(phone.alerts, [], "shown again on coming back")
     }
 
+    /// PUSH-14 (#233): a phone that connected again, its earlier connection
+    /// left open on the Mac (the phone changed networks, and nothing told
+    /// the Mac the old one is gone), is as its newest connection says: in
+    /// the background, it is told through Apple, and its Live Activity is
+    /// kept true through Apple, though the old connection never said it
+    /// went to the background.
+    func testAPhoneIsAsItsNewestConnectionSaysNotAnOlderOneLeftOpen() throws {
+        let mac = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
+        let phoneToken = try pair(mac)
+        let old = Client(port: port, credential: .token(phoneToken), name: "iPhone")
+        old.connection.send(.pushRegister(PushRegistration(token: deviceToken, key: key, mac: macName)))
+        waitUntil("registered") { old.pushState == .on }
+        old.connection.send(.deviceInBackground(false))
+        // Connected again: the old connection stays open, and says nothing more.
+        let new = Client(port: port, credential: .token(phoneToken), name: "iPhone")
+        waitUntil("connected again") { new.pushState == .on }
+        new.connection.send(.liveActivity(token: String(repeating: "6b", count: 32), startToken: String(repeating: "5a", count: 32)))
+        new.connection.send(.deviceInBackground(true))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        mac.connection.send(.create(CreateRequest(command: try standIn().path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let agent = try XCTUnwrap(mac.sessions.first).id
+        mac.connection.send(.attach(session: agent, size: TermSize(cols: 80, rows: 24)))
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("the question on the Mac") { mac.alerts.count == 1 }
+        let id = try XCTUnwrap(mac.alerts.first)
+        waitUntil("pushed though an old connection is open") { relay.sent.contains { $0["payload"] != nil } }
+        XCTAssertEqual(try opened(try XCTUnwrap(relay.sent.first { $0["payload"] != nil })).id, id)
+        waitUntil("its Live Activity through Apple", timeout: 6) { relay.sent.contains { $0["activity"] != nil } }
+        XCTAssertEqual(old.alerts, [], "shown over the old connection")
+        XCTAssertEqual(new.alerts, [], "shown over the connection of an app in the background")
+    }
+
     /// PUSH-11 (#190): what came due while a phone was in the background
     /// and did not reach it through Apple (it is not registered) is shown
     /// when it comes back to the front, as to a phone that connects.
@@ -565,12 +639,11 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(phone.alerts, [id], "once")
     }
 
-    /// PUSH-12 (#193): a notice that waits (a session that crashed while
-    /// someone is at the Mac) and whose host starts again within the wait
-    /// is still a notification when the wait is over, on the Mac and
-    /// through Apple, not before.
-    func testANoticeThatWaitedIsAlertedAfterTheHostStartsAgain() throws {
-        pushWait = 3
+    /// PUSH-12 (#193, #234): a failure that stopped work (a session that
+    /// crashed) while someone is at the Mac is a notification at once, on
+    /// the Mac and through Apple; a host that starts again, with the
+    /// notices kept in a file, tells it neither again.
+    func testAFailureIsAlertedAtOnceAndNotAgainAfterTheHostStartsAgain() throws {
         noticesFile = root.appendingPathComponent("notices.json")
         lock.lock(); idle = 5; lock.unlock()
         server.stop()
@@ -583,20 +656,18 @@ final class PushTests: XCTestCase {
         waitUntil("the phone gone") { mac.devices?.first?.isConnected == false }
         mac.connection.send(.create(CreateRequest(command: "kill -KILL $$", cwd: root.path, title: "crash")))
         waitUntil("the failure's notice") { mac.notices.contains { $0.alerts && $0.state == nil } }
-        let asked = Date()
         let id = try XCTUnwrap(mac.notices.first { $0.alerts && $0.state == nil }).id
+        func pushed() -> [UInt64] { relay.sent.filter { $0["payload"] != nil }.compactMap { try? opened($0).id } }
+        waitUntil("on both at once", timeout: 0.6) { pushed() == [id] && mac.alerts == [id] }
         mac.connection.close()
 
-        // Started again within the wait.
         server.stop()
         try start(relay: URL(string: "https://relay.test"))
         let again = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
-        waitUntil("the log") { again.log != nil }
-        XCTAssertEqual(again.alerts, [], "a notification before the wait")
-        waitUntil("pushed once the wait is over", timeout: 6) { relay.sent.contains { $0["payload"] != nil } }
-        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(asked), pushWait - 0.3, "before the wait")
-        XCTAssertEqual(try opened(try XCTUnwrap(relay.sent.first { $0["payload"] != nil })).id, id)
-        waitUntil("on the Mac too") { again.alerts == [id] }
+        waitUntil("the log") { again.log?.contains { $0.id == id } == true }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(again.alerts, [], "shown again after the host started again")
+        XCTAssertEqual(pushed(), [id], "pushed again after the host started again")
     }
 
     /// READ-1 (#180): read on one device is read on every device: the

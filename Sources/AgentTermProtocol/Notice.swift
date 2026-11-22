@@ -62,19 +62,6 @@ public struct Notice: Codable, Equatable, Sendable, Identifiable {
     /// How long the host keeps them, and a device's Inbox too.
     public static let kept: TimeInterval = 30 * 24 * 3600
 
-    /// How long a notification waits before it goes to an iPhone through
-    /// Apple, when it can (`pushWaits`): handled or read on the Mac by then,
-    /// it does not go at all.
-    public static let pushWait: TimeInterval = 30
-
-    /// Whether its push waits `pushWait` (the owner's decision,
-    /// 2026-11-20): an agent that is done, always; anything else while
-    /// someone is at the Mac, who may handle it there first.
-    public func pushWaits(macInUse: Bool) -> Bool {
-        if case .agent(.done) = kind { return true }
-        return macInUse
-    }
-
     /// Handled in a way that means it was looked at: read too.
     public static func reads(_ how: Handled.How) -> Bool { how != .movedOn }
 
@@ -177,7 +164,7 @@ public enum NoticeWords {
     public static let permissionPurpose =
         "Tells you when an agent is done, asks something or needs your permission, on this device and your others at the same moment."
     public static let macDetail =
-        "A macOS notification, with the app in front or not, at the same moment as on the iPhone. When an agent is done, or while you are at the Mac, it waits 30 seconds first: handled or read by then, it is not shown."
+        "A macOS notification, with the app in front or not, at once and at the same moment as on the iPhone."
     public static let macHelp =
         "Every paired device is told too. Answered, opened, dismissed or read on one, it goes from all of them, and is read on all. Each device keeps its own Inbox for 30 days."
 }

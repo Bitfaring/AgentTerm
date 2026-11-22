@@ -72,6 +72,46 @@ public enum Inbox {
     public static let choices = "Its choices"
     public static let nothingSaid = "The agent did not say what it did."
 
+    // MARK: A row of the list (#218)
+
+    /// How many lines of what was said a row of the list shows: the end of
+    /// it, with "…" in front when the beginning is left out. All of it is
+    /// in the item's detail (the owner's decision, 2026-11-21, in place of
+    /// the one of the same day that had a row show all of it).
+    public static let rowLines = 3
+    /// What marks the beginning that a row leaves out.
+    public static let cutMark = "…"
+    /// The most a row is given to show, in characters: more than three
+    /// lines hold on either app.
+    public static let rowLength = 300
+
+    /// What a row may show of `full`, the longest first, for the app to
+    /// take the first that fits in `rowLines` lines at the width it has:
+    /// the whole of it when it is short, else its end, begun at a word,
+    /// with `cutMark` in front. Line breaks become spaces, so that an
+    /// answer's last paragraphs are not three short lines. Never empty
+    /// unless `full` is.
+    public static func rowTexts(_ full: String) -> [String] {
+        let text = full.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !text.isEmpty else { return [] }
+        var texts: [String] = []
+        // In steps small enough that the one taken about fills the lines:
+        // the Mac's list holds some 27 letters a line, the iPhone's 45.
+        for length in [rowLength, 260, 220, 190, 160, 140, 120, 105, 90, 80, 70, 60, 50, 40] {
+            guard text.count > length else {
+                if texts.isEmpty { texts.append(text) }
+                continue
+            }
+            var end = text.suffix(length)
+            // Begun at a word, when one begins in its first third.
+            if let space = end.firstIndex(of: " "), end.distance(from: end.startIndex, to: space) < length / 3 {
+                end = end[end.index(after: space)...]
+            }
+            texts.append(cutMark + end)
+        }
+        return texts
+    }
+
     /// What needs the user, the most pressing first: the agents that wait,
     /// then what stopped, then the agents that are done and not looked at;
     /// each in the order the host lists them. An agent whose state is not

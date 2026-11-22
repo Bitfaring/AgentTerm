@@ -214,14 +214,20 @@ extension AppModel {
     /// second. While the Mac draws the page they are what it draws,
     /// streamed: a picture taken of a page shown as a device whose pixels
     /// are not the screen's has Chromium lay it out again for the picture,
-    /// which the Mac would show in between (#100). While the Mac does not
-    /// draw it, which Chromium then stops doing, they are taken, each sent
-    /// only when it differs from the last (BROWSER-15).
+    /// which the Mac would show in between (#100). What is streamed has a
+    /// pixel to the page's point, which a device draws blurred: once the
+    /// page has stood still for a moment one picture is taken of it, with
+    /// all its pixels, where taking it leaves the Mac's page as it is
+    /// (`PageStills`, #107). While the Mac does not draw it, which Chromium
+    /// then stops doing, they are taken, each sent only when it differs
+    /// from the last (BROWSER-15).
     func watch(_ tab: BrowserTab, _ on: Bool, width: Int) {
         tab.frames?.cancel()
         tab.frames = nil
         tab.devtools.screencast(width: width, nil)
+        FrameLog.forget(tab: tab.id)
         guard on else { return }
+        let watched = WatchedPage()
         tab.frames = Task { @MainActor [weak self, weak tab] in
             var last: Data?
             while !Task.isCancelled {
@@ -230,14 +236,27 @@ extension AppModel {
                     // The size of what is shown, by which a touch is placed.
                     let size = try? await tab.devtools.viewport()
                     if tab.isDrawn, let size {
-                        tab.devtools.screencast(width: width) { [weak self, weak tab] jpeg in
-                            guard let self, let tab else { return }
+                        last = nil
+                        tab.devtools.screencast(width: width) { [weak self, weak tab] jpeg, streamed in
+                            guard let self, let tab, watched.stills.streamed(jpeg, at: Date()) else { return }
+                            // Narrower only when it weighs more than a message carries.
+                            let jpeg = jpeg.count > PagePicture.mostBytes ? DevToolsSession.fitted(jpeg, width: width) : jpeg
+                            FrameLog.sent(.screencast, tab: tab, jpeg: jpeg, width: size.width, height: size.height, asked: width, streamed: streamed)
                             self.connection?.send(.browserFrame(tab: tab.id, jpeg: jpeg, width: size.width, height: size.height))
+                        }
+                        let began = Date()
+                        if watched.stills.isDue(at: began), Self.takesStills(of: tab), let frame = try? await tab.devtools.frame(width: width),
+                            !Task.isCancelled, watched.stills.taken(began: began)
+                        {
+                            FrameLog.sent(.still, tab: tab, jpeg: frame.jpeg, width: frame.width, height: frame.height, asked: width)
+                            self.connection?.send(.browserFrame(tab: tab.id, jpeg: frame.jpeg, width: frame.width, height: frame.height))
                         }
                     } else {
                         tab.devtools.screencast(width: width, nil)
-                        if let frame = try? await tab.devtools.frame(width: width), frame.jpeg != last {
+                        watched.stills = PageStills()
+                        if let frame = try? await tab.devtools.frame(width: width), !Task.isCancelled, frame.jpeg != last {
                             last = frame.jpeg
+                            FrameLog.sent(.capture, tab: tab, jpeg: frame.jpeg, width: frame.width, height: frame.height, asked: width)
                             self.connection?.send(.browserFrame(tab: tab.id, jpeg: frame.jpeg, width: frame.width, height: frame.height))
                         }
                     }
@@ -245,6 +264,27 @@ extension AppModel {
                 try? await Task.sleep(for: .milliseconds(200))
             }
         }
+    }
+
+    /// What is kept of a page while it is watched: when it last changed,
+    /// for the picture taken of it once it stands still.
+    @MainActor
+    private final class WatchedPage {
+        var stills = PageStills()
+    }
+
+    /// Whether a picture is taken of a tab's page once it stands still:
+    /// where it has more pixels than what is streamed, and taking it leaves
+    /// what the Mac shows of the page as it is, the page shown as itself or
+    /// as a device with the pixels of the screen it is on. A page shown as
+    /// a device of other pixels than the screen's stays as streamed: a
+    /// picture taken of it shakes the Mac's page (#100), which the owner
+    /// decided against (2026-11-21, #107).
+    private static func takesStills(of tab: BrowserTab) -> Bool {
+        guard let screen = tab.container.window.map({ Double($0.backingScaleFactor) }) else { return false }
+        let device = tab.emulating.flatMap { $0.width > 0 && $0.height > 0 ? $0.scale : nil }
+        guard PageStills.isSharper(device: device, screen: screen) else { return false }
+        return PageStills.leavesThePageAsItIs(device: device, screen: screen)
     }
 
     /// The user takes a tab from its agents, or gives it back.

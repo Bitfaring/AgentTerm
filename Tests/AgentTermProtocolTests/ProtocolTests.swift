@@ -469,6 +469,41 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(AgentsStatus().summary, "Nothing running")
     }
 
+    /// LIVE-8 (#233): an update of the Live Activity is high when it changes
+    /// what needs the user (an agent starts or stops asking, one becomes
+    /// done, a failure that stopped work appears), low otherwise.
+    func testALiveActivityUpdateIsHighOnlyWhenItChangesWhatNeedsTheUser() {
+        let working = AgentsStatus(working: 2)
+        let asks = AgentsStatus(working: 1, asking: 1, waiting: ["fix"], firstWaiting: 3)
+        let permission = AgentsStatus(working: 1, permission: 1, waiting: ["fix"], firstWaiting: 3)
+        let other = AgentsStatus(working: 1, asking: 1, waiting: ["docs"], firstWaiting: 4)
+        let done = AgentsStatus(working: 1, done: 1, doneNames: ["fix"])
+        // An agent starts asking, asks for a permission instead, another asks
+        // in its place (the counts the same), it stops asking.
+        XCTAssertEqual(asks.priority(since: working), .high)
+        XCTAssertEqual(permission.priority(since: asks), .high)
+        XCTAssertEqual(other.priority(since: asks), .high)
+        XCTAssertEqual(working.priority(since: asks), .high, "answered on the Mac")
+        // One becomes done; another becomes done though one was seen.
+        XCTAssertEqual(done.priority(since: working), .high)
+        XCTAssertEqual(AgentsStatus(done: 1, doneNames: ["docs"]).priority(since: done), .high)
+        // A failure that stopped work.
+        XCTAssertEqual(AgentsStatus(working: 2, failed: 1).priority(since: working), .high)
+        // Nothing sent yet: what waits is new.
+        XCTAssertEqual(asks.priority(since: nil), .high)
+        XCTAssertEqual(working.priority(since: nil), .low)
+        // Needs nothing of the user: more or fewer work, a done one seen, a
+        // failure dismissed, the same again.
+        XCTAssertEqual(AgentsStatus(working: 3).priority(since: working), .low)
+        XCTAssertEqual(AgentsStatus(working: 1).priority(since: working), .low)
+        XCTAssertEqual(AgentsStatus(working: 1).priority(since: done), .low, "done and seen")
+        XCTAssertEqual(working.priority(since: AgentsStatus(working: 2, failed: 1)), .low)
+        XCTAssertEqual(AgentsStatus(working: 2, asking: 1, waiting: ["fix"], firstWaiting: 3).priority(since: asks), .low, "one more works")
+        XCTAssertEqual(asks.priority(since: asks), .low)
+        XCTAssertEqual(PushPriority.high.apns, 10)
+        XCTAssertEqual(PushPriority.low.apns, 5)
+    }
+
     /// PERF-1: a message larger than a frame may be is sent in pieces, none
     /// larger than 256 KB, and joined whole; one that fits is not split.
     func testALargeMessageIsSentInPiecesAndJoined() throws {

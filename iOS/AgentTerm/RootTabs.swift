@@ -147,9 +147,11 @@ private struct SettingsTab: View {
                     Toggle("Tell me when an agent is done or needs me", isOn: $model.notifyAgents)
                         .accessibilityIdentifier("notify-agents")
                     // Through Apple while the app is closed (#66): off while
-                    // the one above is, whatever it keeps (#211), and in a
-                    // build with no push (#212).
-                    let pushAlso = DependentSwitch.pushAlso(stored: model.pushAlso, notifications: model.notifyAgents, channel: AppChannel.current)
+                    // the one above is, whatever it keeps (#211), in a
+                    // build with no push (#212), and while iOS has
+                    // notifications off for the app (#213).
+                    let pushAlso = DependentSwitch.pushAlso(
+                        stored: model.pushAlso, notifications: model.notifyAgents, channel: AppChannel.current, allowed: model.pushAllowed)
                     Toggle(PushWords.toggle, isOn: Binding(get: { pushAlso.shown }, set: { model.pushAlso = $0 }))
                         .disabled(!pushAlso.isEnabled)
                         .accessibilityIdentifier("push-also")

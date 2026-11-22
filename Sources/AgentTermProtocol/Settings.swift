@@ -294,9 +294,12 @@ public struct DependentSwitch: Equatable, Sendable {
     public var isEnabled: Bool { dependsOn && stoppedBy == nil }
 
     /// The iPhone's "Also While the App Is Closed": under the app's
-    /// notifications, and only in the released build, the one with push.
-    public static func pushAlso(stored: Bool, notifications: Bool, channel: AppChannel) -> DependentSwitch {
-        DependentSwitch(stored: stored, dependsOn: notifications, stoppedBy: channel == .release ? nil : PushWords.notInThisBuild)
+    /// notifications, only in the released build, the one with push, and
+    /// only while iOS lets the app notify (#213). A build with no push
+    /// says that first: allowing notifications would not help it.
+    public static func pushAlso(stored: Bool, notifications: Bool, channel: AppChannel, allowed: Bool = true) -> DependentSwitch {
+        let stoppedBy = channel != .release ? PushWords.notInThisBuild : allowed ? nil : PushWords.notAllowed
+        return DependentSwitch(stored: stored, dependsOn: notifications, stoppedBy: stoppedBy)
     }
 
     /// The iPhone's Live Activity switch: only while iOS lets the app show

@@ -1,63 +1,120 @@
 import AgentTermProtocol
 import SwiftUI
 
-/// The folder's git worktrees as chips (#34, #43), as on the Mac: the
-/// folder's own branch first, each worktree after it with what is changed
-/// in it. A touch makes the folder's Git, History and Files about that one.
-/// "+" makes a new one; "⋯" is what to do with the one shown once its work
-/// is done, and the folder's setup command.
-struct WorktreeChips: View {
+/// The folder's git worktrees (#34, #43), picked from a list like the
+/// branches' (#217), as on the Mac. Outside it there is only the control
+/// that opens it, which says the worktree on show and how many files are
+/// changed in it. A touch on a row makes the folder's Git, History and
+/// Files about that one.
+struct WorktreePicker: View {
     @EnvironmentObject private var model: PhoneModel
     /// The folder the worktrees are of: the repository's own.
     let project: String
     let list: [WorktreeInfo]
     /// The worktree on show; nil for the folder itself.
     @Binding var picked: String?
-    /// The folder whose changes are on show, for what a pull request needs.
+    /// The folder whose changes are on show.
     let shownPath: String
 
-    @State private var discarding: WorktreeInfo?
-    @State private var adding = false
+    /// What is over the screen: the list, or the sheet of a new worktree,
+    /// which takes the list's place.
+    private enum Showing: String, Identifiable {
+        case list, new
+        var id: String { rawValue }
+    }
+    @State private var showing: Showing?
 
     private var shown: WorktreeInfo? { list.first { $0.path == shownPath } ?? list.first }
-
-    private func finish(_ worktree: WorktreeInfo, _ how: WorktreeFinish, deleteBranch: Bool) {
-        model.finishWorktree(worktree, of: project, how, deleteBranch: deleteBranch)
-        if how != .pullRequest { picked = project }
-    }
 
     var body: some View {
         if let shown {
             HStack(spacing: 8) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(list) { worktree in chip(worktree, selected: worktree.path == shown.path) }
-                    }
-                }
                 Button {
-                    adding = true
+                    showing = .list
                 } label: {
-                    Image(systemName: "plus").font(.system(size: 15, weight: .semibold)).frame(width: 30, height: 30)
-                }
-                .accessibilityLabel("New Worktree")
-                .accessibilityIdentifier("worktree-add")
-                if !shown.isMain {
-                    Menu {
-                        Button(WorktreeWords.merge(into: list.first)) { finish(shown, .merge, deleteBranch: shown.isAgentTerm) }
-                            .disabled(shown.changed > 0 || shown.ahead == 0)
-                        Button(WorktreeWords.pullRequest) { finish(shown, .pullRequest, deleteBranch: false) }
-                            .disabled(model.diffs[shownPath]?.pushRemote == nil && model.diffs[shownPath]?.upstream == nil)
-                        Button("Throw Away…", role: .destructive) { discarding = shown }
-                    } label: {
-                        Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold)).frame(width: 30, height: 30)
+                    HStack(spacing: 5) {
+                        Image(systemName: shown.isMain ? "folder" : "arrow.triangle.branch")
+                        Text(shown.chipTitle).lineLimit(1).truncationMode(.middle)
+                        if !shown.pickerCounts.isEmpty {
+                            Text(shown.pickerCounts).font(.caption.monospaced()).foregroundStyle(shown.missing ? Color.red : Color.orange)
+                        }
+                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
                     }
-                    .accessibilityLabel("Worktree Actions")
-                    .accessibilityIdentifier("worktree-more")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(shown.pickerLabel)
+                .accessibilityIdentifier("worktree-picker")
+                .accessibilityAddTraits(.isButton)
+                Spacer(minLength: 0)
             }
             .disabled(model.status != .connected)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 22)
             .padding(.bottom, 8)
+            .sheet(item: $showing) { which in
+                switch which {
+                case .list:
+                    WorktreesSheet(project: project, list: list, shown: shown, picked: $picked) {
+                        showing = nil
+                    } add: {
+                        showing = .new
+                    }
+                case .new:
+                    NewWorktreeSheet(project: project, main: list.first, start: nil)
+                }
+            }
+        }
+    }
+}
+
+/// The worktrees of a folder on the Mac: a field that narrows them down,
+/// New Worktree, and a row for each, the folder's own first, with what is
+/// changed in it and, for one that is not the folder's own, "⋯": what to do
+/// with it once its work is done.
+private struct WorktreesSheet: View {
+    @EnvironmentObject private var model: PhoneModel
+    let project: String
+    let list: [WorktreeInfo]
+    let shown: WorktreeInfo
+    @Binding var picked: String?
+    let close: () -> Void
+    let add: () -> Void
+
+    @State private var search = ""
+    @State private var discarding: WorktreeInfo?
+
+    private var found: [WorktreeInfo] { list.matching(search: search) }
+
+    /// What "⋯" does to its row's worktree. The screen goes back to the
+    /// folder when the one on show is the one that goes away.
+    private func finish(_ worktree: WorktreeInfo, _ how: WorktreeFinish, deleteBranch: Bool) {
+        model.finishWorktree(worktree, of: project, how, deleteBranch: deleteBranch)
+        if how != .pullRequest, worktree.path == shown.path { picked = project }
+        close()
+    }
+
+    /// Whether a pull request can be opened for a worktree: the one on show
+    /// only, whose changes are read and say whether its branch has
+    /// somewhere to be pushed to. The rule is the Mac's too.
+    private func canOpenPullRequest(_ worktree: WorktreeInfo) -> Bool {
+        let diff = model.diffs[worktree.path]
+        return worktree.canOpenPullRequest(onShow: worktree.path == shown.path, hasRemote: diff?.pushRemote != nil || diff?.upstream != nil)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(found) { worktree in row(worktree, selected: worktree.path == shown.path) }
+                if found.isEmpty { Text(WorktreeWords.noMatch(search)).foregroundStyle(.secondary) }
+            }
+            .searchable(text: $search, prompt: WorktreeWords.searchPrompt)
+            .navigationTitle(WorktreeWords.listTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            // Asked first: what is thrown away does not come back.
             .confirmationDialog(
                 discarding.map(WorktreeWords.discardTitle) ?? "", isPresented: Binding(get: { discarding != nil }, set: { if !$0 { discarding = nil } }),
                 titleVisibility: .visible
@@ -68,35 +125,68 @@ struct WorktreeChips: View {
             } message: {
                 Text(discarding.map(WorktreeWords.discardMessage) ?? "")
             }
-            .sheet(isPresented: $adding) {
-                NewWorktreeSheet(project: project, main: list.first, start: nil)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done", action: close) }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: add) {
+                        Label(WorktreeWords.newTitle, systemImage: "plus")
+                    }
+                    .accessibilityLabel(WorktreeWords.newTitle)
+                    .accessibilityIdentifier("worktree-add")
+                }
             }
         }
     }
 
-    private func chip(_ worktree: WorktreeInfo, selected: Bool) -> some View {
-        Button {
-            picked = worktree.path
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: worktree.isMain ? "folder" : "arrow.triangle.branch").font(.system(size: 11))
-                Text(worktree.chipTitle).font(.subheadline.weight(selected ? .semibold : .regular)).lineLimit(1)
-                if !worktree.chipCounts.isEmpty {
-                    Text(worktree.chipCounts).font(.caption.monospaced()).foregroundStyle(worktree.missing ? Color.red : Color.orange)
+    private func row(_ worktree: WorktreeInfo, selected: Bool) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                picked = worktree.path
+                close()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark").font(.footnote.weight(.bold)).opacity(selected ? 1 : 0)
+                    Image(systemName: worktree.isMain ? "folder" : "arrow.triangle.branch").font(.system(size: 11))
+                    Text(worktree.chipTitle).font(.body.weight(selected ? .semibold : .regular)).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 6)
+                    if !worktree.chipCounts.isEmpty {
+                        Text(worktree.chipCounts).font(.caption.monospaced()).foregroundStyle(worktree.missing ? Color.red : Color.orange)
+                    }
+                    if worktree.inUse { Circle().fill(Color.green).frame(width: 6, height: 6) }
                 }
-                if worktree.inUse { Circle().fill(Color.green).frame(width: 6, height: 6) }
+                .foregroundStyle(worktree.missing ? Color.secondary : Color.primary)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 6)
-            .foregroundStyle(selected ? Color.primary : Color.secondary)
-            .background(Capsule().fill(selected ? Palette.tint.opacity(0.22) : Color.primary.opacity(0.07)))
+            // Its own touch, beside the menu's: a row's default takes the whole row.
+            .buttonStyle(.plain)
+            .disabled(worktree.missing)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(worktree.chipTitle), \(worktree.chipHelp)")
+            .accessibilityIdentifier("worktree-chip-" + worktree.chipTitle)
+            .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+            // None for the folder's own; Throw Away… alone for one whose folder is missing.
+            if !worktree.rowActions.isEmpty {
+                Menu {
+                    ForEach(worktree.rowActions, id: \.self) { action in
+                        switch action {
+                        case .merge:
+                            Button(WorktreeWords.merge(into: list.first)) { finish(worktree, .merge, deleteBranch: worktree.isAgentTerm) }
+                                .disabled(!worktree.canMerge)
+                        case .pullRequest:
+                            Button(WorktreeWords.pullRequest) { finish(worktree, .pullRequest, deleteBranch: false) }
+                                .disabled(!canOpenPullRequest(worktree))
+                        case .throwAway:
+                            Button(WorktreeWords.throwAway, role: .destructive) { discarding = worktree }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold)).frame(width: 30, height: 30)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(WorktreeWords.actions)
+                .accessibilityIdentifier("worktree-more-" + worktree.chipTitle)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(worktree.missing)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(worktree.chipTitle), \(worktree.chipHelp)")
-        .accessibilityIdentifier("worktree-chip-" + worktree.chipTitle)
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
 

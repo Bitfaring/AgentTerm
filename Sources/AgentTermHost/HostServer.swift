@@ -78,9 +78,6 @@ public final class HostServer {
         /// How long an agent's hooks and MCP server have to be heard from
         /// before its session says they are missing (#129). Tests shorten it.
         public var linkGrace: TimeInterval = 20
-        /// How long a notice that waits is kept from being a notification
-        /// (`Notice.pushWaits`). Tests shorten it.
-        public var pushWait: TimeInterval = Notice.pushWait
         /// How long the Live Activity is kept, updated, with nothing
         /// working or waiting (`LiveActivityRule.keptIdle`). Tests shorten it.
         public var activityKeptIdle: TimeInterval = LiveActivityRule.keptIdle
@@ -173,6 +170,8 @@ public final class HostServer {
         /// What the device said it is (#157); nil when it did not.
         var kind: DeviceKind?
         var identity: DeviceRegistry.Identity?
+        /// Told already that an agent's history could not be read (#224).
+        var toldOfUnreadHistory = false
         var attached: Set<SessionID> = []
         /// Sessions whose screen is being written out for this client, with
         /// the output that came since, sent once the screen is.
@@ -184,6 +183,13 @@ public final class HostServer {
         /// connection open while it is suspended. What it is told goes
         /// through Apple until it is in front again.
         var inBackground = false
+        /// The same device connected again since (#233): this connection
+        /// may be one the device left behind, say when it changed networks,
+        /// which nothing told the host is gone. The newest one says whether
+        /// the device is in front; this one counts as away.
+        var superseded = false
+        /// Away, as far as notices and the Live Activity go.
+        var away: Bool { inBackground || superseded }
         /// Numbers the large messages sent in pieces.
         var nextMessage: UInt32 = 0
         /// The searches for text this client has going (#45), by its number.
@@ -638,8 +644,6 @@ public final class HostServer {
             // What AgentTerm tells each agent, for its MCP server to give.
             writePromptsForServers()
             loadSchedules()
-            loadHistoryMarks()
-            alertWaitingNotices()
             startAtLoginByDefault()
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + min(1, configuration.scheduleInterval), repeating: configuration.scheduleInterval)
@@ -1336,31 +1340,6 @@ public final class HostServer {
     /// How many older conversations are given at a time.
     private static let historyPage = 200
 
-    /// The conversations the user pinned and hid, by `Conversation.id`.
-    private struct HistoryMarks: Codable {
-        var pinned: Set<String> = []
-        var hidden: Set<String> = []
-    }
-    private var historyMarks = HistoryMarks()
-    private var historyMarksFile: URL? { configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("history.json") }
-
-    private func loadHistoryMarks() {
-        guard let file = historyMarksFile, let data = FileManager.default.contents(atPath: file.path) else { return }
-        historyMarks = MessageCoding.decode(HistoryMarks.self, from: data) ?? HistoryMarks()
-    }
-
-    private func saveHistoryMarks() {
-        guard let file = historyMarksFile else { return }
-        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? MessageCoding.encode(historyMarks).write(to: file, options: .atomic)
-    }
-
-    private var historyMarksMessage: ServerMessage { .historyMarks(pinned: historyMarks.pinned.sorted(), hidden: historyMarks.hidden.sorted()) }
-
-    private func broadcastHistoryMarks() {
-        for client in clients.values where client.authenticated { send(historyMarksMessage, to: client) }
-    }
-
     private func searchHistory(search: Int, in path: String?, query: String, titlesOnly: Bool = false, for client: Client) {
         // One at a time for each list, everywhere's and a folder's, which
         // the Mac shows side by side; a search for text is another's.
@@ -1407,21 +1386,16 @@ public final class HostServer {
                 server.send(.error(problem), to: client)
                 return
             }
-            server.historyMarks.pinned.remove(id)
-            server.historyMarks.hidden.remove(id)
-            server.saveHistoryMarks()
-            server.broadcastHistoryMarks()
             for other in server.clients.values where other.authenticated { server.send(.conversationDeleted(id: id), to: other) }
         }
     }
 
     /// Several conversations deleted at once (#50): those named, or every
-    /// one on the host when `ids` is nil. Never one that is pinned, nor one
-    /// a session is having, whose agent may be writing to it; Antigravity's
-    /// are refused by `AgentHistory.delete` and kept.
+    /// one on the host when `ids` is nil. Never one a session is having,
+    /// whose agent may be writing to it; one `AgentHistory.delete` refuses
+    /// is kept too, as every one of Antigravity is.
     private func deleteConversations(_ ids: [String]?, for client: Client) {
         let home = configuration.home
-        let pinned = historyMarks.pinned
         let inSession = Set(sessions.values.compactMap { session in session.info.conversationID.map { (session.info.agent ?? "") + ":" + $0 } })
         let wanted = ids.map(Set.init)
         work(
@@ -1432,8 +1406,7 @@ public final class HostServer {
                 var deleted: [String] = []
                 var kept = 0
                 for conversation in named {
-                    // Pinned is kept, as the question says: unpinned first.
-                    if pinned.contains(conversation.id) || inSession.contains(conversation.id) {
+                    if inSession.contains(conversation.id) {
                         kept += 1
                     } else if AgentHistory.delete(conversation, home: home) == nil {
                         deleted.append(conversation.id)
@@ -1444,14 +1417,6 @@ public final class HostServer {
                 return (deleted, kept)
             }
         ) { server, client, result in
-            for id in result.deleted {
-                server.historyMarks.pinned.remove(id)
-                server.historyMarks.hidden.remove(id)
-            }
-            if !result.deleted.isEmpty {
-                server.saveHistoryMarks()
-                server.broadcastHistoryMarks()
-            }
             for other in server.clients.values where other.authenticated {
                 for id in result.deleted { server.send(.conversationDeleted(id: id), to: other) }
             }
@@ -1780,6 +1745,15 @@ public final class HostServer {
         }
     }
 
+    /// Says in the host's log which message could not be read (#214): who
+    /// sent it and its name, never what it held. Until then nothing told
+    /// which message an app of another release had sent.
+    private static func logUnread(_ data: Data?, from client: String) {
+        let key = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?.keys.first ?? ""
+        let name = key.count <= 40 && !key.isEmpty && key.allSatisfy { $0.isLetter && $0.isASCII } ? key : "not a message"
+        FileHandle.standardError.write(Data("agenttermd: a message from \(client.isEmpty ? "a client" : client) could not be read: \(name)\n".utf8))
+    }
+
     private func receive(from client: Client) {
         client.connection.receiveMessage { [weak self, weak client] data, context, _, error in
             guard let self, let client else { return }
@@ -1790,9 +1764,13 @@ public final class HostServer {
             let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
             switch metadata?.opcode {
             case .text:
-                if let data, let message = MessageCoding.decode(ClientMessage.self, from: data) {
+                // A host told to be of an earlier protocol (`--protocol-version`,
+                // for tests) does not have what came after it, as the real
+                // one of that release would not (#214).
+                if let data, let message = MessageCoding.decode(ClientMessage.self, from: data), message.isKnown(toHostAt: self.configuration.protocolVersion) {
                     self.handle(message, from: client)
                 } else {
+                    Self.logUnread(data, from: client.name)
                     self.send(.error("malformed message"), to: client)
                 }
             case .binary:
@@ -1919,13 +1897,16 @@ public final class HostServer {
         let end = decision != .show
         // Ended once; nothing more until something works again.
         if end && activityEnded { return }
+        // Shown at once when it changes what needs the user, since the
+        // last one sent (#233).
+        let priority = status.priority(since: activityStatus)
         activityEnded = end
         activityStatus = status
         activitySentAt = now
         let mac = Host.current().localizedName ?? "Mac"
         for device in push.activityDevices where !presentDevices.contains(device) {
             if end { activityEndSent.insert(device) }
-            if let item = push.activity(status, end: end, mac: mac, to: device) { sendPush(item) }
+            if let item = push.activity(status, end: end, priority: priority, mac: mac, to: device) { sendPush(item) }
         }
     }
 
@@ -1937,7 +1918,7 @@ public final class HostServer {
             push.activityDevices.contains(device)
         else { return }
         activityEndSent.insert(device)
-        if let item = push.activity(status, end: true, mac: Host.current().localizedName ?? "Mac", to: device) { sendPush(item) }
+        if let item = push.activity(status, end: true, priority: .low, mac: Host.current().localizedName ?? "Mac", to: device) { sendPush(item) }
     }
 
     // MARK: Notices, on every device (#66)
@@ -1958,7 +1939,7 @@ public final class HostServer {
     private var presentDevices: Set<String> {
         Set(
             clients.values.compactMap { client -> String? in
-                if case .device(let id) = client.identity, !client.inBackground { return id }
+                if case .device(let id) = client.identity, !client.away { return id }
                 return nil
             })
     }
@@ -1969,43 +1950,24 @@ public final class HostServer {
         for notice in handled { tellHandled(notice) }
     }
 
-    /// A new notice: to every client's Inbox at once; a notification on
-    /// every device at once, or after `Notice.pushWait` when it waits and
-    /// is still not handled nor read by then (the owner's decision,
-    /// 2026-11-20).
+    /// A new notice: to every client's Inbox at once, and when it alerts,
+    /// a notification on every device at once too: nothing waits, whoever
+    /// is at the Mac (the owner's decision, 2026-11-22, #234).
     private func tellEveryone(_ notice: Notice) {
         for client in clients.values where client.authenticated && noticeKey(of: client) != nil {
             send(.notice(notice), to: client)
         }
-        guard notice.alerts else { return }
-        let wait = notice.pushWaits(macInUse: macInUse) ? configuration.pushWait : 0
-        if wait <= 0 { return alert(notice.id) }
-        notices.waits(notice.id, until: configuration.now().addingTimeInterval(wait))
-        queue.asyncAfter(deadline: .now() + wait) { [weak self] in self?.alert(notice.id) }
+        if notice.alerts { alert(notice.id) }
     }
 
-    /// On starting: what waited to be a notification when the last host
-    /// stopped is one now, or once the rest of its wait is over (#193).
-    private func alertWaitingNotices() {
-        let now = configuration.now()
-        for (id, until) in notices.waiting {
-            let rest = until.timeIntervalSince(now)
-            if rest <= 0 {
-                alert(id)
-            } else {
-                queue.asyncAfter(deadline: .now() + rest) { [weak self] in self?.alert(id) }
-            }
-        }
-    }
-
-    /// Its time has come: a notification on every device, over the
-    /// connection or, for a device that is away, through Apple: only that
-    /// way for one in the background (#190), so it is not shown twice.
+    /// A notification on every device, over the connection or, for a
+    /// device that is away, through Apple: only that way for one in the
+    /// background (#190), so it is not shown twice.
     private func alert(_ id: UInt64) {
         guard let notice = notices.pending(id) else { return }
         notices.becameDue(id)
         var reached: Set<String> = []
-        for client in clients.values where client.authenticated && !client.inBackground {
+        for client in clients.values where client.authenticated && !client.away {
             guard let key = noticeKey(of: client), !reached.contains(key) else { continue }
             send(.noticeAlert(id: id), to: client)
             reached.insert(key)
@@ -2018,7 +1980,7 @@ public final class HostServer {
         }
     }
 
-    /// What came due that this client was not shown, here or through
+    /// What alerted that this client was not shown, here or through
     /// Apple: on connecting, and for a device back in front (#190).
     private func tellUntold(_ client: Client) {
         guard let key = noticeKey(of: client) else { return }
@@ -2059,6 +2021,7 @@ public final class HostServer {
     }
 
     private func sendPush(_ item: PushCenter.Push) {
+        FileHandle.standardError.write(Data(PushCenter.logLine(item).utf8))
         push.send(item) { [weak self] reason, forgotten in
             self?.queue.async { self?.pushFailed(device: item.device, reason: reason, forgotten: forgotten) }
         }
@@ -2553,11 +2516,20 @@ public final class HostServer {
             let home = configuration.home
             work(
                 for: client,
-                {
-                    path.map { AgentHistory.conversations(in: $0, home: home) } ?? AgentHistory.allConversations(home: home)
+                { () -> (conversations: [Conversation], problem: String?) in
+                    let conversations = path.map { AgentHistory.conversations(in: $0, home: home) } ?? AgentHistory.allConversations(home: home)
+                    return (conversations, AgentHistory.antigravityProblem(home: home))
                 }
-            ) { server, client, conversations in
-                server.send(.history(path: path, conversations: conversations), to: client)
+            ) { server, client, found in
+                server.send(.history(path: path, conversations: found.conversations), to: client)
+                // A store of Antigravity's that cannot be read is said, not
+                // left as conversations that are simply missing (#224,
+                // principle 3): once to each client for as long as it is
+                // connected, since the list is asked for again and again.
+                if let problem = found.problem, !client.toldOfUnreadHistory {
+                    client.toldOfUnreadHistory = true
+                    server.send(.error(problem), to: client)
+                }
             }
         case .historyOlder(let path, let before):
             let home = configuration.home
@@ -2579,11 +2551,6 @@ public final class HostServer {
             }
         case .searchHistory(let search, let path, let query, let titlesOnly):
             searchHistory(search: search, in: path, query: query, titlesOnly: titlesOnly ?? false, for: client)
-        case .markConversation(let id, let pinned, let hidden):
-            if let pinned { if pinned { historyMarks.pinned.insert(id) } else { historyMarks.pinned.remove(id) } }
-            if let hidden { if hidden { historyMarks.hidden.insert(id) } else { historyMarks.hidden.remove(id) } }
-            saveHistoryMarks()
-            broadcastHistoryMarks()
         case .deleteConversation(let agent, let sessionID, let cwd):
             deleteConversation(agent: agent, sessionID: sessionID, cwd: cwd, for: client)
         case .deleteConversations(let ids):
@@ -3105,6 +3072,10 @@ public final class HostServer {
 
     private func admit(_ client: Client, as identity: DeviceRegistry.Identity) {
         client.identity = identity
+        // A device is as its newest connection says (#233).
+        if case .device = identity {
+            for other in clients.values where other !== client && other.identity == identity { other.superseded = true }
+        }
         send(
             .welcome(
                 version: configuration.protocolVersion, host: Host.current().localizedName ?? "Mac", release: configuration.release,
@@ -3141,7 +3112,6 @@ public final class HostServer {
         send(.browserTabs(browserTabsList), to: client)
         send(agentPromptsMessage, to: client)
         send(shellSettingsMessage, to: client)
-        send(historyMarksMessage, to: client)
         send(.commitWriter(commitWriter), to: client)
         if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
         // Without any yet, the client is sent none and hands over its own.
