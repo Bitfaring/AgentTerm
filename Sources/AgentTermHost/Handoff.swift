@@ -220,11 +220,17 @@ public enum Handoff {
     /// the file says to work there only. Blocks on git, off the main thread.
     public static func prepareInNewWorktree(
         _ conversation: Conversation, to target: String, worktree: NewWorktree, plan: Plan? = nil, prompt: String? = nil, note: String? = nil,
-        of folder: String? = nil, now: Date = Date()
+        of folder: String? = nil, now: Date = Date(),
+        progress: ((_ branch: String?, _ step: WorktreeInProgress.Step) -> Void)? = nil
     ) throws -> (prepared: Prepared, branch: String, problem: String?) {
         let base = folder ?? WorktreePath.project(of: conversation.cwd) ?? conversation.cwd
         let made = try GitWorktrees.create(in: base, agent: target, branch: worktree.branch, from: worktree.from)
-        let problem = GitWorktrees.checkOutSubmodules(in: made.directory)
+        // Where it is at, for every device (#244).
+        progress?(made.branch, .making)
+        let problem = GitWorktrees.checkOutSubmodules(in: made.directory) { done, count, name in
+            progress?(nil, .submodules(done: done, count: count, current: name))
+        }
+        progress?(nil, .starting)
         let prepared = try prepare(conversation, to: target, plan: plan, prompt: prompt, note: note, in: made.directory, now: now)
         return (prepared, made.branch, problem)
     }

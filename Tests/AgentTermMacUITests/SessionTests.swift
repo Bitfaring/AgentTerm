@@ -587,6 +587,12 @@ final class SessionTests: MacUITestCase {
         app.wait(for: .id("floating-notice-\(deploy)"), timeout: 20)
         app.wait(for: .id("floating-notice-\(tests)"), timeout: 20)
         let shown = Date()
+        // NOTE-21: the done one counts down the seconds it has left; the one
+        // that waits has no countdown, as it does not go by itself.
+        let countdown = try XCTUnwrap(app.wait(for: .id("floating-notice-countdown-\(tests)")))
+        XCTAssertTrue(countdown.text.contains("Closes in "), "the countdown does not say what it counts: \(countdown.summary)")
+        XCTAssertNil(app.first(.id("floating-notice-countdown-\(deploy)")), "a notice that waits counts down")
+        shot("notice-countdown")
         // Gone by itself, not before its time.
         app.waitGone(.id("floating-notice-\(tests)"), timeout: 15)
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(shown), 2, "the notice went before its time")

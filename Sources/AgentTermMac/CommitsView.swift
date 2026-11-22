@@ -216,13 +216,19 @@ private struct CommitRow: View {
     /// A branch or a tag that points at the commit.
     private func refChip(_ ref: String) -> some View {
         let shape = RoundedRectangle(cornerRadius: 3, style: .continuous)
+        // As wide as its name when there is room, else cut in its middle,
+        // whole in its tooltip (#242): made its own size, a long one took
+        // the subject's room.
         return Text(ref)
             .font(.system(size: 9.5, weight: .medium))
             .lineLimit(1)
+            .truncationMode(.middle)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(shape.fill(Color.accentColor.opacity(0.22)))
-            .fixedSize()
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(minWidth: 28)
+            .help(ref)
     }
 
     private var fill: Color {
@@ -250,10 +256,14 @@ private struct CommitRow: View {
     private var summary: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
+                // The subject first: a chip wider than the row gives way to
+                // it, cut in its middle, rather than leave it no room
+                // (#242, the owner's decision of 2026-11-22).
                 Text(commit.subject)
                     .font(.system(size: 12))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .layoutPriority(1)
                 ForEach(Array(commit.refs.prefix(2)), id: \.self) { ref in refChip(ref) }
             }
             Text(byline)

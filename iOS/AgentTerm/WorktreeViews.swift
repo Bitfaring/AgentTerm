@@ -33,7 +33,8 @@ struct WorktreePicker: View {
                     showing = .list
                 } label: {
                     HStack(spacing: 5) {
-                        Image(systemName: shown.isMain ? "folder" : "arrow.triangle.branch")
+                        // A folder, whichever it is, named by its folder, as on the Mac (#246).
+                        Image(systemName: "folder")
                         Text(shown.chipTitle).lineLimit(1).truncationMode(.middle)
                         if !shown.pickerCounts.isEmpty {
                             Text(shown.pickerCounts).font(.caption.monospaced()).foregroundStyle(shown.missing ? Color.red : Color.orange)
@@ -146,8 +147,16 @@ private struct WorktreesSheet: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark").font(.footnote.weight(.bold)).opacity(selected ? 1 : 0)
-                    Image(systemName: worktree.isMain ? "folder" : "arrow.triangle.branch").font(.system(size: 11))
-                    Text(worktree.chipTitle).font(.body.weight(selected ? .semibold : .regular)).lineLimit(1).truncationMode(.middle)
+                    Image(systemName: "folder").font(.system(size: 11))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(worktree.chipTitle).font(.body.weight(selected ? .semibold : .regular)).lineLimit(1).truncationMode(.middle)
+                        // The branch checked out in it, under its name.
+                        Label(worktree.branchWords, systemImage: "arrow.triangle.branch")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                     Spacer(minLength: 6)
                     if !worktree.chipCounts.isEmpty {
                         Text(worktree.chipCounts).font(.caption.monospaced()).foregroundStyle(worktree.missing ? Color.red : Color.orange)
@@ -162,7 +171,7 @@ private struct WorktreesSheet: View {
             .disabled(worktree.missing)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(worktree.chipTitle), \(worktree.chipHelp)")
-            .accessibilityIdentifier("worktree-chip-" + worktree.chipTitle)
+            .accessibilityIdentifier("worktree-chip-" + worktree.identifierName)
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
             // None for the folder's own; Throw Away… alone for one whose folder is missing.
             if !worktree.rowActions.isEmpty {
@@ -184,7 +193,7 @@ private struct WorktreesSheet: View {
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel(WorktreeWords.actions)
-                .accessibilityIdentifier("worktree-more-" + worktree.chipTitle)
+                .accessibilityIdentifier("worktree-more-" + worktree.identifierName)
             }
         }
     }

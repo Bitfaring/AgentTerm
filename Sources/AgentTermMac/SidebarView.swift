@@ -58,6 +58,10 @@ struct SidebarView: View {
                                 return provider
                             }
                             .onDrop(of: [.data, .fileURL], delegate: FolderDropDelegate(before: folder.path, model: model, dropTarget: $dropTarget))
+                        // A worktree being made, where its session will be (#244).
+                        ForEach(model.worktreesInProgress.filter { WorktreePath.belongs($0.folder, to: folder.path) }) { making in
+                            WorktreeInProgressRow(making: making)
+                        }
                         rows(sessions: model.sessions(in: folder), pages: browsers.tabs.filter { $0.project == folder.path }, project: folder.path, loose: false)
                     }
                     if !model.folders.isEmpty {
@@ -721,5 +725,38 @@ struct SessionRow: View {
         .accessibilityIdentifier("session-\(session.id)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.select(session: session) }
+    }
+}
+
+/// A worktree the host is making for a session (#244): its branch once it
+/// has one, and what is being done, until its session takes its place.
+struct WorktreeInProgressRow: View {
+    let making: WorktreeInProgress
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.mini)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 1) {
+                Label(making.title, systemImage: "arrow.triangle.branch")
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(making.stepText)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 24)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .help(making.stepText)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(making.accessibilityLabel)
+        .accessibilityIdentifier("worktree-in-progress-\(making.id)")
     }
 }

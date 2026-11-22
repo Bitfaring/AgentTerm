@@ -123,7 +123,7 @@ public enum WorktreeWords {
     public static let actions = "Worktree Actions"
     public static func actionsHelp(_ worktree: WorktreeInfo) -> String {
         worktree.missing
-            ? "Throw away \(worktree.chipTitle), whose folder is gone" : "Merge \(worktree.chipTitle), open a pull request for it, or throw it away"
+            ? "Throw away \(worktree.chipTitle), whose folder is gone" : "Merge \(worktree.branchWords), open a pull request for it, or throw away \(worktree.chipTitle)"
     }
 }
 
@@ -160,9 +160,18 @@ extension WorktreeInfo {
 }
 
 extension WorktreeInfo {
-    /// What a worktree is called on its chip: its branch, or its folder
-    /// when its HEAD is detached.
-    public var chipTitle: String { branch ?? (path as NSString).lastPathComponent }
+    /// What a worktree is called: the name of its folder, which stays
+    /// what it is whatever is checked out in it (#246, the owner's decision,
+    /// 2026-11-22: named by its branch, a worktree read as one more branch
+    /// button). Its branch is said beside it (`branchWords`).
+    public var chipTitle: String { (path as NSString).lastPathComponent }
+
+    /// The branch checked out in it, in words.
+    public var branchWords: String { branch ?? "a detached HEAD" }
+
+    /// What tests and assistive tools find its row by: its branch, or its
+    /// folder when its HEAD is detached.
+    public var identifierName: String { branch ?? (path as NSString).lastPathComponent }
 
     /// What its chip says after the name: how many files are changed in
     /// it, and how many commits it has that the folder's branch has not.
@@ -177,7 +186,7 @@ extension WorktreeInfo {
 
     /// All of it in a sentence, for a tooltip and for assistive tools.
     public var chipHelp: String {
-        var parts: [String] = [isMain ? "The folder itself" : "A worktree"]
+        var parts: [String] = [isMain ? "The folder itself" : "A worktree", "on \(branchWords)"]
         if missing {
             parts.append("its folder is gone")
         } else {
@@ -248,4 +257,51 @@ public enum WorktreeFinish: String, Codable, Sendable {
     case pullRequest
     /// Remove it, and what is in it.
     case discard
+}
+
+/// A worktree the host is making for a session, from the moment it is asked
+/// for until its session starts or it fails (#244): making one of a folder
+/// with submodules takes a while, and every device is told where it is at.
+public struct WorktreeInProgress: Codable, Equatable, Hashable, Identifiable, Sendable {
+    /// The host's number for it, while it lasts.
+    public var id: Int
+    /// The folder it is made of, as the folder list writes it.
+    public var folder: String
+    /// What starts in it once it is made: an agent's name, or nil for a shell.
+    public var agent: String?
+    /// Its branch, once the worktree is made; nil before.
+    public var branch: String?
+    public var step: Step
+
+    public enum Step: Codable, Equatable, Hashable, Sendable {
+        /// `git worktree add`.
+        case making
+        /// Checking out the submodule named, the `done` + 1st of `count`.
+        case submodules(done: Int, count: Int, current: String)
+        /// Starting its session.
+        case starting
+    }
+
+    public init(id: Int, folder: String, agent: String? = nil, branch: String? = nil, step: Step = .making) {
+        self.id = id
+        self.folder = folder
+        self.agent = agent
+        self.branch = branch
+        self.step = step
+    }
+
+    /// The row's name: its branch once it has one.
+    public var title: String { branch ?? "New worktree" }
+
+    /// What is being done, in the words both apps show under the name.
+    public var stepText: String {
+        switch step {
+        case .making: return "Making the worktree…"
+        case .submodules(let done, let count, let current): return "Checking out submodule \(done + 1) of \(count): \(current)…"
+        case .starting: return "Starting \(agent ?? "the shell")…"
+        }
+    }
+
+    /// What VoiceOver says of its row.
+    public var accessibilityLabel: String { "\(title), \(stepText)" }
 }

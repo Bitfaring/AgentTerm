@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 39
+public let agenttermProtocolVersion = 40
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -758,6 +758,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case scheduleRunOutput(id: String, at: Date, text: String?)
     /// A folder's worktrees, the folder's own first.
     case worktrees(folder: String, list: [WorktreeInfo])
+    /// The worktrees being made for sessions (#244), each with what is being
+    /// done; sent to every device whenever one starts, moves on or ends.
+    case worktreesInProgress([WorktreeInProgress])
     /// What became of `finishWorktree`: a pull request's address, or that
     /// it was merged or removed.
     case worktreeFinished(folder: String, path: String, said: String)

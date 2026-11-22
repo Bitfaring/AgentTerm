@@ -713,6 +713,11 @@ final class SchedulerHostTests: XCTestCase {
         waitUntil("started there") { self.startedLines.first?.contains("/.agentterm/worktrees/schedule/morning-review-") == true }
         XCTAssertTrue(git("branch", "--list", "schedule/*").contains("schedule/morning-review-"))
         XCTAssertEqual(git("status", "--porcelain"), "", "the folder itself is untouched")
+        // Every device was told of it while it was made, and that it is over (#244).
+        let made = client.messages.compactMap { if case .worktreesInProgress(let list) = $0 { return list } else { return nil } }
+        XCTAssertTrue(made.contains { $0.first?.step == .making && $0.first?.branch?.hasPrefix("schedule/morning-review-") == true }, "\(made)")
+        XCTAssertTrue(made.contains { $0.first?.step == .starting }, "\(made)")
+        waitUntil("over") { self.client.messages.last { if case .worktreesInProgress = $0 { return true } else { return false } } == .worktreesInProgress([]) }
         // Kept for review once the run is over.
         client.connection.send(.kill(session: session.id))
         waitUntil("ended") { self.client.sessions.isEmpty }

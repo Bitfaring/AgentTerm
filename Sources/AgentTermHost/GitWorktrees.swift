@@ -126,11 +126,85 @@ public enum GitWorktrees {
     /// Checks out the submodules of a new worktree, theirs too (#44): git
     /// leaves their folders empty. Nil when there are none or all went
     /// well; otherwise what git said, for the worktree is made all the same.
-    public static func checkOutSubmodules(in directory: String) -> String? {
+    ///
+    /// Each is cloned from the repository's own checkout of it, which is on
+    /// this Mac already, and its remote set back to its URL; only one that
+    /// is not checked out there is fetched from its URL (#244, the owner's
+    /// decision of 2026-11-22: cloned again from GitHub, `~/Project/apps`'
+    /// took minutes and some 500 MB a worktree). `progress` is told which
+    /// one of the worktree's own is being checked out, and of how many.
+    public static func checkOutSubmodules(in directory: String, progress: ((_ done: Int, _ count: Int, _ name: String) -> Void)? = nil) -> String? {
         guard let top = try? top(of: directory).asWritten, FileManager.default.fileExists(atPath: top + "/.gitmodules") else { return nil }
-        // Each is fetched from where it comes from, which may take a while.
-        let done = git(["submodule", "update", "--init", "--recursive"], in: top, timeout: 900, environment: GitActions.actionEnvironment)
-        return done.status == 0 ? nil : "The submodules of the new worktree could not be checked out: their folders are empty there.\n\n\(String(done.output.suffix(1500)))"
+        // The repository's own checkout: the first of its worktrees.
+        let porcelain = (try? run(["worktree", "list", "--porcelain"], in: top)) ?? ""
+        let first = porcelain.split(separator: "\n").first { $0.hasPrefix("worktree ") }.map { String($0.dropFirst("worktree ".count)) }
+        let main = first.map { ownCheckout($0, of: top) }
+        var problems: [String] = []
+        checkOutSubmodules(of: top, mainCheckout: main == top ? nil : main, problems: &problems, progress: progress)
+        guard !problems.isEmpty else { return nil }
+        return "The submodules of the new worktree could not be checked out: their folders are empty there.\n\n\(String(problems.joined(separator: "\n\n").suffix(1500)))"
+    }
+
+    /// The submodules `.gitmodules` names at the top of `checkout`, as
+    /// their names and their paths, in the order it gives them.
+    private static func submodules(of checkout: String) -> [(name: String, path: String)] {
+        let lines = (try? run(["config", "--file", ".gitmodules", "--get-regexp", #"^submodule\..*\.path$"#], in: checkout)) ?? ""
+        return lines.split(separator: "\n").compactMap { line in
+            guard let space = line.firstIndex(of: " ") else { return nil }
+            let key = line[..<space]
+            guard key.hasPrefix("submodule."), key.hasSuffix(".path") else { return nil }
+            let name = String(key.dropFirst("submodule.".count).dropLast(".path".count))
+            return (name, String(line[line.index(after: space)...]))
+        }
+    }
+
+    /// The git folder of the submodule checked out at `path` in `checkout`;
+    /// nil when it is not checked out there, its folder empty or missing,
+    /// where git would answer for the repository around it.
+    private static func checkedOutGitDirectory(_ path: String, in checkout: String) -> String? {
+        let folder = (checkout as NSString).appendingPathComponent(path)
+        guard let own = try? run(["rev-parse", "--show-toplevel"], in: folder),
+            URL(fileURLWithPath: own).resolvingSymlinksInPath().path == URL(fileURLWithPath: folder).resolvingSymlinksInPath().path,
+            let directory = try? run(["rev-parse", "--absolute-git-dir"], in: folder)
+        else { return nil }
+        return directory
+    }
+
+    private static func checkOutSubmodules(of checkout: String, mainCheckout: String?, problems: inout [String], progress: ((Int, Int, String) -> Void)?) {
+        let list = submodules(of: checkout)
+        for (index, submodule) in list.enumerated() {
+            progress?(index, list.count, submodule.name)
+            let folder = (checkout as NSString).appendingPathComponent(submodule.path)
+            let theirs = mainCheckout.flatMap { checkedOutGitDirectory(submodule.path, in: $0) }
+            var done = false
+            if let theirs, let url = try? run(["config", "--file", ".gitmodules", "submodule.\(submodule.name).url"], in: checkout) {
+                // Its URL written into the worktree's configuration first:
+                // given only on the command line, `--init` took it for one
+                // there already and left a submodule inside it uninitialized
+                // (tried with git 2.54.0). The clone from the folder's own
+                // copy needs the file transport, which git allows a
+                // submodule only when asked (2.38.1).
+                let cloned =
+                    git(["submodule", "init", "--", submodule.path], in: checkout).status == 0
+                    && git(
+                        ["-c", "protocol.file.allow=always", "-c", "submodule.\(submodule.name).url=\(theirs)", "submodule", "update", "--", submodule.path],
+                        in: checkout, timeout: 900, environment: GitActions.actionEnvironment
+                    ).status == 0
+                // Pushed and fetched where it comes from, not from the copy.
+                if cloned, git(["remote", "set-url", "origin", url], in: folder).status == 0 { done = true }
+            }
+            if !done {
+                // Not checked out in the folder, or the copy failed: fetched
+                // from its URL, which may take a while.
+                let fetched = git(["submodule", "update", "--init", "--", submodule.path], in: checkout, timeout: 900, environment: GitActions.actionEnvironment)
+                guard fetched.status == 0 else {
+                    problems.append(fetched.output)
+                    continue
+                }
+            }
+            // Those inside it, from the same submodule's own checkout.
+            checkOutSubmodules(of: folder, mainCheckout: mainCheckout.map { ($0 as NSString).appendingPathComponent(submodule.path) }, problems: &problems, progress: nil)
+        }
     }
 
     /// Merges, opens a pull request for, or throws away a worktree. What

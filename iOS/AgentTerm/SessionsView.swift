@@ -524,6 +524,11 @@ private struct FolderSection: View {
                     .accessibilityLabel("Changes, History and Files of \(group.name)")
                     .accessibilityIdentifier("folder-details")
                     Palette.hairline.frame(height: 1)
+                    // A worktree being made, where its session will be (#244).
+                    ForEach(model.worktreesInProgress.filter { WorktreePath.belongs($0.folder, to: path) }) { making in
+                        WorktreeInProgressRow(making: making)
+                        Palette.hairline.frame(height: 1).padding(.leading, 38)
+                    }
                 }
                 ForEach(model.items(for: group)) { item in
                     switch item {
@@ -898,5 +903,36 @@ private struct SessionDropDelegate: DropDelegate {
         model.draggedSession = nil
         withAnimation { model.sessionLayout.move(id, before: before) }
         return true
+    }
+}
+
+/// A worktree the host is making for a session (#244): its branch once it
+/// has one, and what is being done, in the Mac's words, until its session
+/// takes its place.
+private struct WorktreeInProgressRow: View {
+    let making: WorktreeInProgress
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Label(making.title, systemImage: "arrow.triangle.branch")
+                    .font(.body)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(making.stepText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 14)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(making.accessibilityLabel)
+        .accessibilityIdentifier("worktree-in-progress-\(making.id)")
     }
 }
