@@ -131,6 +131,7 @@ use versions from the same row.
 
 | Mac app | iPhone app | Protocol |
 |---|---|---|
+| 0.15.x | 0.15.x | 40 |
 | 0.14.x | 0.14.x | 39 |
 | 0.13.x | 0.13.x | 36 |
 | 0.12.x | 0.12.x | 32 |
