@@ -110,11 +110,20 @@ INBOX_DONE_AFTER=""
 if [ "${INBOX:-}" = only ]; then INBOX_DONE_AFTER=8; fi
 # NOTNOW=only too: a notice after Not Now asks nothing of iOS (NOTIFY-2).
 if [ "${NOTNOW:-}" = only ]; then INBOX_DONE_AFTER=8; fi
+# CUT=only has it say, once done, an answer whose end cut at two lengths
+# comes to the same text: an Inbox row of it crashed the app (#240). The
+# test sees the row and the app still there, and nothing else.
+DEMO_CLOSING=""
+if [ "${CUT:-}" = only ]; then
+    INBOX_DONE_AFTER=8
+    DEMO_CLOSING="$(printf 'x%.0s' $(seq 1 200)) $(printf 'y%.0s' $(seq 1 70))"
+    export TEST_RUNNER_AGENTTERM_ONLY_CUT=1
+fi
 # ASK=only has it ask a question with choices a while after it starts, time
 # enough for the test to write a prompt first (IOS-12, #232).
 ASK_AFTER=""
 if [ "${ASK:-}" = only ]; then ASK_AFTER=15; fi
-HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_ASK_AFTER="$ASK_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_CLOSING="$DEMO_CLOSING" AGENTTERM_DEMO_ASK_AFTER="$ASK_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
 AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only --protocol-version 1 > "$SECOND_STATE/daemon.log" 2>&1 &
@@ -191,6 +200,14 @@ if [ "${INBOX:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_INBOX=1; fi
 if [ "${ASK:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_ASK=1; fi
 # NOTE=only reads a stand-in agent's note on its row (IOS-9), and nothing else.
 if [ "${NOTE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NOTE=1; fi
+# WORKTREE=only makes a worktree of the test project from the list and
+# watches it being made (WT-25, #244), and nothing else. Its checkout is made
+# slow by a hook, for the row to be seen.
+if [ "${WORKTREE:-}" = only ]; then
+    printf '#!/bin/sh\nsleep 4\n' > "$PROJECT/.git/hooks/post-checkout"
+    chmod +x "$PROJECT/.git/hooks/post-checkout"
+    export TEST_RUNNER_AGENTTERM_ONLY_WORKTREE=1
+fi
 # NARROW=only narrows the iPad's window and looks at the list (IPAD-2), and
 # nothing else. On an iPhone it checks nothing.
 if [ "${NARROW:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NARROW=1; fi
@@ -199,13 +216,19 @@ if [ "${NARROW:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NARROW=1; fi
 if [ "${MARKDOWN:-}" = only ]; then
     export TEST_RUNNER_AGENTTERM_ONLY_MARKDOWN=1 TEST_RUNNER_AGENTTERM_MEASURE_MAIN="$STATE/main-thread.txt"
 fi
+# Every run starts from the app installed afresh (#236): a run that left
+# a Live Activity on (a NOTNOW run's agent, done) had iOS launch the app in
+# the background once the next run installed it again, to say the activity
+# ended; the test's launch then brought that process to the front, without
+# the variables the test launches it with, and the first screen did not
+# show, every time. Installed afresh, nothing of an earlier run is left,
+# and iOS was not asked whether the app may notify.
+xcrun simctl uninstall "$DEVICE" com.manhpham.agentterm.dev || true
 # NOTNOW=only answers Not Now on the first screen, pairs, and checks that
 # iOS is not asked and the app's notifications are off (NOTIFY-2), and
-# nothing else. The app is installed afresh for it, so that iOS was not
-# asked before.
+# nothing else.
 if [ "${NOTNOW:-}" = only ]; then
     export TEST_RUNNER_AGENTTERM_ONLY_NOT_NOW=1
-    xcrun simctl uninstall "$DEVICE" com.manhpham.agentterm.dev || true
 fi
 # PAGES=only checks that a long session's earlier lines come a page at a time.
 if [ "${PAGES:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_HISTORY=1; fi
@@ -228,6 +251,8 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${IDLE:-}" = only ]; then grep -E "MEASURE idle" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (idle waits measured)."; rm -f "$LOG"; exit 0; fi
     if [ "${NOTE:-}" = only ]; then echo "iOS UI test passed (a note read only)."; rm -f "$LOG"; exit 0; fi
     if [ "${INBOX:-}" = only ]; then echo "iOS UI test passed (the Inbox only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${CUT:-}" = only ]; then echo "iOS UI test passed (an Inbox row of a cut answer only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${WORKTREE:-}" = only ]; then echo "iOS UI test passed (a worktree being made only)."; rm -f "$LOG"; exit 0; fi
     if [ "${ASK:-}" = only ]; then
         # IOS-12: the answer went in while the stand-in asked, as the keys of
         # its second choice; the prompt only after the question was over.

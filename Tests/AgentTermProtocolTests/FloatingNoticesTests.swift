@@ -153,4 +153,16 @@ final class FloatingNoticesTests: XCTestCase {
         notices.keep { states[$0.session] == $0.state }
         XCTAssertEqual(notices.shown.map(\.id), [4])
     }
+
+    /// NOTE-21: a done notice counts down the whole seconds it has left.
+    func testTheCountdownOfANoticeThatGoesByItself() {
+        let goes = Date(timeIntervalSince1970: 100)
+        XCTAssertEqual(FloatingNotices.secondsLeft(until: goes, at: Date(timeIntervalSince1970: 90)), 10)
+        XCTAssertEqual(FloatingNotices.secondsLeft(until: goes, at: Date(timeIntervalSince1970: 91.5)), 9)
+        XCTAssertEqual(FloatingNotices.secondsLeft(until: goes, at: Date(timeIntervalSince1970: 99.9)), 1)
+        XCTAssertEqual(FloatingNotices.secondsLeft(until: goes, at: Date(timeIntervalSince1970: 105)), 0)
+        XCTAssertEqual(FloatingNotices.countdown(8), "8s")
+        XCTAssertEqual(FloatingNotices.goesIn(8), "Closes in 8 seconds")
+        XCTAssertEqual(FloatingNotices.goesIn(1), "Closes in 1 second")
+    }
 }

@@ -409,6 +409,8 @@ final class AppModel: ObservableObject {
 
     /// Each folder's git worktrees (#23, #33), as its host lists them.
     @Published private(set) var worktrees: [String: [WorktreeInfo]] = [:]
+    /// The worktrees the host is making for sessions, and where each is at (#244).
+    @Published private(set) var worktreesInProgress: [WorktreeInProgress] = []
     /// What became of the last worktree that was finished.
     @Published var worktreeSaid: String?
 
@@ -1676,6 +1678,7 @@ final class AppModel: ObservableObject {
         commitWriter = CommitWriterSettings()
         schedules = []
         worktrees = [:]
+        worktreesInProgress = []
         hostVersion = 0
         system.stats = nil
         sshHosts = []
@@ -1861,6 +1864,8 @@ final class AppModel: ObservableObject {
             runOutputs[ScheduleOverview.Run.id(schedule: id, at: at)] = .some(text)
         case .worktrees(let folder, let list):
             worktrees[folder] = list
+        case .worktreesInProgress(let list):
+            worktreesInProgress = list
         case .filesFound, .textFound, .searchEnded:
             search.handle(message)
         case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .conversationDeleted, .conversationsDeleted, .conversationExported:

@@ -40,6 +40,16 @@ public struct FloatingNotices: Equatable, Sendable {
         return said
     }
 
+    /// Whole seconds left before one goes by itself, counted up: "10" at
+    /// the start, "1" in its last second, never below 0.
+    public static func secondsLeft(until goes: Date, at now: Date) -> Int { max(0, Int(goes.timeIntervalSince(now).rounded(.up))) }
+
+    /// What its countdown says: "8s".
+    public static func countdown(_ seconds: Int) -> String { "\(seconds)s" }
+
+    /// The same in a sentence, for a tooltip and assistive tools.
+    public static func goesIn(_ seconds: Int) -> String { "Closes in \(seconds) \(seconds == 1 ? "second" : "seconds")" }
+
     /// The notices on show, the newest first: the one drawn on top.
     public private(set) var shown: [Shown] = []
     /// How long one of an agent that is done stays here.

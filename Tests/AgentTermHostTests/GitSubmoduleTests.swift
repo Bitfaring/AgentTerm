@@ -179,11 +179,63 @@ final class GitSubmoduleTests: XCTestCase {
         // A repository without submodules has nothing to check out.
         XCTAssertNil(GitWorktrees.checkOutSubmodules(in: library.path))
 
-        // The library is gone from where it came from.
+        // Not checked out in the folder, and gone from where it came from:
+        // there is nowhere to take it from (since #244 one checked out in
+        // the folder is taken from there).
+        git("submodule", "deinit", "-q", "-f", "libs/library", in: project)
         try FileManager.default.removeItem(at: library)
         let second = try GitWorktrees.create(in: project.path, agent: "claude", branch: "without-library")
         let problem = try XCTUnwrap(GitWorktrees.checkOutSubmodules(in: second.directory))
         XCTAssertTrue(problem.hasPrefix("The submodules of the new worktree could not be checked out"), problem)
         XCTAssertTrue(FileManager.default.fileExists(atPath: second.directory + "/a.txt"))
+    }
+
+    /// WT-24 (#244): a new worktree's submodules, and theirs, are cloned
+    /// from the folder's own checkout of them, not fetched again from where
+    /// they come from, and then push and fetch there; which one is being
+    /// checked out, of how many, is told as it goes.
+    func testANewWorktreeTakesItsSubmodulesFromTheFolder() throws {
+        // The library gets a submodule of its own.
+        let deeper = root.appendingPathComponent("deeper")
+        try FileManager.default.createDirectory(at: deeper, withIntermediateDirectories: true)
+        git("init", "-q", "-b", "main", in: deeper)
+        configure(deeper)
+        try write("d.txt", "deep\n", in: deeper)
+        git("add", ".", in: deeper)
+        git("commit", "-q", "-m", "deeper", in: deeper)
+        git("submodule", "add", "-q", deeper.path, "deep", in: inside)
+        git("commit", "-q", "-m", "library with deeper", in: inside)
+        git("add", ".", in: project)
+        git("commit", "-q", "-m", "the library moved", in: project)
+
+        // Neither can be fetched from where it comes from: only the
+        // folder's own copies are left.
+        let away = root.appendingPathComponent("away")
+        try FileManager.default.createDirectory(at: away, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: library, to: away.appendingPathComponent("library"))
+        try FileManager.default.moveItem(at: deeper, to: away.appendingPathComponent("deeper"))
+
+        let made = try GitWorktrees.create(in: project.path, agent: "claude", branch: "from-the-folder")
+        // As on the user's Mac: git allows a submodule the file transport
+        // only when told, which the code does itself, not the environment
+        // these tests give every git.
+        for name in ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"] { unsetenv(name) }
+        var told: [String] = []
+        XCTAssertNil(GitWorktrees.checkOutSubmodules(in: made.directory) { done, count, name in told.append("\(done + 1)/\(count) \(name)") })
+        XCTAssertEqual(told, ["1/1 libs/library"])
+        let library = URL(fileURLWithPath: made.directory).appendingPathComponent("libs/library")
+        XCTAssertEqual(try String(contentsOf: library.appendingPathComponent("l.txt"), encoding: .utf8), "one\n")
+        XCTAssertEqual(try String(contentsOf: library.appendingPathComponent("deep/d.txt"), encoding: .utf8), "deep\n")
+        XCTAssertEqual(GitDiff.snapshot(directory: made.directory).files, [])
+        XCTAssertEqual(GitDiff.snapshot(directory: made.directory).submodules, [])
+        // Both are submodules there, not loose folders.
+        let status = git("submodule", "status", "--recursive", in: URL(fileURLWithPath: made.directory))
+        XCTAssertFalse(status.split(separator: "\n").contains { $0.hasPrefix("-") }, status)
+        // Their remotes are where they come from, not the folder's copies.
+        XCTAssertEqual(git("remote", "get-url", "origin", in: library), self.library.path)
+        XCTAssertEqual(git("remote", "get-url", "origin", in: library.appendingPathComponent("deep")), deeper.path)
+        // The folder's own are as they were.
+        XCTAssertEqual(git("remote", "get-url", "origin", in: inside), self.library.path)
+        XCTAssertEqual(git("status", "--porcelain", in: project), "")
     }
 }

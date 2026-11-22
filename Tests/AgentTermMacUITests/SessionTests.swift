@@ -208,6 +208,31 @@ final class SessionTests: MacUITestCase {
         app.wait(for: .button(ConversationDetails.previewMarkdown))
     }
 
+    /// INBOX-13 (#240): an answer whose end, cut at two lengths and begun at
+    /// a word, comes to the same text is listed and picked, rendered and as
+    /// written, and the app is still there: the row gave that text twice
+    /// to SwiftUI, which stopped the app.
+    func testARowWhoseCutsComeToTheSameTextDoesNotCrash() throws {
+        let phone = try device()
+        let said = String(repeating: "x", count: 200) + " " + String(repeating: "y", count: 70)
+        let agent = try standInAgent("same", hook: "Stop", event: #"{"hook_event_name":"Stop","last_assistant_message":"\#(said)"}"#)
+        phone.send(.create(CreateRequest(command: agent.path, cwd: project.path, title: "same")))
+        wait("the agent done", timeout: 20) { phone.sessions.contains { $0.title == "same" && $0.state?.isWorking == false } }
+        let same = try XCTUnwrap(phone.sessions.first { $0.title == "same" }?.id)
+        bringAppToFront()
+
+        app.press(.id("place-inbox"))
+        app.wait(for: .id(phone.inboxRow(same)))
+        app.press(.id(phone.inboxRow(same)))
+        app.wait(for: .id("inbox-detail-text"))
+        app.press(.id("inbox-markdown"))
+        app.wait(for: .id("inbox-detail-markdown"))
+        app.press(.id("inbox-markdown"))
+        app.wait(for: .id("inbox-detail-text"))
+        let row = try XCTUnwrap(app.first(.id(phone.inboxRow(same)))?.label)
+        XCTAssertTrue(row.hasSuffix(String(repeating: "y", count: 70)), "a row does not show the end: \(row)")
+    }
+
     /// INBOX-3 (#67, #66): the Inbox is this Mac's history of what it was
     /// told, with how many are unread on its place in the rail; the item
     /// picked is shown in the middle, the terminals hidden as in History,
@@ -562,6 +587,12 @@ final class SessionTests: MacUITestCase {
         app.wait(for: .id("floating-notice-\(deploy)"), timeout: 20)
         app.wait(for: .id("floating-notice-\(tests)"), timeout: 20)
         let shown = Date()
+        // NOTE-21: the done one counts down the seconds it has left; the one
+        // that waits has no countdown, as it does not go by itself.
+        let countdown = try XCTUnwrap(app.wait(for: .id("floating-notice-countdown-\(tests)")))
+        XCTAssertTrue(countdown.text.contains("Closes in "), "the countdown does not say what it counts: \(countdown.summary)")
+        XCTAssertNil(app.first(.id("floating-notice-countdown-\(deploy)")), "a notice that waits counts down")
+        shot("notice-countdown")
         // Gone by itself, not before its time.
         app.waitGone(.id("floating-notice-\(tests)"), timeout: 15)
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(shown), 2, "the notice went before its time")

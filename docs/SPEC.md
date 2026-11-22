@@ -128,13 +128,17 @@ says names the device it runs on.
   which opens its folder on that worktree.
 - **The worktrees' button** (#33, #43, #217): at the top of the side
   panel of a folder that is a repository, one button, which names the
-  worktree on show (its branch, or its folder with a detached HEAD) and
-  how many files are changed in it. A folder that is no repository has
+  worktree on show by its folder, with a folder's symbol, and says how
+  many files are changed in it; the branch checked out there is the
+  branch's button under it. A worktree keeps its name whatever is checked
+  out in it (#246, the owner's decision, 2026-11-22: named by its branch and
+  with a branch's symbol, the button read as a second branch button). A folder that is no repository has
   none. Pressed, it opens a popup like the branch's, with a field that
   narrows the worktrees down by their branch or the name of their folder,
   whatever the case; a choice or Escape closes it, the arrows and Return
   pick from the keyboard. Nothing else of the worktrees is outside it.
-- In the popup, a row for each worktree. The folder's own
+- In the popup, a row for each worktree: the name of its folder, and
+  beside it (under it on the iPhone) the branch checked out there. The folder's own
   branch is always the first; each worktree follows, whoever made it
   (AgentTerm, Claude Code in `.claude/worktrees`, `git worktree add`), with
   how many files are changed in it, how many commits it is ahead by, a dot
@@ -154,8 +158,9 @@ says names the device it runs on.
   handoff file says to work there only, not at the folder's paths the
   conversation names. Its own conversation is not resumed there: it holds
   the folder's paths, and the agent would go on changing the folder.
-- **⋯**, on the row of each worktree in the popup, is for that
-  worktree: merge its branch into the folder's
+- **⋯**, on the row of each worktree in the popup, and a right click
+  anywhere on the row, as on a branch's in the branches' popup, are for
+  that worktree: merge its branch into the folder's
   and remove it (with its branch, for one AgentTerm made), open a pull
   request with `gh`, or throw it away, which asks first and says what is
   not merged; the folder's own row has none. A pull request can be opened
@@ -354,7 +359,10 @@ happened; the Live Activity shows the host's state now (below).
     was seen. One of an agent that **waits** (a question, a permission)
     stays until it is answered, opened or dismissed. While the pointer is
     over a notice it does not go; its 10 seconds start again when the
-    pointer leaves.
+    pointer leaves. One that goes by itself counts down the seconds it
+    has left ("8s", a line along its foot that runs out); one that waits,
+    or that the pointer is over, has no countdown (the owner's ask,
+    2026-11-22).
   - **Several are stacked**, the newest on top, **10 at most**, one for a
     session. An eleventh takes the place of the oldest that does not
     wait; when all ten wait, of the oldest, which stays in the Inbox.
@@ -1226,7 +1234,9 @@ panel.
     that another worktree has checked out cannot be switched to, and says
     where it is. **New Branch…** makes one from any branch, the checked
     out one unless another is picked, and switches to it or not. A branch
-    of the repository's own is renamed and deleted from its menu: deleting
+    of the repository's own is renamed and deleted from its menu, which
+    its row's ⋯ opens, and a right click on the row too, as on a
+    worktree's in the worktrees' popup (the owner's decision, 2026-11-22): deleting
     is asked first, once when everything on the branch is on the checked
     out branch too, and twice, the second time saying its commits would be
     lost, when it has commits of its own. The checked out branch is not
@@ -1338,8 +1348,16 @@ panel.
     Discarding it, asked first, checks out the recorded commit again. A
     submodule inside a submodule is listed the same way under it. A new
     worktree has its submodules checked out, theirs too, before its
-    session starts; when one cannot be fetched the worktree is made all the
-    same, and the banner says so. A submodule opened as a folder has
+    session starts: each is cloned from the folder's own checkout of it,
+    on the Mac already, and then pushes and fetches where it comes from;
+    only one the folder has not checked out is fetched from where it
+    comes from (#244). When one cannot be had the worktree is made all the
+    same, and the banner says so. While a worktree is made, for a session
+    started in it, a conversation continued in it or a schedule's run,
+    both apps show it under its folder, where its session will be, with a spinner, its
+    branch and what is being done ("Making the worktree…", "Checking out
+    submodule 3 of 12: manhdev…", "Starting Claude Code…"), until its
+    session takes its place or it fails (#244). A submodule opened as a folder has
     worktrees of its own, as any repository: the first is the submodule's
     folder itself (#216), not the place under the parent's `.git/modules`
     that git names for it.

@@ -390,6 +390,8 @@ final class WorktreeHostTests: XCTestCase {
         var sessions: [SessionInfo] { messages.compactMap { if case .sessions(let list) = $0 { return list } else { return nil } }.last ?? [] }
         var worktrees: [WorktreeInfo] { messages.compactMap { if case .worktrees(_, let list) = $0 { return list } else { return nil } }.last ?? [] }
         var errors: [String] { messages.compactMap { if case .error(let text, _) = $0 { return text } else { return nil } } }
+        /// Every list of the worktrees being made it was sent, in order.
+        var inProgress: [[WorktreeInProgress]] { messages.compactMap { if case .worktreesInProgress(let list) = $0 { return list } else { return nil } } }
     }
 
     private var root: URL!
@@ -468,6 +470,82 @@ final class WorktreeHostTests: XCTestCase {
         // One that cannot be made says why at once.
         client.connection.send(.createInWorktree(request: CreateRequest(command: nil, cwd: project.path), branch: "x", from: "no-such"))
         waitUntil("refused") { self.client.errors.contains { $0.contains("There is no branch “no-such” to start from.") } }
+    }
+
+    /// WT-25 (#244): while a worktree is made, every device is told what is
+    /// being done: making it, then each of its submodules, one of how many,
+    /// then starting its session; and that it is over, once the session is
+    /// there or it was refused.
+    func testEveryDeviceIsToldWhatIsBeingDoneWhileAWorktreeIsMade() throws {
+        let library = root.appendingPathComponent("library")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let git = { (directory: URL, arguments: [String]) in
+            let ran = Subprocess.run(
+                "/usr/bin/git", ["-C", directory.path, "-c", "commit.gpgsign=false", "-c", "protocol.file.allow=always", "-c", "user.name=T", "-c", "user.email=t@example.com"] + arguments,
+                timeout: 30, mergeErrors: true)
+            XCTAssertEqual(ran?.status, 0, "git \(arguments.joined(separator: " ")): \(String(decoding: ran?.output ?? Data(), as: UTF8.self))")
+        }
+        git(library, ["init", "-q", "-b", "main"])
+        git(library, ["commit", "-q", "--allow-empty", "-m", "library"])
+        git(project, ["submodule", "add", "-q", library.path, "libs/library"])
+        git(project, ["commit", "-q", "-m", "with its library"])
+        let other = Client(port: port, token: token)
+        waitUntil("the other device connected") { !other.messages.isEmpty }
+
+        client.connection.send(.createInWorktree(request: CreateRequest(command: "claude", cwd: project.path, title: "Claude Code"), branch: nil, from: nil))
+        waitUntil("the session") { self.client.sessions.count == 1 }
+        waitUntil("over") { self.client.inProgress.last == [] && other.inProgress.last == [] }
+        for device in [client!, other] {
+            let steps = device.inProgress.compactMap(\.first).map { "\($0.branch ?? "-") \($0.stepText)" }
+            XCTAssertEqual(
+                steps,
+                [
+                    "- Making the worktree…",
+                    "agentterm/claude-1 Making the worktree…",
+                    "agentterm/claude-1 Checking out submodule 1 of 1: libs/library…",
+                    "agentterm/claude-1 Starting Claude Code…",
+                ])
+            XCTAssertEqual(Set(device.inProgress.compactMap(\.first).map(\.folder)), [project.path])
+        }
+        XCTAssertEqual(client.errors, [])
+
+        // One refused is over at once too.
+        client.connection.send(.createInWorktree(request: CreateRequest(command: nil, cwd: project.path), branch: "x", from: "no-such"))
+        waitUntil("refused") { !self.client.errors.isEmpty }
+        waitUntil("over") { self.client.inProgress.last == [] }
+    }
+
+    /// WT-25 (#244): a device that connects while a worktree is being made
+    /// is told of it at once, not only of what comes after.
+    func testADeviceThatComesWhileAWorktreeIsMadeIsToldOfIt() throws {
+        // A checkout that takes a while: git runs the project's hook in the new worktree.
+        let hook = project.appendingPathComponent(".git/hooks/post-checkout")
+        try "#!/bin/sh\nsleep 6\n".write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+        client.connection.send(.createInWorktree(request: CreateRequest(command: nil, cwd: project.path), branch: "feature/slow", from: nil))
+        waitUntil("being made") { self.client.inProgress.last?.isEmpty == false }
+
+        // Told on connecting, while git is still at it: not by what the
+        // host sends once the worktree is made, seconds later.
+        let late = Client(port: port, token: token)
+        waitUntil("the late device told of it", timeout: 3) { late.inProgress.first?.first?.branch == "feature/slow" }
+        XCTAssertEqual(late.inProgress.first?.first?.step, .making)
+        waitUntil("over for it too", timeout: 20) { late.inProgress.last == [] }
+    }
+
+    /// WT-26 (#245): a session in a worktree says the branch checked out there, also
+    /// after another is checked out in it: it was the one the worktree was
+    /// made with, for as long as the session ran.
+    func testASessionInAWorktreeSaysTheBranchCheckedOutThere() throws {
+        client.connection.send(.createInWorktree(request: CreateRequest(command: "claude", cwd: project.path), branch: "feature/x", from: nil))
+        waitUntil("the session") { self.client.sessions.first?.branch == "feature/x" }
+        let cwd = try XCTUnwrap(client.sessions.first?.cwd)
+        let switched = Subprocess.run("/usr/bin/git", ["-C", cwd, "checkout", "-q", "-b", "feature/y"], timeout: 30, mergeErrors: true)
+        XCTAssertEqual(switched?.status, 0)
+        // The folder's worktrees are asked for, as the apps do when it is shown.
+        client.connection.send(.listWorktrees(folder: project.path))
+        waitUntil("the worktrees") { self.client.worktrees.contains { $0.branch == "feature/y" } }
+        waitUntil("the session's branch") { self.client.sessions.first?.branch == "feature/y" }
     }
 
     /// WT-5: a worktree a session runs in is not removed; one with unmerged

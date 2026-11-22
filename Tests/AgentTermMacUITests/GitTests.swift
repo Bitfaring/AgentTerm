@@ -146,9 +146,14 @@ final class GitTests: MacUITestCase {
         wait("main to be checked out again") { self.git("branch", "--show-current", in: self.project) == "main" }
 
         // Everything on the new branch is on main: asked once.
+        // From its "⋯", which has what a right click on the row has, as
+        // a worktree's row does (the owner's decision, 2026-11-22).
         app.press(.id("branch-menu"))
         app.wait(for: .id("branch-feature/ui"))
-        app.perform("Delete", on: .id("branch-feature/ui"))
+        XCTAssertTrue(app.offers("AXShowMenu", on: .id("branch-feature/ui")), "a right click on the row has no menu")
+        shot("branch-row")
+        app.press(.id("branch-more-feature/ui"))
+        app.press(.button("Delete…"), menus: true)
         app.wait(for: .containing("Delete the branch “feature/ui”?"))
         app.press(.button("Delete Branch"))
         wait("the branch to be deleted") { !self.git("branch", "--list", "feature/ui", in: self.project).contains("feature/ui") }
@@ -216,6 +221,49 @@ final class GitTests: MacUITestCase {
         // The list follows: the new commit is first.
         app.wait(for: .containing("Revert \"docs: more notes\""), timeout: 15)
         XCTAssertEqual(read("notes.txt"), "first line\n")
+    }
+
+    /// GIT-41 (#241): a branch whose name is wider than the panel does not
+    /// widen the popup of what the commits are of past it: "Commits of"
+    /// stays beside it, in one line, under the tabs.
+    func testABranchWiderThanThePanelLeavesCommitsOfInOneLine() throws {
+        git("branch", "dependabot/github_actions/actions-6d1c06d137-with-a-name-far-wider-than-the-panel-is", in: project)
+
+        app.press(.button("Git"))
+        app.press(.button("Commits"))
+        app.wait(for: .id("commits-branch"))
+        // Once more, with the branches already read: the popup is made with them.
+        app.press(.button("Changes"))
+        app.press(.button("Commits"))
+        app.wait(for: .id("commits-branch"))
+        shot("long-branch")
+
+        let tabs = try XCTUnwrap(app.frame(of: .button("Commits")))
+        let popup = try XCTUnwrap(app.frame(of: .id("commits-branch")))
+        let label = try XCTUnwrap(app.frame(of: .id("commits-of")), "\"Commits of\" is not shown")
+        XCTAssertLessThan(label.height, 30, "\"Commits of\" is broken over lines: \(label)")
+        XCTAssertLessThan(popup.minY - tabs.maxY, 30, "room between the tabs and the popup: \(popup) under \(tabs)")
+        XCTAssertLessThanOrEqual(label.maxX, popup.minX, "\"Commits of\" is not beside the popup")
+        // The tabs span the panel, but for its margins.
+        let first = try XCTUnwrap(app.frame(of: .button("Changes")))
+        XCTAssertGreaterThanOrEqual(label.minX, first.minX - 20, "\"Commits of\" is out of the panel: \(label)")
+    }
+
+    /// GIT-41 (#242): a commit a branch wider than the row points at keeps
+    /// its subject in sight; the chip is cut in its middle. Its picture is
+    /// looked at: the row is one element to assistive tools, its subject
+    /// not one of its own, so where it is drawn is not read by the test.
+    func testACommitWithALongBranchKeepsItsSubject() throws {
+        git("add", "notes.txt", in: project)
+        git("commit", "-q", "-m", "docs: more notes", in: project)
+        let hash = git("rev-parse", "--short=7", "HEAD", in: project)
+        git("branch", "dependabot/github_actions/actions-6d1c06d137-with-a-name-far-wider-than-the-panel-is", in: project)
+
+        app.press(.button("Git"))
+        app.press(.button("Commits"))
+        let row = try XCTUnwrap(app.wait(for: .id("commit-\(hash)")))
+        XCTAssertTrue(row.label.hasPrefix("docs: more notes"), row.label)
+        shot("long-branch-row")
     }
 
     /// GIT-47 (#38): the changes are stashed under a name, new files too;

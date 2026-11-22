@@ -83,13 +83,13 @@ final class WorktreeUITests: MacUITestCase {
         try "only here\n".write(toFile: session.cwd + "/worktree-only.txt", atomically: true, encoding: .utf8)
         app.wait(for: .containing("worktree-only.txt"), timeout: 15)
         app.wait("the button to say what is changed in it", timeout: 15) {
-            self.pickerLabel().contains("agentterm/claude-1, A worktree, 1 file changed, a session runs in it")
+            self.pickerLabel().contains("Worktree claude-1, A worktree, on agentterm/claude-1, 1 file changed, a session runs in it")
         }
         // Its row in the popup says the same.
         app.press(.id("worktree-picker"))
         app.wait(for: .id("worktree-chip-agentterm/claude-1"), timeout: 15)
         XCTAssertEqual(
-            app.first(.id("worktree-chip-agentterm/claude-1"))?.label, "agentterm/claude-1, A worktree, 1 file changed, a session runs in it")
+            app.first(.id("worktree-chip-agentterm/claude-1"))?.label, "claude-1, A worktree, on agentterm/claude-1, 1 file changed, a session runs in it")
         shot("chips")
 
         // The first row goes back to the folder; the other to the worktree.
@@ -99,6 +99,29 @@ final class WorktreeUITests: MacUITestCase {
         app.press(.id("worktree-picker"))
         app.press(.id("worktree-chip-agentterm/claude-1"))
         app.wait(for: .containing("worktree-only.txt"), timeout: 15)
+    }
+
+    /// WT-25 (#244): a worktree being made is shown under its folder, with
+    /// what is being done, from the moment it is asked for until its
+    /// session takes its place.
+    func testAWorktreeBeingMadeIsShownWithWhatIsBeingDone() throws {
+        let phone = try device()
+        app.wait(for: .text("project, folder"), timeout: 15)
+        // A checkout that takes a while: git runs the project's hook in the
+        // new worktree once it is checked out.
+        let hook = project.appendingPathComponent(".git/hooks/post-checkout")
+        try "#!/bin/sh\nsleep 4\n".write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+
+        phone.send(.createInWorktree(request: CreateRequest(command: "exec sleep 600", cwd: project.path, title: "slow"), branch: "feature/slow", from: nil))
+        let row = try XCTUnwrap(app.wait(for: .containing("Making the worktree…"), timeout: 10))
+        XCTAssertEqual(row.label, "feature/slow, Making the worktree…", "named by the branch asked for")
+        XCTAssertTrue(row.identifier.hasPrefix("worktree-in-progress-"), row.identifier)
+        shot("worktree-in-progress")
+
+        wait("the session in its worktree", timeout: 30) { phone.sessions.first?.branch == "feature/slow" }
+        app.waitGone(.containing("Making the worktree…"), timeout: 10)
+        app.wait(for: .containing("feature/slow"), timeout: 10)
     }
 
     /// WT-23 (#217): the worktrees are picked from a popup like the
@@ -134,6 +157,9 @@ final class WorktreeUITests: MacUITestCase {
         XCTAssertFalse(app.isSelected(.id("worktree-chip-main")))
         XCTAssertTrue(app.exists(.id("worktree-more-feature/try")))
         XCTAssertFalse(app.exists(.id("worktree-more-main")), "the folder's own has nothing to merge or throw away")
+        // A right click on the row has what "⋯" has, as a branch's row does
+        // (the owner's decision, 2026-11-22).
+        XCTAssertTrue(app.offers("AXShowMenu", on: .id("worktree-chip-feature/try")), "a right click on the row has no menu")
         XCTAssertTrue(app.exists(.id("worktree-add")))
         shot("worktrees-popup")
 

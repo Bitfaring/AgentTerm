@@ -642,7 +642,7 @@ private struct FloatingNoticeStack: View {
     private func cards(_ shown: [FloatingNotices.Shown]) -> some View {
         VStack(spacing: 8) {
             ForEach(shown) { one in
-                FloatingNoticeCard(id: one.id, notice: one.notice)
+                FloatingNoticeCard(id: one.id, notice: one.notice, goes: one.goes, stays: model.floatingNotices.stays)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -664,6 +664,11 @@ private struct FloatingNoticeCard: View {
     /// The host's number for the notice.
     let id: UInt64
     let notice: AgentNotice
+    /// When it goes by itself: nil while it stays, its agent waiting or the
+    /// pointer over it.
+    let goes: Date?
+    /// How long one that goes by itself is on show.
+    let stays: TimeInterval
     @State private var openedOut = false
 
     /// The lines shown before the notice is opened out.
@@ -706,6 +711,19 @@ private struct FloatingNoticeCard: View {
                     .help(openedOut ? "Show the end of what the agent said" : "Show all of what the agent said")
                     .accessibilityIdentifier("agent-notice-more")
             }
+            if let goes {
+                // How long it has left, counted down (the owner's ask, 2026-11-22).
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    let left = FloatingNotices.secondsLeft(until: goes, at: timeline.date)
+                    Text(FloatingNotices.countdown(left))
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 3)
+                        .help(FloatingNotices.goesIn(left))
+                        .accessibilityLabel(FloatingNotices.goesIn(left))
+                        .accessibilityIdentifier("floating-notice-countdown-\(notice.session)")
+                }
+            }
             Button("Open") { model.open(notice) }
                 .controlSize(.small)
                 .accessibilityIdentifier("floating-notice-open-\(notice.session)")
@@ -719,6 +737,24 @@ private struct FloatingNoticeCard: View {
         .background(AgentStateMark.color(for: notice.state).opacity(0.14), in: shape)
         .background(Theme.panel, in: shape)
         .overlay(shape.strokeBorder(AgentStateMark.color(for: notice.state).opacity(0.45), lineWidth: 1))
+        .overlay(alignment: .bottomLeading) {
+            // The same time left, as a line that runs out along its foot.
+            if let goes {
+                TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
+                    GeometryReader { room in
+                        let part = max(0, min(1, goes.timeIntervalSince(timeline.date) / max(stays, 1)))
+                        Capsule()
+                            .fill(AgentStateMark.color(for: notice.state).opacity(0.7))
+                            .frame(width: room.size.width * part, height: 2)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 1)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
         .shadow(color: .black.opacity(0.45), radius: 12, y: 4)
         .contentShape(shape)
         .onTapGesture { model.open(notice) }

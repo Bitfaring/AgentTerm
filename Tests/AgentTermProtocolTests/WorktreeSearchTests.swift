@@ -45,9 +45,9 @@ final class WorktreeSearchTests: XCTestCase {
         XCTAssertEqual(made.pickerCounts, "3 changed", "what it is ahead by is said in the list")
         XCTAssertEqual(elsewhere.pickerCounts, "")
         XCTAssertEqual(WorktreeInfo(path: "/gone", branch: "old", isMain: false, changed: 4, missing: true).pickerCounts, "missing")
-        XCTAssertEqual(own.pickerLabel, "Worktree main, The folder itself, 1 file changed")
-        XCTAssertEqual(made.pickerLabel, "Worktree agentterm/claude-1, A worktree, 3 files changed, 2 commits ahead, a session runs in it")
-        XCTAssertEqual(detached.pickerLabel, "Worktree bisecting, A worktree")
+        XCTAssertEqual(own.pickerLabel, "Worktree project, The folder itself, on main, 1 file changed")
+        XCTAssertEqual(made.pickerLabel, "Worktree claude-1, A worktree, on agentterm/claude-1, 3 files changed, 2 commits ahead, a session runs in it")
+        XCTAssertEqual(detached.pickerLabel, "Worktree bisecting, A worktree, on a detached HEAD")
     }
 
     func testTheWordsOfTheList() {
@@ -55,8 +55,8 @@ final class WorktreeSearchTests: XCTestCase {
         XCTAssertEqual(WorktreeWords.searchPrompt, "Find a worktree")
         XCTAssertEqual(WorktreeWords.newTitle, "New Worktree")
         XCTAssertEqual(WorktreeWords.throwAway, "Throw Away…")
-        XCTAssertEqual(WorktreeWords.actionsHelp(made), "Merge agentterm/claude-1, open a pull request for it, or throw it away")
-        XCTAssertEqual(WorktreeWords.actionsHelp(gone), "Throw away old, whose folder is gone")
+        XCTAssertEqual(WorktreeWords.actionsHelp(made), "Merge agentterm/claude-1, open a pull request for it, or throw away claude-1")
+        XCTAssertEqual(WorktreeWords.actionsHelp(gone), "Throw away gone, whose folder is gone")
     }
 
     /// WT-19 (#217): what "⋯" on a row holds, the same on both apps: none

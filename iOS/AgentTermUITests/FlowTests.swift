@@ -483,6 +483,16 @@ final class FlowTests: XCTestCase {
             try measureMarkdown(app)
             return
         }
+        if environment["AGENTTERM_ONLY_CUT"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            listAnAnswerWhoseCutsComeToTheSameText(app, compose: compose)
+            return
+        }
+        if environment["AGENTTERM_ONLY_WORKTREE"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            watchAWorktreeBeingMade(app, compose: compose)
+            return
+        }
         if environment["AGENTTERM_ONLY_NARROW"] != nil {
             app.navigationBars.buttons.firstMatch.tap()
             narrowTheWindow(app)
@@ -1311,5 +1321,55 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(note.label.contains("does not say when it waits for permission"), note.label)
         XCTAssertFalse(compose.exists, "touching the mark opened the session")
         capture("17-note")
+    }
+
+    /// WT-25 (#244): a worktree being made is shown in the list, under its
+    /// folder, with what is being done, in the Mac's words, until its
+    /// session takes its place. The test project's checkout is made slow by
+    /// a hook `test-ios.sh` gives it in this mode.
+    private func watchAWorktreeBeingMade(_ app: XCUIApplication, compose: XCUIElement) {
+        let shell = app.buttons["Start Shell"].firstMatch
+        XCTAssertTrue(shell.waitForExistence(timeout: 15), "no Shell button in the list")
+        shell.press(forDuration: 1.0)
+        let item = app.buttons["Start a Shell in a New Worktree…"]
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "the Shell button has no New Worktree item")
+        item.tap()
+        let branch = app.textFields["worktree-branch"]
+        XCTAssertTrue(branch.waitForExistence(timeout: 10), "the New Worktree sheet did not open")
+        branch.tap()
+        branch.press(forDuration: 1.0)
+        if app.menuItems["Select All"].waitForExistence(timeout: 2) { app.menuItems["Select All"].tap() }
+        branch.typeText("feature/slow")
+        app.buttons["worktree-create"].tap()
+
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "worktree-in-progress-")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "nothing is shown while the worktree is made")
+        XCTAssertEqual(row.label, "feature/slow, Making the worktree…")
+        capture("worktree-in-progress")
+        let gone = NSPredicate(format: "exists == false")
+        wait(for: [expectation(for: gone, evaluatedWith: row)], timeout: 30)
+        // Its session takes its place, and is opened, as one started is.
+        XCTAssertTrue(compose.waitForExistence(timeout: 15), "the session in the new worktree did not open")
+        app.navigationBars.buttons.firstMatch.tap()
+        let listed = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "feature/slow")).firstMatch
+        XCTAssertTrue(listed.waitForExistence(timeout: 10), "the session in its worktree is not listed with its branch")
+    }
+
+    /// INBOX-13 (#240): an Inbox row of an answer whose end, cut at two
+    /// lengths and begun at a word, comes to the same text is shown, and the
+    /// app is still there: given twice to SwiftUI, it stopped the app, also
+    /// when a notification was touched, which shows that list.
+    private func listAnAnswerWhoseCutsComeToTheSameText(_ app: XCUIApplication, compose: XCUIElement) {
+        let claude = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Claude Code")).firstMatch
+        XCTAssertTrue(claude.waitForExistence(timeout: 10), "no Claude Code to start")
+        claude.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10), "the Claude Code session did not open")
+        app.navigationBars.buttons.firstMatch.tap()
+        let item = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES %@", "inbox-[0-9]+")).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 20), "the agent that is done is not in the Inbox")
+        sleep(2)
+        XCTAssertEqual(app.state, .runningForeground, "the app is gone")
+        XCTAssertTrue(item.exists, "the row went")
+        capture("inbox-cut")
     }
 }

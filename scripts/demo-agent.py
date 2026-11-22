@@ -63,6 +63,9 @@ CLOSING = (
     "positions matter, every later column shifts. Decide what you want there before writing tests "
     "that lock it in."
 )
+# What it says at the end in place of CLOSING, when given: a test's own
+# answer, such as one an Inbox row once crashed on (#240).
+CLOSING = os.environ.get("AGENTTERM_DEMO_CLOSING") or CLOSING
 NEXT = "add tests for those edge cases"
 
 

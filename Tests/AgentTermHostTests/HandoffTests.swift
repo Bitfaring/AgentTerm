@@ -253,9 +253,14 @@ final class HandoffTests: XCTestCase {
             "../\(root.lastPathComponent)-claude.jsonl", [#"{"type":"user","message":{"role":"user","content":"add a second line"}}"#])
         defer { try? FileManager.default.removeItem(atPath: source) }
 
+        var told: [String] = []
         let made = try Handoff.prepareInNewWorktree(
             conversation("claude", source: source), to: "claude", worktree: NewWorktree(branch: "continue-parser", from: nil),
-            now: Date(timeIntervalSince1970: 1_800_000_000))
+            now: Date(timeIntervalSince1970: 1_800_000_000)
+        ) { branch, step in told.append("\(branch ?? "-") \(step)") }
+        // Where it was at, for every device (#244): made, then its session;
+        // there are no submodules to check out here.
+        XCTAssertEqual(told, ["continue-parser making", "- starting"])
         let worktree = root.appendingPathComponent(".agentterm/worktrees/continue-parser").standardizedFileURL.path
         XCTAssertEqual(made.prepared.directory, worktree)
         XCTAssertEqual(made.branch, "continue-parser")

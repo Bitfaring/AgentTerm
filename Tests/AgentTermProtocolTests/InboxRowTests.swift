@@ -41,6 +41,16 @@ final class InboxRowTests: XCTestCase {
         XCTAssertTrue(Inbox.rowTexts(said).dropFirst().allSatisfy { $0.hasPrefix(Inbox.cutMark) })
     }
 
+    /// Two lengths that come to the same text once begun at a word give it
+    /// once: the Mac's row names each by its text, and one given twice
+    /// crashed the app (#240).
+    func testNoTextIsGivenTwice() {
+        let said = String(repeating: "x", count: 200) + " " + String(repeating: "y", count: 70)
+        let texts = Inbox.rowTexts(said)
+        XCTAssertEqual(texts.count, Set(texts).count, "a text is given twice: \(texts)")
+        XCTAssertTrue(texts.contains(Inbox.cutMark + String(repeating: "y", count: 70)))
+    }
+
     /// One word longer than a row is cut inside it rather than not shown.
     func testAWordLongerThanARowIsCutInside() {
         let said = String(repeating: "x", count: 500)

@@ -1095,13 +1095,23 @@ public final class HostServer {
                     stamp.dateFormat = "yyyyMMdd-HHmm"
                     let name = schedule.name.lowercased().map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined()
                         .split(separator: "-").joined(separator: "-")
-                    let made = try GitWorktrees.create(in: schedule.folder, agent: schedule.agent, branch: "schedule/\(name.isEmpty ? "run" : name)-\(stamp.string(from: at))")
+                    let branch = "schedule/\(name.isEmpty ? "run" : name)-\(stamp.string(from: at))"
+                    // Every device is told where it is at (#244); over once
+                    // it is made or not, its run following at once.
+                    let progress = self?.beginWorktreeInProgress(folder: schedule.folder, agent: Handoff.name(of: schedule.agent), branch: branch)
+                    defer { progress?.end() }
+                    let made = try GitWorktrees.create(in: schedule.folder, agent: schedule.agent, branch: branch)
                     directory = made.directory
                     worktree = made.directory
+                    progress?.moveOn(made.branch, .making)
                     // A worktree that is not ready is not started in, with
                     // nobody there to see what the agent would make of it.
                     // It is kept, to be looked at.
-                    if let problem = GitWorktrees.checkOutSubmodules(in: made.directory) {
+                    let problem = GitWorktrees.checkOutSubmodules(in: made.directory) { done, count, current in
+                        progress?.moveOn(nil, .submodules(done: done, count: count, current: current))
+                    }
+                    progress?.moveOn(nil, .starting)
+                    if let problem {
                         failed = "Not started: the submodules could not be checked out in its worktree. \(Self.firstLine(of: problem))"
                     }
                     if failed == nil {
@@ -1513,12 +1523,24 @@ public final class HostServer {
         let folder = request.cwd ?? configuration.home
         let agent = SessionSummaries.agent(forCommand: request.command) ?? "shell"
         let id = client.id
+        // Named by the branch asked for, when one was: its own once made.
+        let asked = branch?.trimmingCharacters(in: .whitespaces).isEmpty == false ? branch : nil
+        let progress = beginWorktreeInProgress(folder: folder, agent: request.command == nil ? nil : request.title, branch: asked)
         workQueue.async { [weak self] in
             let made = Result { try GitWorktrees.create(in: folder, agent: agent, branch: branch, from: from) }
             var problem: String?
-            if case .success(let worktree) = made { problem = GitWorktrees.checkOutSubmodules(in: worktree.directory) }
+            if case .success(let worktree) = made {
+                progress.moveOn(worktree.branch, .making)
+                problem = GitWorktrees.checkOutSubmodules(in: worktree.directory) { done, count, name in
+                    progress.moveOn(nil, .submodules(done: done, count: count, current: name))
+                }
+                progress.moveOn(nil, .starting)
+            }
             self?.queue.async {
-                guard let self, let client = self.clients[id] else { return }
+                guard let self else { return }
+                // Over, whether the client that asked is still there or not.
+                defer { progress.end() }
+                guard let client = self.clients[id] else { return }
                 switch made {
                 case .failure(let error):
                     self.send(.error("The worktree could not be made: \(error.localizedDescription)", request: request.requestID), to: client)
@@ -1536,6 +1558,58 @@ public final class HostServer {
         }
     }
 
+    /// The worktrees being made for sessions, by their number (#244).
+    private var worktreesInProgress: [Int: WorktreeInProgress] = [:]
+    /// The last number given one, under `worktreeNumbers`: given from any
+    /// thread, as a schedule makes its worktree off the queue.
+    private var nextWorktreeInProgress = 0
+    private let worktreeNumbers = NSLock()
+
+    /// What tells every device of one worktree being made: where it is at,
+    /// and that it is over. Both may be called from any thread.
+    struct WorktreeProgress {
+        let moveOn: (_ branch: String?, _ step: WorktreeInProgress.Step) -> Void
+        let end: () -> Void
+    }
+
+    /// Starts telling every device of a worktree being made, until `end`
+    /// (#244): for a session asked for, a handoff into a new worktree, or a
+    /// schedule's run. May be called from any thread.
+    private func beginWorktreeInProgress(folder: String, agent: String?, branch: String?) -> WorktreeProgress {
+        worktreeNumbers.lock()
+        nextWorktreeInProgress += 1
+        let number = nextWorktreeInProgress
+        worktreeNumbers.unlock()
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.worktreesInProgress[number] = WorktreeInProgress(id: number, folder: folder, agent: agent, branch: branch)
+            self.broadcastWorktreesInProgress()
+        }
+        return WorktreeProgress(
+            moveOn: { [weak self] branch, step in
+                self?.queue.async {
+                    guard let self, var progress = self.worktreesInProgress[number] else { return }
+                    progress.branch = branch ?? progress.branch
+                    progress.step = step
+                    self.worktreesInProgress[number] = progress
+                    self.broadcastWorktreesInProgress()
+                }
+            },
+            end: { [weak self] in
+                self?.queue.async {
+                    guard let self, self.worktreesInProgress.removeValue(forKey: number) != nil else { return }
+                    self.broadcastWorktreesInProgress()
+                }
+            })
+    }
+
+    private var worktreesInProgressList: [WorktreeInProgress] { worktreesInProgress.values.sorted { $0.id < $1.id } }
+
+    private func broadcastWorktreesInProgress() {
+        let list = worktreesInProgressList
+        for client in clients.values where client.authenticated { send(.worktreesInProgress(list), to: client) }
+    }
+
     private func sendWorktrees(of folder: String, to ids: [ClientID]) {
         let inUse = Set(sessions.values.map(\.info.cwd))
         workQueue.async { [weak self] in
@@ -1543,8 +1617,28 @@ public final class HostServer {
             self?.queue.async {
                 guard let self else { return }
                 for id in ids { if let client = self.clients[id] { self.send(.worktrees(folder: folder, list: list), to: client) } }
+                self.followBranches(of: list)
             }
         }
+    }
+
+    /// A session in a worktree says the branch checked out there (#245),
+    /// not the one the worktree was made with: another may have been
+    /// checked out in it since, from the panel or by the agent. Told by
+    /// each list of the worktrees; a session is in the deepest one its
+    /// folder is in, compared as real paths.
+    private func followBranches(of list: [WorktreeInfo]) {
+        func real(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
+        let worktrees = list.filter { !$0.isMain && !$0.missing }.map { (root: real($0.path), branch: $0.branch) }
+        var changed = false
+        for (id, session) in sessions {
+            let cwd = real(session.info.cwd)
+            let holding = worktrees.filter { cwd == $0.root || cwd.hasPrefix($0.root + "/") }
+            guard let deepest = holding.max(by: { $0.root.count < $1.root.count }), session.info.branch != deepest.branch else { continue }
+            sessions[id]?.info.branch = deepest.branch
+            changed = true
+        }
+        if changed { broadcastSessions() }
     }
 
     private func finishWorktree(folder: String, path: String, finish: WorktreeFinish, deleteBranch: Bool, for client: Client) {
@@ -2581,6 +2675,11 @@ public final class HostServer {
             // Only a plan this host made is honored, so a client names a
             // plan and never a path to write to.
             let plan = planID.flatMap { handoffPlans.removeValue(forKey: $0) }?.plan
+            // Into a new worktree: every device is told where it is at (#244).
+            let asked = worktree?.branch?.trimmingCharacters(in: .whitespaces).isEmpty == false ? worktree?.branch : nil
+            let progress = worktree.map { _ in
+                beginWorktreeInProgress(folder: folder ?? WorktreePath.project(of: cwd) ?? cwd, agent: Handoff.name(of: target), branch: asked)
+            }
             work(
                 for: client,
                 { () -> Result<(prepared: Handoff.Prepared, branch: String?, problem: String?), Error> in
@@ -2589,12 +2688,14 @@ public final class HostServer {
                     let found =
                         AgentHistory.conversations(in: cwd, home: home).first { $0.agent == agent && $0.sessionID == sessionID }
                         ?? AgentHistory.allConversations(home: home).first { $0.agent == agent && $0.sessionID == sessionID }
+                    // Over once it is made or not: the session, or why, follows at once.
+                    defer { progress?.end() }
                     guard let found else { return .failure(HandoffRequestError.notFound) }
                     return Result {
                         // In a new worktree (#150): made first, and said when it cannot be.
                         if let worktree {
                             let made = try Handoff.prepareInNewWorktree(
-                                found, to: target, worktree: worktree, plan: plan, prompt: prompt, note: note, of: folder)
+                                found, to: target, worktree: worktree, plan: plan, prompt: prompt, note: note, of: folder, progress: progress?.moveOn)
                             return (made.prepared, made.branch, made.problem)
                         }
                         return (try Handoff.prepare(found, to: target, plan: plan, prompt: prompt, note: note, in: folder), nil, nil)
@@ -3084,6 +3185,7 @@ public final class HostServer {
             send(.pushState(push.state(of: id)), to: client)
         }
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
+        if !worktreesInProgress.isEmpty { send(.worktreesInProgress(worktreesInProgressList), to: client) }
         // The last 30 days, for its Inbox; then what it was not told of yet,
         // here or through Apple (#66).
         if noticeKey(of: client) != nil {

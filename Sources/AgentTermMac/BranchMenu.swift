@@ -248,32 +248,49 @@ private struct BranchRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hovering && held == nil ? Color.white.opacity(0.07) : .clear))
         .contentShape(Rectangle())
     }
 
+    /// What can be done with it: in "⋯", and on a right click anywhere on
+    /// the row, as in the worktrees' popup (#246).
+    @ViewBuilder private var actions: some View {
+        Button("Switch to “\(branch.name)”", action: switchTo).disabled(held != nil)
+        Button("New Branch from “\(branch.name)”…", action: newFromHere)
+        if !branch.isRemote {
+            Button("Rename…", action: rename)
+            Button("Delete…", role: .destructive, action: delete).disabled(!canDelete)
+        }
+    }
+
     var body: some View {
-        row
-            .onHover { hovering = $0 }
-            .onTapGesture(perform: pressed)
-            .help(tip)
-            .contextMenu {
-                Button("Switch to “\(branch.name)”", action: switchTo).disabled(held != nil)
-                Button("New Branch from “\(branch.name)”…", action: newFromHere)
-                if !branch.isRemote {
-                    Button("Rename…", action: rename)
-                    Button("Delete…", role: .destructive, action: delete).disabled(!canDelete)
-                }
+        HStack(spacing: 4) {
+            row
+                .onTapGesture(perform: pressed)
+                .help(tip)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
+                .accessibilityIdentifier("branch-" + branch.id)
+                .accessibilityAddTraits(branch.isCurrent ? [.isButton, .isSelected] : .isButton)
+                .accessibilityAction(.default, pressed)
+                .accessibilityAction(named: "New Branch from Here", newFromHere)
+                .accessibilityAction(named: "Rename", rename)
+                .accessibilityAction(named: "Delete", delete)
+            Menu {
+                actions
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(label)
-            .accessibilityIdentifier("branch-" + branch.id)
-            .accessibilityAddTraits(branch.isCurrent ? [.isButton, .isSelected] : .isButton)
-            .accessibilityAction(.default, pressed)
-            .accessibilityAction(named: "New Branch from Here", newFromHere)
-            .accessibilityAction(named: "Rename", rename)
-            .accessibilityAction(named: "Delete", delete)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("What can be done with \(branch.name)")
+            .accessibilityLabel("Branch Actions")
+            .accessibilityIdentifier("branch-more-" + branch.id)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hovering && held == nil ? Color.white.opacity(0.07) : .clear))
+        .onHover { hovering = $0 }
+        .contextMenu { actions }
     }
 }

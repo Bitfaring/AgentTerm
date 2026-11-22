@@ -734,22 +734,27 @@ final class ProtocolTests: XCTestCase {
     /// one is thrown away, the same on both apps.
     func testWhatAWorktreesChipSays() {
         let own = WorktreeInfo(path: "/code/project", branch: "main", isMain: true, changed: 1)
-        XCTAssertEqual(own.chipTitle, "main")
+        // Named by its folder, its branch said beside it (the owner's decision, 2026-11-22).
+        XCTAssertEqual(own.chipTitle, "project")
+        XCTAssertEqual(own.branchWords, "main")
         // In words beside the numbers (#50).
         XCTAssertEqual(own.chipCounts, "1 changed")
-        XCTAssertEqual(own.chipHelp, "The folder itself, 1 file changed")
+        XCTAssertEqual(own.chipHelp, "The folder itself, on main, 1 file changed")
         let busy = WorktreeInfo(path: "/code/project/.agentterm/worktrees/x", branch: "x", isMain: false, ahead: 2, changed: 3, inUse: true, isAgentTerm: true)
         XCTAssertEqual(busy.chipCounts, "3 changed · 2 ahead")
         XCTAssertEqual(CountWords.files(1), "1 file")
         XCTAssertEqual(CountWords.files(3), "3 files")
         XCTAssertEqual(CountWords.commits(1), "1 commit")
         XCTAssertEqual(CountWords.commits(2), "2 commits")
-        XCTAssertEqual(busy.chipHelp, "A worktree, 3 files changed, 2 commits ahead, a session runs in it")
-        XCTAssertEqual(WorktreeInfo(path: "/code/review", branch: nil, isMain: false).chipTitle, "review", "a detached HEAD is named by its folder")
+        XCTAssertEqual(busy.chipHelp, "A worktree, on x, 3 files changed, 2 commits ahead, a session runs in it")
+        XCTAssertEqual(WorktreeInfo(path: "/code/review", branch: nil, isMain: false).chipTitle, "review")
+        XCTAssertEqual(WorktreeInfo(path: "/code/review", branch: nil, isMain: false).branchWords, "a detached HEAD")
+        // Another branch checked out in it: the same name.
+        XCTAssertEqual(WorktreeInfo(path: "/code/project/.agentterm/worktrees/agentterm/claude-1", branch: "other", isMain: false).chipTitle, "claude-1")
         XCTAssertEqual(WorktreeInfo(path: "/code/clean", branch: "clean", isMain: false).chipCounts, "")
         let gone = WorktreeInfo(path: "/gone", branch: "old", isMain: false, changed: 4, missing: true)
         XCTAssertEqual(gone.chipCounts, "missing")
-        XCTAssertEqual(gone.chipHelp, "A worktree, its folder is gone")
+        XCTAssertEqual(gone.chipHelp, "A worktree, on old, its folder is gone")
 
         XCTAssertEqual(WorktreeWords.discardTitle(busy), "Throw away x?")
         XCTAssertEqual(WorktreeWords.discardMessage(busy), "It has work that is not merged: 2 ahead, 3 changed, in use. It will be lost.")

@@ -24,7 +24,8 @@ struct WorktreePicker: View {
                     showing = true
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: shown.isMain ? "folder" : "arrow.triangle.branch")
+                        // A folder, whichever it is: the branch is the button under it (#246).
+                        Image(systemName: "folder")
                         Text(shown.chipTitle).lineLimit(1).truncationMode(.middle)
                         if !shown.pickerCounts.isEmpty {
                             Text(shown.pickerCounts).font(.system(size: 10, design: .monospaced)).foregroundStyle(shown.missing ? Color.red : Color.orange)
@@ -194,6 +195,23 @@ private struct WorktreeRow: View {
     let discard: () -> Void
     @State private var hovering = false
 
+    /// What can be done with it: in "⋯", and on a right click anywhere on
+    /// the row, as in the branches' popup (#246).
+    @ViewBuilder private var actions: some View {
+        ForEach(worktree.rowActions, id: \.self) { action in
+            switch action {
+            case .merge:
+                Button(WorktreeWords.merge(into: main)) { finish(.merge) }
+                    .disabled(!worktree.canMerge)
+            case .pullRequest:
+                Button(WorktreeWords.pullRequest) { finish(.pullRequest) }
+                    .disabled(!canOpenPullRequest)
+            case .throwAway:
+                Button(WorktreeWords.throwAway, role: .destructive, action: discard)
+            }
+        }
+    }
+
     var body: some View {
         HStack(spacing: 4) {
             Button(action: pick) {
@@ -202,9 +220,15 @@ private struct WorktreeRow: View {
                         .font(.system(size: 9, weight: .bold))
                         .opacity(selected ? 1 : 0)
                         .frame(width: 12)
-                    Image(systemName: worktree.isMain ? "folder" : "arrow.triangle.branch").font(.system(size: 9.5))
+                    Image(systemName: "folder").font(.system(size: 9.5))
                     Text(worktree.chipTitle)
                         .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    // The branch checked out in it, beside its name.
+                    Label(worktree.branchWords, systemImage: "arrow.triangle.branch")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 6)
@@ -220,24 +244,13 @@ private struct WorktreeRow: View {
             .disabled(worktree.missing)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(worktree.chipTitle), \(worktree.chipHelp)")
-            .accessibilityIdentifier("worktree-chip-" + worktree.chipTitle)
+            .accessibilityIdentifier("worktree-chip-" + worktree.identifierName)
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
             .accessibilityAction { pick() }
             // None for the folder's own; Throw Away… alone for one whose folder is missing.
             if !worktree.rowActions.isEmpty {
                 Menu {
-                    ForEach(worktree.rowActions, id: \.self) { action in
-                        switch action {
-                        case .merge:
-                            Button(WorktreeWords.merge(into: main)) { finish(.merge) }
-                                .disabled(!worktree.canMerge)
-                        case .pullRequest:
-                            Button(WorktreeWords.pullRequest) { finish(.pullRequest) }
-                                .disabled(!canOpenPullRequest)
-                        case .throwAway:
-                            Button(WorktreeWords.throwAway, role: .destructive, action: discard)
-                        }
-                    }
+                    actions
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
                 }
@@ -246,7 +259,7 @@ private struct WorktreeRow: View {
                 .fixedSize()
                 .help(WorktreeWords.actionsHelp(worktree))
                 .accessibilityLabel(WorktreeWords.actions)
-                .accessibilityIdentifier("worktree-more-" + worktree.chipTitle)
+                .accessibilityIdentifier("worktree-more-" + worktree.identifierName)
             }
         }
         .padding(.horizontal, 8)
@@ -257,6 +270,7 @@ private struct WorktreeRow: View {
         )
         .onHover { hovering = $0 }
         .help(worktree.chipHelp + "\n" + (worktree.path as NSString).abbreviatingWithTildeInPath)
+        .contextMenu { actions }
     }
 }
 
