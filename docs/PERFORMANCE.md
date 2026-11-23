@@ -278,3 +278,13 @@ These need what a test on this Mac does not have, and are still to do for
   between Macs.
 - **Scrolling a list of thousands of changes**, and the main thread of the
   iPhone app; the Mac app's is above.
+
+## A client that does not read (PERF-12, #270)
+
+`AGENTTERM_MEASURE=1 swift test --filter testTheHostsMemoryWithAClientThatDoesNotRead`
+(`MEASURE_READS=1` for a client that reads): the real host, a session running
+`yes`, its footprint every 10 seconds. On 2026-11-23, before #270, with a
+client that did not read: 115 MB at 0 s, 579 MB at 10 s, then the host was
+gone. After it, the same and with a client that reads both grow by about
+115 MB each 10 s, and fall only to 276 MB once the program is stopped: a
+growth of its own, not the client's, logged as a bug of its own.

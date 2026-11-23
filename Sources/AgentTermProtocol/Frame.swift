@@ -9,8 +9,9 @@ public struct DataFrame: Equatable, Sendable {
         case output = 0
         /// Client to host: keystrokes and pasted text.
         case input = 1
-        /// Host to client: a piece of a message too large for one frame
-        /// (`MessageParts`); `session` numbers the message.
+        /// Either way: a piece of a message too large for one frame
+        /// (`MessageParts`); `session` numbers the message (a client's
+        /// since #289).
         case messagePart = 2
         /// The last piece: the message can be read.
         case messageEnd = 3
@@ -54,6 +55,10 @@ public struct DataFrame: Equatable, Sendable {
 public enum MessageParts {
     /// The largest frame sent, header included.
     public static let limit = 256 * 1024
+    /// The largest message the host joins from a client's pieces (#289):
+    /// a text opened anyway (`FileContent.largestOpenedAnyway`) or a page's
+    /// picture fits, with room for its JSON; one larger is refused in words.
+    public static let largestFromAClient = 64 * 1024 * 1024
 
     /// The frames for a message, or nil when it fits in one.
     public static func frames(for data: Data, id: UInt32) -> [DataFrame]? {
@@ -75,6 +80,17 @@ public enum MessageParts {
         private var pieces = Data()
 
         public init() {}
+
+        /// The bytes of the message being joined, so far.
+        public var joined: Int { pieces.count }
+        /// The message being joined, if any.
+        public var message: UInt32? { id }
+
+        /// Forgets the message being joined.
+        public mutating func reset() {
+            id = nil
+            pieces = Data()
+        }
 
         /// The whole message once its last piece came, nil before.
         public mutating func add(_ frame: DataFrame) -> Data? {

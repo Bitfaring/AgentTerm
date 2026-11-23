@@ -206,6 +206,26 @@ WebSocket over TCP, default port 7717.
 **Text frames** carry JSON messages, encoded with Swift's synthesized `Codable`
 for enums (`{"attach":{"session":1,"size":{"cols":48,"rows":30}}}`).
 
+**Large messages go in pieces, both ways.** A frame may be at most 4 MB,
+and one larger closes the connection. A message larger than 256 KB is sent
+as binary frames of that size (`MessageParts`: `messagePart`, then
+`messageEnd`, numbered by the sender), and joined before it is read: by a
+client since #21, by the host since #289 (protocol 41), for a text opened
+anyway and saved from the iPhone or another Mac, or a page's picture a Mac
+answers an agent with. The host joins at most 64 MB of one message
+(`MessageParts.largestFromAClient`); one larger is answered with `error`
+`message too large`, which both apps say as `HostErrorWords.tooLarge`, its
+other pieces are left, and the connection goes on. Only a client that
+signed in sends pieces.
+
+**A client that does not read is not kept for without bound** (#270). The
+host counts the bytes handed to each connection and not yet sent. Past
+`HostServer.mostUnsent` (8 MB) a client is no longer sent its sessions'
+output, and the host notes how far into each it has all; once less than
+1 MB is waiting, it is sent what it missed from the scrollback, from there,
+or the screen as on attaching when that is no longer kept. Nothing is
+said to the client: it gets all, once.
+
 Client to host:
 
 | Message | Meaning |

@@ -202,6 +202,16 @@ public final class HostServer {
         var away: Bool { inBackground || superseded }
         /// Numbers the large messages sent in pieces.
         var nextMessage: UInt32 = 0
+        /// Joins a large message the client sends in pieces (#289).
+        var joiner = MessageParts.Joiner()
+        /// A message of the client's refused as too large: its pieces left.
+        var refusedMessage: UInt32?
+        /// Bytes handed to the connection and not yet sent (#270).
+        var unsent = 0
+        /// The sessions whose output it is not sent while it does not read,
+        /// with how far into each it has all (#270): it is caught up from
+        /// there once it reads again.
+        var behind: [SessionID: Int] = [:]
         /// The searches for text this client has going (#45), by its number.
         var searches: [Int: SearchFlag] = [:]
         /// Its searches of the history (#46), by their number, with whether
@@ -1955,15 +1965,53 @@ public final class HostServer {
             for frame in frames { send(frame, to: client) }
             return
         }
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
-        let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
-        client.connection.send(content: data, contentContext: context, completion: .idempotent)
+        transmit(data, opcode: .text, to: client)
     }
 
     private func send(_ frame: DataFrame, to client: Client) {
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
-        let context = NWConnection.ContentContext(identifier: "binary", metadata: [metadata])
-        client.connection.send(content: frame.encoded(), contentContext: context, completion: .idempotent)
+        transmit(frame.encoded(), opcode: .binary, to: client)
+    }
+
+    /// A client is no longer sent a session's output once this much is
+    /// waiting to go to it, and is caught up once less than `caughtUpBelow`
+    /// is (#270): a client that does not read, an iPhone suspended with its
+    /// connection open, made the host keep all of it, 460 MB in 10 seconds
+    /// of a program that prints, until the host was stopped.
+    static let mostUnsent = 8 * 1024 * 1024
+    static let caughtUpBelow = 1024 * 1024
+    /// The most ever waiting to go to one client, for the tests.
+    private(set) var largestUnsent = 0
+
+    private func transmit(_ data: Data, opcode: NWProtocolWebSocket.Opcode, to client: Client) {
+        let metadata = NWProtocolWebSocket.Metadata(opcode: opcode)
+        let context = NWConnection.ContentContext(identifier: opcode == .text ? "text" : "binary", metadata: [metadata])
+        let count = data.count
+        client.unsent += count
+        largestUnsent = max(largestUnsent, client.unsent)
+        // Called on `queue`, which the connection runs on.
+        client.connection.send(
+            content: data, contentContext: context,
+            completion: .contentProcessed { [weak self, weak client] _ in
+                guard let self, let client else { return }
+                client.unsent -= count
+                if client.unsent < Self.caughtUpBelow, !client.behind.isEmpty { self.catchUp(client) }
+            })
+    }
+
+    /// A client that reads again is sent what it missed of each session it
+    /// fell behind in, from where it has all: nothing twice, nothing lost.
+    /// What is no longer kept is sent as the screen, as on attaching.
+    private func catchUp(_ client: Client) {
+        let behind = client.behind
+        client.behind = [:]
+        for (id, have) in behind {
+            guard let session = sessions[id], client.attached.contains(id) else { continue }
+            if have >= 0, have <= session.written, session.written - have <= session.scrollback.count {
+                sendReplay(session.scrollback.suffix(session.written - have), of: session, from: have, above: nil, to: client)
+            } else {
+                sendScreen(of: session, history: nil, to: client)
+            }
+        }
     }
 
     private func broadcastSessions() {
@@ -2384,6 +2432,7 @@ public final class HostServer {
             attach(client, to: session, size: size, have: have, history: history)
         case .detach(let id):
             client.attached.remove(id)
+            client.behind[id] = nil
             if let session = sessions[id], session.arbiter.remove(client.id) { applySize(of: session) }
         case .resize(let id, let size):
             guard let session = sessions[id], client.attached.contains(id) else { return }
@@ -3311,7 +3360,38 @@ public final class HostServer {
         }
     }
 
+    /// A piece of a large message of a client's (#289), joined up to
+    /// `MessageParts.largestFromAClient`; one larger is refused in words, and
+    /// its other pieces are left. Only a client that signed in sends them.
+    private func joinPiece(_ frame: DataFrame, from client: Client) {
+        guard client.authenticated else { return refuse(client, "malformed message") }
+        if client.refusedMessage == frame.session {
+            if frame.kind == .messageEnd { client.refusedMessage = nil }
+            return
+        }
+        guard let whole = client.joiner.add(frame) else {
+            if client.joiner.joined > MessageParts.largestFromAClient {
+                client.joiner.reset()
+                if frame.kind == .messagePart { client.refusedMessage = frame.session }
+                send(.error(HostErrorWords.tooLargeMessage), to: client)
+            }
+            return
+        }
+        if whole.count > MessageParts.largestFromAClient {
+            return send(.error(HostErrorWords.tooLargeMessage), to: client)
+        }
+        if let message = MessageCoding.decode(ClientMessage.self, from: whole), message.isKnown(toHostAt: configuration.protocolVersion) {
+            handle(message, from: client)
+        } else {
+            Self.logUnread(whole, from: client.name)
+            send(.error("malformed message"), to: client)
+        }
+    }
+
     private func handle(_ frame: DataFrame, from client: Client) {
+        if frame.kind == .messagePart || frame.kind == .messageEnd {
+            return joinPiece(frame, from: client)
+        }
         guard client.authenticated, frame.kind == .input,
             client.attached.contains(frame.session), let session = sessions[frame.session]
         else { return }
@@ -3976,6 +4056,7 @@ public final class HostServer {
     /// the session, for its creator (#189).
     private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil, history: Int? = nil, request: Int? = nil) {
         client.attached.insert(session.info.id)
+        client.behind[session.info.id] = nil
         // Watching is not using: this only sets the size if nobody else is attached.
         let changed = session.arbiter.update(client.id, size: size)
         if changed {
@@ -3996,11 +4077,16 @@ public final class HostServer {
             sendReplay(session.scrollback.suffix(session.written - have), of: session, from: have, above: nil, to: client)
             return
         }
-        // Anyone else gets the screen as it is now, with the lines above it,
-        // written out for the size the session has, on the session's own
-        // queue. To the client it is output like any other, and it counts on
-        // from the end of it as it would after the session's own; what the
-        // session writes meanwhile follows it.
+        sendScreen(of: session, history: history, to: client)
+    }
+
+    /// The screen as it is now, with the lines above it, written out for the
+    /// size the session has, on the session's own queue. To the client it is
+    /// output like any other, and it counts on from the end of it as it
+    /// would after the session's own; what the session writes meanwhile
+    /// follows it.
+    private func sendScreen(of session: Session, history: Int?, to client: Client) {
+        let id = session.info.id
         attachments += 1
         let attachment = attachments
         client.awaitingScreen[id] = (attachment, [])
@@ -4076,6 +4162,13 @@ public final class HostServer {
         let frame = DataFrame(kind: .output, session: session.info.id, payload: data)
         for id in session.arbiter.clients {
             guard let client = clients[id] else { continue }
+            // A client that does not read is not sent more of it, and is
+            // caught up from here once it reads again (#270).
+            if client.behind[session.info.id] != nil { continue }
+            if client.unsent > Self.mostUnsent, client.awaitingScreen[session.info.id] == nil {
+                client.behind[session.info.id] = session.written - data.count
+                continue
+            }
             // After its screen, which is still being written out.
             if client.awaitingScreen[session.info.id] != nil {
                 client.awaitingScreen[session.info.id]?.output.append(frame)

@@ -47,6 +47,8 @@ public final class AgentTermConnection: @unchecked Sendable {
     /// these wait, and follow the greeting in the order they were sent.
     private var waiting: [(data: Data, opcode: NWProtocolWebSocket.Opcode)]? = []
     private let waitingLock = NSLock()
+    /// Numbers the large messages sent in pieces; under `waitingLock`.
+    private var nextMessage: UInt32 = 0
     /// The protocol the host said it is at, in its welcome; nil until then.
     /// Under `waitingLock`.
     private var hostProtocol: Int?
@@ -150,7 +152,19 @@ public final class AgentTermConnection: @unchecked Sendable {
         let host = hostProtocol
         waitingLock.unlock()
         if let host, !message.isKnown(toHostAt: host) { return }
-        send(MessageCoding.encode(message), opcode: .text)
+        let data = MessageCoding.encode(message)
+        // Larger than a frame may be: in pieces, one after the other, as
+        // the host sends its own (#289); a frame over the host's 4 MB
+        // closed the connection without a word.
+        waitingLock.lock()
+        let id = nextMessage
+        nextMessage &+= 1
+        waitingLock.unlock()
+        if let frames = MessageParts.frames(for: data, id: id) {
+            for frame in frames { send(frame.encoded(), opcode: .binary) }
+            return
+        }
+        send(data, opcode: .text)
     }
 
     public func sendInput(_ data: Data, to session: SessionID) {

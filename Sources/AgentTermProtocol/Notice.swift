@@ -194,12 +194,16 @@ public enum HostErrorWords {
     /// it could not read (#292); it goes on with what it can.
     public static let unreadableMessage = "unreadable message"
     public static let unreadable = "Something the Mac sent could not be read, so what it said is not shown. Restart the host if something looks wrong."
+    /// The host's answer to a message larger than it joins (#289).
+    public static let tooLargeMessage = "message too large"
+    public static let tooLarge = "What was sent to the Mac was larger than 64 MB, so it was not done. Send less at once: a smaller file or picture."
 
     public static func words(for text: String) -> String {
         switch text {
         case "malformed message": return olderHost
         case "not allowed": return "Only the Mac's own app can do this."
         case unreadableMessage: return unreadable
+        case tooLargeMessage: return tooLarge
         default: return text
         }
     }
