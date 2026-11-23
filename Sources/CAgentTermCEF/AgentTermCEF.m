@@ -646,6 +646,8 @@ static void CEF_CALLBACK on_dismiss_permission_prompt(cef_permission_handler_t *
             ATC_RELEASE((cef_permission_prompt_callback_t *)g_prompts[number].pointerValue);
             [g_prompts removeObjectForKey:number];
             [g_prompt_ids removeObjectForKey:number];
+            [g_prompt_kinds removeObjectForKey:number];
+            [g_prompt_asked removeObjectForKey:number];
             atc_emit_text(ATC_EVENT_PERMISSION, browser, nil, nil, number.intValue, -1, 0);
         }
     }
@@ -1007,7 +1009,9 @@ void atc_shutdown(void) {
 @interface ATCProfile : NSObject
 @property(nonatomic) cef_request_context_t *context;
 @property(nonatomic) BOOL open;
-@property(nonatomic, strong) NSMutableArray<void (^)(void)> *waiting;
+/// What waits for its context: run with YES once it is open, with NO when
+/// the profile is forgotten first, which answers each as not made (#256).
+@property(nonatomic, strong) NSMutableArray<void (^)(BOOL)> *waiting;
 @end
 @implementation ATCProfile
 @end
@@ -1032,7 +1036,7 @@ static void CEF_CALLBACK on_request_context_initialized(cef_request_context_hand
         [profile.waiting removeAllObjects];
         // After this callback: a browser is not made from inside it.
         dispatch_async(dispatch_get_main_queue(), ^{
-          for (void (^work)(void) in waiting) work();
+          for (void (^work)(BOOL) in waiting) work(YES);
         });
     }
     context->base.base.release(&context->base.base);
@@ -1116,6 +1120,10 @@ void atc_forget_profile(const char *name) {
     if (!known) return;
     ATCProfile *profile = (__bridge ATCProfile *)known.pointerValue;
     [g_contexts removeObjectForKey:key];
+    // What waited for its context is answered, never left waiting (#256).
+    NSArray *waiting = profile.waiting.copy;
+    [profile.waiting removeAllObjects];
+    for (void (^work)(BOOL) in waiting) work(NO);
     // Its browsers hold the context while they close; then it goes.
     if (profile.context) profile.context->base.base.release(&profile.context->base.base);
     profile.context = NULL;
@@ -1127,12 +1135,20 @@ void atc_create(void *parent, const char *url, const char *key, const char *cach
     NSView *view = (__bridge NSView *)parent;
     NSString *address = [NSString stringWithUTF8String:url ?: "about:blank"] ?: @"about:blank";
     ATCProfile *profile = atc_profile(key, cache_path);
-    if (!profile.context) return atc_created(token, 0);
+    if (!profile.context) {
+        // Its context could not be made: forgotten, so that the next tab
+        // tries again rather than fail until the app starts again (#256).
+        NSString *name = [NSString stringWithUTF8String:key ?: ""] ?: @"";
+        if (g_contexts[name].pointerValue == (__bridge void *)profile) [g_contexts removeObjectForKey:name];
+        [g_profiles removeObject:profile];
+        return atc_created(token, 0);
+    }
     if (profile.open) {
         atc_make(view, address, profile, token);
     } else {
-        [profile.waiting addObject:^{
-          atc_make(view, address, profile, token);
+        [profile.waiting addObject:^(BOOL open) {
+          if (open) atc_make(view, address, profile, token);
+          else atc_created(token, 0);
         }];
     }
 }

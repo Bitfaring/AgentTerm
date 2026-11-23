@@ -84,6 +84,9 @@ extension AppModel {
             guard let self, let opener = self.browsers.tabs.first(where: { $0.browserID == openerID && !$0.isRemote }) else { return nil }
             let owner = opener.owner.flatMap { id in self.sessions.first { $0.id == id } }
             let tab = self.browsers.open(url: address, project: opener.project, owner: owner, profile: opener.profile, starts: false)
+            // A tab the user took over opens the user's popup: a sign-in in
+            // it is never the agent's to drive (#252).
+            if opener.userHasIt { tab.userHasIt = true }
             opener.devtools.happened.append("The page opened \(address) in a new tab, \(tab.id).")
             // The user's in front, as a browser's; an agent's beside it.
             if owner == nil { DispatchQueue.main.async { [weak self] in self?.selectTab(id: tab.tabID) } }
@@ -96,6 +99,7 @@ extension AppModel {
             // In its opener's profile: a window that signs in, the sign-in of
             // that profile, and a private tab's, its private one.
             let tab = self.browsers.open(url: address, project: opener.project, owner: owner, profile: opener.profile)
+            if opener.userHasIt { tab.userHasIt = true }
             opener.devtools.happened.append("The page opened \(address) in a new tab, \(tab.id).")
             // The user's tab opens in front, as a browser's does; an
             // agent's goes beside the agent without taking the keyboard.
@@ -466,6 +470,14 @@ extension AppModel {
         guard let tab = browsers.tab(id: id), tab.reachable(by: agent) else { return .refused(BrowserWords.notYours(id)) }
         if request.acts, tab.userHasIt { return .refused(BrowserWords.userHasIt(id)) }
         guard await tab.ready() else { return .refused(tab.problem ?? BrowserWords.notInBuild) }
+        // A page whose process stopped answers nothing until it is opened
+        // again: said at once, rather than after DevTools' time is out (#254).
+        if tab.crashed {
+            switch request {
+            case .navigate, .history, .close, .stop, .emulate: break
+            default: return .refused(BrowserWords.pageStopped(id))
+            }
+        }
         if case .close = request {
             closeBrowserTab(tab)
             return .text("Closed tab \(id).")
@@ -663,7 +675,8 @@ extension AppModel {
                 profiles.defaultID = id
             case .delete(let id):
                 guard profiles.profile(id) != nil else { return .refused(BrowserWords.noProfile(id, profiles.infos.map(\.name))) }
-                profiles.delete(id)
+                // As from Settings: its tabs close with it (#253).
+                deleteProfile(id)
             case .clearData(let id):
                 guard profiles.profile(id) != nil else { return .refused(BrowserWords.noProfile(id, profiles.infos.map(\.name))) }
                 _ = profiles.clearData(id)

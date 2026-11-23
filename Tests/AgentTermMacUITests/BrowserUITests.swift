@@ -690,6 +690,64 @@ final class BrowserUITests: MacUITestCase {
         }
     }
 
+    /// BROWSER-62 (#324): its location and notifications are named so.
+    /// BROWSER-61 (#255): a page asks two permissions, one after the other:
+    /// the second waits behind the first, which is still there to answer;
+    /// and a question of a page that goes leaves the bar.
+    func testAPagesPermissionQuestionsWaitTheirTurn() throws {
+        let folder = root.appendingPathComponent("served")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try """
+        <!doctype html><title>Asks</title>
+        <button onclick="navigator.geolocation.getCurrentPosition(() => {}, () => {}); setTimeout(() => Notification.requestPermission(), 800)">Ask Two</button>
+        """.write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try "<!doctype html><title>Next</title><p>Next page</p>".write(to: folder.appendingPathComponent("next.html"), atomically: true, encoding: .utf8)
+        let serverPort = port + 501
+        stopWhateverListens(on: serverPort)
+        defer { stopWhateverListens(on: serverPort) }
+        let web = Process()
+        web.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        web.arguments = ["-I", "-m", "http.server", String(serverPort), "--bind", "127.0.0.1", "--directory", folder.path]
+        web.standardOutput = FileHandle.nullDevice
+        web.standardError = FileHandle.nullDevice
+        try web.run()
+        defer { web.terminate() }
+        Thread.sleep(forTimeInterval: 1)
+
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let address = "http://127.0.0.1:\(serverPort)/"
+        let opened = server.text("browser_open", ["url": address])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        var snapshot = server.text("browser_snapshot", ["tab": tab]).text
+        XCTAssertFalse(server.text("browser_click", ["tab": tab, "ref": try XCTUnwrap(ref(in: snapshot, "button \"Ask Two\""), snapshot)]).failed)
+        // BROWSER-62 (#324): each named as CEF 156 asks it.
+        app.wait(for: .containing("wants your location"), timeout: 15)
+        let first = app.value(of: .containing(" wants "))
+        // The second has come by now; the first is still the one on show.
+        RunLoop.current.run(until: Date().addingTimeInterval(2.5))
+        XCTAssertEqual(app.value(of: .containing(" wants ")), first, "the second question took the first's place")
+        shot("first-question")
+        app.press(.button("Don't Allow"))
+        // The second, which before the fix was lost with the first.
+        app.wait(for: .containing("wants to send notifications"), timeout: 10)
+        XCTAssertNotEqual(first, app.value(of: .containing(" wants ")))
+        app.press(.button("Don't Allow"))
+        app.waitGone(.id("browser-permission"))
+
+        // A question of a page that goes leaves the bar. The microphone's,
+        // which Chromium does not take back itself, could not be asked here:
+        // macOS asks for the test build's microphone first (#255). Another
+        // origin: the first one's answers are kept.
+        XCTAssertFalse(server.text("browser_navigate", ["tab": tab, "url": "http://localhost:\(serverPort)/"]).failed)
+        snapshot = server.text("browser_snapshot", ["tab": tab]).text
+        XCTAssertFalse(server.text("browser_click", ["tab": tab, "ref": try XCTUnwrap(ref(in: snapshot, "button \"Ask Two\""), snapshot)]).failed)
+        app.wait(for: .containing("wants your location"), timeout: 15)
+        XCTAssertFalse(server.text("browser_navigate", ["tab": tab, "url": address + "next.html"]).failed)
+        app.waitGone(.id("browser-permission"), timeout: 10)
+        XCTAssertTrue(app.exists(.id("mac-switcher")), "the app is there")
+    }
+
     /// BROWSER-9: the user's own tab, in the project's panes, kept when the
     /// app opens again.
     /// BROWSER-18: a device watches an agent's page live and uses it: it is
@@ -1551,6 +1609,103 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertTrue(waited.text.hasPrefix("“Signed in: ana@example.com” is on the page"), "the popup's answer did not come back: \(waited.text)")
         // Closed by itself, its tab is gone: the agent has its own page only.
         wait("the popup's tab gone", timeout: 15) { server.text("browser_tabs").text.split(separator: "\n").count == 1 }
+    }
+
+    /// BROWSER-58 (#252): a popup a tab the user took over opens is the
+    /// user's too: the agent is refused in it, with why, as in its opener.
+    /// Before the fix the popup was the agent's to drive while the user
+    /// signed in in it.
+    func testAPopupOfATabTheUserTookOverIsTheUsers() throws {
+        let folder = root.appendingPathComponent("site")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // The page opens its window a little after the press, while its
+        // press still counts as one: time for the user to take it over.
+        try """
+        <!doctype html>
+        <html><head><title>Opener</title></head>
+        <body><button id="open" onclick="setTimeout(() => window.open('second.html', 'signin', 'width=420,height=560'), 2500)">Open Later</button></body></html>
+        """.write(to: folder.appendingPathComponent("opener.html"), atomically: true, encoding: .utf8)
+        try "<!doctype html><html><head><title>Second</title></head><body><p>A sign-in</p></body></html>".write(
+            to: folder.appendingPathComponent("second.html"), atomically: true, encoding: .utf8)
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": folder.appendingPathComponent("opener.html").absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        let snapshot = server.text("browser_snapshot", ["tab": tab])
+        let button = try XCTUnwrap(ref(in: snapshot.text, "button \"Open Later\""), snapshot.text)
+        XCTAssertFalse(server.text("browser_click", ["tab": tab, "ref": button]).failed)
+        app.press(.id("browser-control"), timeout: 5)
+        app.wait(for: .containing("You have this tab"))
+        var popup: String?
+        wait("the popup's tab", timeout: 15) {
+            popup =
+                server.text("browser_tabs").text.split(separator: "\n").compactMap { line -> String? in
+                    guard line.contains("second.html") || line.contains("Second") else { return nil }
+                    return line.range(of: #"\d+"#, options: .regularExpression).map { String(line[$0]) }
+                }.first
+            return popup != nil
+        }
+        let refused = server.text("browser_navigate", ["tab": try XCTUnwrap(popup), "url": folder.appendingPathComponent("opener.html").absoluteString])
+        XCTAssertTrue(refused.failed, "the agent drove the popup of a tab the user took over: \(refused.text)")
+        XCTAssertEqual(refused.text, BrowserWords.userHasIt(try XCTUnwrap(popup)))
+    }
+
+    /// BROWSER-60 (#254): a page whose process stopped is said at once to
+    /// the agent, not after DevTools' time is out; opened again, it works.
+    func testAPageWhoseProcessStoppedIsSaidAtOnce() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        // Chromium's own address that ends the page's process.
+        _ = server.text("browser_navigate", ["tab": tab, "url": "chrome://crash"], timeout: 20)
+        app.wait(for: .containing("The page's process stopped"), timeout: 20)
+        let started = Date()
+        let refused = server.text("browser_snapshot", ["tab": tab], timeout: 30)
+        let took = Date().timeIntervalSince(started)
+        XCTAssertEqual(refused.text, BrowserWords.pageStopped(tab))
+        XCTAssertLessThan(took, 3, "the agent waited \(Int(took)) seconds to be told")
+        XCTAssertFalse(server.text("browser_navigate", ["tab": tab, "url": page.absoluteString], timeout: 20).failed, "opened again")
+        XCTAssertFalse(server.text("browser_snapshot", ["tab": tab]).failed)
+    }
+
+    /// BROWSER-63 (#257): the app quits cleanly with a window Chromium made
+    /// itself open, DevTools or a Chrome-style window: it ends with 0, not
+    /// by a signal, within the time a quit takes. `QUIT_WITH` names which.
+    func testTheAppQuitsWithChromiumsOwnWindowOpen() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": page.absoluteString])
+        XCTAssertFalse(opened.failed, opened.text)
+        app.wait(for: .id("browser-page"), timeout: 20)
+        let with = ProcessInfo.processInfo.environment["QUIT_WITH"] ?? "devtools"
+        func windowCount() -> Int {
+            let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
+            return list.filter { ($0[kCGWindowOwnerName as String] as? String ?? "").contains("AgentTerm") && ($0[kCGWindowLayer as String] as? Int) == 0 }.count
+        }
+        let windowsBefore = windowCount()
+        // The tab's own menu, a menu button named Browser in its bar, not
+        // the menu bar's, which acts on the tab that has the focus.
+        let named = app.nodes().filter { $0.label == "Browser" || $0.title == "Browser" }
+        let more = try XCTUnwrap(named.first { $0.role.contains("Menu") }, "no menu of the browser bar: \(named.map(\.role))")
+        AXUIElementPerformAction(more.element, kAXPressAction as CFString)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        let name = with == "chrome" ? "Open in Chrome Window" : "Developer Tools"
+        let item = try XCTUnwrap(app.nodes(menus: true).first { $0.text == name && $0.role == "AXMenuItem" }, "no \(name)")
+        AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+        // Held back, said in the tab: shown when asked.
+        if with == "chrome" { app.press(.id("browser-open-held"), timeout: 15) }
+        // Its window is on the screen before the app is asked to quit.
+        wait("Chromium's own window", timeout: 15) { windowCount() > windowsBefore }
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        let pid = try XCTUnwrap(app.process?.processIdentifier)
+        XCTAssertTrue(NSRunningApplication(processIdentifier: pid)?.terminate() == true, "the app was not asked to quit")
+        wait("the app to quit", timeout: 20) { self.app.process?.isRunning != true }
+        let process = try XCTUnwrap(app.process)
+        XCTAssertEqual(process.terminationReason, .exit, "ended by signal \(process.terminationStatus)")
+        XCTAssertEqual(process.terminationStatus, 0)
     }
 
     /// BROWSER-45 (#161): typing into an editor that keeps its own state, as

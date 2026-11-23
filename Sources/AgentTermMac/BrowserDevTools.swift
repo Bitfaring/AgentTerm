@@ -69,6 +69,14 @@ final class DevToolsSession {
         }
     }
 
+    /// Answers every call waiting for the page, which will not answer them:
+    /// its process stopped, or its tab closed (#254).
+    func failAll(_ why: String) {
+        let waiting = pending
+        pending = [:]
+        for done in waiting.values { done(.failure(Failure(text: why))) }
+    }
+
     /// Sends a command and waits for its answer, at most `seconds`.
     @discardableResult
     func call(_ method: String, _ params: [String: Any] = [:], seconds: Double = 15) async throws -> [String: Any] {

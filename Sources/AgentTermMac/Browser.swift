@@ -252,8 +252,20 @@ final class BrowserTab: ObservableObject, Identifiable {
     /// asks and Send is held, it is there again the next time. In memory,
     /// for the app's life.
     var pickNote = ""
-    /// A page asking for a permission: the number to answer, who, and what.
-    @Published var permission: (id: Int32, origin: String, what: String)?
+    /// The pages' questions for a permission, in the order they came, the
+    /// first on show (#255): a second never takes the first's place, which
+    /// could then not be answered. `media` for the camera or the microphone,
+    /// which Chromium does not take back when the page goes.
+    @Published private var permissions: [(id: Int32, origin: String, what: String, media: Bool)] = []
+    /// The question on show: the number to answer, who, and what.
+    var permission: (id: Int32, origin: String, what: String)? { permissions.first.map { ($0.id, $0.origin, $0.what) } }
+
+    /// The camera's and the microphone's questions of a page that went: refused,
+    /// so that they leave the bar and Chromium lets their callbacks go (#255).
+    private func refuseMediaQuestions() {
+        for asked in permissions where asked.media { atc_answer_permission(asked.id, 0) }
+        permissions.removeAll { $0.media }
+    }
     @Published var downloads: [BrowserDownload] = []
     @Published var findCount: Int32 = 0
     @Published var findActive: Int32 = 0
@@ -448,6 +460,8 @@ final class BrowserTab: ObservableObject, Identifiable {
             if loading {
                 loadError = nil
                 crashed = false
+                // Another page: what the one before asked is not this one's.
+                refuseMediaQuestions()
             }
         case ATC_EVENT_PROGRESS:
             progress = Double(event.a) / 1000
@@ -459,6 +473,8 @@ final class BrowserTab: ObservableObject, Identifiable {
             // Not closed by the app: its page closed itself (`window.close()`,
             // a sign-in's popup once it answered, #162). Its tab goes too.
             let byItsPage = !isClosed
+            devtools.failAll(BrowserWords.noTab(id))
+            refuseMediaQuestions()
             Chromium.shared.forget(browserID)
             browserID = 0
             if byItsPage { model?.closedByItsPage?(self) }
@@ -479,13 +495,15 @@ final class BrowserTab: ObservableObject, Identifiable {
             }
         case ATC_EVENT_PERMISSION:
             if event.b == -1 {
-                if permission?.id == event.a { permission = nil }
+                permissions.removeAll { $0.id == event.a }
             } else {
-                permission = (event.a, event.text ?? "", Self.permissionWords(UInt32(bitPattern: event.b)))
+                let bits = UInt32(bitPattern: event.b)
+                permissions.append((event.a, event.text ?? "", Self.permissionWords(bits), bits & 0x4000_0000 != 0))
             }
         case ATC_EVENT_CRASHED:
             crashed = true
             loading = false
+            devtools.failAll(BrowserWords.pageStopped(id))
         case ATC_EVENT_FOCUS:
             model?.focused?(self)
         case ATC_EVENT_MENU_COMMAND:
@@ -524,14 +542,23 @@ final class BrowserTab: ObservableObject, Identifiable {
             if bits & 0xC != 0 { asked.append("your screen") }
             return asked.isEmpty ? "your camera or microphone" : asked.joined(separator: " and ")
         }
-        // cef_permission_request_types_t.
+        // cef_permission_request_types_t, as CEF 156.0.30's
+        // include/internal/cef_types.h has them (#324): taken from the
+        // header again whenever CEF is updated.
         let names: [(UInt32, String)] = [
-            (1 << 0, "your accessibility events"), (1 << 1, "to run apps of yours"), (1 << 2, "to open more windows"), (1 << 3, "to read the clipboard"),
-            (1 << 6, "your camera"), (1 << 9, "to reach devices"), (1 << 10, "your location"), (1 << 15, "your microphone"), (1 << 16, "MIDI"),
-            (1 << 17, "MIDI devices"), (1 << 18, "to send notifications"), (1 << 19, "to download several files"), (1 << 20, "to protect media"),
-            (1 << 21, "to keep the screen on"), (1 << 22, "your local fonts"), (1 << 23, "to store more data"), (1 << 24, "your local network"),
+            (1 << 0, "to start augmented reality"), (1 << 1, "to move your camera"), (1 << 2, "your camera"),
+            (1 << 3, "to control a screen you share"), (1 << 4, "to read the clipboard"), (1 << 5, "its storage on other sites"),
+            (1 << 6, "to store more data"), (1 << 7, "your local fonts"), (1 << 8, "your location"), (1 << 9, "to track your hands"),
+            (1 << 10, "to sign you in with another site"), (1 << 11, "to know when you are away"), (1 << 12, "your microphone"),
+            (1 << 13, "full use of MIDI devices"), (1 << 14, "to download several files"), (1 << 15, "to send notifications"),
+            (1 << 16, "to take the keyboard"), (1 << 17, "to take the pointer"), (1 << 18, "to identify your device for protected media"),
+            (1 << 19, "to open links of a kind"), (1 << 20, "its storage in this page"), (1 << 21, "to start virtual reality"),
+            (1 << 22, "to install itself as an app"), (1 << 23, "to manage your windows"), (1 << 24, "your files"),
+            (1 << 25, "your local network"), (1 << 26, "your local network"), (1 << 27, "this Mac's own services"),
+            (1 << 28, "your motion sensors"), (1 << 29, "to sign you in"),
         ]
-        let asked = names.filter { bits & $0.0 != 0 }.map(\.1)
+        var asked: [String] = []
+        for name in names where bits & name.0 != 0 && !asked.contains(name.1) { asked.append(name.1) }
         return asked.isEmpty ? "a permission" : asked.joined(separator: ", ")
     }
 
@@ -587,7 +614,7 @@ final class BrowserTab: ObservableObject, Identifiable {
     func answerPermission(_ allow: Bool) {
         guard let permission else { return }
         atc_answer_permission(permission.id, allow ? 1 : 0)
-        self.permission = nil
+        permissions.removeAll { $0.id == permission.id }
     }
 
     func cancelDownload(_ download: BrowserDownload) { atc_cancel_download(download.id) }
