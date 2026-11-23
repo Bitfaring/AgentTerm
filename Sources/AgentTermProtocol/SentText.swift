@@ -28,18 +28,19 @@ public enum SentText {
     ///   brackets as text.
     public static func text(_ text: String, bracketedPaste: Bool) -> String {
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r")
-        // "\r\n" is one Character to Swift: lines are counted once ended
-        // the one way.
-        guard bracketedPaste, lines.contains("\r") || text.count > typedLength else { return lines }
-        // The end of a paste inside it would end it early, and what follows
-        // would be taken as typed: no Escape goes in, nor any other control
-        // character but a tab and the ends of lines, so none can be made of
-        // what is left either (#248). Text from a page or a file's name may
-        // hold them.
+        // No Escape goes, nor any other control character but a tab and the
+        // ends of lines: in a paste the end of one would end it early, and
+        // typed one would be a key, what follows it the key's sequence
+        // (#248). Text from a page or a file's name may hold them.
         var kept = lines
         while kept.contains(pasteEnd) { kept = kept.replacingOccurrences(of: pasteEnd, with: "") }
-        kept = String(String.UnicodeScalarView(kept.unicodeScalars.filter(Self.goesInAPaste)))
-        return pasteStart + kept + pasteEnd
+        let typed = String(String.UnicodeScalarView(kept.unicodeScalars.filter(Self.goesInAPaste)))
+        // "\r\n" is one Character to Swift: lines are counted once ended
+        // the one way.
+        guard bracketedPaste, typed.contains("\r") || typed.count > typedLength else { return typed }
+        // With no Escape left, no end of a paste is in it, nor can one be
+        // made of what was left once the ends that were in it went.
+        return pasteStart + typed + pasteEnd
     }
 
     /// Whether a character is pasted: none of C0 but tab and Return, nor

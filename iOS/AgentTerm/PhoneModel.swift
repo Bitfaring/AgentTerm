@@ -1595,8 +1595,10 @@ final class PhoneModel: ObservableObject {
     /// the only way back to it.
     func forget(_ host: SavedHost) {
         let wasCurrent = host.id == pairing?.id
-        // Its pushes would no longer open: the Mac is asked to stop them.
-        if wasCurrent, hostPushState == .on { connection?.send(.pushUnregister) }
+        // Its pushes would no longer open: the Mac is asked to stop them,
+        // the one connected over its connection, another over one of its
+        // own for the purpose; one that cannot be reached is said (#283).
+        if wasCurrent, status == .connected { connection?.send(.pushUnregister) } else { tellToStopPushes(host) }
         PushKeys.delete(mac: host.id)
         PrivateFiles.remove(Self.inboxKey(host.id))
         hosts.removeAll { $0.id == host.id }
@@ -1611,6 +1613,35 @@ final class PhoneModel: ObservableObject {
         entered = false
         setCurrent(hosts.first)
         if pairing != nil { connect() }
+    }
+
+    /// Connections opened only to tell a forgotten Mac to stop its pushes.
+    private var farewells: [String: AgentTermConnection] = [:]
+
+    /// Connects to a Mac that is not on screen, with its token, only to ask
+    /// it to stop its pushes to this iPhone (#283); said when it cannot be
+    /// reached in a few seconds.
+    private func tellToStopPushes(_ host: SavedHost) {
+        let connection = AgentTermConnection(
+            host: host.host, port: host.port, credential: .token(host.token), clientName: UIDevice.current.name,
+            kind: UIDevice.current.userInterfaceIdiom == .pad ? .ipad : .iphone)
+        farewells[host.id] = connection
+        connection.onMessage = { [weak self, weak connection] message in
+            MainActor.assumeIsolated {
+                guard case .welcome = message, let self, let connection, self.farewells[host.id] === connection else { return }
+                connection.send(.pushUnregister)
+                self.farewells[host.id] = nil
+                // Time for it to go before the connection closes.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { connection.close() }
+            }
+        }
+        connection.connect()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, let left = self.farewells[host.id], left === connection else { return }
+            self.farewells[host.id] = nil
+            left.close()
+            self.message = PushWords.notToldToStop(host.name)
+        }
     }
 
     private func setCurrent(_ host: SavedHost?) {
@@ -2098,7 +2129,13 @@ final class PhoneModel: ObservableObject {
             Telemetry.shared.record(.devicePaired)
             guard let info = pendingPairing else { return }
             let saved = SavedHost(id: UUID().uuidString, host: info.host, port: info.port, name: info.name, token: token)
-            // Pairing again with a Mac replaces what was saved for it.
+            // Pairing again with a Mac replaces what was saved for it, and
+            // what was kept under its former id goes (#283).
+            for old in hosts where old.host == saved.host && old.port == saved.port {
+                PushKeys.delete(mac: old.id)
+                PrivateFiles.remove(Self.inboxKey(old.id))
+                pruneComposeDrafts(of: old.id, keeping: [])
+            }
             hosts.removeAll { $0.host == saved.host && $0.port == saved.port }
             hosts.append(saved)
             PairingStore.shared.save(hosts)

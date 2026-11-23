@@ -1483,6 +1483,52 @@ final class BrowserUITests: MacUITestCase {
         app.wait(for: .button("Pick an Element for an Agent"))
     }
 
+    /// BROWSER-66 (#248), with the real Chromium of the build: an element
+    /// whose text holds ESC and the end-of-paste mark (`&#27;[201~`, which
+    /// HTML keeps as the raw byte and `outerHTML` gives back), picked and
+    /// sent, reaches the agent's session without the mark and with no ESC:
+    /// a paste is not ended inside it, and what follows is not typed as a
+    /// key's sequence. The stand-in asked for no bracketed paste, so it is
+    /// typed: before the fix the ESC was typed as it was.
+    func testAnElementHoldingTheEndOfAPasteIsSentWhole() throws {
+        let folder = root.appendingPathComponent("site")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try """
+        <!doctype html><html><head><title>Marks</title></head>
+        <body><button id="marked" style="width:200px;height:60px">before&#27;[201~after</button></body></html>
+        """.write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        let (server, agent) = try startAgent()
+        defer { server.stop() }
+        let opened = server.text("browser_open", ["url": folder.appendingPathComponent("index.html").absoluteString])
+        let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Marks" }
+        // The page holds the raw byte, as the agent's page could.
+        XCTAssertEqual(server.text("browser_evaluate", ["tab": tab, "script": "document.getElementById('marked').outerHTML.includes(String.fromCharCode(27))"]).text, "true")
+        let middle = "(() => { const r = document.getElementById('marked').getBoundingClientRect(); return (r.x + r.width / 2) + ',' + (r.y + r.height / 2); })()"
+        let place = server.text("browser_evaluate", ["tab": tab, "script": middle])
+        let point = place.text.split(whereSeparator: { !"0123456789.,".contains($0) }).joined().split(separator: ",").compactMap { Double($0) }
+        XCTAssertEqual(point.count, 2, place.text)
+        let device = try self.device()
+        device.send(.attach(session: agent.id, size: .default))
+        app.press(.id("browser-pick"))
+        app.wait(for: .button("Stop Picking"))
+        device.send(.browserAsk(id: Int.random(in: 3000..<9000), request: .tap(tab: tab, x: point[0], y: point[1])))
+        app.wait(for: .text("Send to an Agent"), timeout: 15)
+        app.write("Look at this", into: .id("pick-note"))
+        app.press(.button("Send"))
+        wait("the element typed into the agent's session", timeout: 15) { device.text(agent.id).contains("after") }
+        let typed = device.text(agent.id)
+        // The stand-in echoes what it is given, an ESC as "^[".
+        let scalars = Array(typed.unicodeScalars)
+        let shown = scalars.map { $0.value < 32 ? "<\($0.value)>" : String($0) }
+        let after = (0..<scalars.count).last { String(String.UnicodeScalarView(scalars[$0..<min($0 + 5, scalars.count)])) == "after" } ?? 0
+        let around = shown[max(after - 40, 0)..<min(after + 5, shown.count)].joined()
+        XCTAssertTrue(typed.contains("beforeafter"), "the element did not reach the agent without the mark: \(around)")
+        XCTAssertFalse(typed.contains("^["), "an ESC reached the agent: \(typed.suffix(400))")
+        app.press(.id("browser-pick"))
+    }
+
     /// BROWSER-56 (#232): what is written in the sheet is kept for the tab
     /// until it is sent: cancelled (as while its agent asks, which holds
     /// Send), the next element picked in that page opens the sheet with

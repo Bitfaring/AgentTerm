@@ -51,6 +51,11 @@ public enum PushWords {
     public static let on =
         "Told through Apple's push service while the app is closed. What it says is encrypted on the Mac for this iPhone; Apple and AgentTerm's relay see that a notification was sent, when, and its size, not what it says."
     public static let notInThisBuild = "This build has no push: it comes only with the released app."
+    /// A Mac forgotten on this iPhone that could not be reached to be told
+    /// to stop its notifications (#283).
+    public static func notToldToStop(_ mac: String) -> String {
+        "\(mac) could not be reached to stop its notifications to this iPhone, which can no longer open them. On that Mac, remove this iPhone in Pair Device."
+    }
     public static let relayNotSetUp = "The Mac's host has no push relay set up."
     public static let notAllowed = "Notifications are turned off for AgentTerm in the iPhone's Settings."
     public static func registrationFailed(_ reason: String) -> String {

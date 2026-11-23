@@ -28,4 +28,16 @@ final class ReviewSentTextTests: XCTestCase {
         let controls = kept.unicodeScalars.filter { $0.value < 0x20 && $0 != "\t" && $0 != "\r" }
         XCTAssertTrue(controls.isEmpty, "control characters in the paste: \(controls.map { String($0.value, radix: 16) })")
     }
+
+    /// To a program that did not ask for bracketed paste, text is typed:
+    /// an Escape in it would be typed as the key, and what follows it taken
+    /// as a key's sequence (#248, found with the real Chromium of the build:
+    /// a picked element's `outerHTML` holds the byte). None goes, nor any
+    /// other control character but a tab and the Returns of its lines.
+    func testNoControlCharacterButTabAndReturnIsTypedEither() {
+        let sent = SentText.text("before\u{1B}[201~after\tand\u{3}\nnext", bracketedPaste: false)
+        XCTAssertEqual(sent, "beforeafter\tand\rnext")
+        // Short text with none is typed as it is.
+        XCTAssertEqual(SentText.text("1", bracketedPaste: false), "1")
+    }
 }

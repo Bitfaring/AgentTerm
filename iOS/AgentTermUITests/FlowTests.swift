@@ -1285,6 +1285,24 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(notDone.waitForExistence(timeout: 5), "a schedule saved while the Mac is not connected was not said")
         app.alerts.buttons["OK"].tap()
         XCTAssertTrue(form.exists, "the schedule's form closed as if it were saved")
+
+        // IOS-25 (#283): the Mac forgotten while it cannot be reached is
+        // tried, to stop its notifications, and that it could not be is said.
+        form.buttons.firstMatch.tap()
+        app.tab("Sessions").tap()
+        let macs = app.buttons["mac-menu"].firstMatch
+        if macs.waitForExistence(timeout: 5) { macs.tap() }
+        let row = app.buttons.matching(identifier: "mac-row").matching(NSPredicate(format: "label == %@", "First Mac")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "the Macs are not listed")
+        row.press(forDuration: 1.0)
+        let forget = app.buttons["Forget This Mac"]
+        XCTAssertTrue(forget.waitForExistence(timeout: 5), "no Forget in the Mac's menu")
+        forget.tap()
+        app.buttons["Forget"].firstMatch.tap()
+        let notTold = alert("could not be reached to stop its notifications")
+        XCTAssertTrue(notTold.waitForExistence(timeout: 15), "a forgotten Mac that could not be told was not said")
+        capture("forgotten-not-told")
+        app.alerts.buttons["OK"].tap()
     }
 
     /// PAIR-12 (#279): a pairing link whose code the host refuses, opened

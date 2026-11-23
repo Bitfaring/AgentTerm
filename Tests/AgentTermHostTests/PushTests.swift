@@ -193,6 +193,10 @@ final class PushTests: XCTestCase {
         waitUntil("waiting") { mac.sessions.first?.state == waiting }
         waitUntil("pushed") { relay.sent.count == 1 }
         let push = try XCTUnwrap(relay.sent.first)
+        // PUSH-20 (#317): every field the relay and Apple can read of a
+        // notification. What it says is in `payload`, sealed for the iPhone;
+        // `collapse` is the Mac's name and the notice's number.
+        XCTAssertEqual(Set(push.keys), ["token", "ticket", "expires", "payload", "collapse"])
         XCTAssertEqual(push["token"] as? String, deviceToken)
         XCTAssertEqual(push["ticket"] as? String, "signed")
         // The Mac's app is told over its connection, which may come after
@@ -216,6 +220,8 @@ final class PushTests: XCTestCase {
         mac.connection.sendInput(Data("\n".utf8), to: agent)
         waitUntil("taken back") { relay.sent.count >= 2 }
         XCTAssertEqual(relay.sent[1]["gone"] as? String, identifier(question.id))
+        // A taking back: the notification it names, nothing else.
+        XCTAssertEqual(Set(relay.sent[1].keys), ["token", "ticket", "expires", "gone"])
         XCTAssertNil(relay.sent[1]["payload"])
         mac.connection.sendInput(Data("\n".utf8), to: agent)
         waitUntil("pushed again") { relay.sent.count == 3 }
@@ -311,6 +317,17 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(activities()[0]["token"] as? String, start)
         XCTAssertEqual(activities()[0]["event"] as? String, "start")
         XCTAssertEqual((activities()[0]["state"] as? [String: Any])?["working"] as? Int, 1)
+        // PUSH-20 (#317): a Live Activity's push is read by Apple to draw it,
+        // so all of it is in the clear: the counts, the names of the
+        // sessions that wait or are done, the Mac's name, and how soon.
+        let started = try XCTUnwrap(relay.sent.last { $0["activity"] != nil })
+        XCTAssertEqual(Set(started.keys), ["token", "ticket", "expires", "activity"])
+        XCTAssertEqual(Set(activities()[0].keys), ["token", "event", "state", "mac", "urgent"])
+        // The Mac's own name, as macOS gives it.
+        XCTAssertFalse((activities()[0]["mac"] as? String ?? "").isEmpty)
+        XCTAssertEqual(
+            Set((activities()[0]["state"] as? [String: Any])?.keys.map { $0 } ?? []).subtracting(["firstWaiting"]),
+            ["working", "permission", "asking", "done", "failed", "waiting", "doneNames"])
 
         // The activity it started gives its own token.
         let own = String(repeating: "6b", count: 32)
