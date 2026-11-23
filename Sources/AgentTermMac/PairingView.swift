@@ -34,6 +34,16 @@ struct PairingView: View {
             Text("Pair a Device")
                 .font(.system(size: 18, weight: .semibold))
 
+            // The host cannot be reached on its Tailscale address (#274):
+            // a code shown now would pair nothing.
+            if let failure = model.failures.first(where: { $0.part == .listener }) {
+                Label(failure.headline() + " " + failure.details, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("pairing-listener-failure")
+            }
+
             if let device = model.justPaired {
                 paired(device)
             } else if let host {

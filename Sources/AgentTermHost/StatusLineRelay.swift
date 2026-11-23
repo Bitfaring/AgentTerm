@@ -73,8 +73,8 @@ public enum StatusLineRelay {
         if let project {
             files += [project + "/.claude/settings.local.json", project + "/.claude/settings.json"]
         }
-        let configuration = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.claude"
-        files.append(configuration + "/settings.json")
+        // Claude Code's own environment: it runs the relay.
+        files.append(AgentFolders(home: home, environment: environment).claude + "/settings.json")
         for file in files {
             guard let data = FileManager.default.contents(atPath: file),
                 let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],

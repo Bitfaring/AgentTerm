@@ -23,12 +23,14 @@ public enum AgentHistory {
         in directory: String,
         includeSubfolders: Bool = false,
         home: String = NSHomeDirectory(),
+        folders: AgentFolders? = nil,
         limit: Int = 200
     ) -> [Conversation] {
         let directory = URL(fileURLWithPath: directory).standardizedFileURL.path
+        let folders = folders ?? AgentFolders.of(home: home)
         let home = URL(fileURLWithPath: home, isDirectory: true)
         let scope = Scope(directory: directory, includeSubfolders: includeSubfolders)
-        let all = claude(scope, home) + codex(scope, home) + antigravity(scope, home) + copilot(scope, home)
+        let all = claude(scope, folders) + codex(scope, folders) + antigravity(scope, home) + copilot(scope, home)
         return Array(
             all.filter { isSafeIdentifier($0.sessionID) && !$0.title.isEmpty }
                 .sorted { $0.updatedAt > $1.updatedAt }
@@ -38,10 +40,11 @@ public enum AgentHistory {
 
     /// Every conversation the agents have on this machine, newest first,
     /// whatever folder it ran in.
-    public static func allConversations(home: String = NSHomeDirectory(), limit: Int = 300) -> [Conversation] {
+    public static func allConversations(home: String = NSHomeDirectory(), folders: AgentFolders? = nil, limit: Int = 300) -> [Conversation] {
+        let folders = folders ?? AgentFolders.of(home: home)
         let home = URL(fileURLWithPath: home, isDirectory: true)
         let scope = Scope(directory: nil, includeSubfolders: true)
-        let all = claude(scope, home) + codex(scope, home) + antigravity(scope, home) + copilot(scope, home)
+        let all = claude(scope, folders) + codex(scope, folders) + antigravity(scope, home) + copilot(scope, home)
         // What an agent was asked on the host's own behalf, a commit
         // message for one, is not a conversation of the user's.
         let own = HostEnvironment.commitWriterDirectory.standardizedFileURL.path
@@ -77,8 +80,8 @@ public enum AgentHistory {
     // MARK: Claude Code
 
     /// `~/.claude/projects/<directory with every non-alphanumeric as "-">/<session>.jsonl`
-    private static func claude(_ scope: Scope, _ home: URL) -> [Conversation] {
-        let projects = home.appendingPathComponent(".claude/projects")
+    private static func claude(_ scope: Scope, _ folders: AgentFolders) -> [Conversation] {
+        let projects = URL(fileURLWithPath: folders.claude, isDirectory: true).appendingPathComponent("projects")
         let own = scope.directory.map(claudeProjectName)
         // Subfolders of the directory have their own project folder. The name
         // alone cannot tell "apps/web" from a sibling "apps-web", and cannot
@@ -147,8 +150,9 @@ public enum AgentHistory {
 
     /// `~/.codex/sessions/<year>/<month>/<day>/rollout-<time>-<id>.jsonl`, whose
     /// first line holds the id and directory. Prompts are in `history.jsonl`.
-    private static func codex(_ scope: Scope, _ home: URL) -> [Conversation] {
-        let root = home.appendingPathComponent(".codex/sessions")
+    private static func codex(_ scope: Scope, _ folders: AgentFolders) -> [Conversation] {
+        let codexFolder = URL(fileURLWithPath: folders.codex, isDirectory: true)
+        let root = codexFolder.appendingPathComponent("sessions")
         var files: [(url: URL, modified: Date)] = []
         if let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) {
             for case let url as URL in enumerator where url.lastPathComponent.hasPrefix("rollout-") && url.pathExtension == "jsonl" {
@@ -160,7 +164,7 @@ public enum AgentHistory {
         guard !files.isEmpty else { return [] }
 
         var prompts: [String: String] = [:]
-        for line in lines(of: read(home.appendingPathComponent(".codex/history.jsonl"), tail: 2 * 1024 * 1024), containing: "session_id") {
+        for line in lines(of: read(codexFolder.appendingPathComponent("history.jsonl"), tail: 2 * 1024 * 1024), containing: "session_id") {
             if let id = line["session_id"] as? String, let text = line["text"] as? String, prompts[id] == nil { prompts[id] = text }
         }
 

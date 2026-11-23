@@ -48,10 +48,11 @@ public enum ScheduleRunner {
     /// while the user is there. Antigravity is told for the run itself
     /// (`AgentHooks`), Copilot CLI too when it skips permissions; Codex was
     /// not seen to ask.
-    public static func trustFolder(of schedule: Schedule, home: String) throws {
+    public static func trustFolder(of schedule: Schedule, home: String, folders: AgentFolders? = nil) throws {
+        let folders = folders ?? AgentFolders.of(home: home)
         switch schedule.agent {
         case "claude":
-            try editJSON(at: URL(fileURLWithPath: home).appendingPathComponent(".claude.json")) { settings in
+            try editJSON(at: URL(fileURLWithPath: folders.claudeState)) { settings in
                 var projects = settings["projects"] as? [String: Any] ?? [:]
                 var project = projects[schedule.folder] as? [String: Any] ?? [:]
                 project["hasTrustDialogAccepted"] = true
@@ -59,7 +60,7 @@ public enum ScheduleRunner {
                 settings["projects"] = projects
             }
         case "copilot" where schedule.permissions != .skipAll:
-            try editJSON(at: URL(fileURLWithPath: home).appendingPathComponent(".copilot/config.json")) { settings in
+            try editJSON(at: URL(fileURLWithPath: folders.copilot).appendingPathComponent("config.json")) { settings in
                 var folders = settings["trustedFolders"] as? [String] ?? []
                 if !folders.contains(schedule.folder) { folders.append(schedule.folder) }
                 settings["trustedFolders"] = folders

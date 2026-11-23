@@ -21,6 +21,8 @@ public struct HostMarker: Codable, Equatable {
     /// carried from one host to the next, so that a host started again by
     /// launchd, with no app to count, knows it keeps dying.
     public var deaths: [Date]
+    /// Why the host stopped itself, when it did (#274): said by the next.
+    public var stopReason: String?
 
     /// Broken means three times in sixty seconds.
     public static let deathsThatBreak = 3
@@ -33,7 +35,7 @@ public struct HostMarker: Codable, Equatable {
         self.deaths = deaths
     }
 
-    private enum CodingKeys: String, CodingKey { case pid, startedAt, sessions, deaths }
+    private enum CodingKeys: String, CodingKey { case pid, startedAt, sessions, deaths, stopReason }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -42,6 +44,7 @@ public struct HostMarker: Codable, Equatable {
         sessions = try container.decode([EndedSession].self, forKey: .sessions)
         // A marker of 0.6.0's first builds counted none.
         deaths = try container.decodeIfPresent([Date].self, forKey: .deaths) ?? []
+        stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
     }
 
     /// The deaths that still count: within the last minute.

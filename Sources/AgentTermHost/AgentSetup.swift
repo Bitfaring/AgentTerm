@@ -53,6 +53,19 @@ public final class AgentSetup: @unchecked Sendable {
     /// The user's home, whose agents' configuration is written.
     let home: String
     let environment: [String: String]
+    /// Where the agents keep their configuration (#264): asked of the login
+    /// shell when first needed, never while the host starts, which must not
+    /// wait for the user's shell.
+    var folders: AgentFolders {
+        foldersLock.lock()
+        defer { foldersLock.unlock() }
+        if let known = knownFolders { return known }
+        let found = AgentFolders.of(home: home, own: environment)
+        knownFolders = found
+        return found
+    }
+    private var knownFolders: AgentFolders?
+    private let foldersLock = NSLock()
     private let run: Run
     private let locate: () -> [AgentInfo]
     private let prompt: (String) -> String?
@@ -69,13 +82,14 @@ public final class AgentSetup: @unchecked Sendable {
     public init(
         directory: URL, tool: String, home: String = HostEnvironment.homeDirectory, name: String = AppChannel.current.mcpServerName,
         environment: [String: String] = ProcessInfo.processInfo.environment, locate: @escaping () -> [AgentInfo] = AgentDetector.detect,
-        prompt: @escaping (String) -> String? = AgentSetup.savedPrompt, run: Run? = nil
+        prompt: @escaping (String) -> String? = AgentSetup.savedPrompt, run: Run? = nil, folders: AgentFolders? = nil
     ) {
         self.directory = directory
         self.tool = tool
         self.home = home
         self.name = name
         self.environment = environment
+        self.knownFolders = folders
         self.locate = locate
         self.prompt = prompt
         self.run = run ?? { AgentSetup.throughLoginShell($0, home: home) }
@@ -473,8 +487,7 @@ public final class AgentSetup: @unchecked Sendable {
     // MARK: Claude Code's status line
 
     private var claudeSettings: URL {
-        let configuration = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.claude"
-        return URL(fileURLWithPath: configuration).appendingPathComponent("settings.json")
+        URL(fileURLWithPath: folders.claude).appendingPathComponent("settings.json")
     }
 
     /// The status line the user had before AgentTerm's, which AgentTerm's
@@ -526,8 +539,7 @@ public final class AgentSetup: @unchecked Sendable {
     // MARK: Codex's hooks
 
     var codexConfig: URL {
-        let codexHome = environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) } ?? URL(fileURLWithPath: home).appendingPathComponent(".codex")
-        return codexHome.appendingPathComponent("config.toml")
+        URL(fileURLWithPath: folders.codex).appendingPathComponent("config.toml")
     }
 
     /// How the comment over each hook of this build's begins: it names the

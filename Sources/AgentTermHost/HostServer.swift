@@ -78,6 +78,13 @@ public final class HostServer {
         /// How often sessions are named and measured, in seconds. Tests
         /// shorten it.
         public var refreshInterval: TimeInterval = 6
+        /// How often the Tailscale address is looked for and listened on.
+        public var tailscaleInterval: TimeInterval = 15
+        /// The Tailscale address, for a test: nil asks Tailscale.
+        public var tailscaleAddress: (() -> String?)?
+        /// How the host stops itself when it can no longer be reached
+        /// (#274): it ends, and whoever started it starts it again.
+        public var stopItself: () -> Void = { exit(EXIT_FAILURE) }
         /// How often schedules are looked at, in seconds (#11). Tests shorten it.
         public var scheduleInterval: TimeInterval = 20
         /// How long an agent's hooks and MCP server have to be heard from
@@ -631,6 +638,9 @@ public final class HostServer {
     @discardableResult
     public func start() throws -> UInt16 {
         let port = try listen(on: "127.0.0.1", port: configuration.port)
+        // The login shell is asked once, here off every queue, so that what
+        // needs its PATH or the agents' folders (#264) does not wait for it.
+        DispatchQueue.global(qos: .utility).async { _ = LoginShellPath.shared.value() }
         let deaths = queue.sync {
             boundPort = port
             // Only once the port is this host's: a host that cannot listen
@@ -697,7 +707,7 @@ public final class HostServer {
         guard configuration.listenOnTailscale else { return port }
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: 15)
+        timer.schedule(deadline: .now(), repeating: configuration.tailscaleInterval)
         // Tailscale is asked which address is its own off the queue, as its
         // command takes a moment (#268).
         timer.setEventHandler { [weak self] in
@@ -774,7 +784,9 @@ public final class HostServer {
             // was started again: by the app, or by launchd with the app
             // closed. Then this one does not run.
             let broken = deaths.count >= HostMarker.deathsThatBreak
-            failures.append(PartFailure(part: .host, at: found.aliveAt, ended: found.marker.sessions, restarted: !broken, broken: broken))
+            failures.append(
+                PartFailure(
+                    part: .host, at: found.aliveAt, ended: found.marker.sessions, restarted: !broken, broken: broken, reason: found.marker.stopReason))
             failures = Array(failures.suffix(FailureLog.limit))
             FailureLog.write(failures, in: directory)
             if broken {
@@ -1831,7 +1843,13 @@ public final class HostServer {
             listener.cancel()
             throw StartError.listenerFailed("\(host):\(port): \(failure)")
         }
-        listener.stateUpdateHandler = nil
+        // The loopback listener is the only way the app reaches the host:
+        // one that fails stops the host, so that the app starts it again,
+        // and the next host says why (#274).
+        listener.stateUpdateHandler = { [weak self] state in
+            guard case .failed(let error) = state, let self else { return }
+            self.stopItself(because: "Its listener on \(host):\(port) failed: \(error.localizedDescription).")
+        }
         queue.sync { listeners[host] = listener }
         return listener.port?.rawValue ?? port
     }
@@ -1847,21 +1865,70 @@ public final class HostServer {
     /// Keeps a listener on the current Tailscale address, following the
     /// interface as it comes up, goes away or changes address.
     private func syncTailscaleListener(own: Set<String>?) {
-        let address = Tailscale.ipv4Address(own: own)
+        let address = configuration.tailscaleAddress.map { $0() } ?? Tailscale.ipv4Address(own: own)
         for (host, listener) in listeners where host != "127.0.0.1" && host != address {
             listener.cancel()
             listeners[host] = nil
         }
-        guard let address, listeners[address] == nil,
-            let listener = try? makeListener(host: address, port: boundPort)
-        else { return }
+        // No Tailscale address: nothing to listen on, which is not a fault
+        // of the host's (Tailscale's state is said where it is shown).
+        guard let address else { return listenerListens() }
+        guard listeners[address] == nil else { return }
+        let listener: NWListener
+        do {
+            listener = try makeListener(host: address, port: boundPort)
+        } catch {
+            return listenerFailed(on: address, String(describing: error))
+        }
         listeners[address] = listener
         listener.stateUpdateHandler = { [weak self, weak listener] state in
-            guard case .failed = state, let self, let listener else { return }
-            listener.cancel()
-            if self.listeners[address] === listener { self.listeners[address] = nil }
+            guard let self, let listener else { return }
+            switch state {
+            case .ready:
+                self.listenerListens()
+            case .failed(let error), .waiting(let error):
+                // Tried again at the next look; said once meanwhile (#274).
+                listener.cancel()
+                if self.listeners[address] === listener { self.listeners[address] = nil }
+                self.listenerFailed(on: address, error.localizedDescription)
+            default:
+                break
+            }
         }
         listener.start(queue: queue)
+    }
+
+    /// Stops the host, its marker saying why for the host that follows.
+    private func stopItself(because reason: String) {
+        if var marker, let file = markerFile {
+            marker.stopReason = reason
+            marker.write(to: file)
+            self.marker = marker
+        }
+        NSLog("agenttermd: \(reason) Stopping, to be started again.")
+        configuration.stopItself()
+    }
+
+    /// The failure told of the Tailscale listener, until it listens.
+    private var listenerFailure: String?
+
+    /// Said to every client once, not at every try (#274).
+    private func listenerFailed(on address: String, _ reason: String) {
+        guard listenerFailure == nil else { return }
+        let failure = PartFailure(part: .listener, name: address, at: configuration.now(), restarted: false, reason: "\(reason).")
+        listenerFailure = failure.id
+        report(failure)
+    }
+
+    /// It listens, or has nothing to listen on: what was told is taken back.
+    private func listenerListens() {
+        guard let id = listenerFailure else { return }
+        listenerFailure = nil
+        guard let index = failures.firstIndex(where: { $0.id == id }) else { return }
+        failures.remove(at: index)
+        saveFailures()
+        broadcastFailures()
+        handleNotices(notices.handle(failure: id, now: configuration.now()))
     }
 
     // MARK: Connections

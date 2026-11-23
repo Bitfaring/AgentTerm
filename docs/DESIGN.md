@@ -503,6 +503,19 @@ waits for the shell to start (at most 8 seconds), so the actions are never
 run on the main thread. Under XCTest the user's own shell is never
 started: `LoginShellPath` answers nothing there unless a test stands a
 shell of its own in, so the tests read none of the user's startup files.
+
+**Where the agents keep their configuration** (#264) is answered in one
+place, `AgentFolders`, which setup (the status line, the hooks), a
+schedule's trust, the history, a conversation's delete and the usage use
+alike. Claude Code keeps all of it, `.claude.json` too, in
+`$CLAUDE_CONFIG_DIR` when that is set, and Codex in `$CODEX_HOME` (tried
+with Claude Code 2.1.330 and Codex 0.171.0, 2026-11-23); otherwise in
+`~/.claude`, `~/.claude.json` and `~/.codex`. The two variables are taken
+from the host's own environment, and where it has none, from the login
+shell, asked with its `PATH` in the same start: a host started by the app
+or at login has none of what `.zshrc` exports, and the agents, started
+through that shell, do. A conversation is deleted only inside the agent's
+own folder, links resolved, wherever that is.
 When a push or pull fails because nothing gave git
 a sign-in ("could not read Username for '<url>'") and a credential helper
 was not found, a sentence naming the host and the helper is put above
@@ -2100,6 +2113,15 @@ the same folder can therefore be mixed up; the History tab is exact.
   VPN's tunnel in the same range (Cloudflare WARP) and a carrier's address are
   never taken (#268). It checks every 15 seconds so it follows Tailscale going
   up, down or changing address. It never listens on other interfaces.
+  When it cannot listen on the Tailscale address (the port is taken there,
+  the address went), or that listener fails, every client is told once,
+  a `PartFailure` of part `listener` naming the address and why, shown in
+  the top banner of both apps and on the Mac's pairing sheet; it is taken
+  back when the host listens there, or there is no address to listen on.
+  The loopback listener is the app's only way to the host: when it fails
+  after the start, the host writes why into its marker (`stopReason`) and
+  stops, so that whoever started it starts it again, and the next host
+  reports the stop with that reason (#274, protocol 42).
 - The WebSocket itself is not encrypted. Loopback traffic stays on the Mac and
   Tailscale traffic is encrypted by WireGuard.
 - A token is still required on Tailscale, because other devices and shared

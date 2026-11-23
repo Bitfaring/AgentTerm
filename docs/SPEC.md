@@ -274,7 +274,10 @@ happened; the Live Activity shows the host's state now (below).
   told again, one that keeps waiting is not); and a failure that stopped
   work: the host or a session's program stopped, a schedule's run did not
   start or was stopped. Other failures (a push that could not be sent, the
-  Mac not kept awake, usage not saved) are banners and Inbox items only.
+  Mac not kept awake, usage not saved, the host not listening on its
+  Tailscale address, #274) are banners and Inbox items only. The last is
+  also said on the Mac's pairing sheet, and goes by itself once the host
+  listens again.
 - **Who is told: every device, and every one sounds**: the Mac and each
   paired iPhone or iPad, whether someone is at the Mac or not. The host
   makes each notice once for all of them. The session on an iPhone's or
