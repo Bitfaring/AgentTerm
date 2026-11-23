@@ -2001,10 +2001,16 @@ final class PhoneModel: ObservableObject {
             // Of the branch listed now, not of one listed before.
             guard branch == commitsBranch[folder] else { break }
             loadingCommits.remove(folder)
-            // A page that does not follow what is listed is another list's.
-            guard skip == (commits[folder]?.count ?? 0) else { break }
-            commits[folder, default: []] += list
-            commitsMore[folder] = more
+            switch CommitPages.add(list, skip: skip, to: commits[folder] ?? []) {
+            case .listed(let all):
+                commits[folder] = all
+                commitsMore[folder] = more
+            case .stale:
+                // The same commit twice would be two rows of one id (#300).
+                loadCommits(folder)
+            case .other:
+                break
+            }
         case .gitShow(let folder, let hash, let details):
             commitDetails[hash] = details ?? commits[folder]?.first { $0.hash == hash }.map { CommitDetails(commit: $0) }
         case .diff(let folder, let snapshot):
@@ -2073,7 +2079,7 @@ final class PhoneModel: ObservableObject {
                 {
                     sessionHandoff = found
                 } else {
-                    self.message = "\(session.title) has no conversation to hand off in this session yet. It saves one after your first message."
+                    self.message = HandoffWords.noConversation(session.title)
                 }
             }
         case .directory(let listing):

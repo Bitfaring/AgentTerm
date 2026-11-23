@@ -553,6 +553,8 @@ private struct ScheduleForm: View {
     @Environment(\.dismiss) private var dismiss
     @State var schedule: Schedule
     let isNew: Bool
+    /// Deleting it waits to be confirmed (#308), as on the Mac.
+    @State private var askingDelete = false
     @State private var kind = 1
     @State private var time = Date()
     @State private var weekdays: Set<Int> = [2, 3, 4, 5, 6]
@@ -677,10 +679,16 @@ private struct ScheduleForm: View {
                         model.duplicate(schedule)
                         dismiss()
                     }
-                    Button("Delete Schedule", role: .destructive) {
-                        model.removeSchedule(schedule.id)
-                        dismiss()
-                    }
+                    Button(DeleteWords.deleteSchedule + "…", role: .destructive) { askingDelete = true }
+                        .confirmationDialog(DeleteWords.scheduleTitle(schedule.name), isPresented: $askingDelete, titleVisibility: .visible) {
+                            Button(DeleteWords.deleteSchedule, role: .destructive) {
+                                model.removeSchedule(schedule.id)
+                                dismiss()
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text(DeleteWords.scheduleMessage)
+                        }
                 } footer: {
                     Text("Run Now and Duplicate use the schedule as it was last saved.")
                 }

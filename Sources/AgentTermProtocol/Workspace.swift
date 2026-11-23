@@ -374,6 +374,27 @@ public struct CommitGraphRow: Equatable, Sendable {
 /// The numbers of the Git side panel with what they count beside them
 /// (#50), the same on the Mac and the iPhone: a number alone said nothing
 /// to the owner.
+/// The list of commits a page at a time (#36), as both apps take it.
+public enum CommitPages {
+    public enum Taken: Equatable {
+        /// What is listed now, the page after what was.
+        case listed([CommitInfo])
+        /// The page repeats a commit already listed: commits were made
+        /// since the first page, which `--skip` counts from the top. The
+        /// list is read again from its first page (#300).
+        case stale
+        /// A page that does not follow what is listed: another list's.
+        case other
+    }
+
+    public static func add(_ page: [CommitInfo], skip: Int, to listed: [CommitInfo]) -> Taken {
+        guard skip == listed.count else { return .other }
+        let known = Set(listed.map(\.hash))
+        if page.contains(where: { known.contains($0.hash) }) { return .stale }
+        return .listed(listed + page)
+    }
+}
+
 /// What both apps say about the git actions they ask about first.
 public enum GitQuestionWords {
     /// A question about discarding, reverting, dropping a stash, deleting a

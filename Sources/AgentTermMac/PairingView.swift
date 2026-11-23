@@ -14,6 +14,8 @@ struct PairingView: View {
     let port: UInt16
     @Environment(\.dismiss) private var dismiss
     @State private var status: TailscaleStatus?
+    /// The device whose removal waits to be confirmed (#308).
+    @State private var removing: DeviceInfo?
     @State private var copied = false
     @State private var checking = false
     @State private var now = Date()
@@ -179,9 +181,18 @@ struct PairingView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 6)
-                            Button("Remove", role: .destructive) { model.revoke(device) }
+                            Button("Remove…", role: .destructive) { removing = device }
                                 .controlSize(.small)
                                 .help("Take this device's access away. It has to be paired again to come back.")
+                                .confirmationDialog(
+                                    DeleteWords.deviceTitle(device.name),
+                                    isPresented: Binding(get: { removing?.id == device.id }, set: { if !$0 { removing = nil } }), titleVisibility: .visible
+                                ) {
+                                    Button(DeleteWords.removeDevice, role: .destructive) { model.revoke(device) }
+                                    Button("Cancel", role: .cancel) {}
+                                } message: {
+                                    Text(DeleteWords.deviceMessage)
+                                }
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)

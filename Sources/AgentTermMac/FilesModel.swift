@@ -161,6 +161,8 @@ final class FilesModel: ObservableObject {
     /// The other Mac said something went wrong. It does not say with what,
     /// so no file that was being saved is taken as saved.
     func requestFailed() {
+        // A rename refused leaves what is open where it was (#305).
+        renamesDue = [:]
         saving = [:]
         saveAgain = []
         closeWhenSaved = []
@@ -197,6 +199,13 @@ final class FilesModel: ObservableObject {
         guard isRemote else { return }
         switch message {
         case .files(let directory, let entries):
+            // A rename the other Mac took: the folder now has the new name
+            // and not the old one (#305).
+            for (old, target) in renamesDue where (old as NSString).deletingLastPathComponent == directory {
+                guard entries.contains(where: { $0.path == target }), !entries.contains(where: { $0.path == old }) else { continue }
+                renamesDue[old] = nil
+                moved(old, to: target)
+            }
             guard root != nil, directory == root || expanded.contains(directory) else { return }
             if children[directory] != entries { children[directory] = entries }
         case .file(let path, let content, let data):
@@ -301,12 +310,53 @@ final class FilesModel: ObservableObject {
                 }
             }
         }
-        for index in documents.indices where documents[index].isText && !documents[index].isDirty {
-            // Only files without edits of our own follow the disk. One with
-            // unsaved changes keeps them; saving then overwrites the disk.
-            if case .text(let onDisk) = FileBrowser.read(documents[index].path), !OpenDocument.same(onDisk, documents[index].savedText) {
-                documents[index] = OpenDocument(path: documents[index].path, content: .text(onDisk), text: onDisk, savedText: onDisk)
+        // Only files without edits of our own follow the disk. One with
+        // unsaved changes keeps them; saving then overwrites the disk. Read
+        // off the main thread, and only a file whose date or size changed
+        // since it was last looked at (#304): every few seconds, a dozen
+        // large files, or one on a slow volume, held the window up.
+        let looked = documents.filter { $0.isText && !$0.isDirty }.map { (path: $0.path, saved: $0.savedText) }
+        guard !looked.isEmpty else { return }
+        let known = diskStamps
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var stamps: [String: DiskStamp] = [:]
+            var changed: [(path: String, text: String, saved: String)] = []
+            for document in looked {
+                let stamp = DiskStamp(of: document.path)
+                stamps[document.path] = stamp
+                guard stamp == nil || stamp != known[document.path] else { continue }
+                if case .text(let onDisk) = FileBrowser.read(document.path), !OpenDocument.same(onDisk, document.saved) {
+                    changed.append((document.path, onDisk, document.saved))
+                }
             }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                for (path, stamp) in stamps { self.diskStamps[path] = stamp }
+                for found in changed {
+                    // Not if it was edited, saved or closed meanwhile.
+                    guard let index = self.documents.firstIndex(where: { $0.path == found.path }), !self.documents[index].isDirty,
+                        self.documents[index].savedText == found.saved
+                    else { continue }
+                    self.documents[index] = OpenDocument(path: found.path, content: .text(found.text), text: found.text, savedText: found.text)
+                }
+            }
+        }
+    }
+
+    /// When each open file was last seen to change, and its size: read again
+    /// only when either is another.
+    private var diskStamps: [String: DiskStamp] = [:]
+
+    struct DiskStamp: Equatable {
+        let modified: Date
+        let size: Int
+
+        init?(of path: String) {
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path), let modified = attributes[.modificationDate] as? Date,
+                let size = attributes[.size] as? Int
+            else { return nil }
+            self.modified = modified
+            self.size = size
         }
     }
 
@@ -488,33 +538,46 @@ final class FilesModel: ObservableObject {
 
     func rename(_ entry: FileEntry, to name: String) {
         perform {
-            let target: String
             if let remote {
                 // Where it will be, if the other Mac takes the name: it
-                // answers with the folder as it is then.
-                target = ((entry.path as NSString).deletingLastPathComponent as NSString).appendingPathComponent(name)
+                // answers with the folder as it is then, and only then do
+                // the open files move (#305). Refused, nothing moved.
+                let target = ((entry.path as NSString).deletingLastPathComponent as NSString).appendingPathComponent(name)
                 guard target != entry.path else { return }
+                self.renamesDue[entry.path] = target
                 remote(.renameFile(path: entry.path, name: name))
-            } else {
-                target = try FileBrowser.rename(entry.path, to: name)
+                return
             }
-            guard target != entry.path else { return }
-            // What was open or expanded under the old path moves with it.
-            for index in self.documents.indices {
-                let old = self.documents[index].path
-                guard old == entry.path || old.hasPrefix(entry.path + "/") else { continue }
-                let moved = target + old.dropFirst(entry.path.count)
-                self.documents[index].path = moved
-                if self.active == old { self.active = moved }
-            }
-            self.rememberOpenFiles()
-            self.expanded = Set(self.expanded.map { $0 == entry.path || $0.hasPrefix(entry.path + "/") ? target + $0.dropFirst(entry.path.count) : $0 })
-            self.children = [:]
-            self.refresh()
+            self.moved(entry.path, to: try FileBrowser.rename(entry.path, to: name))
         }
     }
 
+    /// Renames asked of another Mac and not answered yet: by the old path,
+    /// where it is to be.
+    private var renamesDue: [String: String] = [:]
+
+    /// What was open or expanded under a path that was renamed moves with it.
+    private func moved(_ path: String, to target: String) {
+        guard target != path else { return }
+        func under(_ old: String) -> Bool { old == path || old.hasPrefix(path + "/") }
+        for index in documents.indices where under(documents[index].path) {
+            let old = documents[index].path
+            let moved = target + old.dropFirst(path.count)
+            documents[index].path = moved
+            if active == old { active = moved }
+        }
+        rememberOpenFiles()
+        expanded = Set(expanded.map { under($0) ? target + $0.dropFirst(path.count) : $0 })
+        children = [:]
+        refresh()
+    }
+
     func trash(_ entry: FileEntry) {
+        // Its unsaved changes would go with it, without a word (#305).
+        if let unsaved = documents.first(where: { ($0.path == entry.path || $0.path.hasPrefix(entry.path + "/")) && $0.isDirty }) {
+            error = "Save or discard the changes in \((unsaved.path as NSString).lastPathComponent) before putting it in the Trash."
+            return
+        }
         perform {
             if let remote { remote(.trashFile(path: entry.path)) } else { try FileBrowser.trash(entry.path) }
             for document in self.documents where document.path == entry.path || document.path.hasPrefix(entry.path + "/") {

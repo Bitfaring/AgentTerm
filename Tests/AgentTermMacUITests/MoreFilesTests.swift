@@ -54,6 +54,24 @@ final class MoreFilesTests: MacUITestCase {
         app.waitGone(row("renamed.txt"))
     }
 
+    /// FILE-16 (#305): a file with unsaved changes is not put in the Trash:
+    /// it is said why, the file stays, and so do the changes.
+    func testAFileWithUnsavedChangesIsNotPutInTheTrash() throws {
+        app.press(.button("Files"))
+        app.press(.button("notes.txt"), timeout: 15)
+        let editor = MacDriver.Query.role(kAXTextAreaRole as String)
+        let saved = "first line\nsecond line\n"
+        wait("the file's text in the editor") { self.app.value(of: editor) == saved }
+        app.write(saved + "not saved\n", into: editor)
+        app.wait(for: .button("Save"))
+        app.perform("Move to Trash", on: row("notes.txt"))
+        app.press(.button("Move to Trash"))
+        app.wait(for: .containing("Save or discard the changes in notes.txt before putting it in the Trash."), timeout: 5)
+        app.press(.button("OK"))
+        XCTAssertEqual(read("notes.txt"), saved, "the file went to the Trash")
+        XCTAssertEqual(app.value(of: editor), saved + "not saved\n", "the unsaved changes were lost")
+    }
+
     func testFilesThatAreNotPlainText() throws {
         app.press(.button("Files"))
         app.wait(for: .button("notes.txt"))

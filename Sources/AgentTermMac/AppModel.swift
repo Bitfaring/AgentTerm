@@ -192,7 +192,6 @@ final class AppModel: ObservableObject {
     /// Stops the host that is running and starts this app's own in its
     /// place. Its sessions end with it.
     func restartHost() {
-        stoppingHost = true
         let port = port
         hostMatch = .same
         otherBuildOfHost = nil
@@ -201,8 +200,21 @@ final class AppModel: ObservableObject {
         launchedDaemon = false
         connectAttempts = 0
         DispatchQueue.global(qos: .userInitiated).async {
-            // Never a program that is not a host (#204).
-            if let listener = DaemonLauncher.listener(onPort: port), DaemonLauncher.isAHost(listener.path) { DaemonLauncher.stop(listener.pid) }
+            let listener = DaemonLauncher.listener(onPort: port)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                // Never a program that is not a host (#204); and nothing
+                // stopped is said, and not counted as stopping (#306): the
+                // next time the host dies is a death.
+                guard let listener, DaemonLauncher.isAHost(listener.path) else {
+                    self.notice =
+                        listener.map { "Port \(port) is held by \(($0.path as NSString).lastPathComponent), which is not an AgentTerm host, so it was not stopped." }
+                        ?? "No host was found on port \(port), so nothing was stopped. AgentTerm starts its own when it connects again."
+                    return
+                }
+                self.stoppingHost = true
+                DispatchQueue.global(qos: .userInitiated).async { DaemonLauncher.stop(listener.pid) }
+            }
         }
     }
 
@@ -1009,11 +1021,18 @@ final class AppModel: ObservableObject {
     /// Asks what a forced push would overwrite, then asks the user.
     func requestForcePush() {
         guard let directory = panelFolder, let branch = diff?.branch, askingForcePush == nil else { return }
-        askingForcePush = directory
         if isRemote {
-            connection?.send(.gitForcePushPreview(path: directory))
+            // Asked of a Mac that is not connected, nothing would answer, and
+            // the sync bar would stay held (#303).
+            guard let connection else {
+                notice = "\(macName) is not connected, so nothing was pushed."
+                return
+            }
+            askingForcePush = directory
+            connection.send(.gitForcePushPreview(path: directory))
             return
         }
+        askingForcePush = directory
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let found = GitActions.forcePushLoses(in: directory)
             DispatchQueue.main.async { self?.forcePushPreview(directory, branch: branch, upstream: found?.upstream, loses: found?.commits ?? [], at: found?.at) }
@@ -1540,6 +1559,8 @@ final class AppModel: ObservableObject {
         let old = connection
         connection = nil
         old?.close()
+        // The left Mac's notifications can no longer be answered from here (#301).
+        macNotifications.removeAll(of: remote?.id ?? MacNotifications.thisMac)
         // What waited for the Mac left is answered, not said: the user
         // switched (#196).
         refuseRemoteBrowserAsks(macName: remote?.name ?? "the other Mac", tell: false)
@@ -1670,6 +1691,9 @@ final class AppModel: ObservableObject {
     /// one says again for itself.
     private func forgetHostState() {
         controllers.removeAll()
+        // What was asked of that host gets no answer now: the sync bar is
+        // not held for it (#303).
+        askingForcePush = nil
         replaying = []
         sessionsKnown = false
         keepAwake = nil
@@ -2010,6 +2034,11 @@ final class AppModel: ObservableObject {
             }
         case .error(let text, let request):
             starting = nil
+            // A launch refused brings nothing in front: the next session
+            // someone else starts (an agent's shell, a schedule, a device)
+            // is not taken for it, and takes neither the front nor the
+            // keyboard (#299).
+            selectNextAttached = false
             // The part waiting for the launch this refuses waits no more, and
             // what failed is said below; the other parts still wait (#189).
             if let request { stopShellPartWait(request: request) }
@@ -2111,7 +2140,7 @@ final class AppModel: ObservableObject {
                 {
                     requestHandoff(found)
                 } else {
-                    notice = "\(session.title) has no conversation to hand off in this session yet. It saves one after your first message."
+                    notice = HandoffWords.noConversation(session.title)
                 }
             }
             // Every conversation is what History asks for; the folder on
@@ -2523,7 +2552,7 @@ final class AppModel: ObservableObject {
     /// Opens the handoff sheet for a conversation.
     func requestHandoff(_ conversation: Conversation) {
         guard !handoffTargets(from: conversation.agent).isEmpty else {
-            notice = "No other agent is installed to hand this off to."
+            notice = HandoffWords.noOtherAgent
             return
         }
         pendingHandoff = conversation
@@ -2552,7 +2581,7 @@ final class AppModel: ObservableObject {
                 if let newest {
                     self.requestHandoff(newest)
                 } else {
-                    self.notice = "\(name) has no conversation to hand off in this session yet. It saves one after your first message."
+                    self.notice = HandoffWords.noConversation(name)
                 }
             }
         }
@@ -2907,12 +2936,19 @@ final class AppModel: ObservableObject {
     func commitSubmodule(_ path: String) {
         guard let directory = directory(of: path), !isCommitting else { return }
         let message = commitMessages[directory] ?? ""
+        isCommitting = true
         if isRemote {
-            commitMessages[directory] = nil
-            sendForDiff(.gitCommit(path: directory, message: message), in: directory)
+            // As the folder's own commit: the message is kept until the
+            // other Mac's answer says git took it, not thrown away before
+            // (#302).
+            if sendForDiff(.gitCommit(path: directory, message: message), in: directory) {
+                pendingCommit = directory
+            } else {
+                isCommitting = false
+                notice = "\(macName) is not connected, so nothing was committed."
+            }
             return
         }
-        isCommitting = true
         git(in: path, { GitActions.commit(message: message, in: $0) }) { [weak self] succeeded in
             self?.isCommitting = false
             if succeeded { self?.commitMessages[directory] = nil }
@@ -2990,10 +3026,16 @@ final class AppModel: ObservableObject {
 
     private func took(_ list: [CommitInfo], skip: Int, more: Bool) {
         loadingCommits = false
-        // A page that no longer follows what is listed is another list's.
-        guard skip == commits.count else { return }
-        commits += list
-        commitsMore = more
+        switch CommitPages.add(list, skip: skip, to: commits) {
+        case .listed(let all):
+            commits = all
+            commitsMore = more
+        case .stale:
+            // The same commit twice would be two rows of one id (#300).
+            loadCommits()
+        case .other:
+            break
+        }
     }
 
     /// Opens a commit out in the list, or closes it, and reads what it changed.

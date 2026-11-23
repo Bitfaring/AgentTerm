@@ -156,6 +156,38 @@ final class SharedSettingsTests: MacUITestCase {
         app.wait(for: .containing("Next "))
     }
 
+    /// SCHED-39 (#308): a schedule is deleted only once that is confirmed:
+    /// Cancel keeps it, on every device; Delete Schedule takes it away.
+    func testDeletingAScheduleAsksFirst() throws {
+        let phone = try device()
+        phone.send(
+            .saveSchedule(
+                Schedule(
+                    id: "gone", name: "Nightly", agent: "claude", folder: project.path, prompt: "say hello", when: .daily(hour: 9, minute: 0),
+                    warningAccepted: true)))
+        app.press(.id("place-schedules"))
+        app.wait(for: .id("schedule-gone"), timeout: 15)
+        // From its editor (the list's menu has Delete… too, which
+        // accessibility does not offer as an action of the row).
+        app.press(.id("schedule-gone"))
+        app.wait(for: .text("Edit Schedule"))
+        app.press(.button("Delete…"))
+        app.wait(for: .containing(DeleteWords.scheduleTitle("Nightly")), timeout: 5)
+        shot("asked")
+        // The question's Cancel, not the editor's, which is there too.
+        let cancels = app.all(.button("Cancel"))
+        XCTAssertGreaterThanOrEqual(cancels.count, 2, "no Cancel of the question")
+        if let last = cancels.last { AXUIElementPerformAction(last.element, kAXPressAction as CFString) }
+        app.waitGone(.containing(DeleteWords.scheduleTitle("Nightly")), timeout: 5)
+        XCTAssertTrue(app.exists(.text("Edit Schedule")), "Cancel closed the editor too")
+        XCTAssertTrue(app.exists(.id("schedule-gone")), "the schedule was deleted without being confirmed")
+        XCTAssertTrue(phone.messages.reversed().compactMap { if case .schedules(let list) = $0 { return list } else { return nil } }.first?.contains { $0.id == "gone" } == true)
+
+        app.press(.button("Delete…"))
+        app.press(.button(DeleteWords.deleteSchedule), timeout: 5)
+        app.waitGone(.id("schedule-gone"), timeout: 10)
+    }
+
     func testKeepAwakeIsTheSameOnBothDevices() throws {
         let phone = try device()
         openSettings("General")

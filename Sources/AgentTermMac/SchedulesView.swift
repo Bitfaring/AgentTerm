@@ -128,6 +128,8 @@ private struct ScheduleRow: View {
     @EnvironmentObject private var model: AppModel
     let schedule: Schedule
     @State private var hovering = false
+    /// Deleting it waits to be confirmed (#308).
+    @State private var askingDelete = false
 
     private var selected: Bool { model.editingSchedule?.id == schedule.id }
 
@@ -165,10 +167,16 @@ private struct ScheduleRow: View {
             Button("Run Now") { model.runNow(schedule) }
             Button("Duplicate") { model.duplicate(schedule) }
             Divider()
-            Button("Delete", role: .destructive) {
+            Button("Delete…", role: .destructive) { askingDelete = true }
+        }
+        .confirmationDialog(DeleteWords.scheduleTitle(schedule.name), isPresented: $askingDelete, titleVisibility: .visible) {
+            Button(DeleteWords.deleteSchedule, role: .destructive) {
                 if model.editingSchedule?.id == schedule.id { model.editingSchedule = nil }
                 model.removeSchedule(schedule.id)
             }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(DeleteWords.scheduleMessage)
         }
         .help("\(schedule.name): \(schedule.when.label()) in \((schedule.folder as NSString).abbreviatingWithTildeInPath)")
         .accessibilityElement(children: .contain)
@@ -288,6 +296,8 @@ private struct ScheduleEditor: View {
     @State private var dates: [Date] = []
     @State private var limited = false
     @State private var longest = 30
+    /// Deleting it waits to be confirmed (#308).
+    @State private var askingDelete = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -467,10 +477,16 @@ private struct ScheduleEditor: View {
             edits
             HStack {
                 if !isNew {
-                    Button("Delete", role: .destructive) {
-                        model.removeSchedule(schedule.id)
-                        done()
-                    }
+                    Button("Delete…", role: .destructive) { askingDelete = true }
+                        .confirmationDialog(DeleteWords.scheduleTitle(schedule.name), isPresented: $askingDelete, titleVisibility: .visible) {
+                            Button(DeleteWords.deleteSchedule, role: .destructive) {
+                                model.removeSchedule(schedule.id)
+                                done()
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text(DeleteWords.scheduleMessage)
+                        }
                     Button("Duplicate") { model.duplicate(schedule) }
                         .help("A copy of it as it was last saved, turned off, to be changed")
                     Button("Run Now") { model.runNow(schedule) }
