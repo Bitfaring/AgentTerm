@@ -256,7 +256,8 @@ final class PushTests: XCTestCase {
         mac.connection.sendInput(Data("\n".utf8), to: agent)
         waitUntil("pushed after its wait", timeout: 5) { payloads() == 1 }
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(done), Self.alertDelay, "pushed before its wait")
-        XCTAssertEqual(mac.alerts.count, 1, "a notification on the Mac too")
+        // Over the Mac's connection, which may come after the relay heard.
+        waitUntil("a notification on the Mac too", timeout: 5) { mac.alerts.count == 1 }
         XCTAssertEqual(try opened(try XCTUnwrap(relay.sent.first { $0["payload"] != nil })).state, .done(said: "All tests pass."))
     }
 
