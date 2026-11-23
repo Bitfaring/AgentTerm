@@ -22,19 +22,28 @@ enum PairingStore {
         ]
     }
 
+    /// The Keychain could not be read when the app started (a launch before
+    /// the first unlock, say): the paired Macs are not known, and nothing is
+    /// written over them (#287).
+    private(set) static var unreadable = false
+
     private static func read(account: String) -> Data? {
         var request = query(account: account)
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess else { return nil }
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        if status != errSecSuccess, status != errSecItemNotFound { unreadable = true }
+        guard status == errSecSuccess else { return nil }
         return result as? Data
     }
 
     static func load() -> [SavedHost] {
+        unreadable = false
         if let data = read(account: "hosts"), let hosts = try? JSONDecoder().decode([SavedHost].self, from: data) {
             return hosts
         }
+        if unreadable { return [] }
         // Builds that paired with a single Mac kept it under another name.
         struct Single: Codable {
             var host: String
@@ -51,11 +60,21 @@ enum PairingStore {
 
     @discardableResult
     static func save(_ hosts: [SavedHost]) -> Bool {
-        SecItemDelete(query(account: "hosts") as CFDictionary)
-        guard !hosts.isEmpty, let data = try? JSONEncoder().encode(hosts) else { return true }
+        // Never over what could not be read: it may hold every paired Mac.
+        guard !unreadable else { return false }
+        guard !hosts.isEmpty else {
+            let status = SecItemDelete(query(account: "hosts") as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
+        }
+        guard let data = try? JSONEncoder().encode(hosts) else { return false }
+        // Changed in place: the list is never deleted before the new one is
+        // there, so a failure keeps the old one (#287).
+        let changes: [String: Any] = [kSecValueData as String: data, kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let updated = SecItemUpdate(query(account: "hosts") as CFDictionary, changes as CFDictionary)
+        if updated == errSecSuccess { return true }
+        guard updated == errSecItemNotFound else { return false }
         var item = query(account: "hosts")
-        item[kSecValueData as String] = data
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        item.merge(changes) { $1 }
         return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
     }
 }

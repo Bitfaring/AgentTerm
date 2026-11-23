@@ -762,7 +762,7 @@ private struct ScheduleForm: View {
             warning = true
             return
         }
-        model.save(schedule)
-        dismiss()
+        // Not sent, it stays open, and why is said (#286).
+        if model.save(schedule) { dismiss() }
     }
 }

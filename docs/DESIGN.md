@@ -1216,7 +1216,9 @@ Mac's own app as `local`.
   `Telemetry.shouldAskAboutCrashReports`; `AppModel.showOnboarding` starts
   true then), answered by its Next.
 - **The Inbox** is the device's own `InboxBook` (`AgentTermProtocol`),
-  kept in its preferences by the Mac on show: notices newest first, read or
+  kept by the Mac on show, in its preferences on the Mac, and on the iPhone
+  in a file of the app's own, protected and out of its backups
+  (`PrivateFiles`, #287): notices newest first, read or
   not, what was deleted here so that the log does not bring it back, 30
   days. `Inbox.items(book:sessions:failures:)` shows a notice whose agent
   still says it with its session (answered, continued, handed off there),
@@ -2111,7 +2113,9 @@ the same folder can therefore be mixed up; the History tab is exact.
   choices, is sent as a notification's reply is,
   `answer(session:to:text:)`, which the host types by `AgentAnswer.steps`
   only while the agent is still in that state. The prompt's draft is
-  `PhoneModel`'s per session, kept in `UserDefaults`; the answer's is kept
+  `PhoneModel`'s per session, kept in a file of the app's own
+  (`PrivateFiles`, #287: protected until the first unlock, left out of the
+  device's backups, not among its preferences); the answer's is kept
   in memory for that session and that state, and goes when the state does.
   The Mac's "Send to an Agent" sheet goes by the same decision for its note,
   and keeps that note in its page's tab (`BrowserTab.pickNote`, in memory)

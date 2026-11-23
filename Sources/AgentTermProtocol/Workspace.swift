@@ -395,6 +395,20 @@ public enum CommitPages {
     }
 }
 
+/// What both apps say when another Mac cannot be asked, or closed the
+/// connection before it answered (#281, principle 3).
+public enum NotConnectedWords {
+    public static func notCommitted(_ mac: String) -> String { "\(mac) is not connected, so nothing was committed." }
+    public static func notSaved(_ mac: String) -> String {
+        "\(mac) is not connected, so the file was not saved. Its changes are kept: save again once it is back."
+    }
+    /// Anything else asked of a Mac that is not connected (#286).
+    public static func notDone(_ mac: String) -> String { "\(mac) is not connected, so nothing was done. Do it again once it is back." }
+    public static func notAnswered(_ mac: String) -> String {
+        "The connection to \(mac) closed before it answered what was asked: it may or may not have been done. Look again once it is back."
+    }
+}
+
 /// What both apps say about the git actions they ask about first.
 public enum GitQuestionWords {
     /// A question about discarding, reverting, dropping a stash, deleting a

@@ -2945,7 +2945,7 @@ final class AppModel: ObservableObject {
                 pendingCommit = directory
             } else {
                 isCommitting = false
-                notice = "\(macName) is not connected, so nothing was committed."
+                notice = NotConnectedWords.notCommitted(macName)
             }
             return
         }
@@ -3277,7 +3277,7 @@ final class AppModel: ObservableObject {
                 pendingCommit = directory
             } else {
                 isCommitting = false
-                notice = "\(macName) is not connected, so nothing was committed."
+                notice = NotConnectedWords.notCommitted(macName)
             }
             return
         }

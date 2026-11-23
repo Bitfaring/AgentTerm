@@ -58,6 +58,9 @@ public enum ComposeSend: Equatable, Sendable {
 /// The words of the place to answer an agent from, and of a prompt held
 /// while it asks (#232), in both apps (principle 9).
 public enum ComposeWords {
+    /// A message or a key not sent while the Mac is not reached (#280): it
+    /// is kept, to be sent once it is.
+    public static func notConnected(_ mac: String) -> String { "Not sent: \(mac) is not connected. Your message is kept, to send once it is." }
     /// The button over the message field while the agent asks.
     public static let answerButton = "Answer the Agent"
     /// The button that goes back from the answer to the prompt.

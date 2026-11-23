@@ -715,6 +715,12 @@ private struct ComposeBar: View {
             return
         case .answer: return
         }
+        // Never into a connection that is not there: the message is kept,
+        // and why it was not sent is said (#280).
+        guard model.status == .connected else {
+            held = ComposeWords.notConnected(model.pairing?.name ?? "the Mac")
+            return
+        }
         let message = text
         text = ""
         guard !message.isEmpty else {

@@ -5,6 +5,16 @@ import Foundation
 ///
 /// The code is not a credential to keep: it works once, for a few minutes,
 /// and is traded for a token that belongs to the device.
+/// What the iPhone asks before pairing from a link opened from elsewhere
+/// (#279): a web page or another app can open one.
+public enum PairingWords {
+    public static func askTitle(_ info: PairingInfo) -> String { "Pair with “\(info.name)”?" }
+    public static func askMessage(_ info: PairingInfo) -> String {
+        "A link asks to pair this device with \(info.host), port \(info.port). Pair only with a Mac of yours that is showing a pairing code now."
+    }
+    public static let pair = "Pair"
+}
+
 public struct PairingInfo: Equatable, Sendable {
     /// Tailscale MagicDNS name or IP address of the Mac.
     public var host: String

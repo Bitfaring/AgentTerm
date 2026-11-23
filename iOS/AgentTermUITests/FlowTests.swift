@@ -319,7 +319,7 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.buttons["notifications-not-now"].waitForNonExistence(timeout: 10), "the screen stays")
         app.launchEnvironment.removeValue(forKey: "AGENTTERM_ASK_NOTIFICATIONS")
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        app.open(try XCTUnwrap(URL(string: link)))
+        app.openPairingLink(try XCTUnwrap(URL(string: link)))
         XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 15), "not connected to the host")
         let asked = springboard.alerts.firstMatch
         XCTAssertFalse(asked.waitForExistence(timeout: 5), "iOS asked whether the app may notify after Not Now: \(asked.label)")
@@ -388,7 +388,7 @@ final class FlowTests: XCTestCase {
         let enterLink = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Enter a pairing link'")).firstMatch
         XCTAssertTrue(enterLink.waitForExistence(timeout: 10))
         capture("1-pair")
-        app.open(try XCTUnwrap(URL(string: link)))
+        app.openPairingLink(try XCTUnwrap(URL(string: link)))
         allowNotifications()
 
         // Connected: the Mac's folders and launch buttons show up.
@@ -411,7 +411,7 @@ final class FlowTests: XCTestCase {
         // lives five minutes, and its part of the test comes later. Paired,
         // it is the one on screen; the first comes back from the menu.
         if let second = environment["AGENTTERM_SECOND_PAIR_URL"] {
-            app.open(try XCTUnwrap(URL(string: second)))
+            app.openPairingLink(try XCTUnwrap(URL(string: second)))
             XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 15), "the second Mac did not pair")
             app.buttons["mac-menu"].tap()
             app.buttons["First Mac"].tap()

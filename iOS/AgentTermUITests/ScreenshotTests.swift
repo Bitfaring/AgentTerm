@@ -19,7 +19,7 @@ final class ScreenshotTests: XCTestCase {
         passNotificationAsk(app)
         let enterLink = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Enter a pairing link'")).firstMatch
         XCTAssertTrue(enterLink.waitForExistence(timeout: 10))
-        app.open(try XCTUnwrap(URL(string: link)))
+        app.openPairingLink(try XCTUnwrap(URL(string: link)))
         allowNotifications()
 
         // The folders and their sessions, pinned and grouped.
@@ -85,7 +85,7 @@ final class ScreenshotTests: XCTestCase {
         // Paired by the pictures above; else by the link.
         let pinned = app.staticTexts["Fix the flaky parser tests"].firstMatch
         if !pinned.waitForExistence(timeout: 15), let link = environment["AGENTTERM_PAIR_URL"].flatMap(URL.init(string:)) {
-            app.open(link)
+            app.openPairingLink(link)
         }
         XCTAssertTrue(pinned.waitForExistence(timeout: 30), "the demo sessions are not listed")
         // Under its agent; opened, its screen shows the page live.

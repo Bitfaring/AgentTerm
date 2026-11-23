@@ -321,6 +321,23 @@ final class PhoneModel: ObservableObject {
     /// until it is over. Refused while something else asked for is under
     /// way, the buttons being held then; kept while the app asks the
     /// folder's remotes by itself, and sent when that is over.
+    /// How many answers with a folder's changes the Mac still owes, as on
+    /// the Mac (#285): it answers side by side, and the changes asked for
+    /// before a commit may come back while git is still at it.
+    private var diffAnswersDue: [String: Int] = [:]
+
+    /// Sends what the Mac answers with the folder's changes, counted.
+    /// - Parameter quietly: a look at the changes, which nobody asked for in
+    ///   words: not said when it cannot be sent.
+    private func sendForDiff(_ message: ClientMessage, in folder: String, quietly: Bool = false) {
+        guard status == .connected, let connection else {
+            if !quietly { self.message = NotConnectedWords.notDone(pairing?.name ?? "The Mac") }
+            return
+        }
+        diffAnswersDue[folder, default: 0] += 1
+        connection.send(message)
+    }
+
     private func ask(_ what: String, in folder: String, _ message: ClientMessage) {
         guard status == .connected else { return }
         if remoteWork.ask(what, in: folder, keeping: message) == .begin { connection?.send(message) }
@@ -451,6 +468,11 @@ final class PhoneModel: ObservableObject {
     /// True once the Mac on screen has listed its sessions.
     /// True once the Mac has listed its sessions.
     @Published private(set) var sessionsKnown = false
+    /// Whether `sessions` is what the Mac says now: not after the app was in
+    /// the background, where iOS may have held the connection without a
+    /// word, nor after it closed. A notification's reply or press waits for
+    /// a list said after it (#276).
+    private var sessionsFresh = false
     /// The session whose earlier output is being sent, until all of it is here.
     @Published private(set) var replaying: SessionID?
     /// True once it has sent the arrangement.
@@ -508,16 +530,16 @@ final class PhoneModel: ObservableObject {
 
     /// Puts the folder's changes aside on the Mac, the new files too when asked.
     func stash(named name: String, untracked: Bool, in folder: String) {
-        connection?.send(.gitStash(path: folder, message: name, untracked: untracked))
+        sendForDiff(.gitStash(path: folder, message: name, untracked: untracked), in: folder)
     }
 
     func applyStash(_ hash: String, pop: Bool, in folder: String) {
-        connection?.send(.gitStashApply(path: folder, hash: hash, pop: pop))
+        sendForDiff(.gitStashApply(path: folder, hash: hash, pop: pop), in: folder)
     }
 
     /// Throws a stash away, once the user was asked.
     func dropStash(_ hash: String, in folder: String) {
-        connection?.send(.gitStashDrop(path: folder, hash: hash))
+        sendForDiff(.gitStashDrop(path: folder, hash: hash), in: folder)
     }
 
     // MARK: Commits (#36)
@@ -578,23 +600,23 @@ final class PhoneModel: ObservableObject {
     /// Checks a branch out on the Mac. Refused there, in words, when
     /// changes that are not committed would be lost.
     func switchBranch(_ branch: BranchInfo, in folder: String) {
-        connection?.send(.gitSwitch(path: folder, branch: branch.name))
+        sendForDiff(.gitSwitch(path: folder, branch: branch.name), in: folder)
     }
 
     func createBranch(named name: String, from start: String?, checkout: Bool, in folder: String) {
-        connection?.send(.gitCreateBranch(path: folder, name: name, from: start, checkout: checkout))
+        sendForDiff(.gitCreateBranch(path: folder, name: name, from: start, checkout: checkout), in: folder)
     }
 
     /// Gives one of the repository's own branches another name (#35).
     func renameBranch(_ branch: BranchInfo, to name: String, in folder: String) {
-        connection?.send(.gitRenameBranch(path: folder, from: branch.name, to: name))
+        sendForDiff(.gitRenameBranch(path: folder, from: branch.name, to: name), in: folder)
     }
 
     /// Deletes one of the repository's own branches, once asked as on the
     /// Mac (`DeleteBranchQuestion`): with force for one whose commits are
     /// on no other branch, which is asked about twice.
     func deleteBranch(_ branch: BranchInfo, in folder: String) {
-        connection?.send(.gitDeleteBranch(path: folder, name: branch.name, force: !branch.isMerged))
+        sendForDiff(.gitDeleteBranch(path: folder, name: branch.name, force: !branch.isMerged), in: folder)
     }
     /// The diff of a file, by `patchKey`. A missing file is stored as nil.
     @Published private(set) var patches: [String: FileDiff?] = [:]
@@ -663,8 +685,21 @@ final class PhoneModel: ObservableObject {
     func finishWorktree(_ worktree: WorktreeInfo, of folder: String, _ finish: WorktreeFinish, deleteBranch: Bool) {
         connection?.send(.finishWorktree(folder: folder, path: worktree.path, finish: finish, deleteBranch: deleteBranch))
     }
-    func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
-    func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
+    /// Whether a schedule was sent to be saved: not while the Mac is not
+    /// connected, which is said (#286), and the form stays open.
+    @discardableResult func save(_ schedule: Schedule) -> Bool { sendOrSay(.saveSchedule(schedule)) }
+    func removeSchedule(_ id: String) { sendOrSay(.removeSchedule(id: id)) }
+
+    /// Sends what changes the Mac, or says at once that it is not connected
+    /// and nothing was done (#286, principle 3).
+    @discardableResult private func sendOrSay(_ message: ClientMessage) -> Bool {
+        guard status == .connected, let connection else {
+            self.message = NotConnectedWords.notDone(pairing?.name ?? "The Mac")
+            return false
+        }
+        connection.send(message)
+        return true
+    }
 
     // MARK: What is done with a schedule and its runs (#47)
 
@@ -674,10 +709,10 @@ final class PhoneModel: ObservableObject {
     /// nothing was kept of one.
     @Published private(set) var runOutputs: [String: String?] = [:]
 
-    func runNow(_ schedule: Schedule) { connection?.send(.runSchedule(id: schedule.id)) }
-    func stop(_ run: ScheduleOverview.Run) { connection?.send(.stopScheduleRun(id: run.schedule.id, at: run.run.at)) }
-    func duplicate(_ schedule: Schedule) { connection?.send(.duplicateSchedule(id: schedule.id)) }
-    func pauseSchedules(_ paused: Bool) { connection?.send(.pauseSchedules(paused)) }
+    func runNow(_ schedule: Schedule) { sendOrSay(.runSchedule(id: schedule.id)) }
+    func stop(_ run: ScheduleOverview.Run) { sendOrSay(.stopScheduleRun(id: run.schedule.id, at: run.run.at)) }
+    func duplicate(_ schedule: Schedule) { sendOrSay(.duplicateSchedule(id: schedule.id)) }
+    func pauseSchedules(_ paused: Bool) { sendOrSay(.pauseSchedules(paused)) }
     func loadOutput(of run: ScheduleOverview.Run) { connection?.send(.scheduleRunOutput(id: run.schedule.id, at: run.run.at)) }
 
     /// Someone is at the Mac: for the Live Activity.
@@ -822,7 +857,7 @@ final class PhoneModel: ObservableObject {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, show(mac: mac) else { return }
         pendingPushAnswers.append((session, digest, text))
-        if status == .connected, sessionsKnown { sendPushAnswers() } else { resume() }
+        if status == .connected, sessionsFresh { sendPushAnswers() } else { askForSessions() }
     }
 
     private func sendPushAnswers() {
@@ -839,11 +874,11 @@ final class PhoneModel: ObservableObject {
     /// Opens the session a notification is about, on its Mac.
     func open(session: SessionID, onMac mac: String) {
         guard show(mac: mac) else { return }
-        if sessionsKnown {
+        if sessionsFresh {
             openNotified(session)
         } else {
             pendingOpen = session
-            resume()
+            askForSessions()
         }
     }
 
@@ -869,7 +904,7 @@ final class PhoneModel: ObservableObject {
     /// Replies given while the connection was gone, sent once it is back.
     private var pendingAnswers: [(session: SessionID, state: AgentState, text: String)] = []
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
-    let notifications = AgentNotifications()
+    let notifications = AgentNotifications.shared
 
     // MARK: Notices from the Mac (#66, decided 2026-11-19)
 
@@ -880,7 +915,7 @@ final class PhoneModel: ObservableObject {
     private static func inboxKey(_ mac: String) -> String { "inbox-\(mac)" }
 
     private func loadInbox() {
-        guard let mac = pairing?.id, let data = UserDefaults.standard.data(forKey: Self.inboxKey(mac)),
+        guard let mac = pairing?.id, let data = PrivateFiles.read(Self.inboxKey(mac)),
             let saved = MessageCoding.decode(InboxBook.self, from: data)
         else { return inbox = InboxBook() }
         inbox = saved
@@ -889,7 +924,7 @@ final class PhoneModel: ObservableObject {
 
     private func saveInbox() {
         guard let mac = pairing?.id else { return }
-        UserDefaults.standard.set(MessageCoding.encode(inbox), forKey: Self.inboxKey(mac))
+        PrivateFiles.write(MessageCoding.encode(inbox), as: Self.inboxKey(mac))
     }
 
     /// What the Mac told: into the Inbox; seen at once when its session is
@@ -952,12 +987,14 @@ final class PhoneModel: ObservableObject {
         if status == .connected, let connection {
             connection.send(.handleNotice(id: id, how: .dismissed))
         } else {
-            pendingDismissals.append(id)
+            pendingDismissals[mac, default: []].append(id)
         }
     }
 
-    /// Dismissals made while the connection was gone, sent once it is back.
-    private var pendingDismissals: [UInt64] = []
+    /// Dismissals made while the connection was gone, sent once it is back,
+    /// by Mac: a notice's number is its Mac's, and another Mac's of the same
+    /// number is another notice (#284).
+    private var pendingDismissals: [String: [UInt64]] = [:]
 
     // MARK: The Live Activity (#24)
 
@@ -1105,6 +1142,17 @@ final class PhoneModel: ObservableObject {
     }
 
     /// To the Mac, once it keeps this iPhone told through Apple.
+    /// The Live Activity is of the Mac on screen, by its name (#282): one
+    /// that is left, switched from or forgotten, ends, and is told to stop
+    /// sending it states and starting it, while it can still be told.
+    private func leaveLiveActivity() {
+        if Self.activityPushes, status == .connected { connection?.send(.liveActivity(token: nil, startToken: nil)) }
+        activityToken = nil
+        guard let activity = liveActivity ?? Self.shownActivity else { return }
+        liveActivity = nil
+        Task { await activity.end(nil, dismissalPolicy: .immediate) }
+    }
+
     private func sendActivityTokens() {
         guard Self.activityPushes, status == .connected, hostPushState == .on else { return }
         connection?.send(.liveActivity(token: activityToken, startToken: activityStartToken))
@@ -1166,11 +1214,13 @@ final class PhoneModel: ObservableObject {
     func answer(session: SessionID, to state: AgentState, text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        if status == .connected, let connection {
+        // Not on a connection iOS may have held while the app was away:
+        // after the list is said again, which proves it alive (#276).
+        if status == .connected, sessionsFresh, let connection {
             connection.send(.answer(session: session, to: state, text: text))
         } else {
             pendingAnswers.append((session, state, text))
-            resume()
+            askForSessions()
         }
     }
 
@@ -1181,6 +1231,8 @@ final class PhoneModel: ObservableObject {
     /// it is not seen until the app is in front again.
     func enteredBackground() {
         active = false
+        // What it lists may be old by the time a notification is answered.
+        sessionsFresh = false
         if status == .connected { connection?.send(.deviceInBackground(true)) }
         guard backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Agents") { [weak self] in
@@ -1384,8 +1436,14 @@ final class PhoneModel: ObservableObject {
     /// Kept on the phone, per Mac and session, so that leaving the terminal
     /// or closing the app does not lose a message half written. Not
     /// published: the field that shows it holds the text while it is typed.
-    private var composeDrafts: [String: String] = UserDefaults.standard.dictionary(forKey: PhoneModel.composeDraftsKey) as? [String: String] ?? [:]
+    private var composeDrafts: [String: String] =
+        PrivateFiles.read(PhoneModel.composeDraftsKey).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
     private static let composeDraftsKey = "composeDrafts"
+
+    /// In a file of the app's own, not its preferences (#287).
+    private func saveComposeDrafts() {
+        if let data = try? JSONEncoder().encode(composeDrafts) { PrivateFiles.write(data, as: Self.composeDraftsKey) }
+    }
 
     /// Session numbers start over when the Mac's host is restarted, so the
     /// time the session began is part of what names it.
@@ -1401,7 +1459,7 @@ final class PhoneModel: ObservableObject {
     func setComposeDraft(_ text: String, for id: SessionID) {
         guard let key = composeDraftKey(for: id), composeDrafts[key] != (text.isEmpty ? nil : text) else { return }
         composeDrafts[key] = text.isEmpty ? nil : text
-        UserDefaults.standard.set(composeDrafts, forKey: Self.composeDraftsKey)
+        saveComposeDrafts()
     }
 
     /// Drops what was written for sessions of this Mac that have ended.
@@ -1414,7 +1472,7 @@ final class PhoneModel: ObservableObject {
             guard let owner = draft.key.split(separator: "/").first.map(String.init), paired.contains(owner) else { return false }
             return owner != host || kept.contains(draft.key)
         }
-        if composeDrafts.count != before { UserDefaults.standard.set(composeDrafts, forKey: Self.composeDraftsKey) }
+        if composeDrafts.count != before { saveComposeDrafts() }
     }
 
     /// What is written in answer to what an agent asks (#232), apart from
@@ -1453,11 +1511,35 @@ final class PhoneModel: ObservableObject {
 
     // MARK: Pairing
 
+    /// A pairing link opened from elsewhere, waiting for the user to say
+    /// yes (#279): a page or another app can open one, and pairing sends
+    /// this device's name to the host it names.
+    @Published var pairingAsked: PairingInfo?
+
+    /// A link from outside the app: asked first.
+    func askToPair(with url: URL) {
+        guard let info = PairingInfo(url: url) else { return pair(with: url) }
+        pairingAsked = info
+    }
+
+    /// The link that was asked about, said yes to.
+    func pairAsked() {
+        guard let info = pairingAsked else { return }
+        pairingAsked = nil
+        pair(with: info)
+    }
+
     func pair(with url: URL) {
         guard let info = PairingInfo(url: url) else {
             message = "That is not an AgentTerm pairing code. Show a new one on the Mac and try again."
             return
         }
+        pair(with: info)
+    }
+
+    private func pair(with info: PairingInfo) {
+        // Another Mac comes on screen once paired (#282).
+        leaveLiveActivity()
         disconnect()
         message = nil
         pendingPairing = info
@@ -1477,6 +1559,7 @@ final class PhoneModel: ObservableObject {
     /// Shows another paired Mac. The connection moves with it.
     func select(_ host: SavedHost) {
         guard host.id != pairing?.id else { return }
+        leaveLiveActivity()
         disconnect()
         clearHostState()
         setCurrent(host)
@@ -1515,11 +1598,12 @@ final class PhoneModel: ObservableObject {
         // Its pushes would no longer open: the Mac is asked to stop them.
         if wasCurrent, hostPushState == .on { connection?.send(.pushUnregister) }
         PushKeys.delete(mac: host.id)
-        UserDefaults.standard.removeObject(forKey: Self.inboxKey(host.id))
+        PrivateFiles.remove(Self.inboxKey(host.id))
         hosts.removeAll { $0.id == host.id }
         PairingStore.save(hosts)
         pruneComposeDrafts(of: host.id, keeping: [])
         guard wasCurrent else { return }
+        leaveLiveActivity()
         disconnect()
         clearHostState()
         pendingPairing = nil
@@ -1538,6 +1622,21 @@ final class PhoneModel: ObservableObject {
 
     /// What was shown belongs to the Mac that is being left.
     private func clearHostState() {
+        // What was kept to send to the Mac left, or of it, is not the next
+        // one's (#284): answers and opens wait for that Mac's sessions;
+        // its pages, stashes, commits and branches are its own.
+        pendingAnswers = []
+        pendingPushAnswers = []
+        pendingOpen = nil
+        diffAnswersDue = [:]
+        browserTabs = []
+        browserFrames = [:]
+        watchedPages = [:]
+        stashes = [:]
+        commits = [:]
+        commitsMore = [:]
+        loadingCommits = []
+        branches = [:]
         keepAwake = nil
         startAtLogin = nil
         took([])
@@ -1573,6 +1672,29 @@ final class PhoneModel: ObservableObject {
     }
 
     // MARK: Connection
+
+    /// The list of sessions, said again by the Mac: asked of a connection
+    /// that is up, or said on connecting (#276).
+    private func askForSessions() {
+        if status == .connected, let connection {
+            connection.send(.list)
+            connection.check()
+        } else {
+            reachMac()
+        }
+    }
+
+    /// Connects to the Mac on screen, or makes sure its connection is alive,
+    /// without saying the app is in front: an answer from a notification
+    /// is given from the background, and the Mac goes on telling this
+    /// iPhone through Apple (#278).
+    func reachMac() {
+        if pairing != nil, connection == nil {
+            connect()
+        } else {
+            connection?.check()
+        }
+    }
 
     /// Called when the app comes to the front.
     func resume() {
@@ -1652,6 +1774,20 @@ final class PhoneModel: ObservableObject {
             break
         case .closed(let reason):
             connection = nil
+            sessionsFresh = false
+            // What waited for that connection's answer waits no more: the
+            // commit, the save, the forced push's question, a page of
+            // commits, a session to open (#281). The commit's message and
+            // the file's text stay where they were.
+            let waited = committing != nil || savingFile != nil || askingForcePush != nil || !lastCommitWanted.isEmpty
+            committing = nil
+            savingFile = nil
+            askingForcePush = nil
+            loadingCommits = []
+            diffAnswersDue = [:]
+            openCreatedSession = false
+            lastCommitWanted = [:]
+            if waited, !isPairing { message = NotConnectedWords.notAnswered(pairing?.name ?? "The Mac") }
             refuseBrowserAsks()
             replaying = nil
             status = .offline(reason)
@@ -1693,6 +1829,15 @@ final class PhoneModel: ObservableObject {
         #if DEBUG
         TouchLog.received(message)
         #endif
+        // While pairing, the host asked is not the Mac on screen: only its
+        // answer to the code is taken, nothing it says of sessions, folders
+        // or the Mac on screen's notices (#279).
+        if isPairing {
+            switch message {
+            case .paired, .error: break
+            default: return
+            }
+        }
         switch message {
         case .welcome(let version, _, _, _):
             hostMatch = ProtocolMatch(host: version)
@@ -1700,8 +1845,10 @@ final class PhoneModel: ObservableObject {
             status = .connected
             // In front or in the background, from the start (#190).
             connection?.send(.deviceInBackground(!active))
-            for id in pendingDismissals { connection?.send(.handleNotice(id: id, how: .dismissed)) }
-            pendingDismissals.removeAll()
+            if let mac = pairing?.id {
+                for id in pendingDismissals[mac] ?? [] { connection?.send(.handleNotice(id: id, how: .dismissed)) }
+                pendingDismissals[mac] = nil
+            }
             pushAsked = false
             hostPushState = nil
             for answer in pendingAnswers { connection?.send(.answer(session: answer.session, to: answer.state, text: answer.text)) }
@@ -1722,9 +1869,12 @@ final class PhoneModel: ObservableObject {
         case .sessions(let list):
             sessions = list
             sessionsKnown = true
+            sessionsFresh = true
             turnResults = turnResults.filter { id, _ in list.contains { $0.id == id } }
             updateLiveActivity()
             if !pendingPushAnswers.isEmpty { sendPushAnswers() }
+            for answer in pendingAnswers { connection?.send(.answer(session: answer.session, to: answer.state, text: answer.text)) }
+            pendingAnswers.removeAll()
             if let pendingOpen { openNotified(pendingOpen) }
             if let pairing { pruneComposeDrafts(of: pairing.id, keeping: list) }
             syncSessionLayout()
@@ -1966,7 +2116,9 @@ final class PhoneModel: ObservableObject {
             tab = "sessions"
             entered = true
         case .error(let text, _):
-            if text == "invalid token" {
+            if text == "invalid token", !isPairing {
+                // Of the Mac on screen, never of one being paired (#279):
+                // that one was not asked with a token of this iPhone's.
                 let name = pairing?.name ?? "The Mac"
                 forgetMac()
                 self.message = "\(name) removed this \(ThisDevice.name) from its paired devices. Pair it again to reconnect."
@@ -2022,8 +2174,12 @@ final class PhoneModel: ObservableObject {
             }
             if let outermost = around.keys.min(by: { $0.count < $1.count }) { loadDiff(outermost) }
             take(snapshot, of: folder)
-            if committing == folder {
-                // The answer to a commit that git accepted: an error would have come first.
+            let due = max((diffAnswersDue[folder] ?? 0) - 1, 0)
+            diffAnswersDue[folder] = due == 0 ? nil : due
+            if committing == folder, due == 0 {
+                // The answer to a commit that git accepted, once every answer
+                // that was due is in (#285): one asked for before it may come
+                // back while git is still at it.
                 committing = nil
                 commitDrafts[folder] = nil
                 amending[folder] = nil
@@ -2202,7 +2358,7 @@ final class PhoneModel: ObservableObject {
     private var pendingSessionHandoff: SessionInfo?
 
     func loadDiff(_ folder: String) {
-        connection?.send(.diff(path: folder))
+        sendForDiff(.diff(path: folder), in: folder, quietly: true)
     }
 
     /// Keeps a folder's changes, and those of the submodules changed inside
@@ -2280,6 +2436,11 @@ final class PhoneModel: ObservableObject {
 
     func saveFile(_ path: String, text: String) {
         guard savingFile == nil else { return }
+        // Nothing would answer: never a save that waits for ever (#281).
+        guard status == .connected, connection != nil else {
+            message = NotConnectedWords.notSaved(pairing?.name ?? "The Mac")
+            return
+        }
         savingFile = path
         savingText = text
         connection?.send(.writeFile(path: path, text: text))
@@ -2301,27 +2462,31 @@ final class PhoneModel: ObservableObject {
 
     /// Stages files for the next commit. No files means every change.
     func stage(_ files: [String], in folder: String) {
-        connection?.send(.gitStage(path: folder, files: files))
+        sendForDiff(.gitStage(path: folder, files: files), in: folder)
     }
 
     /// Takes files out of the next commit. No files means all of them.
     func unstage(_ files: [String], in folder: String) {
-        connection?.send(.gitUnstage(path: folder, files: files))
+        sendForDiff(.gitUnstage(path: folder, files: files), in: folder)
     }
 
     /// Discards changes that are not staged, once the user was asked (#39):
     /// back to what is staged or committed, and to the Mac's Trash what git
     /// does not track. No files means every such change.
     func discard(_ files: [String], in folder: String) {
-        connection?.send(.gitDiscard(path: folder, files: files))
+        sendForDiff(.gitDiscard(path: folder, files: files), in: folder)
     }
 
     /// Commits what is staged with the message written for the folder.
     func commit(in folder: String) {
         guard committing == nil, let message = commitDrafts[folder] else { return }
+        guard status == .connected, connection != nil else {
+            self.message = NotConnectedWords.notCommitted(pairing?.name ?? "The Mac")
+            return
+        }
         committing = folder
         // The last commit is being amended: this replaces it (#41).
-        connection?.send(amending[folder] != nil ? .gitAmend(path: folder, message: message) : .gitCommit(path: folder, message: message))
+        sendForDiff(amending[folder] != nil ? .gitAmend(path: folder, message: message) : .gitCommit(path: folder, message: message), in: folder)
     }
 
     // MARK: Conflicts (#42)
@@ -2629,7 +2794,26 @@ final class PhoneModel: ObservableObject {
 /// while iOS lets the app run; after that, the Mac sends them through Apple
 /// (#66) and the notification service extension makes the same ones.
 final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
-    weak var model: PhoneModel?
+    /// Made as the app finishes launching (`AppDelegate`), as iOS asks of a
+    /// notification center's delegate: the press that launched the app is
+    /// told to it then, before the model is (#277).
+    static let shared = AgentNotifications()
+
+    weak var model: PhoneModel? {
+        didSet {
+            guard model != nil else { return }
+            let waiting = untilTheModel
+            untilTheModel = []
+            for answer in waiting { answer() }
+        }
+    }
+    /// What a notification's press asked before the model was made.
+    private var untilTheModel: [() -> Void] = []
+
+    /// Runs `answer` with the model there, at once or once it is.
+    private func withModel(_ answer: @escaping () -> Void) {
+        if model != nil { answer() } else { untilTheModel.append(answer) }
+    }
     /// Whether iOS was asked, and who waits for its answer (#200).
     private var permission = PermissionAsk<(Bool) -> Void>()
 
@@ -2637,7 +2821,10 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
         super.init()
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        center.setNotificationCategories(NoticeContent.fixedCategories)
+        // Added to what iOS keeps, never in its place: the categories the
+        // extension made for notifications that came while the app was not
+        // running hold their buttons (#277).
+        center.getNotificationCategories { known in center.setNotificationCategories(known.union(NoticeContent.fixedCategories)) }
     }
 
     /// The categories of questions with choices (#55), by the notification
@@ -2650,7 +2837,6 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
     /// choices, a button for each and the text reply after them.
     private func category(of notice: AgentNotice, request: String) -> String {
         choiceCategories[request] = NoticeContent.choiceCategory(of: notice, request: request)
-        UNUserNotificationCenter.current().setNotificationCategories(NoticeContent.fixedCategories.union(choiceCategories.values))
         if let own = choiceCategories[request] { return own.identifier }
         return notice.takesAReply ? NoticeContent.replyCategory : NoticeContent.openCategory
     }
@@ -2699,11 +2885,18 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
             content = NoticeContent.content(of: nil, id: notice.id, mac: mac, macName: macName, title: notice.title(on: macName), body: notice.body)
         }
         let center = UNUserNotificationCenter.current()
-        // Not again what came through Apple while the app was asleep: the
-        // same name replaces it, and one shown already is left as it is.
-        center.getDeliveredNotifications { shown in
-            guard !shown.contains(where: { $0.request.identifier == identifier }) else { return }
-            center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+        let made = Set(choiceCategories.values)
+        // Its category first, added to what iOS keeps, as the extension does
+        // (#277): an earlier notification's buttons stay. Then, not again
+        // what came through Apple while the app was asleep: the same name
+        // replaces it, and one shown already is left as it is.
+        center.getNotificationCategories { known in
+            let kept = known.filter { old in !made.contains { $0.identifier == old.identifier } }
+            center.setNotificationCategories(kept.union(made).union(NoticeContent.fixedCategories))
+            center.getDeliveredNotifications { shown in
+                guard !shown.contains(where: { $0.request.identifier == identifier }) else { return }
+                center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+            }
         }
     }
 
@@ -2730,8 +2923,10 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
         let noticeID = (info["notice"] as? String).flatMap(UInt64.init)
         if action == UNNotificationDismissActionIdentifier {
             DispatchQueue.main.async { [weak self] in
-                if let noticeID, let mac = info["mac"] as? String { self?.model?.dismissNotice(noticeID, onMac: mac) }
-                completionHandler()
+                defer { completionHandler() }
+                self?.withModel { [weak self] in
+                    if let noticeID, let mac = info["mac"] as? String { self?.model?.dismissNotice(noticeID, onMac: mac) }
+                }
             }
             return
         }
@@ -2741,24 +2936,29 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
             let button = categories.first { $0.identifier == content.categoryIdentifier }?.actions.first { $0.identifier == action }?.title
             DispatchQueue.main.async { [weak self] in
                 defer { completionHandler() }
-                guard let model = self?.model, let mac = info["mac"] as? String else { return }
-                guard let session else {
-                    // A failure: read once it is opened.
-                    if let noticeID, action == UNNotificationDefaultActionIdentifier { model.dismissNotice(noticeID, onMac: mac) }
-                    return
-                }
-                var text = typed
-                if text == nil, action.hasPrefix("choice-") {
-                    text = state.flatMap { AgentNotice(session: session, name: "", folder: "", state: $0).choice(ofButton: action) } ?? button
-                }
-                if let text {
-                    if let state, model.pairing?.id == mac {
-                        model.answer(session: session, to: state, text: text)
-                    } else if let digest {
-                        model.answer(session: session, onMac: mac, digest: digest, text: text)
+                // A press that launched the app waits for its model (#277).
+                self?.withModel { [weak self] in
+                    guard let model = self?.model, let mac = info["mac"] as? String else { return }
+                    guard let session else {
+                        // A failure: read once it is opened.
+                        if let noticeID, action == UNNotificationDefaultActionIdentifier { model.dismissNotice(noticeID, onMac: mac) }
+                        return
                     }
-                } else if action == UNNotificationDefaultActionIdentifier {
-                    model.open(session: session, onMac: mac)
+                    var text = typed
+                    if text == nil, action.hasPrefix("choice-") {
+                        text =
+                            state.flatMap { AgentNotice(session: session, name: "", folder: "", state: $0).choice(ofButton: action) }
+                            ?? (info[NoticeContent.choicesKey] as? [String: String])?[action] ?? button
+                    }
+                    if let text {
+                        if let state, model.pairing?.id == mac {
+                            model.answer(session: session, to: state, text: text)
+                        } else if let digest {
+                            model.answer(session: session, onMac: mac, digest: digest, text: text)
+                        }
+                    } else if action == UNNotificationDefaultActionIdentifier {
+                        model.open(session: session, onMac: mac)
+                    }
                 }
             }
         }
