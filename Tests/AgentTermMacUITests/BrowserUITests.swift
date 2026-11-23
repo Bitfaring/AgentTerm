@@ -1650,6 +1650,42 @@ final class BrowserUITests: MacUITestCase {
         XCTAssertEqual(refused.text, BrowserWords.userHasIt(try XCTUnwrap(popup)))
     }
 
+    /// BROWSER-65 (#253): a profile deleted from a device, as from
+    /// Settings > Browser, closes its tabs and the agents' choice of it.
+    /// Before the fix its tab stayed open, signed in, in a profile no
+    /// list showed any more.
+    func testAProfileDeletedFromADeviceClosesItsTabs() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let mac = try device()
+        var asked = 3000
+        func ask(_ request: BrowserRequest) -> BrowserResult? {
+            asked += 1
+            let id = asked
+            mac.send(.browserAsk(id: id, request: request))
+            var answer: BrowserResult?
+            wait("the answer to \(request)") {
+                answer = mac.messages.lazy.compactMap { if case .browserAnswer(id, let result) = $0 { return result } else { return nil } }.first
+                return answer != nil
+            }
+            if case .refused(let why)? = answer { XCTFail("\(request): \(why)") }
+            return answer
+        }
+        guard case .profiles(let added)? = ask(.profile(.add(name: "Work"))) else { return XCTFail("no profiles answered") }
+        let work = try XCTUnwrap(added.first { $0.name == "Work" })
+        let opened = server.text("browser_open", ["url": page.absoluteString, "profile": "Work"])
+        XCTAssertFalse(opened.failed, opened.text)
+        XCTAssertEqual(server.text("browser_profiles").text, BrowserWords.profiles(["Default", "Work"], uses: "Work"))
+
+        guard case .profiles(let left)? = ask(.profile(.delete(id: work.id))) else { return XCTFail("no profiles answered") }
+        XCTAssertEqual(left.map(\.name), ["Default"])
+        wait("the profile's tab closed, not \(server.text("browser_tabs").text)", timeout: 15) {
+            server.text("browser_tabs").text == "You have no tab. Open one with browser_open."
+        }
+        XCTAssertEqual(server.text("browser_profiles").text, BrowserWords.profiles(["Default"], uses: nil))
+    }
+
     /// BROWSER-60 (#254): a page whose process stopped is said at once to
     /// the agent, not after DevTools' time is out; opened again, it works.
     func testAPageWhoseProcessStoppedIsSaidAtOnce() throws {

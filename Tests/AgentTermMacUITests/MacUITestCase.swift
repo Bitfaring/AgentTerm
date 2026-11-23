@@ -28,7 +28,7 @@ class MacUITestCase: XCTestCase {
     /// and was left running; losing its host, it started one of its own
     /// (#185).
     private var launched: [MacDriver] = []
-    private var clients: [AgentTermConnection] = []
+    var clients: [AgentTermConnection] = []
 
     /// A port nothing else in a run uses.
     private static var nextPort: UInt16 = UInt16(ProcessInfo.processInfo.environment["AGENTTERM_MAC_UI_PORT"] ?? "") ?? 7840

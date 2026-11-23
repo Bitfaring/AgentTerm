@@ -38,6 +38,33 @@ public enum DaemonLauncher {
         (path as NSString).lastPathComponent == "agenttermd"
     }
 
+    /// What Restart Host does with what listens on the port (#306).
+    public enum Restart: Equatable, Sendable {
+        /// A host: it is stopped, and its death is not counted as one.
+        case stop(pid_t)
+        /// Nothing listens: nothing is stopped, and that is said.
+        case noHost
+        /// A program that is not a host, by its name: never stopped
+        /// (#204), and that is said.
+        case notAHost(name: String)
+
+        /// What the user is told when nothing was stopped; nil for a stop.
+        public func refusal(port: UInt16) -> String? {
+            switch self {
+            case .stop: return nil
+            case .noHost: return "No host was found on port \(port), so nothing was stopped. AgentTerm starts its own when it connects again."
+            case .notAHost(let name): return "Port \(port) is held by \(name), which is not an AgentTerm host, so it was not stopped."
+            }
+        }
+    }
+
+    /// What Restart Host does with the program found on the port.
+    public static func restart(of listener: (pid: pid_t, path: String)?) -> Restart {
+        guard let listener else { return .noHost }
+        guard isAHost(listener.path) else { return .notAHost(name: (listener.path as NSString).lastPathComponent) }
+        return .stop(listener.pid)
+    }
+
     /// Asks a host to stop. Its sessions end with it.
     public static func stop(_ pid: pid_t) {
         kill(pid, SIGTERM)

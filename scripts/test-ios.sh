@@ -133,9 +133,10 @@ SECOND_DAEMON=$!
 ( while ! grep -q '"keepAwake":true' "$SECOND_STATE/settings.json" 2>/dev/null; do sleep 0.3; done; kill "$SECOND_DAEMON" ) &
 GONE_WATCH=$!
 TAKEOVER_PID=""
+UNANSWERED_WATCH=""
 cleanup() {
     local status=$?
-    stop_then_remove "$DAEMON $SECOND_DAEMON $GONE_WATCH $TAKEOVER_PID"
+    stop_then_remove "$DAEMON $SECOND_DAEMON $GONE_WATCH $TAKEOVER_PID $UNANSWERED_WATCH"
     # Whatever else is on the hosts' ports or runs from their folders (#221).
     stop_what_is_left "$PORT $SECOND_PORT" "$STATE" "$SECOND_STATE"
     stop_then_remove "" "$STATE" "$SECOND_STATE"
@@ -208,6 +209,19 @@ if [ "${WORKTREE:-}" = only ]; then
     chmod +x "$PROJECT/.git/hooks/post-checkout"
     export TEST_RUNNER_AGENTTERM_ONLY_WORKTREE=1
 fi
+# UNANSWERED=only stages the test project's change from the phone and commits
+# it, and the host is stopped while git runs the commit's hook (IOS-19, #281),
+# and nothing else.
+if [ "${UNANSWERED:-}" = only ]; then
+    printf '#!/bin/sh\ntouch "%s"\nsleep 20\n' "$STATE/committing" > "$PROJECT/.git/hooks/pre-commit"
+    chmod +x "$PROJECT/.git/hooks/pre-commit"
+    ( while [ ! -f "$STATE/committing" ]; do sleep 0.2; done; kill "$DAEMON" ) &
+    UNANSWERED_WATCH=$!
+    export TEST_RUNNER_AGENTTERM_ONLY_UNANSWERED=1
+fi
+# DELETE=only makes a schedule on the phone and deletes it, asked first
+# (SCHED-39, #308), and nothing else.
+if [ "${DELETE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_DELETE=1; fi
 # NARROW=only narrows the iPad's window and looks at the list (IPAD-2), and
 # nothing else; on an iPhone it is refused above (#319).
 if [ "${NARROW:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NARROW=1; fi
@@ -259,6 +273,8 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${INBOX:-}" = only ]; then echo "iOS UI test passed (the Inbox only)."; rm -f "$LOG"; exit 0; fi
     if [ "${CUT:-}" = only ]; then echo "iOS UI test passed (an Inbox row of a cut answer only)."; rm -f "$LOG"; exit 0; fi
     if [ "${WORKTREE:-}" = only ]; then echo "iOS UI test passed (a worktree being made only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${DELETE:-}" = only ]; then echo "iOS UI test passed (a schedule deleted only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${UNANSWERED:-}" = only ]; then echo "iOS UI test passed (a commit the Mac did not answer only)."; rm -f "$LOG"; exit 0; fi
     if [ "${ASK:-}" = only ]; then
         # IOS-12: the answer went in while the stand-in asked, as the keys of
         # its second choice; the prompt only after the question was over.

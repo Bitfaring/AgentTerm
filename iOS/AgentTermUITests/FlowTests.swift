@@ -493,6 +493,16 @@ final class FlowTests: XCTestCase {
             watchAWorktreeBeingMade(app, compose: compose)
             return
         }
+        if environment["AGENTTERM_ONLY_UNANSWERED"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            commitWhileTheMacGoes(app)
+            return
+        }
+        if environment["AGENTTERM_ONLY_DELETE"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            deleteASchedule(app)
+            return
+        }
         if environment["AGENTTERM_ONLY_NARROW"] != nil {
             app.navigationBars.buttons.firstMatch.tap()
             narrowTheWindow(app)
@@ -1158,6 +1168,85 @@ final class FlowTests: XCTestCase {
         let testing = try XCTUnwrap(opened["TESTING.md"])
         XCTAssertLessThanOrEqual(testing, allowed, "TESTING.md held the app up \(Int(testing)) ms as it opened; a small document \(Int(small)) ms")
         XCTAssertLessThanOrEqual(scrolled, allowed, "swiping through TESTING.md held the app up \(Int(scrolled)) ms")
+    }
+
+    /// IOS-19 (#281): a commit waiting for the Mac when its connection
+    /// closes (the script stops the host while git runs the commit's hook)
+    /// ends, says so, and keeps its message; pressed again while the Mac is
+    /// not connected, it is refused at once. Before the fix it spun until
+    /// another commit was made.
+    private func commitWhileTheMacGoes(_ app: XCUIApplication) {
+        app.buttons["folder-details"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Git"].waitForExistence(timeout: 10))
+        app.buttons["Git"].tap()
+        XCTAssertTrue(app.staticTexts["notes.txt"].waitForExistence(timeout: 10), "the changed file is not listed")
+        app.buttons["Stage All"].tap()
+        XCTAssertTrue(app.buttons["Unstage notes.txt"].waitForExistence(timeout: 10), "the file was not staged")
+        let message = app.textFields["commit-message"].exists ? app.textFields["commit-message"] : app.textViews["commit-message"]
+        message.tap()
+        message.typeText("test: the Mac goes away")
+        let commit = app.buttons["commit"]
+        XCTAssertTrue(commit.isEnabled)
+        commit.tap()
+
+        func alert(_ words: String) -> XCUIElement {
+            app.alerts.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
+        }
+        let unanswered = alert("closed before it answered what was asked")
+        XCTAssertTrue(unanswered.waitForExistence(timeout: 30), "nothing said that the Mac went before it answered the commit")
+        capture("commit-not-answered")
+        app.alerts.buttons["OK"].tap()
+        XCTAssertEqual(message.value as? String, "test: the Mac goes away", "the commit's message was thrown away")
+
+        // Pressed again with the Mac gone: refused at once, the message kept.
+        let pressed = Date()
+        if commit.isEnabled { commit.tap() }
+        let refused = alert("is not connected, so nothing was committed")
+        XCTAssertTrue(refused.waitForExistence(timeout: 5), "a commit asked while the Mac is not connected was not refused at once")
+        XCTAssertLessThan(Date().timeIntervalSince(pressed), 5)
+        app.alerts.buttons["OK"].tap()
+        XCTAssertEqual(message.value as? String, "test: the Mac goes away", "the commit's message was thrown away when it was refused")
+    }
+
+    /// SCHED-39 (#308) on the iPhone: a schedule made here is deleted only
+    /// once that is confirmed. Cancel keeps it, with its editor open;
+    /// Delete Schedule takes it away.
+    private func deleteASchedule(_ app: XCUIApplication) {
+        app.tab("Schedules").tap()
+        let add = app.buttons["new-schedule"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "no New Schedule")
+        add.tap()
+        let prompt = app.textFields["Prompt"].exists ? app.textFields["Prompt"] : app.textViews["Prompt"]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5), "the editor has no prompt")
+        prompt.tap()
+        prompt.typeText("say hello")
+        app.navigationBars.buttons["Save"].tap()
+        let withoutAsking = app.buttons["Run Without Asking"]
+        if withoutAsking.waitForExistence(timeout: 3) { withoutAsking.tap() }
+        let row = app.staticTexts["Every morning"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "the schedule is not listed")
+        row.tap()
+
+        let delete = app.buttons["Delete Schedule…"]
+        for _ in 0..<6 where !delete.isHittable { app.swipeUp() }
+        delete.tap()
+        let title = app.staticTexts["Delete the schedule “Every morning”?"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5), "deleting was not asked first")
+        capture("schedule-delete-asked")
+        // Cancel is a tap outside the question: iOS shows no button for it.
+        let cancel = app.buttons["Cancel"].firstMatch
+        if cancel.exists { cancel.tap() } else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap() }
+        XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Every morning"].exists, "Cancel closed the editor")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "the schedule was deleted without being confirmed")
+
+        row.tap()
+        for _ in 0..<6 where !delete.isHittable { app.swipeUp() }
+        delete.tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        app.buttons["Delete Schedule"].firstMatch.tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 10), "the schedule was not deleted once confirmed")
     }
 
     private func narrowTheWindow(_ app: XCUIApplication) {

@@ -190,7 +190,9 @@ says names the device it runs on.
   account limit starts over. On or off without being deleted. Made
   and changed in the Mac's Schedules, a place of the window, and the
   iPhone's Schedules tab; the host keeps them and runs them, with
-  the app closed too.
+  the app closed too. Deleting one asks first, on both (from its row's
+  menu or its editor on the Mac, from its editor on the iPhone): its runs
+  go with it, on every device.
 - **Schedules** shows them in three groups, the same on both: **Running**,
   the runs whose session still runs, each opening its session; **Scheduled**,
   every schedule, the next to run first, then those waiting for a limit,
@@ -1692,7 +1694,8 @@ edits here is not merged; saving overwrites it.
   or after the screen closed is worth nothing.
 - Pairing gives the iPhone a token of its own, kept in its Keychain. The Mac
   lists the paired devices, with when each last connected, and can remove
-  one. A removed device is disconnected at once and has to pair again.
+  one, asked first; the iPhone removes none. A removed device is
+  disconnected at once and has to pair again.
 - All remote traffic between the devices goes through Tailscale, and
   AgentTerm does not open a port on the local network. The one relay is that
   of the iPhone's notifications through Apple, which passes on what it

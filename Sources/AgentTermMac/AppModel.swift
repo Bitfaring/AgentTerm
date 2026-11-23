@@ -206,14 +206,13 @@ final class AppModel: ObservableObject {
                 // Never a program that is not a host (#204); and nothing
                 // stopped is said, and not counted as stopping (#306): the
                 // next time the host dies is a death.
-                guard let listener, DaemonLauncher.isAHost(listener.path) else {
-                    self.notice =
-                        listener.map { "Port \(port) is held by \(($0.path as NSString).lastPathComponent), which is not an AgentTerm host, so it was not stopped." }
-                        ?? "No host was found on port \(port), so nothing was stopped. AgentTerm starts its own when it connects again."
+                let restart = DaemonLauncher.restart(of: listener)
+                guard case .stop(let pid) = restart else {
+                    self.notice = restart.refusal(port: port)
                     return
                 }
                 self.stoppingHost = true
-                DispatchQueue.global(qos: .userInitiated).async { DaemonLauncher.stop(listener.pid) }
+                DispatchQueue.global(qos: .userInitiated).async { DaemonLauncher.stop(pid) }
             }
         }
     }
