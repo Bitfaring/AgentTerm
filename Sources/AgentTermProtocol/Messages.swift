@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 42
+public let agenttermProtocolVersion = 43
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -681,6 +681,11 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Sent after the `error` and the `diff` that answer it: a `diff` alone
     /// may be the answer to something else asked in the meantime.
     case gitSynced(path: String)
+    /// The end of a commit or an amend of a folder (#285, #302), sent after
+    /// the `error` and the `diff` that answer it: nil when git took it,
+    /// else git's reason. A commit waits for this, not for a `diff` or an
+    /// `error`, which may be the answer to something else.
+    case gitCommitted(path: String, problem: String?)
     /// How the Mac itself is doing: processor, memory, network, heat,
     /// battery and uptime. Sent every few seconds while a client is connected.
     case systemStats(SystemStats)

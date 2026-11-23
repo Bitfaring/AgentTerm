@@ -176,11 +176,11 @@ class MacUITestCase: XCTestCase {
     }
 
     /// A picture of the window in the middle of a test, with `ALL_SHOTS`.
-    func shot(_ name: String) {
+    func shot(_ name: String, topmost: Bool = false) {
         let environment = ProcessInfo.processInfo.environment
         guard environment["AGENTTERM_SHOT_ALWAYS"] != nil, let folder = environment["AGENTTERM_SHOT_DIR"], let app else { return }
         try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
-        app.capture(to: URL(fileURLWithPath: folder).appendingPathComponent("\(self.name.filter { $0.isLetter || $0.isNumber })-\(name).png"))
+        app.capture(to: URL(fileURLWithPath: folder).appendingPathComponent("\(self.name.filter { $0.isLetter || $0.isNumber })-\(name).png"), topmost: topmost)
     }
 
     /// Stops the program that listens on a port: a host the app started.

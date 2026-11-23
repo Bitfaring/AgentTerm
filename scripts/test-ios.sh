@@ -76,6 +76,8 @@ printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"write test
 git init -q -b main "$PROJECT/web"
 printf 'web\n' >> "$PROJECT/.git/info/exclude"
 printf '["%s"]' "$PROJECT" > "$STATE/folders.json"
+# BADSTATE=only: a schedules file of a shape this build does not know.
+if [ "${BADSTATE:-}" = only ]; then printf '{"paused":false,"schedules":[{"id":"x"}]}' > "$STATE/schedules.json"; fi
 # MARKDOWN=only: the documents the Mac's PERF-15 opens, for the phone's
 # preview to be measured the same way (#126).
 if [ "${MARKDOWN:-}" = only ]; then
@@ -168,7 +170,8 @@ export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$AGENTTER
 export TEST_RUNNER_AGENTTERM_SECOND_PAIR_URL="$(AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" pairing-link --port "$SECOND_PORT" --host 127.0.0.1 --name "Second Mac")"
 export TEST_RUNNER_AGENTTERM_LAUNCH="${AGENTTERM_LAUNCH:-Start Shell}"
 export TEST_RUNNER_AGENTTERM_TEST_PROJECT=1
-export TEST_RUNNER_AGENTTERM_EXPECT_HOST_DIED=1
+# Not with BADSTATE=only, whose banner of the schedules is a second one.
+[ "${BADSTATE:-}" = only ] || export TEST_RUNNER_AGENTTERM_EXPECT_HOST_DIED=1
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTERM_SHOT_DIR="$SHOTS"; fi
 # LANDSCAPE=only looks at the app with the phone on its side and nothing else.
 if [ "${LANDSCAPE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_LANDSCAPE=1; fi
@@ -218,6 +221,16 @@ if [ "${UNANSWERED:-}" = only ]; then
     ( while [ ! -f "$STATE/committing" ]; do sleep 0.2; done; kill "$DAEMON" ) &
     UNANSWERED_WATCH=$!
     export TEST_RUNNER_AGENTTERM_ONLY_UNANSWERED=1
+fi
+# BADSTATE=only starts the first host on a schedules file it cannot read
+# (HOST-16, #273), for the phone's banner to be seen, and nothing else.
+if [ "${BADSTATE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_BADSTATE=1; fi
+# COMMITWAIT=only commits from the phone while the commit's hook changes
+# another file and takes a while (IOS-23, #285), and nothing else.
+if [ "${COMMITWAIT:-}" = only ]; then
+    printf '#!/bin/sh\nprintf x > during-commit.txt\nsleep 15\n' > "$PROJECT/.git/hooks/pre-commit"
+    chmod +x "$PROJECT/.git/hooks/pre-commit"
+    export TEST_RUNNER_AGENTTERM_ONLY_COMMITWAIT=1
 fi
 # DELETE=only makes a schedule on the phone and deletes it, asked first
 # (SCHED-39, #308), and nothing else.
@@ -273,6 +286,8 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${INBOX:-}" = only ]; then echo "iOS UI test passed (the Inbox only)."; rm -f "$LOG"; exit 0; fi
     if [ "${CUT:-}" = only ]; then echo "iOS UI test passed (an Inbox row of a cut answer only)."; rm -f "$LOG"; exit 0; fi
     if [ "${WORKTREE:-}" = only ]; then echo "iOS UI test passed (a worktree being made only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${BADSTATE:-}" = only ]; then echo "iOS UI test passed (a state file the host could not read only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${COMMITWAIT:-}" = only ]; then echo "iOS UI test passed (a commit while its folder changes only)."; rm -f "$LOG"; exit 0; fi
     if [ "${DELETE:-}" = only ]; then echo "iOS UI test passed (a schedule deleted only)."; rm -f "$LOG"; exit 0; fi
     if [ "${UNANSWERED:-}" = only ]; then echo "iOS UI test passed (a commit the Mac did not answer only)."; rm -f "$LOG"; exit 0; fi
     if [ "${ASK:-}" = only ]; then

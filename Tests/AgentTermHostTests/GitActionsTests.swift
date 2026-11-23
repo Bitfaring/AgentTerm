@@ -33,6 +33,30 @@ final class GitActionsTests: XCTestCase {
     private func entries(_ files: [FileDiff]) -> [String] { files.map { "\($0.marker) \($0.path)" } }
     private var snapshot: DiffSnapshot { GitDiff.snapshot(directory: root.path) }
 
+    /// GIT-83 (#300) with a real repository: commits made at the top after
+    /// the first page was read make `--skip` give a page that repeats the
+    /// last of it, and `CommitPages` takes it for stale, to be read again
+    /// from the top; read again, the list has each commit once.
+    func testAPageReadAfterNewCommitsIsReadAgainFromTheTop() throws {
+        for number in 1...60 { git("commit", "-q", "--allow-empty", "-m", "commit \(number)") }
+        let first = GitActions.log(in: root.path, skip: 0, limit: 50)
+        XCTAssertEqual(first.commits.count, 50)
+        XCTAssertTrue(first.more)
+        // An agent commits three times while the list is open.
+        for number in 61...63 { git("commit", "-q", "--allow-empty", "-m", "commit \(number)") }
+        let next = GitActions.log(in: root.path, skip: first.commits.count, limit: 50)
+        XCTAssertEqual(Set(next.commits.map(\.hash)).intersection(first.commits.map(\.hash)).count, 3, "the next page repeats the last three")
+        XCTAssertEqual(CommitPages.add(next.commits, skip: first.commits.count, to: first.commits), .stale)
+
+        let again = GitActions.log(in: root.path, skip: 0, limit: 50)
+        let rest = GitActions.log(in: root.path, skip: again.commits.count, limit: 50)
+        guard case .listed(let all) = CommitPages.add(rest.commits, skip: again.commits.count, to: again.commits) else {
+            return XCTFail("the page after the list read again is not added")
+        }
+        XCTAssertEqual(all.count, 63)
+        XCTAssertEqual(Set(all.map(\.hash)).count, 63, "a commit is listed twice")
+    }
+
     /// GIT-66: looking at a folder's changes writes nothing into its
     /// repository. git, asked for the status, rewrites the index when a
     /// file's time changed, and holds `index.lock` while it does: a commit

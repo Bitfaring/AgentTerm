@@ -567,6 +567,23 @@ final class GitTests: MacUITestCase {
         app.wait(for: .containing("+second line"))
     }
 
+    /// GIT-81 (#295) on the screen: a file indented with tabs, side by
+    /// side: its columns line up, and the panel's text has the tabs.
+    func testAFileWithTabsIsShownSideBySideWithItsTabs() throws {
+        try write("all:\n\tswift build\n", to: "Makefile", in: project)
+        git("add", "Makefile", in: project)
+        git("commit", "-q", "-m", "a makefile", in: project)
+        try write("all:\n\tswift build\n\tswift test\n\t\t@echo done\n", to: "Makefile", in: project)
+        app.press(.button("Git"))
+        app.press(.id("change-Makefile"), timeout: 15)
+        app.wait(for: .containing("swift test"))
+        app.press(.button("Show side by side"))
+        app.wait(for: .id("split-diff"))
+        app.wait("the tab in the panel of what it is now") { (self.app.value(of: .id("split-diff-after")) ?? "").contains("\tswift test") }
+        shot("split-diff-tabs")
+        app.press(.button("Show in one panel"))
+    }
+
     func testChangesMadeOnAnotherDeviceShowHere() throws {
         let phone = try device()
         app.press(.button("Git"))

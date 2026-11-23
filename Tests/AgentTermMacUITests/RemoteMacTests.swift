@@ -499,6 +499,85 @@ final class RemoteMacTests: MacUITestCase {
         return !found.isEmpty
     }
 
+    /// REMOTE-37 (#303): a forced push's question asked of the other Mac,
+    /// whose connection closes before it answers, holds the sync bar no
+    /// more: Fetch works again on this Mac. Before the fix Fetch, Pull and
+    /// Push stayed disabled in every folder until the app was opened again.
+    func testAForcedPushTheOtherMacNeverAnswersDoesNotHoldTheSyncBar() throws {
+        try startOtherMac()
+        let otherRemote = root.appendingPathComponent("other/remote.git")
+        git("init", "-q", "--bare", "-b", "main", otherRemote.path, in: otherProject)
+        git("remote", "add", "origin", otherRemote.path, in: otherProject)
+        git("push", "-q", "-u", "origin", "main", in: otherProject)
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Git"))
+        app.wait(for: .id("sync-more"), timeout: 15)
+
+        // Its host stops answering, and then is gone.
+        let other = listeners(on: otherPort)
+        XCTAssertFalse(other.isEmpty, "no host listens on \(otherPort)")
+        for pid in other { kill(pid, SIGSTOP) }
+        app.press(.id("sync-more"))
+        app.press(.button("Force Push…"), menus: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        for pid in other { kill(pid, SIGKILL) }
+        wait("the other host gone") { Set(self.listeners(on: self.otherPort)).isDisjoint(with: other) }
+
+        switchTo("This Mac")
+        app.wait(for: .text("project, folder"), timeout: 15)
+        app.press(.button("Git"))
+        app.wait(for: .button("Fetch"), timeout: 15)
+        app.wait("Fetch to be enabled", timeout: 10) { self.app.first(.button("Fetch"))?.enabled ?? false }
+    }
+
+    /// REMOTE-38 (#302): a submodule's commit on the other Mac keeps its
+    /// message until git took it: refused by a hook, git's reason is said
+    /// and the message stays; asked while that Mac is not connected, it is
+    /// said at once and the message stays. Before the fix the message was
+    /// thrown away before git had answered.
+    func testASubmodulesCommitOnTheOtherMacKeepsItsMessage() throws {
+        try startOtherMac()
+        let library = root.appendingPathComponent("other/library")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        git("init", "-q", "-b", "main", in: library)
+        try write("one\n", to: "l.txt", in: library)
+        git("config", "user.name", "Other", in: library)
+        git("config", "user.email", "other@example.com", in: library)
+        git("config", "commit.gpgsign", "false", in: library)
+        git("add", ".", in: library)
+        git("commit", "-q", "-m", "library", in: library)
+        git("-c", "protocol.file.allow=always", "submodule", "add", "-q", library.path, "libs/library", in: otherProject)
+        let inside = otherProject.appendingPathComponent("libs/library")
+        git("config", "user.name", "Other", in: inside)
+        git("config", "user.email", "other@example.com", in: inside)
+        git("config", "commit.gpgsign", "false", in: inside)
+        git("commit", "-q", "-m", "with the library", in: otherProject)
+        try write("one\ntwo\n", to: "l.txt", in: inside)
+        let hooks = otherProject.appendingPathComponent(".git/modules/libs/library/hooks")
+        try FileManager.default.createDirectory(at: hooks, withIntermediateDirectories: true)
+        try "#!/bin/sh\necho 'the library hook says no' >&2\nexit 1\n".write(to: hooks.appendingPathComponent("pre-commit"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hooks.appendingPathComponent("pre-commit").path)
+
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Git"))
+        app.press(.button("Stage libs/library/l.txt"), timeout: 15)
+        app.wait(for: .id("staged-libs/library/l.txt"), timeout: 15)
+        app.write("library: two", into: .id("submodule-message-libs/library"), confirm: true)
+        app.press(.id("submodule-commit-libs/library"))
+        app.wait(for: .containing("the library hook says no"), timeout: 20)
+        XCTAssertEqual(app.value(of: .id("submodule-message-libs/library")), "library: two", "the message of a refused commit is gone")
+        if app.exists(.button("OK")) { app.press(.button("OK")) }
+
+        // That Mac gone: said at once, the message kept.
+        killHost(on: otherPort)
+        app.wait(for: .containing("Other Mac cannot be reached"), timeout: 30)
+        app.press(.id("submodule-commit-libs/library"))
+        app.wait(for: .containing(NotConnectedWords.notCommitted("Other Mac")), timeout: 5)
+        XCTAssertEqual(app.value(of: .id("submodule-message-libs/library")), "library: two", "the message was thrown away while that Mac was not connected")
+    }
+
     /// REMOTE-14.
     func testACommitTheOtherMacRefusesLateKeepsItsMessage() throws {
         try startOtherMac()
@@ -518,6 +597,41 @@ final class RemoteMacTests: MacUITestCase {
     }
 
     /// REMOTE-15.
+    /// REMOTE-39 (#305): an open file renamed on the other Mac to a name it
+    /// refuses (one taken) stays where it is: saved, it is written to its
+    /// own path, and the file of that name is untouched. Renamed to a free
+    /// name, it moves once that Mac took it. Before the fix the open file
+    /// moved at once, and its save overwrote the other file.
+    func testAFileRenamedOnTheOtherMacMovesOnlyOnceItIsRenamed() throws {
+        try startOtherMac()
+        try write("someone else's\n", to: "taken.txt", in: otherProject)
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Files"))
+        app.press(.button("notes.txt"), timeout: 15)
+        wait("the other Mac's file in the editor", timeout: 15) { self.app.value(of: self.editor) == "first line\nchanged on the other Mac\n" }
+        let row = MacDriver.Query.idEnding("/work/notes.txt", prefix: "file-")
+        app.perform("Rename", on: row)
+        app.write("taken.txt", into: .role(kAXTextFieldRole as String))
+        app.press(.button("Rename"))
+        app.press(.button("OK"), timeout: 15)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+
+        app.write("first line\nsaved after the refusal\n", into: editor)
+        app.menu(["File", "Save"])
+        wait("the save on the other Mac", timeout: 15) { self.read("notes.txt", in: self.otherProject) == "first line\nsaved after the refusal\n" }
+        XCTAssertEqual(read("taken.txt", in: otherProject), "someone else's\n", "the save of a file whose rename was refused overwrote another file")
+
+        app.perform("Rename", on: row)
+        app.write("moved.txt", into: .role(kAXTextFieldRole as String))
+        app.press(.button("Rename"))
+        wait("the rename on the other Mac", timeout: 15) { FileManager.default.fileExists(atPath: self.otherProject.appendingPathComponent("moved.txt").path) }
+        app.write("first line\nsaved after the rename\n", into: editor)
+        app.menu(["File", "Save"])
+        wait("the save under the new name", timeout: 15) { self.read("moved.txt", in: self.otherProject) == "first line\nsaved after the rename\n" }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: otherProject.appendingPathComponent("notes.txt").path), "the save went to the old name")
+    }
+
     func testAFileTheOtherMacCannotWriteKeepsItsChanges() throws {
         try startOtherMac()
         pair()

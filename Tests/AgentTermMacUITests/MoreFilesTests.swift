@@ -67,6 +67,7 @@ final class MoreFilesTests: MacUITestCase {
         app.perform("Move to Trash", on: row("notes.txt"))
         app.press(.button("Move to Trash"))
         app.wait(for: .containing("Save or discard the changes in notes.txt before putting it in the Trash."), timeout: 5)
+        shot("trash-refused")
         app.press(.button("OK"))
         XCTAssertEqual(read("notes.txt"), saved, "the file went to the Trash")
         XCTAssertEqual(app.value(of: editor), saved + "not saved\n", "the unsaved changes were lost")

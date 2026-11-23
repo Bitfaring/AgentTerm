@@ -1590,6 +1590,11 @@ has dismissed it on one device:
   (`StateWords.notStarted`, #202); nothing waits to start later. A Shells
   tab's part is not on screen then, since the window shows why it is not
   connected in place of the tabs.
+- On the iPhone, what would change a Mac that is not connected (a schedule
+  saved, run, stopped, duplicated or deleted; a file staged, discarded,
+  made, renamed or put in the Trash; a stash, a branch, a commit, a save)
+  is not sent: it says at once that nothing was done
+  (`NotConnectedWords`), and what was being written stays (#286, #281).
 
 A stop that was asked for (Restart Host, replacing another copy's host,
 logging out) is not reported.
@@ -1640,7 +1645,10 @@ and touch up what an agent wrote without leaving the app.
   picking a session brings the terminal back to the front.
 - Text opens in an editor with syntax coloring for the common languages. It
   saves with ⌘S, and a dot on the tab marks unsaved changes. Closing a tab
-  with unsaved changes asks first.
+  with unsaved changes asks first. A file with unsaved changes, or a
+  folder holding one, is not put in the Trash: the app says to save or
+  discard them first. On another Mac an open file moves with a rename only
+  once that Mac took the new name.
 - Markdown opens as a rendered preview, with a switch to the source, laid
   out as GitHub shows it, tables included, on the Mac and the iPhone
   (#126). Code blocks in it are colored, and blocks marked `mermaid` are

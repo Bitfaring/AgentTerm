@@ -2051,9 +2051,9 @@ final class AppModel: ObservableObject {
             lastError = text
             if isRemote {
                 // On another Mac git and the files answer through the host:
-                // whatever waited for the answer is over.
-                isCommitting = false
-                pendingCommit = nil
+                // what waited for the answer is over. A commit is not: it
+                // waits for its own end, `gitCommitted` (#302), since this
+                // error may be another request's.
                 files.requestFailed()
             }
             if text == "malformed message" { writingCommitMessage = [] }
@@ -2098,17 +2098,6 @@ final class AppModel: ObservableObject {
             guard isRemote else { break }
             let due = max((diffAnswersDue[path] ?? 0) - 1, 0)
             diffAnswersDue[path] = due == 0 ? nil : due
-            if pendingCommit == path, due == 0 {
-                // The answer to a commit git took: an error would have come
-                // first. Only once every answer that was due is in: the
-                // host does its work side by side, and the changes asked
-                // for before the commit may come back while git is still at it.
-                pendingCommit = nil
-                isCommitting = false
-                commitMessages[path] = nil
-                amending[path] = nil
-                files.refresh()
-            }
             // Something was done inside a submodule of the folder on show:
             // what the folder says of it is read again (#44).
             if let panelFolder, path.hasPrefix(panelFolder + "/") { refreshDiff() }
@@ -2126,6 +2115,17 @@ final class AppModel: ObservableObject {
                 } else if tab.tabID == diffTab?.tabID {
                     closeDiffTab(tab.tabID)
                 }
+            }
+        case .gitCommitted(let path, let problem):
+            // The end of the commit asked of another Mac (#302): its message
+            // goes only once git took it.
+            guard isRemote, pendingCommit == path else { break }
+            pendingCommit = nil
+            isCommitting = false
+            if problem == nil {
+                commitMessages[path] = nil
+                amending[path] = nil
+                files.refresh()
             }
         case .gitSynced(let path):
             remoteWork.ended(in: path)

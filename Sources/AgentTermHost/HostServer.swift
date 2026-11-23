@@ -2724,7 +2724,7 @@ public final class HostServer {
         case .gitLastCommit(let path):
             work(for: client, { GitActions.lastCommit(in: path) }) { server, client, last in server.send(.gitLastCommit(path: path, last: last), to: client) }
         case .gitAmend(let path, let message):
-            git(for: client, in: path, sync: true) { GitActions.amend(message: message, in: path) }
+            git(for: client, in: path, sync: true, commit: true) { GitActions.amend(message: message, in: path) }
         case .gitUndoCommit(let path):
             git(for: client, in: path, sync: true) { GitActions.undoLastCommit(in: path) }
         case .gitStashes(let path):
@@ -2764,7 +2764,7 @@ public final class HostServer {
         case .gitDeleteBranch(let path, let name, let force):
             git(for: client, in: path, branches: true) { GitActions.deleteBranch(name, force: force, in: path) }
         case .gitCommit(let path, let message):
-            git(for: client, in: path) { GitActions.commit(message: message, in: path) }
+            git(for: client, in: path, commit: true) { GitActions.commit(message: message, in: path) }
         case .gitPush(let path, let force, let lease):
             git(for: client, in: path, sync: true) { GitActions.push(in: path, force: force ?? false, lease: lease) }
         case .gitPull(let path, let mode):
@@ -2933,7 +2933,8 @@ public final class HostServer {
     /// before the changes, whose branch may be another now.
     /// One to the stash (`stashes`) likewise.
     private func git(
-        for client: Client, in path: String, sync: Bool = false, branches: Bool = false, stashes: Bool = false, _ action: @escaping () -> String?
+        for client: Client, in path: String, sync: Bool = false, commit: Bool = false, branches: Bool = false, stashes: Bool = false,
+        _ action: @escaping () -> String?
     ) {
         work(
             for: client,
@@ -2956,6 +2957,7 @@ public final class HostServer {
             if let list = result.3 { server.send(.gitStashes(path: path, stashes: list), to: client) }
             server.send(.diff(path: path, snapshot: result.1.withoutPatches), to: client)
             if sync { server.send(.gitSynced(path: path), to: client) }
+            if commit { server.send(.gitCommitted(path: path, problem: result.0), to: client) }
         }
     }
 

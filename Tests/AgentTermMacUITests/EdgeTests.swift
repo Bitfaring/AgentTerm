@@ -127,3 +127,20 @@ final class DiffPlaceTests: MacUITestCase {
         }
     }
 }
+
+/// HOST-16 (#273) on the screen: a schedules file the host cannot read is
+/// put aside, and the banner says so, with its name.
+final class UnreadableStateTests: MacUITestCase {
+    override func makeFixtures() throws {
+        try super.makeFixtures()
+        // JSON, but not of a shape this build knows.
+        try #"{"paused":false,"schedules":[{"id":"x","shape":"of another build"}]}"#.write(
+            to: state.appendingPathComponent("schedules.json"), atomically: true, encoding: .utf8)
+    }
+
+    func testAStateFileTheHostCannotReadIsSaidInTheBanner() throws {
+        app.wait(for: .containing("could not read its schedules"), timeout: 20)
+        shot("unreadable-state")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: state.appendingPathComponent("schedules.json.unreadable").path), "the file that could not be read was not put aside")
+    }
+}

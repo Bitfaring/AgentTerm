@@ -9,6 +9,16 @@ struct RootTabs: View {
     @EnvironmentObject private var model: PhoneModel
 
     var body: some View {
+        // Above every tab and every screen of one, as the Mac shows them
+        // above every place, in room of their own (#328).
+        VStack(spacing: 0) {
+            TopBanners()
+            tabs
+        }
+        .background(Palette.canvas.ignoresSafeArea())
+    }
+
+    private var tabs: some View {
         TabView(selection: $model.tab) {
             SessionsView()
                 .tabItem { Label("Sessions", systemImage: "terminal") }
@@ -32,25 +42,6 @@ struct RootTabs: View {
                 .readableWidth()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag("settings")
-        }
-        // An agent of another session finished, or needs you: over every
-        // tab, as the Mac shows it over every place.
-        .overlay(alignment: .top) {
-            VStack(spacing: 8) {
-                // The agents on the Mac cannot open shells, although that
-                // is on (#58): over every tab too, as on the Mac.
-                ForEach(model.shownShellsFaults) { fault in
-                    AgentShellsFaultBanner(fault: fault)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-                // What stopped, until it is dismissed on some device: over
-                // every tab, as the Mac shows it over every place (#66).
-                ForEach(model.failures) { failure in
-                    FailureBanner(failure: failure)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-            }
-            .padding(.horizontal, 12)
         }
         // On the tabs, not on one of them: what the Mac answers to
         // something asked in History or Settings has to be shown there too,
@@ -314,6 +305,31 @@ private struct AgentShellsFaultBanner: View {
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.thinMaterial))
+    }
+}
+
+/// What the Mac says has stopped or cannot be done, above every tab as the
+/// Mac shows it above every place, in room of its own: nothing of a tab is
+/// hidden under it (#328), as it was when it floated over them.
+private struct TopBanners: View {
+    @EnvironmentObject private var model: PhoneModel
+
+    var body: some View {
+        VStack(spacing: 8) {
+            // The agents on the Mac cannot open shells, although that is on
+            // (#58).
+            ForEach(model.shownShellsFaults) { fault in
+                AgentShellsFaultBanner(fault: fault)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            // What stopped, until it is dismissed on some device (#66).
+            ForEach(model.failures) { failure in
+                FailureBanner(failure: failure)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, model.failures.isEmpty && model.shownShellsFaults.isEmpty ? 0 : 8)
     }
 }
 

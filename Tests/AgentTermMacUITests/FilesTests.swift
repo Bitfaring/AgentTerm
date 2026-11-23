@@ -104,7 +104,9 @@ final class FilesTests: MacUITestCase {
 
         askToQuit()
         app.wait(for: .containing("Quit without saving notes.txt?"), timeout: 5)
-        shot("asked")
+        // The alert grows in from a point: drawn whole after a moment.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        shot("asked", topmost: true)
         app.press(.button("Cancel"))
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         XCTAssertTrue(app.process?.isRunning == true, "the app quit with unsaved changes")

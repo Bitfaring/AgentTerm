@@ -1248,7 +1248,7 @@ final class PhoneModel: ObservableObject {
     init() {
         let saved = UserDefaults.standard.double(forKey: Self.fontSizeKey)
         fontSize = Self.fontSizes.contains(saved) ? saved : 12
-        hosts = PairingStore.load()
+        hosts = PairingStore.shared.load()
         let last = UserDefaults.standard.string(forKey: Self.currentHostKey)
         pairing = hosts.first { $0.id == last } ?? hosts.first
         loadInbox()
@@ -1600,7 +1600,7 @@ final class PhoneModel: ObservableObject {
         PushKeys.delete(mac: host.id)
         PrivateFiles.remove(Self.inboxKey(host.id))
         hosts.removeAll { $0.id == host.id }
-        PairingStore.save(hosts)
+        PairingStore.shared.save(hosts)
         pruneComposeDrafts(of: host.id, keeping: [])
         guard wasCurrent else { return }
         leaveLiveActivity()
@@ -2101,7 +2101,7 @@ final class PhoneModel: ObservableObject {
             // Pairing again with a Mac replaces what was saved for it.
             hosts.removeAll { $0.host == saved.host && $0.port == saved.port }
             hosts.append(saved)
-            PairingStore.save(hosts)
+            PairingStore.shared.save(hosts)
             clearHostState()
             setCurrent(saved)
             pendingPairing = nil
@@ -2134,9 +2134,9 @@ final class PhoneModel: ObservableObject {
             } else {
                 // A request that was going to open a session failed.
                 openCreatedSession = false
-                // So did a commit, if one was waiting. Its message is kept.
-                committing = nil
-                // And a save: the edits stay in the editor.
+                // A commit waits for its own end, `gitCommitted` (#285):
+                // this error may be another request's.
+                // A save: the edits stay in the editor.
                 savingFile = nil
                 self.message = HostErrorWords.words(for: text)
             }
@@ -2176,14 +2176,6 @@ final class PhoneModel: ObservableObject {
             take(snapshot, of: folder)
             let due = max((diffAnswersDue[folder] ?? 0) - 1, 0)
             diffAnswersDue[folder] = due == 0 ? nil : due
-            if committing == folder, due == 0 {
-                // The answer to a commit that git accepted, once every answer
-                // that was due is in (#285): one asked for before it may come
-                // back while git is still at it.
-                committing = nil
-                commitDrafts[folder] = nil
-                amending[folder] = nil
-            }
         case .gitFetched(let folder, let problem, let automatic):
             // What was asked for while the app fetched by itself is sent
             // now (#116).
@@ -2204,6 +2196,15 @@ final class PhoneModel: ObservableObject {
                 pendingForcePush = ForcePush(folder: folder, question: ForcePushQuestion(branch: branch, upstream: upstream, loses: loses), lease: at)
             } else {
                 self.message = ForcePushQuestion.couldNotAsk
+            }
+        case .gitCommitted(let folder, let problem):
+            // The end of the commit asked (#285): its message goes only once
+            // git took it, whatever other changes of the folder came first.
+            guard committing == folder else { break }
+            committing = nil
+            if problem == nil {
+                commitDrafts[folder] = nil
+                amending[folder] = nil
             }
         case .gitSynced(let folder):
             // Not at the `diff` before it: one asked for while git was still
@@ -2446,18 +2447,18 @@ final class PhoneModel: ObservableObject {
         connection?.send(.writeFile(path: path, text: text))
     }
 
+    // What changes the Mac's files is said at once when it cannot be sent
+    // (#286), and what was known of the file is kept then.
     func createFile(named name: String, in directory: String, isDirectory: Bool) {
-        connection?.send(.createFile(directory: directory, name: name, isDirectory: isDirectory))
+        sendOrSay(.createFile(directory: directory, name: name, isDirectory: isDirectory))
     }
 
     func renameFile(_ path: String, to name: String) {
-        remoteFiles[path] = nil
-        connection?.send(.renameFile(path: path, name: name))
+        if sendOrSay(.renameFile(path: path, name: name)) { remoteFiles[path] = nil }
     }
 
     func trashFile(_ path: String) {
-        remoteFiles[path] = nil
-        connection?.send(.trashFile(path: path))
+        if sendOrSay(.trashFile(path: path)) { remoteFiles[path] = nil }
     }
 
     /// Stages files for the next commit. No files means every change.
