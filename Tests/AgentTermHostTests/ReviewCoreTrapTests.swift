@@ -16,7 +16,6 @@ final class ReviewCoreTrapTests: XCTestCase {
     }
 
     func testAttachingWithACountOutOfRangeDoesNotStopTheHost() throws { try survives("testAttachingWithACountOutOfRange") }
-    func testAskingForAMinusNumberOfLinesOfACommandDoesNotStopTheHost() throws { try survives("testAskingForAMinusNumberOfLinesOfACommand") }
     func testAskingForARunsOutputAtADateOutOfRangeDoesNotStopTheHost() throws { try survives("testAskingForARunsOutputAtADateOutOfRange") }
 }
 
@@ -62,51 +61,6 @@ final class ReviewCoreTrapCases: XCTestCase {
         client.connection.send(.attach(session: session, size: .default, have: Int.min))
         XCTAssertTrue(stillAnswers(client), "the host no longer answers")
         client.connection.send(.kill(session: session))
-    }
-
-    func testAskingForAMinusNumberOfLinesOfACommand() throws {
-        // A stand-in agent that says what its session's key is.
-        let agents = folder.root.appendingPathComponent("agents")
-        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
-        let key = folder.root.appendingPathComponent("key")
-        try "#!/bin/sh\nprintf '%s' \"$AGENTTERM_MCP\" > '\(key.path).new'; mv '\(key.path).new' '\(key.path)'\nexec sleep 600\n".write(
-            to: agents.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agents.appendingPathComponent("claude").path)
-        var configuration = folder.configuration()
-        configuration.detectAgents = { AgentDetector.detect(in: agents.path) }
-        configuration.agentsDirectory = agents.path
-        let client = try start(configuration)
-        defer { client.connection.close() }
-        client.connection.send(.create(CreateRequest(command: "claude", cwd: folder.root.path)))
-        XCTAssertTrue(ReviewCore.spin(15) { FileManager.default.fileExists(atPath: key.path) }, "the agent's session did not start")
-        let agent = try XCTUnwrap(AgentShellsMCP.Session(variable: try String(contentsOf: key, encoding: .utf8)))
-        client.connection.send(.agentShell(id: 1, key: agent.key, request: .open(command: nil, title: "its shell")))
-        var shell: SessionID?
-        XCTAssertTrue(
-            ReviewCore.spin(15) {
-                shell = client.messages.compactMap { if case .agentShellResult(1, .opened(let info)) = $0 { return info.id } else { return nil } }.last
-                return shell != nil
-            }, "the agent's shell was not opened: \(client.messages.compactMap { if case .agentShellResult(_, let result) = $0 { return result } else { return nil } })")
-        // A command is run in it first: only a shell that has printed
-        // something has lines to count.
-        let id = try XCTUnwrap(shell)
-        var ran = false
-        for attempt in 0..<20 where !ran {
-            client.connection.send(.agentShell(id: 100 + attempt, key: agent.key, request: .run(session: id, command: "echo review-271")))
-            ReviewCore.spin(1) { client.messages.contains { if case .agentShellResult(100 + attempt, _) = $0 { return true } else { return false } } }
-            ran = client.messages.contains { if case .agentShellResult(100 + attempt, .ran) = $0 { return true } else { return false } }
-        }
-        XCTAssertTrue(ran, "the command was not typed: \(client.messages.compactMap { if case .agentShellResult(_, let result) = $0 { return result } else { return nil } }.suffix(2))")
-        var printed = false
-        for attempt in 0..<20 where !printed {
-            client.connection.send(.agentShell(id: 200 + attempt, key: agent.key, request: .command(session: id, lines: 5)))
-            ReviewCore.spin(1) { client.messages.contains { if case .agentShellResult(200 + attempt, _) = $0 { return true } else { return false } } }
-            printed = client.messages.contains { if case .agentShellResult(200 + attempt, .command(let state)) = $0 { return state.output.contains("review-271") } else { return false } }
-        }
-        XCTAssertTrue(printed, "the shell's command printed nothing the host kept")
-        client.connection.send(.agentShell(id: 2, key: agent.key, request: .command(session: id, lines: -1)))
-        XCTAssertTrue(ReviewCore.spin(5) { client.messages.contains { if case .agentShellResult(2, _) = $0 { return true } else { return false } } }, "no answer")
-        XCTAssertTrue(stillAnswers(client), "the host no longer answers")
     }
 
     func testAskingForARunsOutputAtADateOutOfRange() throws {

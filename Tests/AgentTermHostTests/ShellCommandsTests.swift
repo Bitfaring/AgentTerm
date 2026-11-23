@@ -24,6 +24,18 @@ final class ShellCommandsTests: XCTestCase {
         XCTAssertTrue(marks.scan(bytes("\u{1b}]1337;File=" + String(repeating: "x", count: 200) + "\u{07}")).isEmpty)
     }
 
+    /// HOST-15 (#271): a count of lines below none, from a client, is none:
+    /// the output is empty and every line is left out. Before the fix
+    /// `suffix(-1)` stopped the host, and every session with it. Here on
+    /// the mirror itself: a real shell's marks are not on every Mac (CI).
+    func testACountOfLinesBelowNoneIsNone() {
+        let mirror = ScreenMirror(size: TermSize(cols: 40, rows: 5), scrollback: 100)
+        mirror.feed(Data("\u{1b}]133;A\u{07}$ echo\r\n\u{1b}]133;C\u{07}review-271\r\n".utf8))
+        let state = mirror.command(lines: -1)
+        XCTAssertEqual(state.output, "")
+        XCTAssertEqual(state.linesLeftOut, 1)
+    }
+
     /// MCP-28: a command's output is what it wrote, drawn as a terminal
     /// shows it, and its exit code is kept once it ends.
     func testACommandsOutputAndExitCode() {
