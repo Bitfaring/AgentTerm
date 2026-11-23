@@ -49,7 +49,7 @@ public enum PushState: Codable, Equatable, Sendable {
 public enum PushWords {
     public static let toggle = "Also While the App Is Closed"
     public static let on =
-        "Told through Apple's push service while the app is closed. What it says is encrypted on the Mac for this iPhone; Apple and AgentTerm's relay see only that a notification was sent."
+        "Told through Apple's push service while the app is closed. What it says is encrypted on the Mac for this iPhone; Apple and AgentTerm's relay see that a notification was sent, when, and its size, not what it says."
     public static let notInThisBuild = "This build has no push: it comes only with the released app."
     public static let relayNotSetUp = "The Mac's host has no push relay set up."
     public static let notAllowed = "Notifications are turned off for AgentTerm in the iPhone's Settings."

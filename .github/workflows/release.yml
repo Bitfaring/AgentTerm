@@ -70,14 +70,19 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-      - uses: maxim-lobanov/setup-xcode@v1
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
+      # What was typed is given through the environment and checked, never
+      # pasted into the script (#318).
       - name: Resolve version
         id: version
+        env:
+          TYPED_VERSION: ${{ inputs.version }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"; else v="${GITHUB_REF_NAME#v}"; fi
+          if [ -n "$TYPED_VERSION" ]; then v="$TYPED_VERSION"; else v="${GITHUB_REF_NAME#v}"; fi
+          printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' || { echo "Not a version like 0.15.1 or 0.15.1-beta.1: $v" >&2; exit 1; }
           echo "value=$v" >> "$GITHUB_OUTPUT"
           case "$v" in *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;; *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;; esac
 
@@ -124,10 +129,17 @@ jobs:
           fastlane mac release
           cd dist && shasum -a 256 "AgentTerm-$VERSION.dmg" > "AgentTerm-$VERSION.sha256"
 
+      # Gone before publishing: nothing after this needs them (#314).
+      - name: Remove the signing files
+        run: rm -f "$RUNNER_TEMP/asc_key.p8" "$RUNNER_TEMP/developer_id.p12" "$RUNNER_TEMP/firebase.plist"
+
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.version.outputs.value) }}
+          # A release started by hand from a branch tags the commit that was
+          # built, not the default branch's head (#315).
+          target_commitish: ${{ github.sha }}
           name: AgentTerm ${{ steps.version.outputs.value }}
           prerelease: ${{ steps.version.outputs.prerelease }}
           body_path: ${{ steps.notes.outputs.path }}
@@ -141,9 +153,11 @@ jobs:
         if: env.HOMEBREW_TAP_TOKEN != ''
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # For the release's published checksum (#316).
+          GH_TOKEN: ${{ github.token }}
         run: scripts/publish-homebrew.sh "${{ steps.version.outputs.value }}"
 
-      - name: Remove the signing files
+      - name: Remove the signing files, whatever happened
         if: always()
         run: rm -f "$RUNNER_TEMP/asc_key.p8" "$RUNNER_TEMP/developer_id.p12" "$RUNNER_TEMP/firebase.plist"
 
@@ -154,14 +168,18 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-      - uses: maxim-lobanov/setup-xcode@v1
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
+      # What was typed is given through the environment and checked (#318).
       - name: Resolve version
         id: version
+        env:
+          TYPED_VERSION: ${{ inputs.version }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"; else v="${GITHUB_REF_NAME#v}"; fi
+          if [ -n "$TYPED_VERSION" ]; then v="$TYPED_VERSION"; else v="${GITHUB_REF_NAME#v}"; fi
+          printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' || { echo "Not a version like 0.15.1 or 0.15.1-beta.1: $v" >&2; exit 1; }
           # TestFlight takes numbers only: 0.2.0-beta.1 is uploaded as 0.2.0.
           echo "value=${v%%-*}" >> "$GITHUB_OUTPUT"
           echo "release=$v" >> "$GITHUB_OUTPUT"
@@ -233,7 +251,9 @@ jobs:
       - name: Post the release notes
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TYPED_VERSION: ${{ inputs.version }}
         run: |
           if [ -z "$DISCORD_WEBHOOK_URL" ]; then echo "No DISCORD_WEBHOOK_URL secret: not announcing."; exit 0; fi
-          if [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"; else v="${GITHUB_REF_NAME#v}"; fi
+          if [ -n "$TYPED_VERSION" ]; then v="$TYPED_VERSION"; else v="${GITHUB_REF_NAME#v}"; fi
+          printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' || { echo "Not a version: $v" >&2; exit 1; }
           scripts/announce-discord.sh "$v"

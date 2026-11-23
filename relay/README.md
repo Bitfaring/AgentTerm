@@ -16,7 +16,7 @@ no push (principle 7); a build made from the source has none either.
 | `POST /v1/register` | `{token}` | `{ticket, expires}`: an HMAC of the token and its expiry, 30 days |
 | `POST /v1/push` | `{token, ticket, expires, gone}` | Takes back the notification named `gone`, handled on another device: a background push that wakes the app, or, with `FILTERING=on` once the app has Apple's filtering entitlement, an alert its extension removes it with and hides |
 | `POST /v1/push` | `{token, ticket, expires, activity: {token, event, state, mac, urgent?}}` | The Live Activity (#168): `liveactivity` to the activity's own token (or its push-to-start token for `start`), at `<topic>.push-type.liveactivity`, priority 10 to start and for an update or end marked `urgent: true`, 5 otherwise (#233); `state` is `AgentsStatus`, in the clear, since iOS draws the activity from it |
-| `POST /v1/push` | `{token, ticket, expires, payload, collapse?}` | An alert at priority 10, with sound, `interruption-level: time-sensitive` (#233); `{ok: true}`; 400 for a payload that is not a sealed notice (base64, 3000 characters at most); 401 for a ticket it did not sign or that expired; 410 for a token APNs no longer knows; 429 for more than 30 a minute to one device; 502 with APNs' reason otherwise |
+| `POST /v1/push` | `{token, ticket, expires, payload, collapse?}` | An alert at priority 10, with sound, `interruption-level: time-sensitive` (#233); `{ok: true}`; 400 for a payload that is not a sealed notice (base64, 3000 characters at most); 401 for a ticket it did not sign or that expired; 410 for a token APNs no longer knows; 429 for more than 30 a minute to one device, or 120 from one address (#312); 502 with APNs' reason otherwise |
 
 ## Priorities (#233)
 
@@ -73,7 +73,7 @@ refused the made-up token (`BadDeviceToken`).
 Once Apple grants the filtering entitlement, `npx wrangler deploy --var FILTERING:on`, with the
 entitlement added to the extension's entitlements, takes notifications back at once.
 
-The limits (30 pushes a minute to one device, 5 registrations a minute from
+The limits (30 pushes a minute to one device, 120 from one address, 5 registrations a minute from
 one address) are asked of Cloudflare's rate limiting binding, which counts in
 each of its locations and agrees between them later: it is approximate, and
 was seen on 2026-11-19 to let 20 registrations a minute from one address
