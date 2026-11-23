@@ -73,7 +73,7 @@ public enum AgentHooks {
 
     private static func writeText(_ text: String, to file: URL) throws {
         if FileManager.default.contents(atPath: file.path) == Data(text.utf8) { return }
-        try Data(text.utf8).write(to: file, options: .atomic)
+        try Data(text.utf8).writeKeepingLinks(to: file)
     }
 
     // MARK: What a hook does

@@ -85,10 +85,9 @@ final class InboxBookTests: XCTestCase {
         XCTAssertEqual(book.entries.first { $0.id == 2 }?.read, true, "read in the host's log")
         book.take([notice(2, asked)], now: now)
         XCTAssertEqual(book.entries.first { $0.id == 2 }?.read, true, "never unread again")
+        // Moved on is read too (#321, the owner's decision of 2026-11-23).
         book.handled(3, Notice.Handled(at: now, how: .movedOn))
-        XCTAssertEqual(book.entries.first { $0.id == 3 }?.read, false, "moved on is not read")
-        book.handled(3, Notice.Handled(at: now, how: .opened))
-        XCTAssertEqual(book.entries.first { $0.id == 3 }?.read, true)
+        XCTAssertEqual(book.entries.first { $0.id == 3 }?.read, true, "moved on is read")
         XCTAssertEqual(book.unread, 0)
 
         // The host's log knows 2 as read; 1 and 3 were read here only.

@@ -314,6 +314,7 @@ do {
     configuration.release = release
     configuration.revision = revision
     configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)
+    configuration.promptsDirectory = HostEnvironment.supportDirectory
     // Notices through Apple for the devices that are away (#66): the
     // released host's relay, none for a development build. A test names a
     // stand-in of its own. Not in the help.
@@ -322,6 +323,8 @@ do {
     configuration.noticesFile = HostEnvironment.noticesFile
     // For the tests of the apps, which do not wait the whole grace. Not in the help.
     if let grace = ProcessInfo.processInfo.environment["AGENTTERM_LINK_GRACE"].flatMap(TimeInterval.init) { configuration.linkGrace = grace }
+    // How long a notice waits to be a notification (#322), for the tests of the apps. Not in the help.
+    if let delay = ProcessInfo.processInfo.environment["AGENTTERM_ALERT_DELAY"].flatMap(TimeInterval.init) { configuration.alertDelay = delay }
     // Gives the agents' sessions the MCP server, and takes out what earlier
     // builds put in the agents' own configuration, for this Mac's host
     // only: not for one with a state folder of its own (a test, a trial

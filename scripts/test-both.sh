@@ -23,7 +23,9 @@ own_environment
 command -v xcodegen >/dev/null || { echo "test-both.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
 source scripts/lib-simulator.sh
 source scripts/lib-cleanup.sh
-choose_simulator "${1:-}" "iPhone Air"
+source scripts/lib-test-log.sh
+# It resets the simulator's keychain: never the booted one by default (#311).
+choose_test_simulator "${1:-}"
 DEVICE="$SIM_UDID"
 echo "Testing on this Mac and on $SIM_NAME ($SIM_UDID)."
 PORT=7795
@@ -120,6 +122,12 @@ part() {
     local name="$1"
     shift
     if "$@" > "$LOG" 2>&1; then
+        # A part whose tests all skipped themselves checked nothing (#309).
+        if why="$(nothing_checked "$LOG")"; then
+            tail -3 "$LOG" >&2
+            echo "test-both.sh: nothing was checked in: $name: $why. Full log in $LOG" >&2
+            exit 1
+        fi
         echo "  passed: $name"
     else
         grep -E "error:|Test Case .* failed|XCTAssert|TEST FAILED" "$LOG" | cut -c1-700 >&2

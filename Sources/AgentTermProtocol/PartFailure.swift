@@ -31,6 +31,10 @@ public struct PartFailure: Codable, Equatable, Identifiable, Sendable {
         /// A notice that could not be sent through Apple to a device
         /// (`name`) while it was away (#66): `reason` says why.
         public static let push = Part(rawValue: "push")
+        /// A file of what the host keeps (`name`: its schedules, its paired
+        /// devices, its settings) that it could not read (#273): put aside,
+        /// `reason` says where, and the host started without what it held.
+        public static let savedState = Part(rawValue: "savedState")
     }
 
     /// Names this report, for `dismissFailure`.
@@ -111,6 +115,8 @@ extension PartFailure {
             return "A run of the schedule \(named)\(onMac) did not go as planned \(when)."
         case .push:
             return "A notification to \(name.map { "“\($0)”" } ?? "a device") could not be sent through Apple\(onMac) \(when)."
+        case .savedState:
+            return "The host\(onMac) could not read its \(name ?? "saved state") \(when), and started without them."
         default:
             // A part this build does not know yet.
             what = "A part of AgentTerm (\(part.rawValue)\(name.map { ", \($0)" } ?? ""))\(mac.map { " on \($0)" } ?? "")"
@@ -126,7 +132,7 @@ extension PartFailure {
     public var details: String {
         var parts: [String] = []
         switch part {
-        case .keepAwake, .statusLine, .schedule, .push:
+        case .keepAwake, .statusLine, .schedule, .push, .savedState:
             // Nothing ends with these: what they are for stops.
             break
         case .session:

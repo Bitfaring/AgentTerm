@@ -65,9 +65,10 @@ struct SplitDiffTexts: @unchecked Sendable {
     ///     main thread.
     ///   - lineHeight: The font's own line height, measured there too.
     init(patch: String, fontSize: CGFloat, advance: CGFloat, lineHeight: CGFloat) {
-        // Tabs as four blanks: a diff's lines start with a mark, which
-        // would put every tab stop one off.
-        let all = SplitDiff.rows(for: patch.replacingOccurrences(of: "\t", with: "    "))
+        // Tabs stay tabs, so that what is copied is the file's own (#295):
+        // their stops are every four characters from where the line's text
+        // starts, past the line's number.
+        let all = SplitDiff.rows(for: patch)
         rows = all.count
         let font = Self.font(fontSize)
         let height = Self.rowHeight(fontSize)
@@ -80,6 +81,9 @@ struct SplitDiffTexts: @unchecked Sendable {
             style.maximumLineHeight = height
             style.firstLineHeadIndent = indent
             style.headIndent = indent
+            let tab = CGFloat(Self.tabWidth) * advance
+            style.tabStops = (1...Self.tabStopsSet).map { NSTextTab(textAlignment: .left, location: indent + CGFloat($0) * tab) }
+            style.defaultTabInterval = tab
             // Never wrapped: a row is one line on both sides, or they would
             // stop facing each other.
             style.lineBreakMode = .byClipping
@@ -124,8 +128,17 @@ struct SplitDiffTexts: @unchecked Sendable {
 
     /// How many columns a line takes: two for a wide character, so that a
     /// line of them is not cut short.
+    /// How many characters apart a tab's stops are.
+    static let tabWidth = 4
+    /// How many stops are set from where a line's text starts; past them a
+    /// tab goes to the next of the default interval.
+    static let tabStopsSet = 64
+
     static func columns(_ text: String) -> Int {
-        text.unicodeScalars.reduce(0) { $0 + ($1.value >= 0x1100 ? 2 : 1) }
+        text.unicodeScalars.reduce(0) { count, scalar in
+            if scalar == "\t" { return (count / tabWidth + 1) * tabWidth }
+            return count + (scalar.value >= 0x1100 ? 2 : 1)
+        }
     }
 
     /// How wide a character of the font is, and its line height: measured

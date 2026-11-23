@@ -148,7 +148,10 @@ final class ParsingTests: XCTestCase {
         XCTAssertEqual(status(true, "Stopped", "100.64.0.1"), .notConnected, "a stale address does not count when it is switched off")
         XCTAssertEqual(status(true, "Running", "100.101.102.103", "macbook.tail1234.ts.net."), .ready(host: "macbook.tail1234.ts.net"))
         XCTAssertEqual(status(true, "Running", "100.101.102.103", ""), .ready(host: "100.101.102.103"))
-        XCTAssertEqual(status(false, nil, "100.101.102.103"), .ready(host: "100.101.102.103"), "an address proves it works even if the app was not found")
+        // An address alone on a Mac without Tailscale is someone else's, a
+        // carrier's or another VPN's (#268, the owner's decision of
+        // 2026-11-23); before, it was taken for proof that Tailscale works.
+        XCTAssertEqual(status(false, nil, "100.101.102.103"), .notInstalled, "an address alone, on a Mac without Tailscale, was taken for Tailscale")
     }
 
     func testEmulatorAnswersAreToldApartFromTyping() {

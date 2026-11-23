@@ -96,6 +96,36 @@ public struct PushNotice: Codable, Equatable, Sendable {
             title = String(failure.headline().prefix(200))
             body = String(failure.details.prefix(600))
         }
+        fitInAPush()
+    }
+
+    /// How many bytes of JSON a notice may be: sealed (a nonce and a tag
+    /// of 28 bytes) and in base64, at most the relay's 3,000 characters.
+    public static let mostBytes = 2_200
+
+    /// Shortens what it says until it is no more than `mostBytes` of JSON
+    /// (#294): the lengths above are in characters, and a character of
+    /// Japanese or Chinese is three bytes. Each round keeps of every text
+    /// the share that would fit, so none is cut much more than the others.
+    private mutating func fitInAPush() {
+        for _ in 0..<8 {
+            guard let size = try? JSONEncoder().encode(self).count, size > Self.mostBytes else { return }
+            let share = Double(Self.mostBytes) / Double(size) * 0.95
+            func cut(_ text: String) -> String { String(text.prefix(Int(Double(text.count) * share))) }
+            name = cut(name)
+            folder = String(folder.suffix(Int(Double(folder.count) * share)))
+            title = title.map(cut)
+            body = body.map(cut)
+            if let shortened = state {
+                func question(_ asked: AgentQuestion) -> AgentQuestion { AgentQuestion(text: cut(asked.text), choices: asked.choices.map(cut)) }
+                switch shortened {
+                case .done(let said): state = .done(said: said.map { String($0.suffix(Int(Double($0.count) * share))) })
+                case .waitingForPermission(let asked): state = .waitingForPermission(question(asked))
+                case .waitingForAnswer(let asked): state = .waitingForAnswer(question(asked))
+                case .working: break
+                }
+            }
+        }
     }
 
     /// What an agent's notice says and offers, with the shortened state;

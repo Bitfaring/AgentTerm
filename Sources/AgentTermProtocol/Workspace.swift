@@ -374,6 +374,16 @@ public struct CommitGraphRow: Equatable, Sendable {
 /// The numbers of the Git side panel with what they count beside them
 /// (#50), the same on the Mac and the iPhone: a number alone said nothing
 /// to the owner.
+/// What both apps say about the git actions they ask about first.
+public enum GitQuestionWords {
+    /// A question about discarding, reverting, dropping a stash, deleting a
+    /// branch, aborting or rewriting a commit, closed because the folder on
+    /// show changed while it was open (#297): it is never answered in
+    /// another folder.
+    public static let closedForAnotherFolder =
+        "The question was closed and nothing was done: another folder is on show now. Ask again in the folder you meant."
+}
+
 public enum CountWords {
     /// "1 file", "3 files": the files of a list of changes.
     public static func files(_ count: Int) -> String { "\(count) \(count == 1 ? "file" : "files")" }

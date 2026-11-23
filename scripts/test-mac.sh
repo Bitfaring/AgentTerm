@@ -47,6 +47,7 @@ LOG="$(mktemp)"
 # (#179). Run in the background and waited for, so that the signal is
 # taken at once, not when the tests are over.
 source scripts/lib-cleanup.sh
+source scripts/lib-test-log.sh
 TESTS=""
 stop_the_tests() {
     trap - INT TERM
@@ -99,11 +100,12 @@ if ! left_behind; then
     exit 1
 fi
 if [ "$PASSED" -eq 1 ]; then
-    # A name that matches no test runs none, which `swift test` takes for a
-    # pass: it is not one, and is said (#137).
-    if ! grep -qE "Executed [1-9][0-9]* test" "$LOG"; then
+    # A name that matches no test runs none, and tests that all skipped
+    # themselves checked nothing, which `swift test` takes for a pass: it is
+    # not one, and is said (#137, #309).
+    if why="$(nothing_checked "$LOG")"; then
         tail -3 "$LOG" >&2
-        echo "test-mac.sh: no test was run, full log in $LOG" >&2
+        echo "test-mac.sh: nothing was checked: $why. Full log in $LOG" >&2
         exit 1
     fi
     grep -E "^MEASURE " "$LOG" | sed 's/^MEASURE //' || true

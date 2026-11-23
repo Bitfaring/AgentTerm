@@ -775,20 +775,30 @@ public enum ServerMessage: Codable, Equatable, Sendable {
 }
 
 public enum MessageCoding {
+    /// A number that is no number, or infinite, which JSON has no way to
+    /// write, is written as text, and read back (#292): a figure of the Mac
+    /// that came out so would otherwise make the whole message nothing.
+    private static let numbers = (infinity: "Infinity", minusInfinity: "-Infinity", notANumber: "NaN")
+
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .secondsSince1970
+        e.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: numbers.infinity, negativeInfinity: numbers.minusInfinity, nan: numbers.notANumber)
         return e
     }()
 
     private static let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .secondsSince1970
+        d.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: numbers.infinity, negativeInfinity: numbers.minusInfinity, nan: numbers.notANumber)
         return d
     }()
 
     public static func encode<T: Encodable>(_ value: T) -> Data {
-        // Encoding these plain value types cannot fail.
+        // With numbers that are no numbers written as text, these plain
+        // value types are always encoded.
         (try? encoder.encode(value)) ?? Data()
     }
 

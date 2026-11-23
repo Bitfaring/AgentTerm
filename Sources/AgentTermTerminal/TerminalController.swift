@@ -37,9 +37,15 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         // Takes files dropped or pasted on it (#160).
         view = FileTakingTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
         #else
-        view = TerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
+        view = AnsweringTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
         #endif
         super.init()
+        // The emulator's answers are held back during a replay; what the
+        // user types never is (#293).
+        (view as? AnsweringTerminalView)?.onAnswer = { [weak self] bytes in
+            guard let self, !self.isReplayAnswer(bytes) else { return }
+            self.onInput?(bytes)
+        }
         view.font = TerminalStyle.font(size: fontSize)
         view.nativeBackgroundColor = TerminalStyle.background
         view.nativeForegroundColor = TerminalStyle.foreground
@@ -381,12 +387,11 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         }
     }
 
+    /// What the user typed, pasted or did with the mouse: sent on also
+    /// during a replay. The emulator's answers come by `onAnswer`.
     public nonisolated func send(source: TerminalView, data: ArraySlice<UInt8>) {
         let bytes = Data(data)
-        MainActor.assumeIsolated {
-            guard !isReplayAnswer(bytes) else { return }
-            onInput?(bytes)
-        }
+        MainActor.assumeIsolated { onInput?(bytes) }
     }
 
     public nonisolated func setTerminalTitle(source: TerminalView, title: String) {}

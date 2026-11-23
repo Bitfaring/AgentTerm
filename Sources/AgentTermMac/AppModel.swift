@@ -1211,6 +1211,8 @@ final class AppModel: ObservableObject {
     private var pendingFolderSelection: String?
 
     init() {
+        // For the question before quitting with unsaved changes (#298).
+        AppDelegate.model = self
         if let value = ProcessInfo.processInfo.environment["AGENTTERM_PORT"].flatMap(UInt16.init) { port = value }
         // The Mac that was on screen last time is the one to come back to.
         if let last = UserDefaults.standard.string(forKey: Self.currentMacKey), let mac = remoteMacs.first(where: { $0.id == last }) {
@@ -2400,6 +2402,7 @@ final class AppModel: ObservableObject {
     // MARK: Changes
 
     private func folderChanged() {
+        closeGitQuestions()
         diff = nil
         watchPanelFolder()
         if let selectedFolder { listWorktrees(selectedFolder) }
@@ -2410,6 +2413,23 @@ final class AppModel: ObservableObject {
         refreshDiff()
         folderHistory = nil
         refreshHistory(ofFolder: true)
+    }
+
+    /// A git action asked about in the folder that was on show is never
+    /// done in the one on show now (#297): every such question is closed,
+    /// and that is said.
+    private func closeGitQuestions() {
+        let open = discarding != nil || pendingCommitAction != nil || droppingStash != nil || deletingBranch != nil || confirmingAbort || pendingRewrite != nil
+        discarding = nil
+        discardingIn = nil
+        pendingCommitAction = nil
+        droppingStash = nil
+        deletingBranch = nil
+        confirmingAbort = false
+        pendingRewrite = nil
+        rewriteAskedAgain?.cancel()
+        rewriteAskedAgain = nil
+        if open { notice = GitQuestionWords.closedForAnotherFolder }
     }
 
     // MARK: Handoff
@@ -3281,6 +3301,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var amending: [String: LastCommit] = [:]
     /// Undoing or amending that waits to be confirmed.
     @Published var pendingRewrite: PendingRewrite?
+    /// The second question about undoing a pushed commit, on its way.
+    private var rewriteAskedAgain: DispatchWorkItem?
 
     struct PendingRewrite: Identifiable {
         let action: RewriteCommitQuestion.Action
@@ -3296,7 +3318,11 @@ final class AppModel: ObservableObject {
     private func withLastCommit(_ then: @escaping (LastCommit) -> Void) {
         guard let directory = panelFolder else { return }
         if isRemote {
-            lastCommitWanted = then
+            // The answer, for this folder only (#297).
+            lastCommitWanted = { [weak self] last in
+                guard self?.panelFolder == directory else { return }
+                then(last)
+            }
             connection?.send(.gitLastCommit(path: directory))
             return
         }
@@ -3350,9 +3376,12 @@ final class AppModel: ObservableObject {
             if pending.last.isPushed && !pending.again {
                 // After the dialog has gone: one that is presented while
                 // another closes is not shown.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                let again = DispatchWorkItem { [weak self] in
                     self?.pendingRewrite = PendingRewrite(action: .undo, last: pending.last, again: true)
                 }
+                // Not asked again in another folder (#297).
+                rewriteAskedAgain = again
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: again)
                 return
             }
             guard let directory = panelFolder else { return }

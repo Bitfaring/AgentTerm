@@ -38,9 +38,28 @@ public enum StatusLineRelay {
         }
         let project = (object?["workspace"] as? [String: Any])?["project_dir"] as? String ?? object?["cwd"] as? String
         let kept = previous.flatMap { FileManager.default.contents(atPath: $0.path) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        guard let command = (kept?["command"] as? String).flatMap({ $0.isEmpty ? nil : $0 }) ?? userCommand(project: project, home: home, environment: environment)
+        // Another build's relay, which this one took the place of (MCP-15),
+        // is run once; a relay it runs runs only the user's, never a relay
+        // again: two builds that keep each other's would run without end
+        // (#259).
+        let relayed = environment[relayedVariable] != nil
+        let keptCommand = (kept?["command"] as? String).flatMap { $0.isEmpty || (relayed && isAgentTerms($0)) ? nil : $0 }
+        guard let command = keptCommand ?? userCommand(project: project, home: home, environment: environment)
         else { return Data() }
-        return pipe(input, through: command)
+        return pipe(input, through: command, relaying: isAgentTerms(command), environment: environment)
+    }
+
+    /// Set for a relay that another relay runs: it then runs no relay
+    /// itself (#259). The one name every build reads, on purpose (the
+    /// owner's decision, 2026-11-23): it is what stops two builds' relays
+    /// running each other, and names nothing of either.
+    public static let relayedVariable = "AGENTTERM_STATUS_LINE_RELAYED"
+
+    /// Whether a status line command is AgentTerm's relay, of any build:
+    /// `agenttermd … statusline`, with the file to save in after it or not.
+    public static func isAgentTerms(_ command: String) -> Bool {
+        let command = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        return command.contains("agenttermd") && (command.hasSuffix(" statusline") || command.contains(" statusline "))
     }
 
     /// Where the relay says why it could not save what it was given, next
@@ -63,32 +82,18 @@ public enum StatusLineRelay {
                 let command = statusLine["command"] as? String, !command.isEmpty
             else { continue }
             // Never ourselves: that would run without end.
-            if command.contains("agenttermd") && command.contains("statusline") { continue }
+            if isAgentTerms(command) { continue }
             return command
         }
         return nil
     }
 
-    private static func pipe(_ input: Data, through command: String) -> Data {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", command]
-        let stdin = Pipe(), stdout = Pipe()
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return Data() }
-        // A status line that hangs must not hang Claude Code's.
-        let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: timeout)
-        DispatchQueue.global().async {
-            try? stdin.fileHandleForWriting.write(contentsOf: input)
-            try? stdin.fileHandleForWriting.close()
-        }
-        let output = stdout.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        timeout.cancel()
-        return output
+    private static func pipe(_ input: Data, through command: String, relaying: Bool, environment: [String: String]) -> Data {
+        var environment = environment
+        if relaying { environment[relayedVariable] = "1" }
+        // A status line that hangs must not hang Claude Code's: five seconds,
+        // for the command and all it started (#261).
+        return Subprocess.run("/bin/sh", ["-c", command], timeout: 5, environment: environment, input: input, forTheHost: false)?.output ?? Data()
     }
 
     /// What Claude Code told the status line, as usage.

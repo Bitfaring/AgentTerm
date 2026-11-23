@@ -282,19 +282,20 @@ happened; the Live Activity shows the host's state now (below).
   is left out, the one in front included (#180): being in front does not
   make it seen, something the user does there does (choosing it, typing
   into it, the notification).
-- **When it is a notification** (#180; the wait taken away by the owner
-  on 2026-11-22, #234): every notice is in each device's Inbox, and floats
-  over the Mac's window, at once; it is a notification on the Mac and on
-  every iPhone or iPad **at once and at the same moment**, which the host
-  says: through Apple to each one that is away, whether someone is at the
-  Mac or not, an agent that is done as much as one that asks. Nothing
-  waits to see whether it is handled or read first; what is handled or
-  read afterwards on one device is taken back from the others. A host
-  that starts again shows nothing twice.
+- **When it is a notification** (#180; #234; the wait put back by the
+  owner on 2026-11-23, #322): every notice is in each device's Inbox, and
+  floats over the Mac's window, at once. An agent's notice (it asks, or is
+  done) is a notification on the Mac and on every iPhone or iPad **10
+  seconds later and at the same moment**, which the host says: through
+  Apple to each one that is away, whether someone is at the Mac or not;
+  one the user acted on meanwhile (answered it, opened its session, its
+  agent went on) is never a notification. A failure that stopped work is
+  one at once. What is handled or read afterwards on one device is taken
+  back from the others. A host that starts again shows nothing twice.
 - **How they sound** (#233, decided by the owner on 2026-11-22): every
   notification is of something that needs the user (an agent asks or is
-  done, a part failed and stopped work), so each comes at once, with
-  sound, and is **time-sensitive** on the iPhone: shown during a Focus,
+  done, a part failed and stopped work), so each comes with sound
+  (an agent's after its 10 seconds, #322), and is **time-sensitive** on the iPhone: shown during a Focus,
   as iOS lets the user allow for the app. An agent that stops asking
   brings no new notification: the earlier one is taken back.
 - **Handled on one, gone from all**: answered, opened or dismissed (from
@@ -302,7 +303,9 @@ happened; the Live Activity shows the host's state now (below).
   on, and the notification goes from every other device.
 - **Read on one, read on all** (#180, replacing what #66 decided): a
   notice read on one device (picked in the Inbox, its session opened, its
-  notification tapped, answered or dismissed) is read on every device, and
+  notification tapped, answered or dismissed), or whose agent moved on
+  (#321: answered in its session, asked something else, its session ended),
+  is read on every device, and
   its notification goes from all of them. What is read while a device is
   not connected is said to the host once it is.
 - **On the iPhone and the iPad**, iOS's own notification banner, also

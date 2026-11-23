@@ -49,7 +49,7 @@ extension GitActions {
         guard let ref = ref(of: hash, in: directory) else { return nil }
         guard
             let result = Subprocess.run(
-                "/usr/bin/git", ["-C", directory, "stash", "show", "--include-untracked", "--patch", "--no-color", "--no-ext-diff", ref], timeout: 30),
+                "/usr/bin/git", ["-C", directory] + GitDiff.defaultPrefixes + ["stash", "show", "--include-untracked", "--patch", "--no-color", "--no-ext-diff", ref], timeout: 30),
             result.status == 0
         else { return nil }
         return GitDiff.parse(String(decoding: result.output, as: UTF8.self))

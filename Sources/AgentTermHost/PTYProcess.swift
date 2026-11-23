@@ -38,6 +38,12 @@ public final class PTYProcess {
     private let master: Int32
     private let queue: DispatchQueue
     private let writeQueue = DispatchQueue(label: "agentterm.pty.write")
+    /// Whether `master` is still this terminal's, read and changed on
+    /// `writeQueue` only: it is closed there, after every write asked
+    /// before, so that no write reaches the number once it is another
+    /// terminal's or file's (#275).
+    private final class Descriptor { var isOpen = true }
+    private let descriptor = Descriptor()
     private var readSource: DispatchSourceRead?
     private var exitSource: DispatchSourceProcess?
     private var finished = false
@@ -69,7 +75,13 @@ public final class PTYProcess {
 
         let readSource = DispatchSource.makeReadSource(fileDescriptor: master, queue: queue)
         readSource.setEventHandler { [weak self] in self?.readAvailable() }
-        readSource.setCancelHandler { close(master) }
+        let writeQueue = writeQueue, descriptor = descriptor
+        readSource.setCancelHandler {
+            writeQueue.async {
+                descriptor.isOpen = false
+                close(master)
+            }
+        }
         self.readSource = readSource
         readSource.resume()
 
@@ -87,11 +99,13 @@ public final class PTYProcess {
     /// Sends bytes to the program as if they were typed.
     public func write(_ data: Data) {
         guard !data.isEmpty else { return }
-        let fd = master
+        let fd = master, descriptor = descriptor
         // Writes can block when the program is not reading. They run on their
         // own queue so output keeps flowing meanwhile.
-        writeQueue.async { [weak self] in
-            guard self != nil else { return }
+        writeQueue.async {
+            // Once the program has ended its terminal is closed, and its
+            // number may be another's: nothing more is written (#275).
+            guard descriptor.isOpen else { return }
             data.withUnsafeBytes { buffer in
                 var offset = 0
                 while offset < buffer.count {
@@ -113,6 +127,8 @@ public final class PTYProcess {
     /// the leader of its foreground process group (#129). The shell itself
     /// at its prompt; nil when it cannot be told.
     public var foregroundCommand: String? {
+        // Asked of an ended program's terminal, the number may be another's.
+        guard !finished else { return nil }
         let group = tcgetpgrp(master)
         guard group > 0 else { return nil }
         return ProcessNames.command(of: group)

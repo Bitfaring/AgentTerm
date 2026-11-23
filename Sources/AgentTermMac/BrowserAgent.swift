@@ -583,6 +583,9 @@ extension AppModel {
             if devtools.document != before || tab.loading { await devtools.waitForLoad(seconds: 15) }
             return .text("Pressed \(key). Now" + (await self.whereNow(tab)))
         case .scroll(_, let ref, let x, let y):
+            // As the agent's server takes them (#249), whoever asked.
+            func bounded(_ delta: Double) -> Double { delta.isFinite ? min(max(delta, -100_000), 100_000) : 0 }
+            let x = bounded(x), y = bounded(y)
             let point: CGPoint
             if let ref {
                 point = try await devtools.center(of: try devtools.node(for: ref))
@@ -594,9 +597,12 @@ extension AppModel {
             try await devtools.mouse("mouseWheel", at: point, deltaX: x, deltaY: y)
             done("Scrolled")
             try? await Task.sleep(nanoseconds: 250_000_000)
-            return .text("Scrolled by \(Int(x)), \(Int(y)).")
+            return .text("Scrolled by \(Int(saturating: x)), \(Int(saturating: y)).")
         case .wait(_, let text, let gone, let seconds):
-            let deadline = Date().addingTimeInterval(min(max(seconds, 0), 600))
+            // Numbers from a request, which may not have come through the
+            // agent's server, that checks them (#249).
+            let seconds = seconds.isFinite ? min(max(seconds, 0), 600) : 0
+            let deadline = Date().addingTimeInterval(seconds)
             while Date() < deadline {
                 if Task.isCancelled { break }
                 let page = await devtools.pageText()
@@ -605,7 +611,7 @@ extension AppModel {
                 if text == nil, gone == nil, devtools.loaded || !tab.loading { return .text("The page has loaded" + (await self.whereNow(tab))) }
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
-            return .text("Still waiting after \(Int(seconds)) seconds; the page" + (await self.whereNow(tab)))
+            return .text("Still waiting after \(Int(saturating: seconds)) seconds; the page" + (await self.whereNow(tab)))
         case .evaluate(_, let script):
             done("Ran a script")
             return .text(try await devtools.evaluate(script))

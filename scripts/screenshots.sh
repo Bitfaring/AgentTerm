@@ -34,6 +34,7 @@ cd "$(dirname "$0")/.."
 source scripts/lib-own-environment.sh
 own_environment
 source scripts/lib-cleanup.sh
+source scripts/lib-test-log.sh
 ONLY="${ONLY:-both}"
 DO_MAC=yes DO_IPHONE=yes DO_IPAD=yes
 case "$ONLY" in
@@ -220,6 +221,12 @@ part() {
     local name="$1"
     shift
     if "$@" > "$LOG" 2>&1; then
+        # A part whose tests all skipped themselves took no picture (#309).
+        if why="$(nothing_checked "$LOG")"; then
+            tail -3 "$LOG" >&2
+            echo "screenshots.sh: nothing was taken in: $name: $why. Full log in $LOG" >&2
+            exit 1
+        fi
         echo "  done: $name"
     else
         grep -E "error:|Test Case .* failed|XCTAssert|TEST FAILED" "$LOG" | cut -c1-900 >&2

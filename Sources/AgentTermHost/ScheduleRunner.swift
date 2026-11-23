@@ -95,7 +95,7 @@ public enum ScheduleRunner {
             // Written by someone else since it was read: once more, from that.
             guard FileManager.default.contents(atPath: file.path) == read else { continue }
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: file, options: .atomic)
+            try data.writeKeepingLinks(to: file)
             return
         }
         // Written again every time it was looked at: not something to

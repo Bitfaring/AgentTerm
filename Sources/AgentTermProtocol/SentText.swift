@@ -32,7 +32,23 @@ public enum SentText {
         // the one way.
         guard bracketedPaste, lines.contains("\r") || text.count > typedLength else { return lines }
         // The end of a paste inside it would end it early, and what follows
-        // would be taken as typed.
-        return pasteStart + lines.replacingOccurrences(of: pasteEnd, with: "") + pasteEnd
+        // would be taken as typed: no Escape goes in, nor any other control
+        // character but a tab and the ends of lines, so none can be made of
+        // what is left either (#248). Text from a page or a file's name may
+        // hold them.
+        var kept = lines
+        while kept.contains(pasteEnd) { kept = kept.replacingOccurrences(of: pasteEnd, with: "") }
+        kept = String(String.UnicodeScalarView(kept.unicodeScalars.filter(Self.goesInAPaste)))
+        return pasteStart + kept + pasteEnd
+    }
+
+    /// Whether a character is pasted: none of C0 but tab and Return, nor
+    /// Delete, nor C1.
+    static func goesInAPaste(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x09, 0x0D: return true
+        case 0x00...0x1F, 0x7F...0x9F: return false
+        default: return true
+        }
     }
 }

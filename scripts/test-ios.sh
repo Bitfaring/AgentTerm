@@ -20,18 +20,16 @@ own_environment AGENTTERM_LAUNCH
 command -v xcodegen >/dev/null || { echo "test-ios.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
 source scripts/lib-simulator.sh
 source scripts/lib-cleanup.sh
+source scripts/lib-test-log.sh
 if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then print_simulators; exit 0; fi
 # The fallback is not the simulator run-ios.sh falls back to: this test
 # resets the simulator's keychain, which unpairs the app you are trying out.
-if [ -z "${1:-}" ] && [ -z "${SIMULATOR:-}" ] && [ -t 0 ] && [ -t 1 ]; then
-    echo "This test resets the chosen simulator's keychain: an app paired there has to pair again."
-fi
-# Unlike the other scripts, never the booted simulator by default: that is
-# most likely the one in use.
-if [ -z "${1:-}" ] && [ -z "${SIMULATOR:-}" ] && ! { [ -t 0 ] && [ -t 1 ]; }; then
-    choose_simulator "iPhone Air" "iPhone Air"
-else
-    choose_simulator "${1:-}" "iPhone Air"
+choose_test_simulator "${1:-}"
+# NARROW=only is for an iPad: on an iPhone the test returns at once, having
+# checked nothing, which would be said to pass (#319).
+if [ "${NARROW:-}" = only ] && [[ "$SIM_NAME" != iPad* ]]; then
+    echo "test-ios.sh: NARROW=only narrows an iPad's window, and $SIM_NAME is not an iPad: name an iPad simulator (scripts/test-ios.sh --list shows them)" >&2
+    exit 1
 fi
 DEVICE="$SIM_UDID"
 echo "Testing on $SIM_NAME ($SIM_UDID)."
@@ -123,10 +121,12 @@ fi
 # enough for the test to write a prompt first (IOS-12, #232).
 ASK_AFTER=""
 if [ "${ASK:-}" = only ]; then ASK_AFTER=15; fi
-HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_CLOSING="$DEMO_CLOSING" AGENTTERM_DEMO_ASK_AFTER="$ASK_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_CLOSING="$DEMO_CLOSING" AGENTTERM_DEMO_ASK_AFTER="$ASK_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" "$AGENTTERMD" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
-AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only --protocol-version 1 > "$SECOND_STATE/daemon.log" 2>&1 &
+# Neither asks the agents' services, nor runs in the home of the person
+# running the tests (#310).
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" --protocol-version 1 > "$SECOND_STATE/daemon.log" 2>&1 &
 SECOND_DAEMON=$!
 # SET-4: once the phone keeps the second Mac awake, that Mac goes out of
 # reach, for the phone to show its settings as they were and not change them.
@@ -209,7 +209,7 @@ if [ "${WORKTREE:-}" = only ]; then
     export TEST_RUNNER_AGENTTERM_ONLY_WORKTREE=1
 fi
 # NARROW=only narrows the iPad's window and looks at the list (IPAD-2), and
-# nothing else. On an iPhone it checks nothing.
+# nothing else; on an iPhone it is refused above (#319).
 if [ "${NARROW:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NARROW=1; fi
 # MARKDOWN=only opens Markdown documents in their preview, scrolls the
 # longest, and says how long the app's main thread was held up (PERF-16).
@@ -243,6 +243,12 @@ if [ -n "${TAKEOVER:-}" ]; then
 fi
 
 if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
+    # A run whose test skipped itself, or ran none, checked nothing (#319).
+    if why="$(nothing_checked "$LOG")"; then
+        tail -3 "$LOG" >&2
+        echo "test-ios.sh: nothing was checked: $why. Full log in $LOG" >&2
+        exit 1
+    fi
     # The test arranged the sessions; the host has to have kept that.
     if [ "${TAKEOVER:-}" = only ]; then echo "iOS UI test passed (Mac takeover only)."; rm -f "$LOG"; exit 0; fi
     if [ "${LANDSCAPE:-}" = only ]; then echo "iOS UI test passed (landscape only)."; rm -f "$LOG"; exit 0; fi

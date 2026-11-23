@@ -232,7 +232,7 @@ public enum CommitWriter {
     }
 
     private static func run(_ arguments: [String], in directory: String) -> String? {
-        guard let result = Subprocess.run(git, ["-C", directory, "-c", "core.quotepath=false"] + arguments, timeout: 30), result.status == 0 else {
+        guard let result = Subprocess.run(git, ["-C", directory, "-c", "core.quotepath=false"] + GitDiff.defaultPrefixes + arguments, timeout: 30), result.status == 0 else {
             return nil
         }
         return String(decoding: result.output, as: UTF8.self)

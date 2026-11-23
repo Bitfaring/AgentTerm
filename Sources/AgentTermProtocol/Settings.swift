@@ -154,7 +154,7 @@ public struct SystemStats: Codable, Equatable, Sendable {
     public static func speed(_ bytesPerSecond: UInt64) -> String {
         let kilobytes = Double(bytesPerSecond) / 1024
         if kilobytes >= 1000 { return String(format: "%.1f MB/s", kilobytes / 1024) }
-        return "\(Int(kilobytes.rounded())) KB/s"
+        return "\(Int(saturating: kilobytes.rounded())) KB/s"
     }
 
     /// The key both apps keep the choice of unit under, and its two values.
@@ -169,7 +169,7 @@ public struct SystemStats: Codable, Equatable, Sendable {
     /// measures in Celsius; the unit is how an app shows it.
     public func temperatureText(unit: String) -> String {
         if let temperature {
-            return unit == Self.fahrenheit ? "\(Int((temperature * 9 / 5 + 32).rounded()))°F" : "\(Int(temperature.rounded()))°C"
+            return unit == Self.fahrenheit ? "\(Int(saturating: (temperature * 9 / 5 + 32).rounded()))°F" : "\(Int(saturating: temperature.rounded()))°C"
         }
         switch thermalState {
         case "fair": return "Warm"
@@ -184,7 +184,7 @@ public struct SystemStats: Codable, Equatable, Sendable {
 
     /// "3d 4h", "5h 12m", "8m".
     public static func uptime(since bootedAt: Date, now: Date = Date()) -> String {
-        let minutes = max(0, Int(now.timeIntervalSince(bootedAt)) / 60)
+        let minutes = max(0, Int(saturating: now.timeIntervalSince(bootedAt)) / 60)
         if minutes >= 1440 { return "\(minutes / 1440)d \(minutes % 1440 / 60)h" }
         if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m" }
         return "\(minutes)m"

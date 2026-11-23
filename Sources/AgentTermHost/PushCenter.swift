@@ -9,8 +9,9 @@ import Foundation
 /// (`NoticeCenter`) is encrypted with its key and sent to the relay, which
 /// passes it on to APNs; one handled elsewhere is taken back the same way.
 ///
-/// Not thread-safe: the host calls it from its queue, and `transport`
-/// answers on whatever queue it likes; `HostServer` brings it back.
+/// Not thread-safe: the host calls it from its queue, and what `transport`
+/// answers, on whatever queue it likes, is brought back to that queue
+/// before anything is changed (#267).
 public final class PushCenter {
     /// What is kept for one device.
     struct Target: Codable, Equatable {
@@ -37,11 +38,22 @@ public final class PushCenter {
     private let file: URL?
     private let transport: Transport
     private(set) var targets: [String: Target] = [:]
+    /// The queue it is used on, which the relay's answers are brought to.
+    private let queue: DispatchQueue?
+    /// The registration asked of the relay for each device and not answered
+    /// yet: an answer for one taken off since keeps nothing (#267).
+    private var asked: [String: UUID] = [:]
 
-    init(relay: URL?, file: URL?, transport: Transport? = nil) {
+    init(relay: URL?, file: URL?, transport: Transport? = nil, queue: DispatchQueue? = nil) {
         self.relay = relay
         self.file = file
-        self.transport = transport ?? Self.urlSession
+        self.queue = queue
+        let transport = transport ?? Self.urlSession
+        self.transport = { url, body, done in
+            transport(url, body) { status, data in
+                if let queue { queue.async { done(status, data) } } else { done(status, data) }
+            }
+        }
         if let file, let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode([String: Target].self, from: data) {
             targets = saved
         }
@@ -67,8 +79,13 @@ public final class PushCenter {
             return done(.unavailable(reason: PushWords.registrationFailed("the iPhone's key is not one")))
         }
         let body = try! JSONSerialization.data(withJSONObject: ["token": registration.token])
+        let request = UUID()
+        asked[device] = request
         transport(relay.appendingPathComponent("v1/register"), body) { [weak self] status, data in
             guard let self else { return }
+            // Taken off, or registered again, while the relay was asked.
+            guard self.asked[device] == request else { return }
+            self.asked[device] = nil
             guard status == 200, let data, let answer = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let ticket = answer["ticket"] as? String, let expires = answer["expires"] as? Int
             else {
@@ -125,6 +142,7 @@ public final class PushCenter {
     }
 
     func unregister(device: String) {
+        asked[device] = nil
         guard targets.removeValue(forKey: device) != nil else { return }
         save()
     }

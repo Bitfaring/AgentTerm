@@ -36,6 +36,8 @@ public final class AgentTermConnection: @unchecked Sendable {
     private let queue = DispatchQueue(label: "agentterm.client")
     /// Touched on the main queue only.
     private var closed = false
+    /// It was said on this connection that a message could not be read.
+    private var saidUnreadable = false
     /// Joins a large message sent in pieces (`MessageParts`).
     private var joiner = MessageParts.Joiner()
 
@@ -220,6 +222,15 @@ public final class AgentTermConnection: @unchecked Sendable {
     }
 
     /// Anything from the host is a sign of life, also a part of a message.
+    /// A message from the host that could not be read is said, once a
+    /// connection, as an error both apps show in their banner (#292):
+    /// before, it was dropped and nothing said so.
+    private func couldNotRead() {
+        guard !saidUnreadable else { return }
+        saidUnreadable = true
+        deliver { if !self.closed { self.onMessage?(.error(HostErrorWords.unreadableMessage)) } }
+    }
+
     private func heard() {
         lastHeard = .now()
         pingSentAt = nil
@@ -259,14 +270,20 @@ public final class AgentTermConnection: @unchecked Sendable {
                 if let data, let message = MessageCoding.decode(ServerMessage.self, from: data) {
                     self.noteProtocol(of: message)
                     self.deliver { if !self.closed { self.onMessage?(message) } }
+                } else {
+                    self.couldNotRead()
                 }
             case .binary:
                 guard let data, let frame = DataFrame(decoding: data) else { break }
                 if frame.kind == .output {
                     self.deliver { if !self.closed { self.onOutput?(frame.session, frame.payload) } }
-                } else if let whole = self.joiner.add(frame), let message = MessageCoding.decode(ServerMessage.self, from: whole) {
+                } else if let whole = self.joiner.add(frame) {
                     // A large message, sent in pieces.
-                    self.deliver { if !self.closed { self.onMessage?(message) } }
+                    if let message = MessageCoding.decode(ServerMessage.self, from: whole) {
+                        self.deliver { if !self.closed { self.onMessage?(message) } }
+                    } else {
+                        self.couldNotRead()
+                    }
                 }
             case .close:
                 self.finish(reason: nil)

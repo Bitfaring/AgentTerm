@@ -357,7 +357,10 @@ Three things about it are deliberate:
 
 - It holds no question to the terminal (which terminal are you, where is
   the cursor), so a client has nothing to answer a second time. Clients
-  still treat it as a replay and send nothing on until `replayed`.
+  still treat it as a replay and send none of the emulator's answers on
+  until `replayed`. What the user types meanwhile is sent: the terminal
+  view (`AnsweringTerminalView`) hands the emulator's answers over apart
+  from the user's keys, and only those are held back (#293).
 - The emulator's own colors are left out. A client has its own.
 - A program's output arrives in pieces cut anywhere, also inside an escape
   sequence or a character. A client given the screen at such a moment would
@@ -648,7 +651,12 @@ environment names (`AppChannel.usageVariable`,
 it took the place of, or the one of the project's or the user's settings,
 with the same input, and prints what that prints. Claude Code has one
 status line: of two builds, the one set up last has it and runs the
-other's after its own, whose own then says it is not known. The host
+other's after its own, whose own then says it is not known. The other's is
+run with `AGENTTERM_STATUS_LINE_RELAYED` set, and a relay run with it runs
+no relay it keeps, only the user's: two builds set up in turn keep each
+other's, and would otherwise run each other without end (#259). The one
+name both builds read, on purpose: it names nothing of either. A build set
+up again after the other keeps the user's own line, not the other's. The host
 prefers this report over the conversation file, since it has the limits
 and the size of the context window. The file is removed when the session ends.
 
@@ -1080,7 +1088,8 @@ whatever the two say, until this Mac's own app types, takes control or
 says `used` (a key or a click in its window, sent once after it was told
 no one is there) (NOTE-7). Every client is told `macInUse(Bool)`. Since
 #66 it holds no notice back: every device is told, whoever is at the Mac,
-and since #234 no notification waits for it either.
+and since #234 no notification waits for it either: an agent's waits
+its 10 seconds whoever is there (#322).
 
 **On the iPhone.** Since #66 iOS's own banner, in front as behind, for a
 session other than the one on screen (`AgentNotifications`, from the
@@ -1146,20 +1155,27 @@ Mac's own app as `local`.
   the device's Inbox; then `noticeAlert(id:)` for each one due, not
   handled nor read, that it was not shown yet. A new notice is `notice` to
   every client at once, for the Inbox and the Mac's floating notice. When it
-  `alerts`, it is a notification at once, in the same turn of the host's
-  queue (`tellEveryone` → `alert`): nothing waits, whether someone is at
-  the Mac or not, a done agent included (decided 2026-11-22, #234, which
-  took away the 30 seconds #180 had made a done agent, and anything while
-  someone was at the Mac, wait). It is due (`becameDue`, kept in
+  `alerts`, an agent's notice (a question, a permission, a finished task)
+  is a notification 10 seconds later (`Notice.alertDelay`,
+  `Configuration.alertDelay`), whether someone is at the Mac or not, and
+  only if it is then neither handled nor read: one the user acted on
+  meanwhile, its agent gone on, is never shown on the Mac nor the iPhone
+  (decided 2026-11-23, #322, over #234's "at once"; #234 had taken away
+  the 30 seconds #180 made a done agent wait). A failure that stopped work
+  is a notification at once (`Notice.waitsToAlert`). A host that stops
+  during the wait shows, when it starts again, none of those: their
+  sessions ended with it, so their notices moved on, which is read (#321).
+  The wait is short in the host's tests, and `AGENTTERM_ALERT_DELAY` sets
+  it for the apps' tests. It is due (`becameDue`, kept in
   `notices.json`), and is `noticeAlert(id:)` to every client in front and a
   push to each registered device that is away, not connected or in the
   background (#190), at the same moment. The Mac posts its macOS
-  notification on `noticeAlert` as before, so it too is at once.
+  notification on `noticeAlert` as before, so it waits the same.
 - **Read** (#180) is the host's too: `readNotices(ids:)` from a device marks
   them read in the log (`Notice.read`, `NoticeCenter.read`), and every
   client is told `noticesRead(ids:)`; each device that had one through
   Apple and is away has it taken back (`gone`). Handled by being answered,
-  opened or dismissed is read too (`Notice.reads`); moved on is not. A
+  opened or dismissed is read too (`Notice.reads`), and so is moved on (#321, the owner's decision of 2026-11-23): an agent that waits goes on only once someone answered it, often in its session, and one that asks something else has a notice of its own for it. A handled notice is taken back from every device whatever the way. A
   device keeps read in its `InboxBook` as well, and on `noticeLog` says what
   it read while not connected (`InboxBook.readHere(notTold:)`).
 - A notice is handled once (`Notice.Handled`: answered, opened, dismissed,
@@ -2041,13 +2057,18 @@ the same folder can therefore be mixed up; the History tab is exact.
   link. The iOS Simulator has no camera, so `scripts/pair-ios.sh` uses it.
 - `Tailscale.status()` decides what the pairing screen shows. Tailscale counts
   as installed when its app or command line tool is found; as ready when the
-  Mac has an address in Tailscale's range and the CLI, if it answers, reports
-  the backend as running. An address alone is enough where the CLI is missing.
-  The screen re-checks every 3 seconds while it is open.
-- The host listens on `127.0.0.1` and on the Mac's Tailscale address
-  (100.64.0.0/10), found with `getifaddrs`. It checks every 15 seconds so it
-  follows Tailscale going up, down or changing address. It never listens on
-  other interfaces.
+  Mac has Tailscale's address and the CLI, if it answers, reports the backend
+  as running. Where the CLI is missing, an address on a tunnel (`utun`) of a
+  Mac that has Tailscale is enough; on a Mac without Tailscale, an address in
+  its range is someone else's (#268). The screen re-checks every 3 seconds
+  while it is open.
+- The host listens on `127.0.0.1` and on the Mac's Tailscale address: of the
+  interfaces with an address in 100.64.0.0/10 (`getifaddrs`), the one
+  Tailscale says is its own (`tailscale status --json`, `TailscaleIPs`, asked
+  off the host's queue), or when it cannot be asked the first tunnel. Another
+  VPN's tunnel in the same range (Cloudflare WARP) and a carrier's address are
+  never taken (#268). It checks every 15 seconds so it follows Tailscale going
+  up, down or changing address. It never listens on other interfaces.
 - The WebSocket itself is not encrypted. Loopback traffic stays on the Mac and
   Tailscale traffic is encrypted by WireGuard.
 - A token is still required on Tailscale, because other devices and shared
@@ -2235,12 +2256,15 @@ A part of AgentTerm that stops without being asked to is reported to every
 client in a message of its own, `failures([PartFailure])`, rather than left
 for the clients to work out from a list that emptied. The parts are the
 host, a session's program, the hold that keeps the Mac awake, and the
-status line relay (see "The other parts" below). A `PartFailure` says:
+status line relay (see "The other parts" below); and, as the host starts, a
+file of what it keeps (its schedules, paired devices or settings) that it
+could not read (`savedState`, #273): put aside as `<name>.unreadable`, never
+written over, and the host starts without what it held. A `PartFailure` says:
 
 | Field | Means |
 |---|---|
 | `id` | Names the report, for `dismissFailure` |
-| `part` | Which part: `host`, `session`, `keepAwake`, `statusLine`. Text, not a closed list, so a client reads a part added after it was built |
+| `part` | Which part: `host`, `session`, `keepAwake`, `statusLine`, `schedule`, `push`, `savedState`. Text, not a closed list, so a client reads a part added after it was built |
 | `name` | Which one, for a part there are several of (a session); nil for the host |
 | `at` | When it stopped, as near as is known |
 | `ended` | The sessions that ended with it: name, folder, agent |
@@ -2552,6 +2576,16 @@ the user asked for a commit or an add, still takes its lock. How a folder
 was when a scheduled run started is written as a tree through a copy of
 the index (`GIT_INDEX_FILE`), not with `git stash create`, which rewrote
 the index too.
+
+Each runs in a session and a process group of its own, with no terminal,
+and its time limit holds (#261): at the limit the whole group is asked to
+end, and killed a second later (`Subprocess.graceAfterTimeout`), and its
+output is read no longer than that, also while a program it left behind in
+another group keeps it open. A login shell still in its startup files, which
+takes no notice of SIGTERM, and a hook that leaves a program in the
+background, made a call wait with no end. The user's own status line runs
+the same way, with what Claude Code gave it as its input and its own
+environment (`forTheHost: false`).
 
 ## Reporting
 

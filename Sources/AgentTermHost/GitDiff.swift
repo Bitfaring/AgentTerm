@@ -7,6 +7,12 @@ public enum GitDiff {
     private static let git = "/usr/bin/git"
     private static let maxPatchBytes = 400_000
     private static let maxUntrackedFiles = 50
+    /// Given to git before every diff `parse` reads: the names in it are
+    /// read after `a/` and `b/`, which the user's `diff.mnemonicPrefix` or
+    /// `diff.noprefix` would change (#260). Settings, not `--src-prefix`
+    /// and `--dst-prefix`: git 2.54's `stash show --include-untracked` puts
+    /// bytes of no meaning before a name given those.
+    static let defaultPrefixes = ["-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false"]
 
     /// Blocks while git runs. Call off the main thread.
     ///
@@ -326,7 +332,7 @@ public enum GitDiff {
     }
 
     private static func run(_ arguments: [String], in directory: String, acceptStatus: Set<Int32> = [0]) -> String? {
-        guard let result = Subprocess.run(git, ["-C", directory, "-c", "core.quotepath=false"] + arguments, timeout: 15),
+        guard let result = Subprocess.run(git, ["-C", directory, "-c", "core.quotepath=false"] + defaultPrefixes + arguments, timeout: 15),
             acceptStatus.contains(result.status)
         else { return nil }
         return String(decoding: result.output, as: UTF8.self)

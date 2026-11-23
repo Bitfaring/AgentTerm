@@ -94,6 +94,44 @@ final class GitTests: MacUITestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: trash.appendingPathComponent("docs/guide.md").path), "its folder went whole")
     }
 
+    /// GIT-82 (#297): a question about discarding, asked in one folder, is
+    /// never answered in another. The session in front ends while it is
+    /// open, and the one in a worktree of the same repository comes in
+    /// front: the question is closed, and that is said; the worktree's
+    /// change is still there.
+    func testAQuestionAskedInOneFolderIsNeverAnsweredInAnother() throws {
+        let phone = try device()
+        app.wait(for: .text("project, folder"), timeout: 15)
+        phone.send(.createInWorktree(request: CreateRequest(command: "exec sleep 600", cwd: project.path, title: "elsewhere"), branch: "feature/other", from: nil))
+        wait("the worktree's session", timeout: 20) { phone.sessions.contains { $0.branch == "feature/other" } }
+        let other = try XCTUnwrap(phone.sessions.first { $0.branch == "feature/other" })
+        // A change of the worktree's own, that discarding there would lose.
+        try "the other agent's work\n".write(toFile: other.cwd + "/notes.txt", atomically: true, encoding: .utf8)
+        phone.send(.create(CreateRequest(command: "exec sleep 600", cwd: project.path, title: "here")))
+        wait("the session here", timeout: 20) { phone.sessions.contains { $0.title == "here" } }
+        let here = try XCTUnwrap(phone.sessions.first { $0.title == "here" })
+
+        app.press(.id("session-\(here.id)"), timeout: 15)
+        app.press(.button("Git"))
+        app.wait(for: .button("Stage notes.txt"), timeout: 15)
+        app.press(.button("Discard changes to notes.txt"))
+        app.wait(for: .containing("Discard the changes to notes.txt?"))
+        // The session in front ends while the question is open.
+        phone.send(.kill(session: here.id))
+        wait("the session to end", timeout: 15) { !phone.sessions.contains { $0.id == here.id } }
+        app.wait("the worktree's session in front", timeout: 15) { self.app.first(.id("worktree-picker"))?.label.contains("feature/other") == true }
+        if app.exists(.button("Discard Changes")) {
+            // What the user would do: answer what they were asked.
+            app.press(.button("Discard Changes"))
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(
+            try String(contentsOfFile: other.cwd + "/notes.txt", encoding: .utf8), "the other agent's work\n",
+            "the discard asked in the project was done in the worktree")
+        app.wait(for: .containing(GitQuestionWords.closedForAnotherFolder), timeout: 5)
+        XCTAssertTrue(git("status", "--porcelain", in: project).contains("notes.txt"), "the project's change, which was asked about and not discarded, is gone")
+    }
+
     /// GIT-68 (#50): Discard All throws away what it named and nothing
     /// else: not the new files past the fifty that are listed, nor a
     /// worktree of the repository inside the folder, as Claude Code keeps

@@ -9,7 +9,7 @@ import SwiftTerm
 /// submitted. A picture on the clipboard, a screenshot say, is not a file:
 /// ⌘V sends Control V, with which an agent such as Claude Code takes the
 /// clipboard's picture itself. Nothing is saved.
-public final class FileTakingTerminalView: TerminalView {
+public final class FileTakingTerminalView: AnsweringTerminalView {
     /// Says why nothing was typed, where nothing else would.
     public var refused: ((String) -> Void)?
     /// Whether this Mac's files and clipboard mean anything to the session:

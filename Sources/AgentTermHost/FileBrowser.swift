@@ -68,7 +68,7 @@ public enum FileBrowser {
 
     public static func write(_ text: String, to path: String) throws {
         do {
-            try Data(text.utf8).write(to: URL(fileURLWithPath: path), options: .atomic)
+            try Data(text.utf8).writeKeepingLinks(to: URL(fileURLWithPath: path))
         } catch {
             throw FileBrowserError.failed(error.localizedDescription)
         }
