@@ -90,9 +90,11 @@ jobs:
       # notes have to be written: the GitHub release and TestFlight show them.
       - name: Check the version and its release notes
         id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
-          scripts/check-version.sh "${{ steps.version.outputs.value }}"
-          echo "path=$(scripts/check-release-notes.sh "${{ steps.version.outputs.value }}")" >> "$GITHUB_OUTPUT"
+          scripts/check-version.sh "$VERSION"
+          echo "path=$(scripts/check-release-notes.sh "$VERSION")" >> "$GITHUB_OUTPUT"
 
       - name: Install fastlane
         run: command -v fastlane >/dev/null || brew install fastlane
@@ -155,7 +157,8 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           # For the release's published checksum (#316).
           GH_TOKEN: ${{ github.token }}
-        run: scripts/publish-homebrew.sh "${{ steps.version.outputs.value }}"
+          VERSION: ${{ steps.version.outputs.value }}
+        run: scripts/publish-homebrew.sh "$VERSION"
 
       - name: Remove the signing files, whatever happened
         if: always()
@@ -188,9 +191,11 @@ jobs:
       # notes have to be written: the GitHub release and TestFlight show them.
       - name: Check the version and its release notes
         id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
-          scripts/check-version.sh "${{ steps.version.outputs.value }}"
-          echo "path=$(scripts/check-release-notes.sh "${{ steps.version.outputs.value }}")" >> "$GITHUB_OUTPUT"
+          scripts/check-version.sh "$VERSION"
+          echo "path=$(scripts/check-release-notes.sh "$VERSION")" >> "$GITHUB_OUTPUT"
 
       - name: Install fastlane and XcodeGen
         run: |

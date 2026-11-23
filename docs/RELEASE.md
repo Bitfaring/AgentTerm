@@ -185,7 +185,10 @@ brew install --cask agentterm
 The cask lives in the tap repository, `manhpham90vn/homebrew-tap`, and is
 written from the template `packaging/homebrew/agentterm.rb`.
 `scripts/publish-homebrew.sh <version>` fills in the version and the checksum
-of that version's disk image and pushes it to the tap. The release workflow
+published with that version's GitHub release (`AgentTerm-<version>.sha256`),
+the one `brew` checks the download against, and pushes it to the tap; a
+`dist/AgentTerm-<version>.dmg` that is there and is not that image is
+refused, never hashed in its place (#316). The release workflow
 runs it after publishing the disk image, when the `HOMEBREW_TAP_TOKEN` secret
 is set. By hand it uses git's sign-in on your machine; `DRY_RUN=1` prints the
 cask and pushes nothing. Beta versions are published to the tap too.
@@ -197,7 +200,18 @@ Pushing a tag such as `v0.2.0` releases both apps: the Mac disk image goes
 on a GitHub release of that tag with its checksum, the iPhone app goes to
 TestFlight. A version with a suffix (`v0.2.0-beta.1`) makes the GitHub
 release a prerelease. The workflow can also be run by hand with a version,
-for one of the two apps or both.
+for one of the two apps or both. A version typed there is given to the
+scripts through the environment and must look like `0.15.1` or
+`0.15.1-beta.1`, or the run stops in its first step (#318). The release's
+tag is put on the commit that was built, also when the run was started by
+hand from a branch (`target_commitish`, #315).
+
+The actions that are not GitHub's own (`maxim-lobanov/setup-xcode`,
+`softprops/action-gh-release`) are pinned by commit, with their tag beside
+it in a comment; Dependabot proposes their updates as for any action. The
+signing files are removed as soon as the apps are signed and notarized,
+before the release is published, and again at the end whatever happened
+(#314).
 
 Its secrets are set from the dotfiles repo, which shows what it would set
 before setting anything:
