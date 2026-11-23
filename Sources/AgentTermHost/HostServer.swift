@@ -259,6 +259,8 @@ public final class HostServer {
         /// every session's output goes through must not wait for (#21).
         let mirror: ScreenMirror
         let mirrorQueue: DispatchQueue
+        /// Bytes of output handed to the mirror and not yet fed to it.
+        var mirrorBacklog = 0
         /// The last of the raw output, for a client that was here before.
         var scrollback = Data()
         /// Where the end of `scrollback` is in all the session ever wrote.
@@ -1977,10 +1979,15 @@ public final class HostServer {
     /// is (#270): a client that does not read, an iPhone suspended with its
     /// connection open, made the host keep all of it, 460 MB in 10 seconds
     /// of a program that prints, until the host was stopped.
+    /// Past this much output waiting for a session's mirror, the program's
+    /// output is no longer read until the mirror took half of it.
+    static let mirrorMostBehind = 4 * 1024 * 1024
     static let mostUnsent = 8 * 1024 * 1024
     static let caughtUpBelow = 1024 * 1024
     /// The most ever waiting to go to one client, for the tests.
     private(set) var largestUnsent = 0
+    /// The most output ever waiting for a session's mirror, for the tests.
+    private(set) var largestMirrorBacklog = 0
 
     private func transmit(_ data: Data, opcode: NWProtocolWebSocket.Opcode, to client: Client) {
         let metadata = NWProtocolWebSocket.Metadata(opcode: opcode)
@@ -4148,7 +4155,21 @@ public final class HostServer {
             queue.asyncAfter(deadline: .now() + typedAfter) { [weak session] in session?.process.write(Data(text.utf8)) }
         }
         let mirror = session.mirror
-        session.mirrorQueue.async { mirror.feed(data) }
+        let count = data.count
+        session.mirrorBacklog += count
+        largestMirrorBacklog = max(largestMirrorBacklog, session.mirrorBacklog)
+        // The emulator is slower than a program that prints without end:
+        // past the bound the program waits for it, as a terminal that cannot
+        // keep up makes it wait, rather than the host keeping all (#327).
+        if session.mirrorBacklog > Self.mirrorMostBehind { session.process.pauseReading() }
+        session.mirrorQueue.async { [weak self, weak session] in
+            mirror.feed(data)
+            self?.queue.async {
+                guard let session else { return }
+                session.mirrorBacklog -= count
+                if session.mirrorBacklog <= Self.mirrorMostBehind / 2 { session.process.resumeReading() }
+            }
+        }
         session.scrollback.append(data)
         session.written += data.count
         if session.info.schedule != nil { session.lastOutputAt = configuration.now() }

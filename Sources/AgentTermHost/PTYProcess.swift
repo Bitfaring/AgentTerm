@@ -45,6 +45,9 @@ public final class PTYProcess {
     private final class Descriptor { var isOpen = true }
     private let descriptor = Descriptor()
     private var readSource: DispatchSourceRead?
+    /// Its output is not read for now (#327): the program waits on a full
+    /// PTY, as it does in a terminal that cannot keep up.
+    private var readingPaused = false
     private var exitSource: DispatchSourceProcess?
     private var finished = false
 
@@ -93,7 +96,23 @@ public final class PTYProcess {
 
     deinit {
         exitSource?.cancel()
+        // A source is let go resumed: a suspended one stops the process.
+        if readingPaused { readSource?.resume() }
         readSource?.cancel()
+    }
+
+    /// Stops reading its output until `resumeReading`. On the queue given
+    /// at init.
+    public func pauseReading() {
+        guard !readingPaused, !finished, let readSource else { return }
+        readingPaused = true
+        readSource.suspend()
+    }
+
+    public func resumeReading() {
+        guard readingPaused else { return }
+        readingPaused = false
+        readSource?.resume()
     }
 
     /// Sends bytes to the program as if they were typed.
@@ -191,6 +210,7 @@ public final class PTYProcess {
         finished = true
         exitSource?.cancel()
         exitSource = nil
+        resumeReading()
         readSource?.cancel()
         readSource = nil
 

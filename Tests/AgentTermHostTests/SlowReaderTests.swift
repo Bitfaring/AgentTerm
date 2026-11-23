@@ -79,3 +79,49 @@ final class SlowReaderTests: XCTestCase {
         XCTAssertTrue(got.last?.hasPrefix("line 00400000") ?? false)
     }
 }
+
+/// HOST-40: a program that prints without end does not make the host keep
+/// without bound what its screen's emulator has not taken yet: the program
+/// is made to wait, as a terminal that cannot keep up makes it.
+final class FastPrinterTests: XCTestCase {
+    func testAProgramThatPrintsWithoutEndIsMadeToWaitForTheScreen() throws {
+        let token = "test-token-0123456789abcdef0123456789"
+        let server = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] }))
+        let port = try server.start()
+        defer { server.stop() }
+        let client = AgentTermConnectionProbe(port: port, token: token)
+        defer { client.close() }
+        client.send(.create(CreateRequest(command: "exec yes 'a line a program prints, again and again, without end'")))
+        Thread.sleep(forTimeInterval: 6)
+        XCTAssertLessThanOrEqual(
+            server.largestMirrorBacklog, HostServer.mirrorMostBehind + 64 * 1024,
+            "\(server.largestMirrorBacklog / 1024 / 1024) MB waited for the screen's emulator")
+    }
+}
+
+/// A client that says hello and reads nothing back.
+private final class AgentTermConnectionProbe {
+    private let connection: NWConnection
+
+    init(port: UInt16, token: String) {
+        let webSocket = NWProtocolWebSocket.Options()
+        let parameters = NWParameters.tcp
+        parameters.defaultProtocolStack.applicationProtocols.insert(webSocket, at: 0)
+        connection = NWConnection(to: .url(URL(string: "ws://127.0.0.1:\(port)/")!), using: parameters)
+        let ready = DispatchSemaphore(value: 0)
+        connection.stateUpdateHandler = { if case .ready = $0 { ready.signal() } }
+        connection.start(queue: DispatchQueue(label: "probe"))
+        _ = ready.wait(timeout: .now() + 5)
+        // Reads, so that only the screen's emulator can fall behind.
+        func receive() { connection.receiveMessage { _, _, _, error in if error == nil { receive() } } }
+        receive()
+        send(.hello(token: token, client: "probe"))
+    }
+
+    func send(_ message: ClientMessage) {
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        connection.send(content: MessageCoding.encode(message), contentContext: .init(identifier: "m", metadata: [metadata]), completion: .idempotent)
+    }
+
+    func close() { connection.cancel() }
+}

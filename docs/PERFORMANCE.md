@@ -279,12 +279,20 @@ These need what a test on this Mac does not have, and are still to do for
 - **Scrolling a list of thousands of changes**, and the main thread of the
   iPhone app; the Mac app's is above.
 
-## A client that does not read (PERF-12, #270)
+## A program that prints without end (PERF-12, #270, #327)
 
 `AGENTTERM_MEASURE=1 swift test --filter testTheHostsMemoryWithAClientThatDoesNotRead`
 (`MEASURE_READS=1` for a client that reads): the real host, a session running
-`yes`, its footprint every 10 seconds. On 2026-11-23, before #270, with a
-client that did not read: 115 MB at 0 s, 579 MB at 10 s, then the host was
-gone. After it, the same and with a client that reads both grow by about
-115 MB each 10 s, and fall only to 276 MB once the program is stopped: a
-growth of its own, not the client's, logged as a bug of its own.
+`yes`, its footprint every 10 seconds for 30 s, then 30 s more with the
+program stopped. On 2026-11-23:
+
+| Build | Client | 0 s | 10 s | 30 s | stopped, 30 s after |
+|---|---|---|---|---|---|
+| before #270 | does not read | 115 MB | 579 MB | the host was gone | |
+| #270 only | reads | 42 MB | 158 MB | 391 MB | 276 MB |
+| #270 and #327 | reads | 24 MB | 25 MB | 26 MB | 25 MB |
+| #270 and #327 | does not read | 47 MB | 47 MB | 47 MB | 47 MB |
+
+The first growth was what waited for a client that does not read (#270);
+the second, what waited for the session's screen emulator, which is slower
+than such a program (#327): the program now waits for it.

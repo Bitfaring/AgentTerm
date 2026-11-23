@@ -226,6 +226,15 @@ output, and the host notes how far into each it has all; once less than
 or the screen as on attaching when that is no longer kept. Nothing is
 said to the client: it gets all, once.
 
+**A program is made to wait for its session's screen** (#327). Every piece
+of a session's output is fed to its screen emulator (`ScreenMirror`) on the
+session's own queue, and that emulator is slower than a program that prints
+without end. The host counts what waits for it; past
+`HostServer.mirrorMostBehind` (4 MB) it stops reading the PTY
+(`PTYProcess.pauseReading`), so the program waits on a full PTY as it does
+in a terminal that cannot keep up, and reads again once half of it was
+taken. Nothing is lost, and a session that ends meanwhile says all it wrote.
+
 Client to host:
 
 | Message | Meaning |
