@@ -498,6 +498,11 @@ final class FlowTests: XCTestCase {
             commitWhileTheMacGoes(app)
             return
         }
+        if environment["AGENTTERM_ONLY_BADLINK"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            try pairWithACodeThatIsRefused(app, launchButton: launchButton)
+            return
+        }
         if environment["AGENTTERM_ONLY_BADSTATE"] != nil {
             // HOST-16 (#273): the host started on a schedules file it could
             // not read, and the phone's banner says so.
@@ -1280,6 +1285,29 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(notDone.waitForExistence(timeout: 5), "a schedule saved while the Mac is not connected was not said")
         app.alerts.buttons["OK"].tap()
         XCTAssertTrue(form.exists, "the schedule's form closed as if it were saved")
+    }
+
+    /// PAIR-12 (#279): a pairing link whose code the host refuses, opened
+    /// while a Mac is on screen, pairs nothing and forgets nothing: it is
+    /// said, and the Mac on screen stays, connected.
+    private func pairWithACodeThatIsRefused(_ app: XCUIApplication, launchButton: String) throws {
+        let link = try XCTUnwrap(ProcessInfo.processInfo.environment["AGENTTERM_PAIR_URL"].flatMap { URLComponents(string: $0) })
+        var refused = link
+        refused.queryItems = link.queryItems?.map { $0.name == "code" ? URLQueryItem(name: "code", value: "000000") : $0.name == "name" ? URLQueryItem(name: "name", value: "Stale Mac") : $0 }
+        app.openPairingLink(try XCTUnwrap(refused.url))
+        let said = app.alerts.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "pairing code has expired or was already used")).firstMatch
+        XCTAssertTrue(said.waitForExistence(timeout: 15), "the refused code was not said")
+        capture("pairing-refused")
+        app.alerts.buttons["OK"].tap()
+        // The list of Macs, where pairing is: the first still there and
+        // connected, the refused one not kept.
+        let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "First Mac")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "the paired Mac is gone")
+        let connected = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Connected")).firstMatch
+        XCTAssertTrue(connected.waitForExistence(timeout: 5), "the paired Mac's connection was dropped")
+        XCTAssertFalse(app.staticTexts["Stale Mac"].exists, "the refused Mac was kept")
+        first.tap()
+        XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 15), "the paired Mac does not open")
     }
 
     /// IOS-23 (#285): while git runs a commit (its hook takes a while, and

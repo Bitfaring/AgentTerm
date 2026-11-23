@@ -222,6 +222,9 @@ if [ "${UNANSWERED:-}" = only ]; then
     UNANSWERED_WATCH=$!
     export TEST_RUNNER_AGENTTERM_ONLY_UNANSWERED=1
 fi
+# BADLINK=only opens a pairing link whose code the first host refuses, with
+# the first Mac on screen (PAIR-12, #279), and nothing else.
+if [ "${BADLINK:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_BADLINK=1; fi
 # BADSTATE=only starts the first host on a schedules file it cannot read
 # (HOST-16, #273), for the phone's banner to be seen, and nothing else.
 if [ "${BADSTATE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_BADSTATE=1; fi
@@ -286,6 +289,7 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${INBOX:-}" = only ]; then echo "iOS UI test passed (the Inbox only)."; rm -f "$LOG"; exit 0; fi
     if [ "${CUT:-}" = only ]; then echo "iOS UI test passed (an Inbox row of a cut answer only)."; rm -f "$LOG"; exit 0; fi
     if [ "${WORKTREE:-}" = only ]; then echo "iOS UI test passed (a worktree being made only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${BADLINK:-}" = only ]; then echo "iOS UI test passed (a refused pairing link only)."; rm -f "$LOG"; exit 0; fi
     if [ "${BADSTATE:-}" = only ]; then echo "iOS UI test passed (a state file the host could not read only)."; rm -f "$LOG"; exit 0; fi
     if [ "${COMMITWAIT:-}" = only ]; then echo "iOS UI test passed (a commit while its folder changes only)."; rm -f "$LOG"; exit 0; fi
     if [ "${DELETE:-}" = only ]; then echo "iOS UI test passed (a schedule deleted only)."; rm -f "$LOG"; exit 0; fi

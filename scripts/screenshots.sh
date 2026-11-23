@@ -235,6 +235,18 @@ part() {
     fi
 }
 
+# A build, which runs no test: only whether it worked is looked at.
+build() {
+    local name="$1"
+    shift
+    if ! "$@" > "$LOG" 2>&1; then
+        grep -E "error:|BUILD FAILED" "$LOG" | cut -c1-900 >&2
+        echo "screenshots.sh: failed in: $name. Full log in $LOG" >&2
+        exit 1
+    fi
+    echo "  done: $name"
+}
+
 if [ -n "$DO_MAC" ]; then
     # The pictures are of the window at work, not of the onboarding, which
     # opens when the stand-in agents say they are not set up (#155): asked
@@ -263,7 +275,7 @@ pictures_on() {
     local xcodebuild=(xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm
         -destination "platform=iOS Simulator,id=$device"
         -derivedDataPath .build/ios -skipPackagePluginValidation APP_DISPLAY_NAME=AgentTerm)
-    part "building the app for the $what" "${xcodebuild[@]}" build-for-testing
+    build "building the app for the $what" "${xcodebuild[@]}" build-for-testing
     # The status bar the App Store's pictures have.
     xcrun simctl status_bar "$device" override --time "9:41" --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
     export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$APP/agenttermd" pairing-link --port "$PORT" --host 127.0.0.1 --name "MacBook Pro")"
@@ -284,7 +296,7 @@ page_on() {
     local xcodebuild=(xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm
         -destination "platform=iOS Simulator,id=$device"
         -derivedDataPath .build/ios -skipPackagePluginValidation APP_DISPLAY_NAME=AgentTerm)
-    part "building the app for the $what" "${xcodebuild[@]}" build-for-testing
+    build "building the app for the $what" "${xcodebuild[@]}" build-for-testing
     xcrun simctl status_bar "$device" override --time "9:41" --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
     export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$APP/agenttermd" pairing-link --port "$PORT" --host 127.0.0.1 --name "MacBook Pro")"
     export TEST_RUNNER_AGENTTERM_SCREENSHOTS=1 TEST_RUNNER_AGENTTERM_SHOT_DIR="$into"
