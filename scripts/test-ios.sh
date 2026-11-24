@@ -20,18 +20,16 @@ own_environment AGENTTERM_LAUNCH
 command -v xcodegen >/dev/null || { echo "test-ios.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
 source scripts/lib-simulator.sh
 source scripts/lib-cleanup.sh
+source scripts/lib-test-log.sh
 if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then print_simulators; exit 0; fi
 # The fallback is not the simulator run-ios.sh falls back to: this test
 # resets the simulator's keychain, which unpairs the app you are trying out.
-if [ -z "${1:-}" ] && [ -z "${SIMULATOR:-}" ] && [ -t 0 ] && [ -t 1 ]; then
-    echo "This test resets the chosen simulator's keychain: an app paired there has to pair again."
-fi
-# Unlike the other scripts, never the booted simulator by default: that is
-# most likely the one in use.
-if [ -z "${1:-}" ] && [ -z "${SIMULATOR:-}" ] && ! { [ -t 0 ] && [ -t 1 ]; }; then
-    choose_simulator "iPhone Air" "iPhone Air"
-else
-    choose_simulator "${1:-}" "iPhone Air"
+choose_test_simulator "${1:-}"
+# NARROW=only is for an iPad: on an iPhone the test returns at once, having
+# checked nothing, which would be said to pass (#319).
+if [ "${NARROW:-}" = only ] && [[ "$SIM_NAME" != iPad* ]]; then
+    echo "test-ios.sh: NARROW=only narrows an iPad's window, and $SIM_NAME is not an iPad: name an iPad simulator (scripts/test-ios.sh --list shows them)" >&2
+    exit 1
 fi
 DEVICE="$SIM_UDID"
 echo "Testing on $SIM_NAME ($SIM_UDID)."
@@ -78,6 +76,11 @@ printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"write test
 git init -q -b main "$PROJECT/web"
 printf 'web\n' >> "$PROJECT/.git/info/exclude"
 printf '["%s"]' "$PROJECT" > "$STATE/folders.json"
+# BADSTATE=only: a schedules file of a shape this build does not know.
+# It also listens on a stand-in Tailscale address this Mac does not have, for
+# the banner that says it cannot (REMOTE-36, #274).
+TAILSCALE_STANDIN=""
+if [ "${BADSTATE:-}" = only ]; then printf '{"paused":false,"schedules":[{"id":"x"}]}' > "$STATE/schedules.json"; TAILSCALE_STANDIN=127.0.0.2; fi
 # MARKDOWN=only: the documents the Mac's PERF-15 opens, for the phone's
 # preview to be measured the same way (#126).
 if [ "${MARKDOWN:-}" = only ]; then
@@ -122,20 +125,23 @@ fi
 # ASK=only has it ask a question with choices a while after it starts, time
 # enough for the test to write a prompt first (IOS-12, #232).
 ASK_AFTER=""
-if [ "${ASK:-}" = only ]; then ASK_AFTER=15; fi
-HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_CLOSING="$DEMO_CLOSING" AGENTTERM_DEMO_ASK_AFTER="$ASK_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
+if [ "${ASK:-}" = only ] || [ "${INBOXASK:-}" = only ]; then ASK_AFTER=15; fi
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_CLOSING="$DEMO_CLOSING" AGENTTERM_DEMO_ASK_AFTER="$ASK_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" AGENTTERM_TAILSCALE_ADDRESS="$TAILSCALE_STANDIN" "$AGENTTERMD" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
-AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only --protocol-version 1 > "$SECOND_STATE/daemon.log" 2>&1 &
+# Neither asks the agents' services, nor runs in the home of the person
+# running the tests (#310).
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" --protocol-version 1 > "$SECOND_STATE/daemon.log" 2>&1 &
 SECOND_DAEMON=$!
 # SET-4: once the phone keeps the second Mac awake, that Mac goes out of
 # reach, for the phone to show its settings as they were and not change them.
 ( while ! grep -q '"keepAwake":true' "$SECOND_STATE/settings.json" 2>/dev/null; do sleep 0.3; done; kill "$SECOND_DAEMON" ) &
 GONE_WATCH=$!
 TAKEOVER_PID=""
+UNANSWERED_WATCH=""
 cleanup() {
     local status=$?
-    stop_then_remove "$DAEMON $SECOND_DAEMON $GONE_WATCH $TAKEOVER_PID"
+    stop_then_remove "$DAEMON $SECOND_DAEMON $GONE_WATCH $TAKEOVER_PID $UNANSWERED_WATCH"
     # Whatever else is on the hosts' ports or runs from their folders (#221).
     stop_what_is_left "$PORT $SECOND_PORT" "$STATE" "$SECOND_STATE"
     stop_then_remove "" "$STATE" "$SECOND_STATE"
@@ -167,7 +173,8 @@ export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$AGENTTER
 export TEST_RUNNER_AGENTTERM_SECOND_PAIR_URL="$(AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" pairing-link --port "$SECOND_PORT" --host 127.0.0.1 --name "Second Mac")"
 export TEST_RUNNER_AGENTTERM_LAUNCH="${AGENTTERM_LAUNCH:-Start Shell}"
 export TEST_RUNNER_AGENTTERM_TEST_PROJECT=1
-export TEST_RUNNER_AGENTTERM_EXPECT_HOST_DIED=1
+# Not with BADSTATE=only, whose banner of the schedules is a second one.
+[ "${BADSTATE:-}" = only ] || export TEST_RUNNER_AGENTTERM_EXPECT_HOST_DIED=1
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTERM_SHOT_DIR="$SHOTS"; fi
 # LANDSCAPE=only looks at the app with the phone on its side and nothing else.
 if [ "${LANDSCAPE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_LANDSCAPE=1; fi
@@ -198,6 +205,10 @@ if [ "${INBOX:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_INBOX=1; fi
 # question it asks meanwhile from the place to answer, then sends the prompt
 # (IOS-12), and nothing else. What the stand-in received is checked after.
 if [ "${ASK:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_ASK=1; fi
+# INBOXASK=only answers the stand-in's question from the Inbox in words of
+# one's own (IOS-26, #320), and nothing else. What the stand-in received is
+# checked after.
+if [ "${INBOXASK:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_INBOXASK=1; fi
 # NOTE=only reads a stand-in agent's note on its row (IOS-9), and nothing else.
 if [ "${NOTE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NOTE=1; fi
 # WORKTREE=only makes a worktree of the test project from the list and
@@ -208,8 +219,43 @@ if [ "${WORKTREE:-}" = only ]; then
     chmod +x "$PROJECT/.git/hooks/post-checkout"
     export TEST_RUNNER_AGENTTERM_ONLY_WORKTREE=1
 fi
+# UNANSWERED=only stages the test project's change from the phone and commits
+# it, and the host is stopped while git runs the commit's hook (IOS-19, #281),
+# and nothing else.
+if [ "${UNANSWERED:-}" = only ]; then
+    printf '#!/bin/sh\ntouch "%s"\nsleep 20\n' "$STATE/committing" > "$PROJECT/.git/hooks/pre-commit"
+    chmod +x "$PROJECT/.git/hooks/pre-commit"
+    ( while [ ! -f "$STATE/committing" ]; do sleep 0.2; done; kill "$DAEMON" ) &
+    UNANSWERED_WATCH=$!
+    export TEST_RUNNER_AGENTTERM_ONLY_UNANSWERED=1
+fi
+# OFFLINE=only opens a shell, has it touch a file at which the host is
+# stopped, and then sends a message and types keys with the Mac gone (IOS-18,
+# #280), and nothing else.
+if [ "${OFFLINE:-}" = only ]; then
+    ( while [ ! -f "$STATE/gone" ]; do sleep 0.2; done; kill "$DAEMON" ) &
+    UNANSWERED_WATCH=$!
+    export TEST_RUNNER_AGENTTERM_GONE_MARK="$STATE/gone"
+    export TEST_RUNNER_AGENTTERM_ONLY_OFFLINE=1
+fi
+# BADLINK=only opens a pairing link whose code the first host refuses, with
+# the first Mac on screen (PAIR-12, #279), and nothing else.
+if [ "${BADLINK:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_BADLINK=1; fi
+# BADSTATE=only starts the first host on a schedules file it cannot read
+# (HOST-16, #273), for the phone's banner to be seen, and nothing else.
+if [ "${BADSTATE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_BADSTATE=1; fi
+# COMMITWAIT=only commits from the phone while the commit's hook changes
+# another file and takes a while (IOS-23, #285), and nothing else.
+if [ "${COMMITWAIT:-}" = only ]; then
+    printf '#!/bin/sh\nprintf x > during-commit.txt\nsleep 15\n' > "$PROJECT/.git/hooks/pre-commit"
+    chmod +x "$PROJECT/.git/hooks/pre-commit"
+    export TEST_RUNNER_AGENTTERM_ONLY_COMMITWAIT=1
+fi
+# DELETE=only makes a schedule on the phone and deletes it, asked first
+# (SCHED-39, #308), and nothing else.
+if [ "${DELETE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_DELETE=1; fi
 # NARROW=only narrows the iPad's window and looks at the list (IPAD-2), and
-# nothing else. On an iPhone it checks nothing.
+# nothing else; on an iPhone it is refused above (#319).
 if [ "${NARROW:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NARROW=1; fi
 # MARKDOWN=only opens Markdown documents in their preview, scrolls the
 # longest, and says how long the app's main thread was held up (PERF-16).
@@ -243,6 +289,12 @@ if [ -n "${TAKEOVER:-}" ]; then
 fi
 
 if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
+    # A run whose test skipped itself, or ran none, checked nothing (#319).
+    if why="$(nothing_checked "$LOG")"; then
+        tail -3 "$LOG" >&2
+        echo "test-ios.sh: nothing was checked: $why. Full log in $LOG" >&2
+        exit 1
+    fi
     # The test arranged the sessions; the host has to have kept that.
     if [ "${TAKEOVER:-}" = only ]; then echo "iOS UI test passed (Mac takeover only)."; rm -f "$LOG"; exit 0; fi
     if [ "${LANDSCAPE:-}" = only ]; then echo "iOS UI test passed (landscape only)."; rm -f "$LOG"; exit 0; fi
@@ -253,6 +305,22 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${INBOX:-}" = only ]; then echo "iOS UI test passed (the Inbox only)."; rm -f "$LOG"; exit 0; fi
     if [ "${CUT:-}" = only ]; then echo "iOS UI test passed (an Inbox row of a cut answer only)."; rm -f "$LOG"; exit 0; fi
     if [ "${WORKTREE:-}" = only ]; then echo "iOS UI test passed (a worktree being made only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${BADLINK:-}" = only ]; then echo "iOS UI test passed (a refused pairing link only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${BADSTATE:-}" = only ]; then echo "iOS UI test passed (a state file the host could not read only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${COMMITWAIT:-}" = only ]; then echo "iOS UI test passed (a commit while its folder changes only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${DELETE:-}" = only ]; then echo "iOS UI test passed (a schedule deleted only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${UNANSWERED:-}" = only ]; then echo "iOS UI test passed (a commit the Mac did not answer only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${OFFLINE:-}" = only ]; then echo "iOS UI test passed (typing while the Mac is gone only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${INBOXASK:-}" = only ]; then
+        # IOS-26: the words went in while the stand-in asked.
+        INPUT="$FAKE_HOME/.demo-agent/claude-input"
+        if ! grep -q "a parser of my own" "$INPUT" 2>/dev/null || ! grep -q ANSWERED "$INPUT" 2>/dev/null; then
+            echo "test-ios.sh: the answer of one's own did not reach the stand-in; it received:" >&2
+            cat "$INPUT" >&2 2>/dev/null || echo "(nothing)" >&2
+            exit 1
+        fi
+        echo "iOS UI test passed (an answer from the Inbox only)."; rm -f "$LOG"; exit 0
+    fi
     if [ "${ASK:-}" = only ]; then
         # IOS-12: the answer went in while the stand-in asked, as the keys of
         # its second choice; the prompt only after the question was over.

@@ -59,6 +59,8 @@ final class NoticeCenter {
             guard let session = log[index].session, let state = log[index].state else { continue }
             if byID[session]?.state != state {
                 log[index].handled = Notice.Handled(at: now, how: .movedOn)
+                // Read on every device too (#321).
+                if Notice.reads(.movedOn) { log[index].read = true }
                 handled.append(log[index])
             }
         }

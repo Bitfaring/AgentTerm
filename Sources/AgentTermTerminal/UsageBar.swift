@@ -12,7 +12,7 @@ enum UsageStyle {
 
     /// "in 2h 10m" for today, "Fri 14:05" further out.
     static func shortReset(_ date: Date, now: Date = Date()) -> String {
-        let seconds = Int(date.timeIntervalSince(now))
+        let seconds = Int(saturating: date.timeIntervalSince(now))
         if seconds <= 0 { return "now" }
         if seconds < 3600 { return "in \(max(1, seconds / 60))m" }
         if seconds < 24 * 3600 { return "in \(seconds / 3600)h \((seconds % 3600) / 60)m" }
@@ -89,7 +89,7 @@ public struct UsageBar: View {
             if let fraction = usage.contextFraction {
                 cells.append(
                     Cell(
-                        id: "context", label: "Context", value: "\(Int((fraction * 100).rounded()))%", fill: fraction, used: fraction * 100,
+                        id: "context", label: "Context", value: "\(Int(saturating: (fraction * 100).rounded()))%", fill: fraction, used: fraction * 100,
                         note: usage.contextWindow.map { "of \(SessionUsage.short($0))" }))
             } else {
                 cells.append(Cell(id: "context", label: "Context", value: SessionUsage.short(tokens), fill: 0, used: 0, note: "tokens"))
@@ -113,7 +113,7 @@ public struct UsageBar: View {
                 let left = max(0, 100 - limit.usedPercent)
                 cells.append(
                     Cell(
-                        id: "recorded-\(index)", label: limit.label, value: "\(Int(left.rounded()))% left", fill: left / 100, used: limit.usedPercent,
+                        id: "recorded-\(index)", label: limit.label, value: "\(Int(saturating: left.rounded()))% left", fill: left / 100, used: limit.usedPercent,
                         note: limit.resetsAt.map { UsageStyle.shortReset($0) }))
             }
         }
@@ -267,7 +267,7 @@ public struct UsageDetails: View {
                     if let tokens = usage.contextTokens {
                         if let fraction = usage.contextFraction, let window = usage.contextWindow {
                             row(
-                                title: "Context", text: "\(Int((fraction * 100).rounded()))% used", used: fraction * 100,
+                                title: "Context", text: "\(Int(saturating: (fraction * 100).rounded()))% used", used: fraction * 100,
                                 caption: "\(SessionUsage.short(tokens)) of \(SessionUsage.short(window)) tokens")
                         } else {
                             fact("Context", "\(SessionUsage.short(tokens)) tokens")
@@ -307,7 +307,7 @@ public struct UsageDetails: View {
                 section("Account limits") {
                     ForEach(Array(usage.limits.enumerated()), id: \.offset) { _, limit in
                         row(
-                            title: limit.label + " limit", text: "\(Int(max(0, 100 - limit.usedPercent).rounded()))% left", used: limit.usedPercent, fillsWithLeft: true,
+                            title: limit.label + " limit", text: "\(Int(saturating: max(0, 100 - limit.usedPercent).rounded()))% left", used: limit.usedPercent, fillsWithLeft: true,
                             caption: limit.resetsAt.map { UsageStyle.longReset($0, now: now) } ?? "")
                     }
                 }

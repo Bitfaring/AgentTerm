@@ -601,6 +601,10 @@ public enum BrowserWords {
         "There is no tab \(tab) of yours: you see and use only the tabs you opened. Open one with browser_open, or list yours with browser_tabs."
     }
     public static func noTab(_ tab: String) -> String { "There is no tab \(tab): it was closed. List yours with browser_tabs." }
+    /// The page's process stopped (#254): said at once, not after a wait.
+    public static func pageStopped(_ tab: String) -> String {
+        "The page of tab \(tab) stopped: its process ended. Open it again with browser_navigate, or close the tab with browser_close."
+    }
     public static func userHasIt(_ tab: String) -> String {
         "The user took tab \(tab) over and is using it. Wait until they give it back, or open a tab of your own with browser_open."
     }

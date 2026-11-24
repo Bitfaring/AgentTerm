@@ -17,6 +17,7 @@ final class LoginShellPath: @unchecked Sendable {
     private let lock = NSLock()
     private var asked = false
     private var known: String?
+    private var knownVariables: [String: String] = [:]
 
     /// - Parameter shell: the program asked. Nil for the user's login shell,
     ///   which is never started under XCTest: there it answers nothing, so a
@@ -45,10 +46,19 @@ final class LoginShellPath: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if !asked {
-            known = ask()
+            (known, knownVariables) = ask()
             asked = true
         }
         return known
+    }
+
+    /// What the shell has of `AgentFolders.variables`, asked with its
+    /// `PATH`: only those it has, not empty.
+    func variables() -> [String: String] {
+        _ = value()
+        lock.lock()
+        defer { lock.unlock() }
+        return knownVariables
     }
 
     /// Asks again, since a tool may have been installed since. True when the
@@ -57,17 +67,23 @@ final class LoginShellPath: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let before = asked ? known : nil
-        let found = ask()
+        let (found, variables) = ask()
         asked = true
         // A shell that fails to answer once does not take away what is known.
-        if let found { known = found }
+        if let found {
+            known = found
+            knownVariables = variables
+        }
         return found != nil && found != before
     }
 
-    private func ask() -> String? {
+    private func ask() -> (String?, [String: String]) {
         // Interactive too, as sessions are: what the user adds to PATH is
-        // often in the file only an interactive shell reads.
-        let script = "printf '\(Self.marker)%s\\n' \"$PATH\""
+        // often in the file only an interactive shell reads. The variables
+        // that move the agents' folders come with it (#264).
+        let script =
+            "printf '\(Self.marker)%s\\n' \"$PATH\"; "
+            + AgentFolders.variables.map { "printf '\(Self.variableMarker)\($0)=%s\\n' \"$\($0)\"" }.joined(separator: "; ")
         let program: String
         if let shell {
             program = shell()
@@ -75,12 +91,28 @@ final class LoginShellPath: @unchecked Sendable {
             Self.refusalLock.lock()
             Self.refusals += 1
             Self.refusalLock.unlock()
-            return nil
+            return (nil, [:])
         } else {
             program = HostEnvironment.shell
         }
-        guard let result = Subprocess.run(program, ["-l", "-i", "-c", script], cwd: HostEnvironment.homeDirectory, timeout: 8) else { return nil }
-        return Self.parse(String(decoding: result.output, as: UTF8.self))
+        guard let result = Subprocess.run(program, ["-l", "-i", "-c", script], cwd: HostEnvironment.homeDirectory, timeout: 8) else { return (nil, [:]) }
+        let output = String(decoding: result.output, as: UTF8.self)
+        return (Self.parse(output), Self.parseVariables(output))
+    }
+
+    private static let variableMarker = "AGENTTERM_VARIABLE:"
+
+    /// The variables in what the shell printed, the empty ones left out.
+    static func parseVariables(_ output: String) -> [String: String] {
+        var found: [String: String] = [:]
+        for line in output.split(whereSeparator: \.isNewline) {
+            guard let range = line.range(of: variableMarker) else { continue }
+            let pair = line[range.upperBound...]
+            guard let equals = pair.firstIndex(of: "=") else { continue }
+            let name = String(pair[..<equals]), value = String(pair[pair.index(after: equals)...]).trimmingCharacters(in: .whitespaces)
+            if AgentFolders.variables.contains(name), !value.isEmpty { found[name] = value }
+        }
+        return found
     }
 
     /// The path in what the shell printed, which may hold anything else the

@@ -192,7 +192,6 @@ final class AppModel: ObservableObject {
     /// Stops the host that is running and starts this app's own in its
     /// place. Its sessions end with it.
     func restartHost() {
-        stoppingHost = true
         let port = port
         hostMatch = .same
         otherBuildOfHost = nil
@@ -201,8 +200,20 @@ final class AppModel: ObservableObject {
         launchedDaemon = false
         connectAttempts = 0
         DispatchQueue.global(qos: .userInitiated).async {
-            // Never a program that is not a host (#204).
-            if let listener = DaemonLauncher.listener(onPort: port), DaemonLauncher.isAHost(listener.path) { DaemonLauncher.stop(listener.pid) }
+            let listener = DaemonLauncher.listener(onPort: port)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                // Never a program that is not a host (#204); and nothing
+                // stopped is said, and not counted as stopping (#306): the
+                // next time the host dies is a death.
+                let restart = DaemonLauncher.restart(of: listener)
+                guard case .stop(let pid) = restart else {
+                    self.notice = restart.refusal(port: port)
+                    return
+                }
+                self.stoppingHost = true
+                DispatchQueue.global(qos: .userInitiated).async { DaemonLauncher.stop(pid) }
+            }
         }
     }
 
@@ -1009,11 +1020,18 @@ final class AppModel: ObservableObject {
     /// Asks what a forced push would overwrite, then asks the user.
     func requestForcePush() {
         guard let directory = panelFolder, let branch = diff?.branch, askingForcePush == nil else { return }
-        askingForcePush = directory
         if isRemote {
-            connection?.send(.gitForcePushPreview(path: directory))
+            // Asked of a Mac that is not connected, nothing would answer, and
+            // the sync bar would stay held (#303).
+            guard let connection else {
+                notice = "\(macName) is not connected, so nothing was pushed."
+                return
+            }
+            askingForcePush = directory
+            connection.send(.gitForcePushPreview(path: directory))
             return
         }
+        askingForcePush = directory
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let found = GitActions.forcePushLoses(in: directory)
             DispatchQueue.main.async { self?.forcePushPreview(directory, branch: branch, upstream: found?.upstream, loses: found?.commits ?? [], at: found?.at) }
@@ -1211,6 +1229,8 @@ final class AppModel: ObservableObject {
     private var pendingFolderSelection: String?
 
     init() {
+        // For the question before quitting with unsaved changes (#298).
+        AppDelegate.model = self
         if let value = ProcessInfo.processInfo.environment["AGENTTERM_PORT"].flatMap(UInt16.init) { port = value }
         // The Mac that was on screen last time is the one to come back to.
         if let last = UserDefaults.standard.string(forKey: Self.currentMacKey), let mac = remoteMacs.first(where: { $0.id == last }) {
@@ -1538,6 +1558,8 @@ final class AppModel: ObservableObject {
         let old = connection
         connection = nil
         old?.close()
+        // The left Mac's notifications can no longer be answered from here (#301).
+        macNotifications.removeAll(of: remote?.id ?? MacNotifications.thisMac)
         // What waited for the Mac left is answered, not said: the user
         // switched (#196).
         refuseRemoteBrowserAsks(macName: remote?.name ?? "the other Mac", tell: false)
@@ -1668,6 +1690,9 @@ final class AppModel: ObservableObject {
     /// one says again for itself.
     private func forgetHostState() {
         controllers.removeAll()
+        // What was asked of that host gets no answer now: the sync bar is
+        // not held for it (#303).
+        askingForcePush = nil
         replaying = []
         sessionsKnown = false
         keepAwake = nil
@@ -2008,6 +2033,11 @@ final class AppModel: ObservableObject {
             }
         case .error(let text, let request):
             starting = nil
+            // A launch refused brings nothing in front: the next session
+            // someone else starts (an agent's shell, a schedule, a device)
+            // is not taken for it, and takes neither the front nor the
+            // keyboard (#299).
+            selectNextAttached = false
             // The part waiting for the launch this refuses waits no more, and
             // what failed is said below; the other parts still wait (#189).
             if let request { stopShellPartWait(request: request) }
@@ -2021,9 +2051,9 @@ final class AppModel: ObservableObject {
             lastError = text
             if isRemote {
                 // On another Mac git and the files answer through the host:
-                // whatever waited for the answer is over.
-                isCommitting = false
-                pendingCommit = nil
+                // what waited for the answer is over. A commit is not: it
+                // waits for its own end, `gitCommitted` (#302), since this
+                // error may be another request's.
                 files.requestFailed()
             }
             if text == "malformed message" { writingCommitMessage = [] }
@@ -2068,17 +2098,6 @@ final class AppModel: ObservableObject {
             guard isRemote else { break }
             let due = max((diffAnswersDue[path] ?? 0) - 1, 0)
             diffAnswersDue[path] = due == 0 ? nil : due
-            if pendingCommit == path, due == 0 {
-                // The answer to a commit git took: an error would have come
-                // first. Only once every answer that was due is in: the
-                // host does its work side by side, and the changes asked
-                // for before the commit may come back while git is still at it.
-                pendingCommit = nil
-                isCommitting = false
-                commitMessages[path] = nil
-                amending[path] = nil
-                files.refresh()
-            }
             // Something was done inside a submodule of the folder on show:
             // what the folder says of it is read again (#44).
             if let panelFolder, path.hasPrefix(panelFolder + "/") { refreshDiff() }
@@ -2097,6 +2116,17 @@ final class AppModel: ObservableObject {
                     closeDiffTab(tab.tabID)
                 }
             }
+        case .gitCommitted(let path, let problem):
+            // The end of the commit asked of another Mac (#302): its message
+            // goes only once git took it.
+            guard isRemote, pendingCommit == path else { break }
+            pendingCommit = nil
+            isCommitting = false
+            if problem == nil {
+                commitMessages[path] = nil
+                amending[path] = nil
+                files.refresh()
+            }
         case .gitSynced(let path):
             remoteWork.ended(in: path)
         case .history(let path, let conversations):
@@ -2109,7 +2139,7 @@ final class AppModel: ObservableObject {
                 {
                     requestHandoff(found)
                 } else {
-                    notice = "\(session.title) has no conversation to hand off in this session yet. It saves one after your first message."
+                    notice = HandoffWords.noConversation(session.title)
                 }
             }
             // Every conversation is what History asks for; the folder on
@@ -2132,10 +2162,26 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Keys typed in a terminal go only into a connection that is up: one
+    /// still connecting would keep them and send them later, out of turn.
+    /// They are dropped, and that is said once until it is up again (#280).
+    private func type(_ data: Data, to id: SessionID) {
+        guard status == .connected, let connection else {
+            if !saidKeysDropped {
+                saidKeysDropped = true
+                notice = ComposeWords.keysNotSent(remote?.name ?? "The host")
+            }
+            return
+        }
+        saidKeysDropped = false
+        connection.sendInput(data, to: id)
+    }
+    private var saidKeysDropped = false
+
     private func makeController(for id: SessionID) -> TerminalController {
         let controller = TerminalController(session: id, fontSize: terminalFontSize)
         controller.setLooks(cursor: terminalCursor, blinks: cursorBlinks, scrollback: scrollbackLines)
-        controller.onInput = { [weak self] data in self?.connection?.sendInput(data, to: id) }
+        controller.onInput = { [weak self] data in self?.type(data, to: id) }
         controller.onResize = { [weak self] size in self?.connection?.send(.resize(session: id, size: size)) }
         controller.onClaim = { [weak self] size in self?.connection?.send(.takeControl(session: id, size: size)) }
         // Files dropped or pasted on it, a picture's ⌘V sent as Control V
@@ -2400,6 +2446,7 @@ final class AppModel: ObservableObject {
     // MARK: Changes
 
     private func folderChanged() {
+        closeGitQuestions()
         diff = nil
         watchPanelFolder()
         if let selectedFolder { listWorktrees(selectedFolder) }
@@ -2410,6 +2457,23 @@ final class AppModel: ObservableObject {
         refreshDiff()
         folderHistory = nil
         refreshHistory(ofFolder: true)
+    }
+
+    /// A git action asked about in the folder that was on show is never
+    /// done in the one on show now (#297): every such question is closed,
+    /// and that is said.
+    private func closeGitQuestions() {
+        let open = discarding != nil || pendingCommitAction != nil || droppingStash != nil || deletingBranch != nil || confirmingAbort || pendingRewrite != nil
+        discarding = nil
+        discardingIn = nil
+        pendingCommitAction = nil
+        droppingStash = nil
+        deletingBranch = nil
+        confirmingAbort = false
+        pendingRewrite = nil
+        rewriteAskedAgain?.cancel()
+        rewriteAskedAgain = nil
+        if open { notice = GitQuestionWords.closedForAnotherFolder }
     }
 
     // MARK: Handoff
@@ -2503,7 +2567,7 @@ final class AppModel: ObservableObject {
     /// Opens the handoff sheet for a conversation.
     func requestHandoff(_ conversation: Conversation) {
         guard !handoffTargets(from: conversation.agent).isEmpty else {
-            notice = "No other agent is installed to hand this off to."
+            notice = HandoffWords.noOtherAgent
             return
         }
         pendingHandoff = conversation
@@ -2532,7 +2596,7 @@ final class AppModel: ObservableObject {
                 if let newest {
                     self.requestHandoff(newest)
                 } else {
-                    self.notice = "\(name) has no conversation to hand off in this session yet. It saves one after your first message."
+                    self.notice = HandoffWords.noConversation(name)
                 }
             }
         }
@@ -2887,12 +2951,19 @@ final class AppModel: ObservableObject {
     func commitSubmodule(_ path: String) {
         guard let directory = directory(of: path), !isCommitting else { return }
         let message = commitMessages[directory] ?? ""
+        isCommitting = true
         if isRemote {
-            commitMessages[directory] = nil
-            sendForDiff(.gitCommit(path: directory, message: message), in: directory)
+            // As the folder's own commit: the message is kept until the
+            // other Mac's answer says git took it, not thrown away before
+            // (#302).
+            if sendForDiff(.gitCommit(path: directory, message: message), in: directory) {
+                pendingCommit = directory
+            } else {
+                isCommitting = false
+                notice = NotConnectedWords.notCommitted(macName)
+            }
             return
         }
-        isCommitting = true
         git(in: path, { GitActions.commit(message: message, in: $0) }) { [weak self] succeeded in
             self?.isCommitting = false
             if succeeded { self?.commitMessages[directory] = nil }
@@ -2970,10 +3041,16 @@ final class AppModel: ObservableObject {
 
     private func took(_ list: [CommitInfo], skip: Int, more: Bool) {
         loadingCommits = false
-        // A page that no longer follows what is listed is another list's.
-        guard skip == commits.count else { return }
-        commits += list
-        commitsMore = more
+        switch CommitPages.add(list, skip: skip, to: commits) {
+        case .listed(let all):
+            commits = all
+            commitsMore = more
+        case .stale:
+            // The same commit twice would be two rows of one id (#300).
+            loadCommits()
+        case .other:
+            break
+        }
     }
 
     /// Opens a commit out in the list, or closes it, and reads what it changed.
@@ -3215,7 +3292,7 @@ final class AppModel: ObservableObject {
                 pendingCommit = directory
             } else {
                 isCommitting = false
-                notice = "\(macName) is not connected, so nothing was committed."
+                notice = NotConnectedWords.notCommitted(macName)
             }
             return
         }
@@ -3281,6 +3358,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var amending: [String: LastCommit] = [:]
     /// Undoing or amending that waits to be confirmed.
     @Published var pendingRewrite: PendingRewrite?
+    /// The second question about undoing a pushed commit, on its way.
+    private var rewriteAskedAgain: DispatchWorkItem?
 
     struct PendingRewrite: Identifiable {
         let action: RewriteCommitQuestion.Action
@@ -3296,7 +3375,11 @@ final class AppModel: ObservableObject {
     private func withLastCommit(_ then: @escaping (LastCommit) -> Void) {
         guard let directory = panelFolder else { return }
         if isRemote {
-            lastCommitWanted = then
+            // The answer, for this folder only (#297).
+            lastCommitWanted = { [weak self] last in
+                guard self?.panelFolder == directory else { return }
+                then(last)
+            }
             connection?.send(.gitLastCommit(path: directory))
             return
         }
@@ -3350,9 +3433,12 @@ final class AppModel: ObservableObject {
             if pending.last.isPushed && !pending.again {
                 // After the dialog has gone: one that is presented while
                 // another closes is not shown.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                let again = DispatchWorkItem { [weak self] in
                     self?.pendingRewrite = PendingRewrite(action: .undo, last: pending.last, again: true)
                 }
+                // Not asked again in another folder (#297).
+                rewriteAskedAgain = again
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: again)
                 return
             }
             guard let directory = panelFolder else { return }

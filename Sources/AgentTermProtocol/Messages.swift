@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 40
+public let agenttermProtocolVersion = 45
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -681,6 +681,11 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Sent after the `error` and the `diff` that answer it: a `diff` alone
     /// may be the answer to something else asked in the meantime.
     case gitSynced(path: String)
+    /// The end of a commit or an amend of a folder (#285, #302), sent after
+    /// the `error` and the `diff` that answer it: nil when git took it,
+    /// else git's reason. A commit waits for this, not for a `diff` or an
+    /// `error`, which may be the answer to something else.
+    case gitCommitted(path: String, problem: String?)
     /// How the Mac itself is doing: processor, memory, network, heat,
     /// battery and uptime. Sent every few seconds while a client is connected.
     case systemStats(SystemStats)
@@ -775,20 +780,30 @@ public enum ServerMessage: Codable, Equatable, Sendable {
 }
 
 public enum MessageCoding {
+    /// A number that is no number, or infinite, which JSON has no way to
+    /// write, is written as text, and read back (#292): a figure of the Mac
+    /// that came out so would otherwise make the whole message nothing.
+    private static let numbers = (infinity: "Infinity", minusInfinity: "-Infinity", notANumber: "NaN")
+
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .secondsSince1970
+        e.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: numbers.infinity, negativeInfinity: numbers.minusInfinity, nan: numbers.notANumber)
         return e
     }()
 
     private static let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .secondsSince1970
+        d.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: numbers.infinity, negativeInfinity: numbers.minusInfinity, nan: numbers.notANumber)
         return d
     }()
 
     public static func encode<T: Encodable>(_ value: T) -> Data {
-        // Encoding these plain value types cannot fail.
+        // With numbers that are no numbers written as text, these plain
+        // value types are always encoded.
         (try? encoder.encode(value)) ?? Data()
     }
 

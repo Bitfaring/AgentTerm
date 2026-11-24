@@ -14,6 +14,14 @@ final class PushToken: ObservableObject {
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// The notification center's delegate is made now, before launching is
+    /// over, as iOS asks: a press on a notification that launched the app is
+    /// told to it (#277).
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        _ = AgentNotifications.shared
+        return true
+    }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         PushToken.shared.failure = nil
         PushToken.shared.token = deviceToken.map { String(format: "%02x", $0) }.joined()
@@ -82,7 +90,18 @@ struct AgentTermApp: App {
                     .interactiveDismissDisabled()
                     .preferredColorScheme(.dark)
             }
-            .onOpenURL { url in if !model.openFromLink(url) { model.pair(with: url) } }
+            // A pairing link from elsewhere is asked about first (#279); a
+            // code scanned in the app is the user's own doing.
+            .onOpenURL { url in if !model.openFromLink(url) { model.askToPair(with: url) } }
+            .alert(
+                model.pairingAsked.map(PairingWords.askTitle) ?? "", isPresented: Binding(get: { model.pairingAsked != nil }, set: { if !$0 { model.pairingAsked = nil } }),
+                presenting: model.pairingAsked
+            ) { _ in
+                Button(PairingWords.pair) { model.pairAsked() }
+                Button("Cancel", role: .cancel) {}
+            } message: { info in
+                Text(PairingWords.askMessage(info))
+            }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { model.resume() }
                 if phase == .background { model.enteredBackground() }

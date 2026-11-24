@@ -159,6 +159,6 @@ public struct AccountUsage: Codable, Equatable, Identifiable, Sendable {
 
     /// "55% used" or "45% left", the way the agent says it.
     public func percentText(_ limit: AccountLimit) -> String {
-        showsRemaining ? "\(Int(limit.leftPercent.rounded()))% left" : "\(Int(limit.usedPercent.rounded()))% used"
+        showsRemaining ? "\(Int(saturating: limit.leftPercent.rounded()))% left" : "\(Int(saturating: limit.usedPercent.rounded()))% used"
     }
 }

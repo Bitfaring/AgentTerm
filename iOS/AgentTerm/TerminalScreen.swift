@@ -574,6 +574,15 @@ private struct ComposeBar: View {
                     .controlSize(.small)
                     .accessibilityIdentifier("compose-answer-button")
                 }
+            } else if let held {
+                // Why the last Send did not send, with no question asked:
+                // the Mac is not connected (#280).
+                Text(held)
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .lineLimit(isOnItsSide ? 1 : 3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("compose-held")
             }
             HStack(alignment: .bottom, spacing: 8) {
                 Group {
@@ -611,6 +620,10 @@ private struct ComposeBar: View {
         .onChange(of: text) { _, written in model.setComposeDraft(written, for: controller.session) }
         .onChange(of: answer) { _, written in
             if let state, state.isWaiting { model.setAnswerDraft(written, for: controller.session, to: state) }
+        }
+        .onChange(of: model.status) { _, now in
+            // The Mac back: what was said of a Send it was away for goes.
+            if now == .connected { held = nil }
         }
         .onChange(of: state) { _, now in
             // Another question, or none: what was said of the last Send
@@ -714,6 +727,12 @@ private struct ComposeBar: View {
             held = why
             return
         case .answer: return
+        }
+        // Never into a connection that is not there: the message is kept,
+        // and why it was not sent is said (#280).
+        guard model.status == .connected else {
+            held = ComposeWords.notConnected(model.pairing?.name ?? "the Mac")
+            return
         }
         let message = text
         text = ""

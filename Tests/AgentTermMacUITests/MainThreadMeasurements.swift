@@ -78,6 +78,11 @@ final class MainThreadMeasurements: MacUITestCase {
         git("commit", "-q", "-m", "a big file", in: project)
         try write((1...20_000).map { "changed \($0), and longer than it was\n" }.joined(), to: "big.txt")
         try write(String(repeating: "A line of a large file, forty-nine letters long.\n", count: 5 * 1024 * 1024 / 50), to: "large.txt")
+        // #304: twelve files of nearly 2 MB, the most opened as text, to
+        // be open while the Files tab follows the disk.
+        let followed = (1...12).map { String(format: "followed-%02d.txt", $0) }
+        let twoMB = String(repeating: "A line of a followed file, forty-nine letters lon\n", count: 2 * 1000 * 1000 / 50)
+        for name in followed { try write(twoMB, to: name) }
         appEnvironment["AGENTTERM_MEASURE_MAIN"] = notes.path
         try relaunchApp()
         let phone = try device()
@@ -128,6 +133,19 @@ final class MainThreadMeasurements: MacUITestCase {
             if let bar = tallestScrollBar() { measured("the 5 MB file scrolled from top to bottom in a second") { self.scroll(bar) } }
         } else {
             print("MEASURE main thread, typing into the 5 MB file: not measured, the editor was not found")
+        }
+
+        // #304: the twelve files of 2 MB open, followed every 5 seconds;
+        // then each of them changed on the disk.
+        for name in followed {
+            let button = try XCTUnwrap(app.wait(for: .button(name), timeout: 20))
+            AXUIElementPerformAction(button.element, kAXPressAction as CFString)
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        Thread.sleep(forTimeInterval: 2)
+        measured("twelve files of 2 MB open, the disk followed for 12 seconds", for: 12) {}
+        measured("those twelve files changed on the disk", for: 12) {
+            for name in followed { try? self.write(twoMB + "one more line\n", to: name) }
         }
 
         // A session that writes 12,000 lines at once, on show.

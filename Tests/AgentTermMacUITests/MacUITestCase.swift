@@ -28,7 +28,7 @@ class MacUITestCase: XCTestCase {
     /// and was left running; losing its host, it started one of its own
     /// (#185).
     private var launched: [MacDriver] = []
-    private var clients: [AgentTermConnection] = []
+    var clients: [AgentTermConnection] = []
 
     /// A port nothing else in a run uses.
     private static var nextPort: UInt16 = UInt16(ProcessInfo.processInfo.environment["AGENTTERM_MAC_UI_PORT"] ?? "") ?? 7840
@@ -176,11 +176,11 @@ class MacUITestCase: XCTestCase {
     }
 
     /// A picture of the window in the middle of a test, with `ALL_SHOTS`.
-    func shot(_ name: String) {
+    func shot(_ name: String, topmost: Bool = false) {
         let environment = ProcessInfo.processInfo.environment
         guard environment["AGENTTERM_SHOT_ALWAYS"] != nil, let folder = environment["AGENTTERM_SHOT_DIR"], let app else { return }
         try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
-        app.capture(to: URL(fileURLWithPath: folder).appendingPathComponent("\(self.name.filter { $0.isLetter || $0.isNumber })-\(name).png"))
+        app.capture(to: URL(fileURLWithPath: folder).appendingPathComponent("\(self.name.filter { $0.isLetter || $0.isNumber })-\(name).png"), topmost: topmost)
     }
 
     /// Stops the program that listens on a port: a host the app started.
@@ -532,6 +532,9 @@ class MacUITestCase: XCTestCase {
 
     // MARK: The host and the app
 
+    /// What a test adds to its hosts' environment.
+    var hostEnvironment: [String: String] = [:]
+
     @discardableResult
     func startHost(state: URL, home: URL, port: UInt16, extra: [String] = []) throws -> Process {
         let process = Process()
@@ -543,6 +546,7 @@ class MacUITestCase: XCTestCase {
         // An agent's hooks and MCP server are said missing after 3 seconds,
         // not 20 (#129), unless the test asks for longer.
         environment["AGENTTERM_LINK_GRACE"] = linkGrace
+        environment.merge(hostEnvironment) { _, own in own }
         // What it throws away stays in the test's folder, also when its
         // home is the user's.
         if home != self.home { environment["AGENTTERM_TRASH_DIR"] = root.appendingPathComponent("trash").path }

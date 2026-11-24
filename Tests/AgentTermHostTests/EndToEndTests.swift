@@ -954,6 +954,51 @@ final class EndToEndTests: XCTestCase {
         waitUntil("staged in the folder") { latest(directory.path) == ["staged M lib"] }
     }
 
+    /// GIT-85 (#285, #302): a commit's end is said in so many words,
+    /// `gitCommitted`, after what else was answered while git ran it: an
+    /// error of another request and the folder's changes come first, and
+    /// neither is the commit's. A refused one ends with git's reason.
+    func testACommitsEndIsSaidAfterWhatElseCameMeanwhile() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-committed-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        git("init", "-q", "-b", "main", in: directory)
+        git("config", "user.name", "Test", in: directory)
+        git("config", "user.email", "test@example.com", in: directory)
+        git("config", "commit.gpgsign", "false", in: directory)
+        try "one\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: directory)
+        git("commit", "-q", "-m", "init", in: directory)
+        // git takes a while over the commit.
+        let hook = directory.appendingPathComponent(".git/hooks/pre-commit")
+        try "#!/bin/sh\nsleep 2\n".write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+        try "one\ntwo\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: directory)
+
+        let phone = connect("phone")
+        func index(_ match: (ServerMessage) -> Bool) -> Int? { phone.messages.firstIndex(where: match) }
+        phone.connection.send(.gitCommit(path: directory.path, message: "feat: two"))
+        // Meanwhile: another request git refuses, and the changes asked for.
+        phone.connection.send(.gitDiscard(path: directory.path, files: ["no-such-file.txt"]))
+        phone.connection.send(.diff(path: directory.path))
+        waitUntil("the commit's end", timeout: 15) { index { $0 == .gitCommitted(path: directory.path, problem: nil) } != nil }
+        let end = try XCTUnwrap(index { $0 == .gitCommitted(path: directory.path, problem: nil) })
+        let otherError = try XCTUnwrap(index { if case .error = $0 { return true } else { return false } }, "the other request was not refused")
+        let changes = try XCTUnwrap(index { if case .diff(directory.path, _) = $0 { return true } else { return false } })
+        XCTAssertLessThan(otherError, end, "the other request's error came after the commit's end")
+        XCTAssertLessThan(changes, end, "no changes came while git ran the commit")
+
+        // Refused: git's reason, in its end.
+        try "#!/bin/sh\necho 'the hook says no' >&2\nexit 1\n".write(to: hook, atomically: true, encoding: .utf8)
+        try "one\ntwo\nthree\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: directory)
+        phone.connection.send(.gitCommit(path: directory.path, message: "feat: three"))
+        waitUntil("the refused commit's end", timeout: 15) {
+            phone.messages.contains { if case .gitCommitted(directory.path, let problem?) = $0 { return problem.contains("the hook says no") } else { return false } }
+        }
+    }
+
     func testStagingAndCommittingFromAClient() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-commit-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

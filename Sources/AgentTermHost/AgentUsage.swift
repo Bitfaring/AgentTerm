@@ -35,7 +35,7 @@ public enum AgentUsage {
     public static func configuredModel(agent: String, home: String = NSHomeDirectory(), environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
         switch agent {
         case "codex":
-            let directory = environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.codex"
+            let directory = AgentFolders.of(home: home, own: environment).codex
             guard let text = try? String(contentsOfFile: directory + "/config.toml", encoding: .utf8) else { return nil }
             // The top-level `model = "..."`, before the first table.
             for line in text.split(whereSeparator: \.isNewline) {

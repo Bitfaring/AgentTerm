@@ -323,7 +323,9 @@ extension AgentHistory {
 
     /// Moves a conversation's record to the Trash, so that its agent no
     /// longer has it. Nil when done, or why it was not.
-    public static func delete(_ conversation: Conversation, home: String = NSHomeDirectory()) -> String? {
+    public static func delete(_ conversation: Conversation, home: String = NSHomeDirectory(), folders: AgentFolders? = nil) -> String? {
+        let folders = folders ?? AgentFolders.of(home: home)
+        func real(_ folder: String) -> String { URL(fileURLWithPath: folder, isDirectory: true).resolvingSymlinksInPath().path }
         // Antigravity keeps its conversations in a store of its own (a
         // SQLite database since 1.0.16, #224), which AgentTerm reads and
         // never writes to: none of its is deleted here, whichever of its
@@ -340,10 +342,10 @@ extension AgentHistory {
         let target: String
         switch conversation.agent {
         case "claude":
-            guard path.hasPrefix(home + "/.claude/projects/"), path.hasSuffix(".jsonl") else { return "That is not a conversation of Claude Code." }
+            guard path.hasPrefix(real(folders.claude) + "/projects/"), path.hasSuffix(".jsonl") else { return "That is not a conversation of Claude Code." }
             target = path
         case "codex":
-            guard path.hasPrefix(home + "/.codex/sessions/"), path.hasSuffix(".jsonl") else { return "That is not a conversation of Codex." }
+            guard path.hasPrefix(real(folders.codex) + "/sessions/"), path.hasSuffix(".jsonl") else { return "That is not a conversation of Codex." }
             target = path
         case "copilot":
             // Its folder: the events, and what names the conversation.

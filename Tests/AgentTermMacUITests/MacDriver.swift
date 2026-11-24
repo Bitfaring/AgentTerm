@@ -412,7 +412,10 @@ final class MacDriver {
     /// The one in front, a sheet when one is open, that is a window to look
     /// at: once a popover has been shown, the first in the list is one of
     /// two points by one that it leaves behind, and the picture was of that.
-    func capture(to url: URL) {
+    /// - Parameter topmost: the app's window in front, whatever its level: an
+    ///   alert run on its own (`NSAlert.runModal`), which is not a sheet of
+    ///   the main window.
+    func capture(to url: URL, topmost: Bool = false) {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
         func isToLookAt(_ window: [String: Any]) -> Bool {
             guard let bounds = window[kCGWindowBounds as String] as? NSDictionary, let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
@@ -420,7 +423,8 @@ final class MacDriver {
         }
         guard
             let id = windows.first(where: {
-                ($0[kCGWindowOwnerPID as String] as? Int32) == pid && (($0[kCGWindowLayer as String] as? Int) ?? 1) == 0 && isToLookAt($0)
+                let layer = ($0[kCGWindowLayer as String] as? Int) ?? 1
+                return ($0[kCGWindowOwnerPID as String] as? Int32) == pid && (topmost ? (0...8).contains(layer) : layer == 0) && isToLookAt($0)
             })?[kCGWindowNumber as String] as? Int
         else { return }
         let capture = Process()

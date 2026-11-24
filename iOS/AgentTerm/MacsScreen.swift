@@ -1,3 +1,4 @@
+import AgentTermClient
 import AgentTermProtocol
 import SwiftUI
 

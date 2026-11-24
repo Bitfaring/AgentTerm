@@ -38,6 +38,8 @@ public final class DeviceRegistry {
     private let file: URL?
     private let now: () -> Date
     private var records: [Record] = []
+    /// Where the file of paired devices was put, when it could not be read.
+    public private(set) var setAside: URL?
     private var code: (value: String, expiresAt: Date)?
 
     public init(localToken: String, file: URL?, now: @escaping () -> Date = Date.init) {
@@ -47,7 +49,12 @@ public final class DeviceRegistry {
         if let file, let data = try? Data(contentsOf: file) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .secondsSince1970
-            records = (try? decoder.decode([Record].self, from: data)) ?? []
+            if let read = try? decoder.decode([Record].self, from: data) {
+                records = read
+            } else {
+                // Not written over at the next pairing (#273).
+                setAside = StateFile.setAside(file)
+            }
         }
     }
 

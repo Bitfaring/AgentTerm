@@ -40,6 +40,37 @@ final class FlowTests: XCTestCase {
         }
     }
 
+    /// IOS-18 (#280): with the Mac gone, Send keeps the message and says
+    /// why, and a key of the key bar is dropped and said once, not kept to
+    /// be sent later. Before the fix the field emptied, and the keys went
+    /// nowhere without a word.
+    private func typeWhileTheMacGoes(_ app: XCUIApplication, compose: XCUIElement, mark: String) {
+        compose.tap()
+        // The script stops the host once this file is there.
+        compose.typeText("touch '\(mark)'")
+        app.buttons["Send"].tap()
+        let lost = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Reconnecting")).firstMatch
+        XCTAssertTrue(lost.waitForExistence(timeout: 20), "the phone does not say the Mac went")
+        compose.tap()
+        compose.typeText("echo kept")
+        app.buttons["Send"].tap()
+        let held = app.staticTexts["compose-held"]
+        XCTAssertTrue(held.waitForExistence(timeout: 5), "Send with the Mac gone said nothing")
+        XCTAssertTrue(held.label.contains("is not connected"), held.label)
+        XCTAssertEqual(compose.value as? String, "echo kept", "Send with the Mac gone threw the message away")
+        capture("send-not-connected")
+        if app.buttons["hide-keyboard"].firstMatch.exists { app.buttons["hide-keyboard"].firstMatch.tap() }
+        app.buttons["key-Escape"].tap()
+        let dropped = app.alerts.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "keys typed in its terminals are dropped")).firstMatch
+        XCTAssertTrue(dropped.waitForExistence(timeout: 5), "a key typed with the Mac gone was dropped without a word")
+        capture("keys-not-connected")
+        app.alerts.buttons["OK"].tap()
+        // Said once, not for every key.
+        app.buttons["key-Tab"].tap()
+        XCTAssertFalse(app.alerts.firstMatch.waitForExistence(timeout: 2), "the dropped keys were said again")
+        XCTAssertEqual(compose.value as? String, "echo kept")
+    }
+
     private func measureScrolling(_ app: XCUIApplication, compose: XCUIElement) {
         compose.tap()
         compose.typeText("seq 1 5000")
@@ -319,7 +350,7 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.buttons["notifications-not-now"].waitForNonExistence(timeout: 10), "the screen stays")
         app.launchEnvironment.removeValue(forKey: "AGENTTERM_ASK_NOTIFICATIONS")
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        app.open(try XCTUnwrap(URL(string: link)))
+        app.openPairingLink(try XCTUnwrap(URL(string: link)))
         XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 15), "not connected to the host")
         let asked = springboard.alerts.firstMatch
         XCTAssertFalse(asked.waitForExistence(timeout: 5), "iOS asked whether the app may notify after Not Now: \(asked.label)")
@@ -388,7 +419,7 @@ final class FlowTests: XCTestCase {
         let enterLink = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Enter a pairing link'")).firstMatch
         XCTAssertTrue(enterLink.waitForExistence(timeout: 10))
         capture("1-pair")
-        app.open(try XCTUnwrap(URL(string: link)))
+        app.openPairingLink(try XCTUnwrap(URL(string: link)))
         allowNotifications()
 
         // Connected: the Mac's folders and launch buttons show up.
@@ -411,7 +442,7 @@ final class FlowTests: XCTestCase {
         // lives five minutes, and its part of the test comes later. Paired,
         // it is the one on screen; the first comes back from the menu.
         if let second = environment["AGENTTERM_SECOND_PAIR_URL"] {
-            app.open(try XCTUnwrap(URL(string: second)))
+            app.openPairingLink(try XCTUnwrap(URL(string: second)))
             XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 15), "the second Mac did not pair")
             app.buttons["mac-menu"].tap()
             app.buttons["First Mac"].tap()
@@ -441,6 +472,10 @@ final class FlowTests: XCTestCase {
         // A run that only looks at the app on its side.
         if environment["AGENTTERM_ONLY_LANDSCAPE"] != nil {
             landscape(app, compose: compose)
+            return
+        }
+        if let gone = environment["AGENTTERM_GONE_MARK"], environment["AGENTTERM_ONLY_OFFLINE"] != nil {
+            typeWhileTheMacGoes(app, compose: compose, mark: gone)
             return
         }
         if environment["AGENTTERM_ONLY_SCROLL"] != nil {
@@ -473,6 +508,11 @@ final class FlowTests: XCTestCase {
             useTheInbox(app, compose: compose)
             return
         }
+        if environment["AGENTTERM_ONLY_INBOXASK"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            answerFromTheInbox(app, compose: compose)
+            return
+        }
         if environment["AGENTTERM_ONLY_ASK"] != nil {
             app.navigationBars.buttons.firstMatch.tap()
             answerWhileWritingAPrompt(app, compose: compose)
@@ -491,6 +531,47 @@ final class FlowTests: XCTestCase {
         if environment["AGENTTERM_ONLY_WORKTREE"] != nil {
             app.navigationBars.buttons.firstMatch.tap()
             watchAWorktreeBeingMade(app, compose: compose)
+            return
+        }
+        if environment["AGENTTERM_ONLY_UNANSWERED"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            commitWhileTheMacGoes(app)
+            return
+        }
+        if environment["AGENTTERM_ONLY_BADLINK"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            try pairWithACodeThatIsRefused(app, launchButton: launchButton)
+            return
+        }
+        if environment["AGENTTERM_ONLY_BADSTATE"] != nil {
+            // HOST-16 (#273): the host started on a schedules file it could
+            // not read, and the phone's banner says so.
+            app.navigationBars.buttons.firstMatch.tap()
+            let card = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "could not read its schedules")).firstMatch
+            XCTAssertTrue(card.waitForExistence(timeout: 15), "the phone does not say the host could not read its schedules")
+            capture("unreadable-state")
+            // REMOTE-36 (#274): the stand-in Tailscale address it cannot
+            // listen on, said in a banner of its own.
+            let listener = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "could not listen on its Tailscale address")).firstMatch
+            XCTAssertTrue(listener.waitForExistence(timeout: 15), "the phone does not say the host cannot listen on its Tailscale address")
+            capture("listener-failed")
+            // IOS-24 (#328): the banners take room of their own: the list
+            // starts under the last of them, not under the screen's top.
+            let cards = app.descendants(matching: .any).matching(identifier: "failure-card").allElementsBoundByIndex
+            let bottom = cards.map(\.frame.maxY).max() ?? 0
+            let list = app.scrollViews.firstMatch
+            XCTAssertTrue(list.exists, "no list")
+            XCTAssertGreaterThanOrEqual(list.frame.minY, bottom, "the list starts at \(list.frame.minY), under the banners, which go down to \(bottom)")
+            return
+        }
+        if environment["AGENTTERM_ONLY_COMMITWAIT"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            commitWhileTheFolderChanges(app)
+            return
+        }
+        if environment["AGENTTERM_ONLY_DELETE"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            deleteASchedule(app)
             return
         }
         if environment["AGENTTERM_ONLY_NARROW"] != nil {
@@ -1160,6 +1241,208 @@ final class FlowTests: XCTestCase {
         XCTAssertLessThanOrEqual(scrolled, allowed, "swiping through TESTING.md held the app up \(Int(scrolled)) ms")
     }
 
+    /// IOS-19 (#281): a commit waiting for the Mac when its connection
+    /// closes (the script stops the host while git runs the commit's hook)
+    /// ends, says so, and keeps its message; pressed again while the Mac is
+    /// not connected, it is refused at once. Before the fix it spun until
+    /// another commit was made.
+    private func commitWhileTheMacGoes(_ app: XCUIApplication) {
+        // A schedule, to be changed once the Mac is gone (IOS-21, #286).
+        app.tab("Schedules").tap()
+        let add = app.buttons["new-schedule"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "no New Schedule")
+        add.tap()
+        let prompt = app.textFields["Prompt"].exists ? app.textFields["Prompt"] : app.textViews["Prompt"]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        prompt.tap()
+        prompt.typeText("say hello")
+        app.navigationBars.buttons["Save"].tap()
+        let withoutAsking = app.buttons["Run Without Asking"]
+        if withoutAsking.waitForExistence(timeout: 3) { withoutAsking.tap() }
+        let scheduleRow = app.staticTexts["Every morning"]
+        XCTAssertTrue(scheduleRow.waitForExistence(timeout: 10), "the schedule is not listed")
+        app.tab("Sessions").tap()
+
+        app.buttons["folder-details"].firstMatch.tap()
+        // The files listed while the Mac is there.
+        XCTAssertTrue(app.buttons["Files"].waitForExistence(timeout: 10))
+        app.buttons["Files"].tap()
+        XCTAssertTrue(app.staticTexts["notes.txt"].waitForExistence(timeout: 10), "the files are not listed")
+        app.buttons["Git"].tap()
+        XCTAssertTrue(app.staticTexts["notes.txt"].waitForExistence(timeout: 10), "the changed file is not listed")
+        app.buttons["Stage All"].tap()
+        XCTAssertTrue(app.buttons["Unstage notes.txt"].waitForExistence(timeout: 10), "the file was not staged")
+        let message = app.textFields["commit-message"].exists ? app.textFields["commit-message"] : app.textViews["commit-message"]
+        message.tap()
+        message.typeText("test: the Mac goes away")
+        let commit = app.buttons["commit"]
+        XCTAssertTrue(commit.isEnabled)
+        commit.tap()
+
+        func alert(_ words: String) -> XCUIElement {
+            app.alerts.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
+        }
+        let unanswered = alert("closed before it answered what was asked")
+        XCTAssertTrue(unanswered.waitForExistence(timeout: 30), "nothing said that the Mac went before it answered the commit")
+        capture("commit-not-answered")
+        app.alerts.buttons["OK"].tap()
+        XCTAssertEqual(message.value as? String, "test: the Mac goes away", "the commit's message was thrown away")
+
+        // Pressed again with the Mac gone: refused at once, the message kept.
+        let pressed = Date()
+        if commit.isEnabled { commit.tap() }
+        let refused = alert("is not connected, so nothing was committed")
+        XCTAssertTrue(refused.waitForExistence(timeout: 5), "a commit asked while the Mac is not connected was not refused at once")
+        XCTAssertLessThan(Date().timeIntervalSince(pressed), 5)
+        app.alerts.buttons["OK"].tap()
+        XCTAssertEqual(message.value as? String, "test: the Mac goes away", "the commit's message was thrown away when it was refused")
+
+        // IOS-21 (#286): what changes the Mac is said at once, not sent
+        // nowhere. A file renamed:
+        let notDone = alert("is not connected, so nothing was done")
+        app.buttons["Files"].firstMatch.tap()
+        let file = app.staticTexts["notes.txt"].firstMatch
+        XCTAssertTrue(file.waitForExistence(timeout: 10), "the files are not listed")
+        file.press(forDuration: 1.0)
+        let rename = app.buttons["Rename…"]
+        XCTAssertTrue(rename.waitForExistence(timeout: 5), "no Rename in the file's menu")
+        rename.tap()
+        app.alerts.textFields.firstMatch.typeText("-moved")
+        app.alerts.buttons["Rename"].tap()
+        XCTAssertTrue(notDone.waitForExistence(timeout: 5), "a rename while the Mac is not connected was not said")
+        capture("rename-not-connected")
+        app.alerts.buttons["OK"].tap()
+        // A schedule saved: not taken for saved, its form still open.
+        for _ in 0..<3 where !app.tab("Schedules").exists {
+            let back = app.navigationBars.buttons.firstMatch
+            guard back.exists else { break }
+            back.tap()
+        }
+        // The Mac's screens, not the list of Macs, out of reach as it is.
+        if !app.tab("Schedules").exists, app.buttons["First Mac"].exists { app.buttons["First Mac"].tap() }
+        XCTAssertTrue(app.tab("Schedules").waitForExistence(timeout: 10), "the Mac's tabs are not shown")
+        app.tab("Schedules").tap()
+        XCTAssertTrue(scheduleRow.waitForExistence(timeout: 10))
+        scheduleRow.tap()
+        let form = app.navigationBars["Every morning"]
+        XCTAssertTrue(form.waitForExistence(timeout: 5))
+        form.buttons["Save"].tap()
+        XCTAssertTrue(notDone.waitForExistence(timeout: 5), "a schedule saved while the Mac is not connected was not said")
+        app.alerts.buttons["OK"].tap()
+        XCTAssertTrue(form.exists, "the schedule's form closed as if it were saved")
+
+        // IOS-25 (#283): the Mac forgotten while it cannot be reached is
+        // tried, to stop its notifications, and that it could not be is said.
+        form.buttons.firstMatch.tap()
+        app.tab("Sessions").tap()
+        let macs = app.buttons["mac-menu"].firstMatch
+        if macs.waitForExistence(timeout: 5) { macs.tap() }
+        let row = app.buttons.matching(identifier: "mac-row").matching(NSPredicate(format: "label == %@", "First Mac")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "the Macs are not listed")
+        row.press(forDuration: 1.0)
+        let forget = app.buttons["Forget This Mac"]
+        XCTAssertTrue(forget.waitForExistence(timeout: 5), "no Forget in the Mac's menu")
+        forget.tap()
+        app.buttons["Forget"].firstMatch.tap()
+        let notTold = alert("could not be reached to stop its notifications")
+        XCTAssertTrue(notTold.waitForExistence(timeout: 15), "a forgotten Mac that could not be told was not said")
+        capture("forgotten-not-told")
+        app.alerts.buttons["OK"].tap()
+    }
+
+    /// PAIR-12 (#279): a pairing link whose code the host refuses, opened
+    /// while a Mac is on screen, pairs nothing and forgets nothing: it is
+    /// said, and the Mac on screen stays, connected.
+    private func pairWithACodeThatIsRefused(_ app: XCUIApplication, launchButton: String) throws {
+        let link = try XCTUnwrap(ProcessInfo.processInfo.environment["AGENTTERM_PAIR_URL"].flatMap { URLComponents(string: $0) })
+        var refused = link
+        refused.queryItems = link.queryItems?.map { $0.name == "code" ? URLQueryItem(name: "code", value: "000000") : $0.name == "name" ? URLQueryItem(name: "name", value: "Stale Mac") : $0 }
+        app.openPairingLink(try XCTUnwrap(refused.url))
+        let said = app.alerts.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "pairing code has expired or was already used")).firstMatch
+        XCTAssertTrue(said.waitForExistence(timeout: 15), "the refused code was not said")
+        capture("pairing-refused")
+        app.alerts.buttons["OK"].tap()
+        // The list of Macs, where pairing is: the first still there and
+        // connected, the refused one not kept.
+        let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "First Mac")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "the paired Mac is gone")
+        let connected = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Connected")).firstMatch
+        XCTAssertTrue(connected.waitForExistence(timeout: 5), "the paired Mac's connection was dropped")
+        XCTAssertFalse(app.staticTexts["Stale Mac"].exists, "the refused Mac was kept")
+        first.tap()
+        XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 15), "the paired Mac does not open")
+    }
+
+    /// IOS-23 (#285): while git runs a commit (its hook takes a while, and
+    /// changes another file of the folder meanwhile), the folder's changes
+    /// that come of a pull to refresh are not taken for its end: the message stays until the
+    /// commit is over, and goes then. Before the fix the first changes of
+    /// the folder ended the commit and threw its message away.
+    private func commitWhileTheFolderChanges(_ app: XCUIApplication) {
+        app.buttons["folder-details"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Git"].waitForExistence(timeout: 10))
+        app.buttons["Git"].tap()
+        XCTAssertTrue(app.staticTexts["notes.txt"].waitForExistence(timeout: 10), "the changed file is not listed")
+        app.buttons["Stage All"].tap()
+        XCTAssertTrue(app.buttons["Unstage notes.txt"].waitForExistence(timeout: 10), "the file was not staged")
+        let message = app.textFields["commit-message"].exists ? app.textFields["commit-message"] : app.textViews["commit-message"]
+        message.tap()
+        message.typeText("test: while the folder changes")
+        app.buttons["commit"].tap()
+        sleep(2)
+        // Pulled to refresh while git still runs: the hook's change is listed.
+        let top = app.staticTexts["Follows origin/main"].firstMatch
+        let start = (top.exists ? top : app.buttons["Git"]).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 400)))
+        XCTAssertTrue(app.staticTexts["during-commit.txt"].waitForExistence(timeout: 8), "the change made during the commit did not come")
+        capture("commit-while-changing")
+        XCTAssertEqual(message.value as? String, "test: while the folder changes", "the changes that came were taken for the commit's end")
+        // Over: the message goes.
+        let empty = NSPredicate(format: "value != %@", "test: while the folder changes")
+        wait(for: [expectation(for: empty, evaluatedWith: message)], timeout: 30)
+    }
+
+    /// SCHED-39 (#308) on the iPhone: a schedule made here is deleted only
+    /// once that is confirmed. Cancel keeps it, with its editor open;
+    /// Delete Schedule takes it away.
+    private func deleteASchedule(_ app: XCUIApplication) {
+        app.tab("Schedules").tap()
+        let add = app.buttons["new-schedule"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "no New Schedule")
+        add.tap()
+        let prompt = app.textFields["Prompt"].exists ? app.textFields["Prompt"] : app.textViews["Prompt"]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5), "the editor has no prompt")
+        prompt.tap()
+        prompt.typeText("say hello")
+        app.navigationBars.buttons["Save"].tap()
+        let withoutAsking = app.buttons["Run Without Asking"]
+        if withoutAsking.waitForExistence(timeout: 3) { withoutAsking.tap() }
+        let row = app.staticTexts["Every morning"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "the schedule is not listed")
+        row.tap()
+
+        let delete = app.buttons["Delete Schedule…"]
+        for _ in 0..<6 where !delete.isHittable { app.swipeUp() }
+        delete.tap()
+        let title = app.staticTexts["Delete the schedule “Every morning”?"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5), "deleting was not asked first")
+        capture("schedule-delete-asked")
+        // Cancel is a tap outside the question: iOS shows no button for it.
+        let cancel = app.buttons["Cancel"].firstMatch
+        if cancel.exists { cancel.tap() } else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap() }
+        XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Every morning"].exists, "Cancel closed the editor")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "the schedule was deleted without being confirmed")
+
+        row.tap()
+        for _ in 0..<6 where !delete.isHittable { app.swipeUp() }
+        delete.tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        app.buttons["Delete Schedule"].firstMatch.tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 10), "the schedule was not deleted once confirmed")
+    }
+
     private func narrowTheWindow(_ app: XCUIApplication) {
         guard UIDevice.current.userInterfaceIdiom == .pad else { return }
         // In the screen's points: the app's own frame moves with its window.
@@ -1199,6 +1482,32 @@ final class FlowTests: XCTestCase {
     /// said; touched, it shows what its turn came to; Open shows its
     /// terminal. Read, it leaves the top of the list and stays in the whole
     /// Inbox, kept after it is read.
+    /// IOS-26 (#320): what an agent asks, opened from the Inbox, is
+    /// answered there in words of one's own, as Claude Code's list offers
+    /// after its choices ("Type something."). Where the answer went is what
+    /// the stand-in received, which scripts/test-ios.sh checks. Before the
+    /// fix the Inbox listed the choices as text, with no way to answer.
+    private func answerFromTheInbox(_ app: XCUIApplication, compose: XCUIElement) {
+        let claude = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Claude Code")).firstMatch
+        XCTAssertTrue(claude.waitForExistence(timeout: 10), "no Claude Code to start")
+        claude.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10), "the Claude Code session did not open")
+        app.navigationBars.buttons.firstMatch.tap()
+        let items = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES %@", "inbox-[0-9]+"))
+        let item = items.firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 40), "the agent's question is not in the Inbox")
+        item.tap()
+        let answer = app.descendants(matching: .any)["notice-answer"].firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 10), "no field to answer the agent in words of one's own")
+        XCTAssertTrue(app.buttons["notice-choice-1"].exists, "the question's choices are not offered")
+        answer.tap()
+        answer.typeText("a parser of my own")
+        capture("25-inbox-answer")
+        app.buttons["notice-answer-send"].tap()
+        XCTAssertTrue(answer.waitForNonExistence(timeout: 15), "the answered question still offers to answer")
+        capture("26-inbox-answered")
+    }
+
     private func useTheInbox(_ app: XCUIApplication, compose: XCUIElement) {
         // The stand-in Claude Code says it is done a few seconds after it
         // starts (scripts/test-ios.sh): by then the list is on screen.

@@ -32,6 +32,8 @@
 //   APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC
 //   APNS_HOST      api.push.apple.com, or api.sandbox.push.apple.com
 //   PUSH_LIMIT     optional: a rate limiting binding, keyed by device token
+//   CALLER_LIMIT   optional: a rate limiting binding for /v1/push, keyed by
+//                  the caller's address (#312)
 //   REGISTER_LIMIT optional: a rate limiting binding for /v1/register, keyed
 //                  by the caller's address, so that tickets are not handed
 //                  out in bulk
@@ -64,8 +66,9 @@ async function route(request, env) {
   } catch {
     return reply(400, { error: "body", reason: "not JSON" });
   }
-  if (url.pathname === "/v1/register") return register(body, env, request.headers.get("cf-connecting-ip") ?? "unknown");
-  if (url.pathname === "/v1/push") return push(body, env);
+  const caller = request.headers.get("cf-connecting-ip") ?? "unknown";
+  if (url.pathname === "/v1/register") return register(body, env, caller);
+  if (url.pathname === "/v1/push") return push(body, env, caller);
   return reply(404, { error: "path" });
 }
 
@@ -80,11 +83,18 @@ async function register(body, env, caller) {
   return reply(200, { ticket: await sign(env, token, expires), expires });
 }
 
-async function push(body, env) {
+async function push(body, env, caller) {
   const token = String(body?.token ?? "").toLowerCase();
   const expires = Number(body?.expires);
   const payload = body?.payload;
   if (!TOKEN.test(token)) return reply(400, { error: "token", reason: "not a device token" });
+  // By the caller's address too, whatever the tokens (#312): a ticket for a
+  // made-up token is as easy to get as one for a real device, and the limit
+  // by token alone let one caller push as often as it had tickets.
+  if (env.CALLER_LIMIT) {
+    const { success } = await env.CALLER_LIMIT.limit({ key: caller });
+    if (!success) return reply(429, { error: "limit", reason: "too many pushes from this address" });
+  }
   if (!Number.isInteger(expires) || expires < Date.now() / 1000) return reply(401, { error: "ticket", reason: "expired" });
   if (!(await verify(env, token, expires, String(body?.ticket ?? "")))) return reply(401, { error: "ticket", reason: "not signed by this relay" });
   if (body?.gone !== undefined) return takeBack(token, String(body.gone), env);

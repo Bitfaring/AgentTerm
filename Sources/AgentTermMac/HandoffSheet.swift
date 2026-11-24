@@ -136,7 +136,7 @@ struct HandoffSheet: View {
                     }
                 }
                 if targets.isEmpty {
-                    Text("No other agent is installed to hand this off to.")
+                    Text(HandoffWords.noOtherAgent)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }

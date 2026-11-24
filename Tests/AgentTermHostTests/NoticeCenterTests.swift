@@ -40,6 +40,22 @@ final class NoticeCenterTests: XCTestCase {
         XCTAssertEqual(center.log.count, 2)
     }
 
+    /// NOTICE-7 (#321): a notice whose agent moved on is read, on every
+    /// device, whatever it moved on to: working again (someone answered in
+    /// the session), something else asked, or its session ended.
+    func testANoticeWhoseAgentMovedOnIsRead() {
+        let center = NoticeCenter(file: file)
+        _ = center.update(sessions: [session(1, asked), session(2, asked), session(3, .done(said: "ok"))], now: now)
+        let other = AgentState.waitingForAnswer(AgentQuestion(text: "And then?", choices: ["c"]))
+        let (_, handled) = center.update(sessions: [session(1, .working(since: now)), session(2, other)], now: now)
+        XCTAssertEqual(handled.count, 3)
+        XCTAssertTrue(handled.allSatisfy { $0.read == true }, "moved on is not read: \(handled.map { ($0.session ?? 0, $0.read ?? false) })")
+        XCTAssertEqual(center.log.filter { $0.read != true }.map(\.state), [other], "only the new question is unread")
+        var book = InboxBook()
+        book.take(center.log, now: now)
+        XCTAssertEqual(book.unread, 1, "the Inbox of a device")
+    }
+
     /// NOTICE-2: handled by a device once; opened or answered names the
     /// session and the state.
     func testANoticeIsHandledOnce() throws {
@@ -112,7 +128,8 @@ final class NoticeCenterTests: XCTestCase {
         let third = try XCTUnwrap(center.update(sessions: [session(1, asked), session(2, .done(said: nil)), session(3, asked)], now: now).new.first)
         _ = center.update(sessions: [session(1, asked), session(2, .done(said: nil))], now: now)
         XCTAssertEqual(center.log.first { $0.id == third.id }?.handled?.how, .movedOn)
-        XCTAssertNil(center.log.first { $0.id == third.id }?.read, "moved on is not read")
+        // Read too since #321 (the owner's decision of 2026-11-23).
+        XCTAssertEqual(center.log.first { $0.id == third.id }?.read, true, "moved on is read")
     }
 
     /// NOTICE-6 (#193, #234): nothing waits to be a notification; what

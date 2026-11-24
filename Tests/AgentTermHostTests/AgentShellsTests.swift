@@ -350,7 +350,10 @@ final class AgentShellsHostTests: XCTestCase {
         try token.write(to: state.appendingPathComponent("token"), atomically: true, encoding: .utf8)
         stateBefore = ProcessInfo.processInfo.environment["AGENTTERM_STATE_DIR"]
         setenv("AGENTTERM_STATE_DIR", state.path, 1)
-        server = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] }))
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] })
+        // Where the MCP server, of the same state folder, reads them.
+        configuration.promptsDirectory = state
+        server = HostServer(configuration: configuration)
         port = try server.start()
     }
 
@@ -920,6 +923,8 @@ final class AgentsUseShellsTests: XCTestCase {
         configuration.agentsDirectory = agents.path
         configuration.foldersFile = root.appendingPathComponent("state/folders.json")
         configuration.agentShells = AgentShellsSetup(directory: root.appendingPathComponent("state"), tool: "/usr/bin/true")
+        // Where its server reads them, as `agenttermd` says (#269).
+        configuration.promptsDirectory = root.appendingPathComponent("state")
         let server = HostServer(configuration: configuration)
         let port = try server.start()
         defer { server.stop() }
@@ -1064,7 +1069,7 @@ extension AgentShellsHostTests {
         waitUntil("every device told") {
             mac.messages.contains { if case .agentPrompts(let custom, _) = $0 { return custom["claude"] == words } else { return false } }
         }
-        XCTAssertTrue(FileManager.default.fileExists(atPath: HostServer.agentPromptsFile.path), "the host did not keep them")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("state/agent-prompts.json").path), "the host did not keep them")
 
         let (agent, _) = try startAgent("claude", title: "told", client: mac)
         let request: [String: Any] = ["jsonrpc": "2.0", "id": 900, "method": "initialize", "params": [:]]

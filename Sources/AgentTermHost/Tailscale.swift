@@ -42,19 +42,38 @@ public enum Tailscale {
     public static func status() -> TailscaleStatus {
         var backendState: String?
         var dnsName: String?
-        if let cli, let result = Subprocess.run(cli, ["status", "--json"], timeout: 4),
-            let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any]
-        {
+        var own: Set<String>?
+        if let json = askedStatus() {
             backendState = json["BackendState"] as? String
             dnsName = (json["Self"] as? [String: Any])?["DNSName"] as? String
+            own = Set(json["TailscaleIPs"] as? [String] ?? [])
         }
-        return status(installed: isInstalled, backendState: backendState, address: ipv4Address(), dnsName: dnsName)
+        let installed = isInstalled
+        return status(installed: installed, backendState: backendState, address: address(among: addressesInRange(), own: own, installed: installed), dnsName: dnsName)
+    }
+
+    /// What `tailscale status --json` says (Tailscale 1.104.7 has
+    /// `BackendState`, `Self.DNSName` and `TailscaleIPs`); nil when its
+    /// command is not there or does not answer.
+    private static func askedStatus() -> [String: Any]? {
+        guard let cli, let result = Subprocess.run(cli, ["status", "--json"], timeout: 4), result.status == 0 else { return nil }
+        return try? JSONSerialization.jsonObject(with: result.output) as? [String: Any]
+    }
+
+    /// The addresses Tailscale itself says are this Mac's; nil when it
+    /// could not be asked. Runs its command: off the host's queue.
+    public static func ownAddresses() -> Set<String>? {
+        askedStatus().map { Set($0["TailscaleIPs"] as? [String] ?? []) }
     }
 
     /// The decision behind `status()`, separated from the system calls.
     static func status(installed: Bool, backendState: String?, address: String?, dnsName: String?) -> TailscaleStatus {
-        // An address in Tailscale's range is proof enough of a working
-        // connection, even where the CLI cannot be found or asked.
+        // No Tailscale on the Mac: an address in its range is someone
+        // else's, a carrier's or another VPN's (#268).
+        guard installed else { return .notInstalled }
+        // An address Tailscale's own, or on a tunnel of a Mac with Tailscale,
+        // is proof enough of a working connection, even where the CLI
+        // cannot be asked.
         if let address, backendState == nil || backendState == "Running" {
             let name = dnsName.map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }
             return .ready(host: name?.isEmpty == false ? name! : address)
@@ -63,11 +82,30 @@ public enum Tailscale {
         return backendState == "NeedsLogin" ? .needsLogin : .notConnected
     }
 
-    /// The Mac's address in the Tailscale range 100.64.0.0/10, if it is connected.
-    public static func ipv4Address() -> String? {
+    /// The Mac's Tailscale address, if it is connected: one in the range
+    /// 100.64.0.0/10 that Tailscale says is its own (`own`, from
+    /// `ownAddresses()`), or when Tailscale cannot be asked, the first on a
+    /// tunnel (`utun`) of a Mac that has Tailscale (#268).
+    public static func ipv4Address(own: Set<String>? = nil) -> String? {
+        address(among: addressesInRange(), own: own, installed: isInstalled)
+    }
+
+    /// The decision behind `ipv4Address`: never an address of an interface
+    /// that is not a tunnel (a carrier's), nor on a Mac without Tailscale,
+    /// nor, once Tailscale was asked, one it does not say is its own
+    /// (another VPN's tunnel, Cloudflare WARP's).
+    static func address(among found: [(interface: String, address: String)], own: Set<String>?, installed: Bool) -> String? {
+        if let own { return found.first { own.contains($0.address) }?.address }
+        guard installed else { return nil }
+        return found.first { $0.interface.hasPrefix("utun") }?.address
+    }
+
+    /// The interfaces that are up with an IPv4 address in 100.64.0.0/10.
+    static func addressesInRange() -> [(interface: String, address: String)] {
         var list: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&list) == 0 else { return nil }
+        guard getifaddrs(&list) == 0 else { return [] }
         defer { freeifaddrs(list) }
+        var found: [(interface: String, address: String)] = []
         var cursor = list
         while let entry = cursor {
             defer { cursor = entry.pointee.ifa_next }
@@ -76,10 +114,10 @@ public enum Tailscale {
             else { continue }
             let raw = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt32(bigEndian: $0.pointee.sin_addr.s_addr) }
             if raw & 0xFFC0_0000 == 0x6440_0000 {
-                return "\(raw >> 24).\((raw >> 16) & 0xff).\((raw >> 8) & 0xff).\(raw & 0xff)"
+                found.append((String(cString: entry.pointee.ifa_name), "\(raw >> 24).\((raw >> 16) & 0xff).\((raw >> 8) & 0xff).\(raw & 0xff)"))
             }
         }
-        return nil
+        return found
     }
 
     /// The Mac's MagicDNS name, e.g. "macbook.tail1234.ts.net". Needs the

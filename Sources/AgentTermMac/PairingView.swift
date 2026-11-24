@@ -14,6 +14,8 @@ struct PairingView: View {
     let port: UInt16
     @Environment(\.dismiss) private var dismiss
     @State private var status: TailscaleStatus?
+    /// The device whose removal waits to be confirmed (#308).
+    @State private var removing: DeviceInfo?
     @State private var copied = false
     @State private var checking = false
     @State private var now = Date()
@@ -31,6 +33,18 @@ struct PairingView: View {
         VStack(spacing: 18) {
             Text("Pair a Device")
                 .font(.system(size: 18, weight: .semibold))
+
+            // The host cannot be reached on its Tailscale address (#274):
+            // a code shown now would pair nothing.
+            if let failure = model.failures.first(where: { $0.part == .listener }) {
+                Label(failure.headline() + " " + failure.details, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                    // Whole: the reason and what to do are its point.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("pairing-listener-failure")
+            }
 
             if let device = model.justPaired {
                 paired(device)
@@ -179,9 +193,18 @@ struct PairingView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 6)
-                            Button("Remove", role: .destructive) { model.revoke(device) }
+                            Button("Remove…", role: .destructive) { removing = device }
                                 .controlSize(.small)
                                 .help("Take this device's access away. It has to be paired again to come back.")
+                                .confirmationDialog(
+                                    DeleteWords.deviceTitle(device.name),
+                                    isPresented: Binding(get: { removing?.id == device.id }, set: { if !$0 { removing = nil } }), titleVisibility: .visible
+                                ) {
+                                    Button(DeleteWords.removeDevice, role: .destructive) { model.revoke(device) }
+                                    Button("Cancel", role: .cancel) {}
+                                } message: {
+                                    Text(DeleteWords.deviceMessage)
+                                }
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)

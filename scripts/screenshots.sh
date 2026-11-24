@@ -34,6 +34,7 @@ cd "$(dirname "$0")/.."
 source scripts/lib-own-environment.sh
 own_environment
 source scripts/lib-cleanup.sh
+source scripts/lib-test-log.sh
 ONLY="${ONLY:-both}"
 DO_MAC=yes DO_IPHONE=yes DO_IPAD=yes
 case "$ONLY" in
@@ -220,12 +221,30 @@ part() {
     local name="$1"
     shift
     if "$@" > "$LOG" 2>&1; then
+        # A part whose tests all skipped themselves took no picture (#309).
+        if why="$(nothing_checked "$LOG")"; then
+            tail -3 "$LOG" >&2
+            echo "screenshots.sh: nothing was taken in: $name: $why. Full log in $LOG" >&2
+            exit 1
+        fi
         echo "  done: $name"
     else
         grep -E "error:|Test Case .* failed|XCTAssert|TEST FAILED" "$LOG" | cut -c1-900 >&2
         echo "screenshots.sh: failed in: $name. Full log in $LOG" >&2
         exit 1
     fi
+}
+
+# A build, which runs no test: only whether it worked is looked at.
+build() {
+    local name="$1"
+    shift
+    if ! "$@" > "$LOG" 2>&1; then
+        grep -E "error:|BUILD FAILED" "$LOG" | cut -c1-900 >&2
+        echo "screenshots.sh: failed in: $name. Full log in $LOG" >&2
+        exit 1
+    fi
+    echo "  done: $name"
 }
 
 if [ -n "$DO_MAC" ]; then
@@ -256,7 +275,7 @@ pictures_on() {
     local xcodebuild=(xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm
         -destination "platform=iOS Simulator,id=$device"
         -derivedDataPath .build/ios -skipPackagePluginValidation APP_DISPLAY_NAME=AgentTerm)
-    part "building the app for the $what" "${xcodebuild[@]}" build-for-testing
+    build "building the app for the $what" "${xcodebuild[@]}" build-for-testing
     # The status bar the App Store's pictures have.
     xcrun simctl status_bar "$device" override --time "9:41" --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
     export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$APP/agenttermd" pairing-link --port "$PORT" --host 127.0.0.1 --name "MacBook Pro")"
@@ -277,7 +296,7 @@ page_on() {
     local xcodebuild=(xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm
         -destination "platform=iOS Simulator,id=$device"
         -derivedDataPath .build/ios -skipPackagePluginValidation APP_DISPLAY_NAME=AgentTerm)
-    part "building the app for the $what" "${xcodebuild[@]}" build-for-testing
+    build "building the app for the $what" "${xcodebuild[@]}" build-for-testing
     xcrun simctl status_bar "$device" override --time "9:41" --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
     export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$APP/agenttermd" pairing-link --port "$PORT" --host 127.0.0.1 --name "MacBook Pro")"
     export TEST_RUNNER_AGENTTERM_SCREENSHOTS=1 TEST_RUNNER_AGENTTERM_SHOT_DIR="$into"

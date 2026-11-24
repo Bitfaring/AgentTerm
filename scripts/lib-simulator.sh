@@ -72,6 +72,24 @@ choose_simulator() {
     SIM_NAME="$(printf '%s' "$line" | cut -d'|' -f2)"
 }
 
+# For a test that resets the simulator's keychain (#311): with no name given,
+# from a terminal it asks, saying so; otherwise it takes "iPhone Air", never
+# the booted simulator, which is most likely the one in use.
+#
+#   choose_test_simulator "<name or UDID, may be empty>"
+choose_test_simulator() {
+    if [ -z "${1:-}" ] && [ -z "${SIMULATOR:-}" ]; then
+        if [ -t 0 ] && [ -t 1 ]; then
+            echo "This test resets the chosen simulator's keychain: an app paired there has to pair again."
+            choose_simulator "" "iPhone Air"
+        else
+            choose_simulator "iPhone Air" "iPhone Air"
+        fi
+    else
+        choose_simulator "${1:-}" "iPhone Air"
+    fi
+}
+
 # Shows the software keyboard in a simulator, as on a device with no
 # keyboard attached. Once a Mac's keyboard has been typed on in an iPad's
 # simulator, iPadOS remembers it and shrinks its own keyboard to a small

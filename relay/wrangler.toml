@@ -16,6 +16,13 @@ name = "PUSH_LIMIT"
 namespace_id = "1066"
 simple = { limit = 30, period = 60 }
 
+# At most 120 pushes a minute from one address, whatever the devices (#312):
+# a Mac sends at most 30 a minute to each of its few iPhones.
+[[ratelimits]]
+name = "CALLER_LIMIT"
+namespace_id = "1068"
+simple = { limit = 120, period = 60 }
+
 # At most 5 registrations a minute from one address: a Mac registers its
 # iPhones each time they connect, far fewer.
 [[ratelimits]]

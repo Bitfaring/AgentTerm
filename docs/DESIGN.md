@@ -206,6 +206,35 @@ WebSocket over TCP, default port 7717.
 **Text frames** carry JSON messages, encoded with Swift's synthesized `Codable`
 for enums (`{"attach":{"session":1,"size":{"cols":48,"rows":30}}}`).
 
+**Large messages go in pieces, both ways.** A frame may be at most 4 MB,
+and one larger closes the connection. A message larger than 256 KB is sent
+as binary frames of that size (`MessageParts`: `messagePart`, then
+`messageEnd`, numbered by the sender), and joined before it is read: by a
+client since #21, by the host since #289 (protocol 41), for a text opened
+anyway and saved from the iPhone or another Mac, or a page's picture a Mac
+answers an agent with. The host joins at most 64 MB of one message
+(`MessageParts.largestFromAClient`); one larger is answered with `error`
+`message too large`, which both apps say as `HostErrorWords.tooLarge`, its
+other pieces are left, and the connection goes on. Only a client that
+signed in sends pieces.
+
+**A client that does not read is not kept for without bound** (#270). The
+host counts the bytes handed to each connection and not yet sent. Past
+`HostServer.mostUnsent` (8 MB) a client is no longer sent its sessions'
+output, and the host notes how far into each it has all; once less than
+1 MB is waiting, it is sent what it missed from the scrollback, from there,
+or the screen as on attaching when that is no longer kept. Nothing is
+said to the client: it gets all, once.
+
+**A program is made to wait for its session's screen** (#327). Every piece
+of a session's output is fed to its screen emulator (`ScreenMirror`) on the
+session's own queue, and that emulator is slower than a program that prints
+without end. The host counts what waits for it; past
+`HostServer.mirrorMostBehind` (4 MB) it stops reading the PTY
+(`PTYProcess.pauseReading`), so the program waits on a full PTY as it does
+in a terminal that cannot keep up, and reads again once half of it was
+taken. Nothing is lost, and a session that ends meanwhile says all it wrote.
+
 Client to host:
 
 | Message | Meaning |
@@ -220,14 +249,14 @@ Client to host:
 | `kill(session)` | Hang up the session (SIGHUP, then SIGKILL after 3 s). An agent's session is ended with the shells it opened, and the app that shows the browser is asked to close the pages it opened (`browserCall` `close`, as a device's: nobody waits for the answer) (#145, protocol 29). An agent that ends by itself leaves them to the user. |
 | `addFolder(path)` / `removeFolder(path)` | Change the shared folder list. |
 | `diff(path)` / `diffFile(path, file, staged)` | A folder's uncommitted changes without the diffs, then one file's diff: its staged part, or what is only in the working tree. |
-| `gitStage(path, files)` / `gitUnstage(path, files)` / `gitCommit(path, message)` | Change what the next commit contains (no files means all), and commit it. Answered with `diff`, after an `error` carrying git's words if it failed. |
+| `gitStage(path, files)` / `gitUnstage(path, files)` / `gitCommit(path, message)` | Change what the next commit contains (no files means all), and commit it. Answered with `diff`, after an `error` carrying git's words if it failed; a commit then with `gitCommitted(path, problem)`, nil when git took it (#285, #302). The apps keep the commit's message until that comes: a `diff` or an `error` meanwhile may answer something else. |
 | `gitDiscard(path, files)` | Throw away changes that are not staged (no files means all): `git restore --worktree` for what git tracks, the Trash for what it does not (`GitActions.discard`, `FileBrowser.trash`). Answered as `gitStage` is. The apps ask first, in the words of `DiscardQuestion`, and then name each file they asked about, Discard All too: not a change made since, nor a new file past the fifty listed (#50). A worktree of the repository inside the folder (`.claude/worktrees`) is never thrown away; a folder git tracks nothing of goes to the Trash whole only when all of it was named (`GitActions.trashed`). |
 | `gitBranches(path)` | The repository's branches, its own first and the checked out one before the rest, then its remotes' (`GitActions.branches`, one `git for-each-ref`). Answered with `gitBranches(path, branches)`. |
 | `gitSwitch(path, branch)` / `gitCreateBranch(path, name, from, checkout)` / `gitRenameBranch(path, from, to)` / `gitDeleteBranch(path, name, force)` | Change the branches (#35). Answered with an `error` carrying what git said if it refused, then `gitBranches` and `diff`. A branch with commits of its own is deleted only with `force`: the apps ask twice before they send it (`DeleteBranchQuestion`). |
 | `gitResolve(path, file, take)` / `gitContinue(path)` / `gitAbort(path)` | While a merge, rebase, cherry-pick or revert is stopped on conflicts (#42). `diff` says so: `DiffSnapshot.operation`, from what git keeps in its own folder meanwhile, and the files that conflict first, each a `FileDiff` with `conflict` (git's two letters) and the file as it is against both sides. A side is taken with `git checkout --ours/--theirs` and `git add`, or `git rm` where that side has no such file; "edited" is `git add`, refused while a marker is in the file. Continue runs the operation's own `--continue` with no editor; a pull, a revert or a pick that stops is no longer aborted by the host. |
 | Submodules (#44) | No message of their own. `DiffSnapshot.submodules` holds, for each submodule `git status` says has modified or untracked files inside (`S.M.`, `S..U`), its path and a `DiffSnapshot` of its own, read by the same code in the submodule's folder, so one inside another nests. The folder's own diff is run with `--ignore-submodules=dirty`: a submodule is among `files` only when its commit moved, marked `isSubmodule`. The apps act inside a submodule with the ordinary messages and the submodule's folder as `path`; the host then forgets what it kept of every folder around that path, and a client that is answered for a submodule's folder asks for the folder around it again. Discarding a submodule's row runs `git submodule update --init` for it. `GitWorktrees.checkOutSubmodules` checks out a new worktree's submodules, theirs too, one by one: each that is checked out in the repository's own checkout is cloned from there (`git submodule init`, then `git -c protocol.file.allow=always -c submodule.<name>.url=<its git folder there> submodule update`, then its `origin` set back to the URL in `.gitmodules`), and any other is fetched from its URL (`git submodule update --init`) (#244). It tells the host which one of the worktree's own it is at, of how many, which the host sends every device in `worktreesInProgress`. |
 | `gitApplyPart(path, file, patch, use)` | One hunk of a file's diff, or lines of one, staged, unstaged or discarded (#40). The app takes the diff apart and puts the part together as a patch (`PatchParts`): lines left out read as what the side the patch is applied to holds. The hunk a long diff was cut off in (`PatchHunk.isCut`) is shown and is no part: it may end in the middle of a line. The host applies it with `git apply`, `--cached` for the index and `--reverse` to take it out, after `git add --intent-to-add` for a file git does not track; from a folder inside its repository with `--directory=<prefix>`, since the patch names the file from the folder and git reads the names of a patch from the top (#50). Answered as `gitStage` is. |
-| `gitLastCommit(path)` / `gitAmend(path, message)` / `gitUndoCommit(path)` | The commit the checked out branch is at, with its whole message and whether a remote has it (`gitLastCommit(path, last)`); `git commit --amend` with what is staged; `git reset --soft HEAD~1`, or the branch unborn again for the first commit (#41). The apps amend through their commit box, and ask before undoing, twice for a commit that is pushed (`RewriteCommitQuestion`). Answered as `gitPush` is. |
+| `gitLastCommit(path)` / `gitAmend(path, message)` / `gitUndoCommit(path)` | The commit the checked out branch is at, with its whole message and whether a remote has it (`gitLastCommit(path, last)`); `git commit --amend` with what is staged; `git reset --soft HEAD~1`, or the branch unborn again for the first commit (#41). The apps amend through their commit box, and ask before undoing, twice for a commit that is pushed (`RewriteCommitQuestion`). Answered as `gitPush` is, an amend then with `gitCommitted` as a commit is. |
 | `gitStashes(path)` / `gitStash(path, message, untracked)` / `gitStashShow(path, hash)` / `gitStashApply(path, hash, pop)` / `gitStashDrop(path, hash)` | The stash (#38). A stash is named by the hash of the commit git keeps it as, not by its place (`stash@{1}`), which moves when another is dropped: the host looks its place up each time, and says when it is gone. Changes are answered with an `error` carrying what was said, then `gitStashes` and `diff`; `gitStashShow` with the files and their diffs. The apps ask before `gitStashDrop` (`DropStashQuestion`). |
 | `gitLog(path, branch, skip, limit)` | Commits of a branch, the checked out one when none is named, newest first and a page at a time (`GitActions.log`). Answered with `gitLog(path, branch, skip, commits, more)`. The graph beside the list is worked out by the apps from each commit's parents (`CommitGraphRow.rows`). |
 | `gitShow(path, hash)` | A commit's message and what it changed, a merge against its first parent, each file with its diff unless together they pass `GitActions.showLimit`. Answered with `gitShow(path, hash, details)`. |
@@ -293,7 +322,11 @@ message's name, never its content. `--protocol-version`, which tests give a
 host to have it stand for an earlier one, also has it refuse what came
 after that number.
 
-The protocol version is 40. 40 added `worktreesInProgress` from the host:
+The protocol version is 45. 45 took out what 44 added for a question
+before an agent used a browser profile, which the owner chose not to
+keep (#251); 43 added `gitCommitted` from the host, the end
+of a commit or an amend (#285, #302); 42 the reason a host stopped itself
+(#274); 41 messages from a client in parts (#289). 40 added `worktreesInProgress` from the host:
 the worktrees being made for sessions, handoffs and schedules' runs, each with its folder, its agent,
 its branch once made and what is being done (making it, checking out its
 submodules one of how many, starting its session), sent to every device
@@ -357,7 +390,10 @@ Three things about it are deliberate:
 
 - It holds no question to the terminal (which terminal are you, where is
   the cursor), so a client has nothing to answer a second time. Clients
-  still treat it as a replay and send nothing on until `replayed`.
+  still treat it as a replay and send none of the emulator's answers on
+  until `replayed`. What the user types meanwhile is sent: the terminal
+  view (`AnsweringTerminalView`) hands the emulator's answers over apart
+  from the user's keys, and only those are held back (#293).
 - The emulator's own colors are left out. A client has its own.
 - A program's output arrives in pieces cut anywhere, also inside an escape
   sequence or a character. A client given the screen at such a moment would
@@ -471,6 +507,19 @@ waits for the shell to start (at most 8 seconds), so the actions are never
 run on the main thread. Under XCTest the user's own shell is never
 started: `LoginShellPath` answers nothing there unless a test stands a
 shell of its own in, so the tests read none of the user's startup files.
+
+**Where the agents keep their configuration** (#264) is answered in one
+place, `AgentFolders`, which setup (the status line, the hooks), a
+schedule's trust, the history, a conversation's delete and the usage use
+alike. Claude Code keeps all of it, `.claude.json` too, in
+`$CLAUDE_CONFIG_DIR` when that is set, and Codex in `$CODEX_HOME` (tried
+with Claude Code 2.1.330 and Codex 0.171.0, 2026-11-23); otherwise in
+`~/.claude`, `~/.claude.json` and `~/.codex`. The two variables are taken
+from the host's own environment, and where it has none, from the login
+shell, asked with its `PATH` in the same start: a host started by the app
+or at login has none of what `.zshrc` exports, and the agents, started
+through that shell, do. A conversation is deleted only inside the agent's
+own folder, links resolved, wherever that is.
 When a push or pull fails because nothing gave git
 a sign-in ("could not read Username for '<url>'") and a credential helper
 was not found, a sentence naming the host and the helper is put above
@@ -648,7 +697,12 @@ environment names (`AppChannel.usageVariable`,
 it took the place of, or the one of the project's or the user's settings,
 with the same input, and prints what that prints. Claude Code has one
 status line: of two builds, the one set up last has it and runs the
-other's after its own, whose own then says it is not known. The host
+other's after its own, whose own then says it is not known. The other's is
+run with `AGENTTERM_STATUS_LINE_RELAYED` set, and a relay run with it runs
+no relay it keeps, only the user's: two builds set up in turn keep each
+other's, and would otherwise run each other without end (#259). The one
+name both builds read, on purpose: it names nothing of either. A build set
+up again after the other keeps the user's own line, not the other's. The host
 prefers this report over the conversation file, since it has the limits
 and the size of the context window. The file is removed when the session ends.
 
@@ -1080,7 +1134,8 @@ whatever the two say, until this Mac's own app types, takes control or
 says `used` (a key or a click in its window, sent once after it was told
 no one is there) (NOTE-7). Every client is told `macInUse(Bool)`. Since
 #66 it holds no notice back: every device is told, whoever is at the Mac,
-and since #234 no notification waits for it either.
+and since #234 no notification waits for it either: an agent's waits
+its 10 seconds whoever is there (#322).
 
 **On the iPhone.** Since #66 iOS's own banner, in front as behind, for a
 session other than the one on screen (`AgentNotifications`, from the
@@ -1146,20 +1201,27 @@ Mac's own app as `local`.
   the device's Inbox; then `noticeAlert(id:)` for each one due, not
   handled nor read, that it was not shown yet. A new notice is `notice` to
   every client at once, for the Inbox and the Mac's floating notice. When it
-  `alerts`, it is a notification at once, in the same turn of the host's
-  queue (`tellEveryone` → `alert`): nothing waits, whether someone is at
-  the Mac or not, a done agent included (decided 2026-11-22, #234, which
-  took away the 30 seconds #180 had made a done agent, and anything while
-  someone was at the Mac, wait). It is due (`becameDue`, kept in
+  `alerts`, an agent's notice (a question, a permission, a finished task)
+  is a notification 10 seconds later (`Notice.alertDelay`,
+  `Configuration.alertDelay`), whether someone is at the Mac or not, and
+  only if it is then neither handled nor read: one the user acted on
+  meanwhile, its agent gone on, is never shown on the Mac nor the iPhone
+  (decided 2026-11-23, #322, over #234's "at once"; #234 had taken away
+  the 30 seconds #180 made a done agent wait). A failure that stopped work
+  is a notification at once (`Notice.waitsToAlert`). A host that stops
+  during the wait shows, when it starts again, none of those: their
+  sessions ended with it, so their notices moved on, which is read (#321).
+  The wait is short in the host's tests, and `AGENTTERM_ALERT_DELAY` sets
+  it for the apps' tests. It is due (`becameDue`, kept in
   `notices.json`), and is `noticeAlert(id:)` to every client in front and a
   push to each registered device that is away, not connected or in the
   background (#190), at the same moment. The Mac posts its macOS
-  notification on `noticeAlert` as before, so it too is at once.
+  notification on `noticeAlert` as before, so it waits the same.
 - **Read** (#180) is the host's too: `readNotices(ids:)` from a device marks
   them read in the log (`Notice.read`, `NoticeCenter.read`), and every
   client is told `noticesRead(ids:)`; each device that had one through
   Apple and is away has it taken back (`gone`). Handled by being answered,
-  opened or dismissed is read too (`Notice.reads`); moved on is not. A
+  opened or dismissed is read too (`Notice.reads`), and so is moved on (#321, the owner's decision of 2026-11-23): an agent that waits goes on only once someone answered it, often in its session, and one that asks something else has a notice of its own for it. A handled notice is taken back from every device whatever the way. A
   device keeps read in its `InboxBook` as well, and on `noticeLog` says what
   it read while not connected (`InboxBook.readHere(notTold:)`).
 - A notice is handled once (`Notice.Handled`: answered, opened, dismissed,
@@ -1200,7 +1262,9 @@ Mac's own app as `local`.
   `Telemetry.shouldAskAboutCrashReports`; `AppModel.showOnboarding` starts
   true then), answered by its Next.
 - **The Inbox** is the device's own `InboxBook` (`AgentTermProtocol`),
-  kept in its preferences by the Mac on show: notices newest first, read or
+  kept by the Mac on show, in its preferences on the Mac, and on the iPhone
+  in a file of the app's own, protected and out of its backups
+  (`PrivateFiles`, #287): notices newest first, read or
   not, what was deleted here so that the log does not bring it back, 30
   days. `Inbox.items(book:sessions:failures:)` shows a notice whose agent
   still says it with its session (answered, continued, handed off there),
@@ -2041,13 +2105,27 @@ the same folder can therefore be mixed up; the History tab is exact.
   link. The iOS Simulator has no camera, so `scripts/pair-ios.sh` uses it.
 - `Tailscale.status()` decides what the pairing screen shows. Tailscale counts
   as installed when its app or command line tool is found; as ready when the
-  Mac has an address in Tailscale's range and the CLI, if it answers, reports
-  the backend as running. An address alone is enough where the CLI is missing.
-  The screen re-checks every 3 seconds while it is open.
-- The host listens on `127.0.0.1` and on the Mac's Tailscale address
-  (100.64.0.0/10), found with `getifaddrs`. It checks every 15 seconds so it
-  follows Tailscale going up, down or changing address. It never listens on
-  other interfaces.
+  Mac has Tailscale's address and the CLI, if it answers, reports the backend
+  as running. Where the CLI is missing, an address on a tunnel (`utun`) of a
+  Mac that has Tailscale is enough; on a Mac without Tailscale, an address in
+  its range is someone else's (#268). The screen re-checks every 3 seconds
+  while it is open.
+- The host listens on `127.0.0.1` and on the Mac's Tailscale address: of the
+  interfaces with an address in 100.64.0.0/10 (`getifaddrs`), the one
+  Tailscale says is its own (`tailscale status --json`, `TailscaleIPs`, asked
+  off the host's queue), or when it cannot be asked the first tunnel. Another
+  VPN's tunnel in the same range (Cloudflare WARP) and a carrier's address are
+  never taken (#268). It checks every 15 seconds so it follows Tailscale going
+  up, down or changing address. It never listens on other interfaces.
+  When it cannot listen on the Tailscale address (the port is taken there,
+  the address went), or that listener fails, every client is told once,
+  a `PartFailure` of part `listener` naming the address and why, shown in
+  the top banner of both apps and on the Mac's pairing sheet; it is taken
+  back when the host listens there, or there is no address to listen on.
+  The loopback listener is the app's only way to the host: when it fails
+  after the start, the host writes why into its marker (`stopReason`) and
+  stops, so that whoever started it starts it again, and the next host
+  reports the stop with that reason (#274, protocol 42).
 - The WebSocket itself is not encrypted. Loopback traffic stays on the Mac and
   Tailscale traffic is encrypted by WireGuard.
 - A token is still required on Tailscale, because other devices and shared
@@ -2090,7 +2168,9 @@ the same folder can therefore be mixed up; the History tab is exact.
   choices, is sent as a notification's reply is,
   `answer(session:to:text:)`, which the host types by `AgentAnswer.steps`
   only while the agent is still in that state. The prompt's draft is
-  `PhoneModel`'s per session, kept in `UserDefaults`; the answer's is kept
+  `PhoneModel`'s per session, kept in a file of the app's own
+  (`PrivateFiles`, #287: protected until the first unlock, left out of the
+  device's backups, not among its preferences); the answer's is kept
   in memory for that session and that state, and goes when the state does.
   The Mac's "Send to an Agent" sheet goes by the same decision for its note,
   and keeps that note in its page's tab (`BrowserTab.pickNote`, in memory)
@@ -2235,12 +2315,15 @@ A part of AgentTerm that stops without being asked to is reported to every
 client in a message of its own, `failures([PartFailure])`, rather than left
 for the clients to work out from a list that emptied. The parts are the
 host, a session's program, the hold that keeps the Mac awake, and the
-status line relay (see "The other parts" below). A `PartFailure` says:
+status line relay (see "The other parts" below); and, as the host starts, a
+file of what it keeps (its schedules, paired devices or settings) that it
+could not read (`savedState`, #273): put aside as `<name>.unreadable`, never
+written over, and the host starts without what it held. A `PartFailure` says:
 
 | Field | Means |
 |---|---|
 | `id` | Names the report, for `dismissFailure` |
-| `part` | Which part: `host`, `session`, `keepAwake`, `statusLine`. Text, not a closed list, so a client reads a part added after it was built |
+| `part` | Which part: `host`, `session`, `keepAwake`, `statusLine`, `schedule`, `push`, `savedState`. Text, not a closed list, so a client reads a part added after it was built |
 | `name` | Which one, for a part there are several of (a session); nil for the host |
 | `at` | When it stopped, as near as is known |
 | `ended` | The sessions that ended with it: name, folder, agent |
@@ -2552,6 +2635,16 @@ the user asked for a commit or an add, still takes its lock. How a folder
 was when a scheduled run started is written as a tree through a copy of
 the index (`GIT_INDEX_FILE`), not with `git stash create`, which rewrote
 the index too.
+
+Each runs in a session and a process group of its own, with no terminal,
+and its time limit holds (#261): at the limit the whole group is asked to
+end, and killed a second later (`Subprocess.graceAfterTimeout`), and its
+output is read no longer than that, also while a program it left behind in
+another group keeps it open. A login shell still in its startup files, which
+takes no notice of SIGTERM, and a hook that leaves a program in the
+background, made a call wait with no end. The user's own status line runs
+the same way, with what Claude Code gave it as its input and its own
+environment (`forTheHost: false`).
 
 ## Reporting
 

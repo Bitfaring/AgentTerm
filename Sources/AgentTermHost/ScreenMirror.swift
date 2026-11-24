@@ -94,6 +94,8 @@ final class ScreenMirror: TerminalDelegate {
         }
         while rows.last?.isEmpty == true { rows.removeLast() }
         while rows.first?.isEmpty == true { rows.removeFirst() }
+        // A count below none, from a client, is none (#271).
+        let lines = max(0, lines)
         state.linesLeftOut = max(0, rows.count - lines)
         state.output = rows.suffix(lines).joined(separator: "\n")
         return state

@@ -49,8 +49,13 @@ public enum PushState: Codable, Equatable, Sendable {
 public enum PushWords {
     public static let toggle = "Also While the App Is Closed"
     public static let on =
-        "Told through Apple's push service while the app is closed. What it says is encrypted on the Mac for this iPhone; Apple and AgentTerm's relay see only that a notification was sent."
+        "Told through Apple's push service while the app is closed. What it says is encrypted on the Mac for this iPhone; Apple and AgentTerm's relay see that a notification was sent, when, and its size, not what it says."
     public static let notInThisBuild = "This build has no push: it comes only with the released app."
+    /// A Mac forgotten on this iPhone that could not be reached to be told
+    /// to stop its notifications (#283).
+    public static func notToldToStop(_ mac: String) -> String {
+        "\(mac) could not be reached to stop its notifications to this iPhone, which can no longer open them. On that Mac, remove this iPhone in Pair Device."
+    }
     public static let relayNotSetUp = "The Mac's host has no push relay set up."
     public static let notAllowed = "Notifications are turned off for AgentTerm in the iPhone's Settings."
     public static func registrationFailed(_ reason: String) -> String {
@@ -95,6 +100,36 @@ public struct PushNotice: Codable, Equatable, Sendable {
         if case .failure(let failure) = notice.kind {
             title = String(failure.headline().prefix(200))
             body = String(failure.details.prefix(600))
+        }
+        fitInAPush()
+    }
+
+    /// How many bytes of JSON a notice may be: sealed (a nonce and a tag
+    /// of 28 bytes) and in base64, at most the relay's 3,000 characters.
+    public static let mostBytes = 2_200
+
+    /// Shortens what it says until it is no more than `mostBytes` of JSON
+    /// (#294): the lengths above are in characters, and a character of
+    /// Japanese or Chinese is three bytes. Each round keeps of every text
+    /// the share that would fit, so none is cut much more than the others.
+    private mutating func fitInAPush() {
+        for _ in 0..<8 {
+            guard let size = try? JSONEncoder().encode(self).count, size > Self.mostBytes else { return }
+            let share = Double(Self.mostBytes) / Double(size) * 0.95
+            func cut(_ text: String) -> String { String(text.prefix(Int(Double(text.count) * share))) }
+            name = cut(name)
+            folder = String(folder.suffix(Int(Double(folder.count) * share)))
+            title = title.map(cut)
+            body = body.map(cut)
+            if let shortened = state {
+                func question(_ asked: AgentQuestion) -> AgentQuestion { AgentQuestion(text: cut(asked.text), choices: asked.choices.map(cut)) }
+                switch shortened {
+                case .done(let said): state = .done(said: said.map { String($0.suffix(Int(Double($0.count) * share))) })
+                case .waitingForPermission(let asked): state = .waitingForPermission(question(asked))
+                case .waitingForAnswer(let asked): state = .waitingForAnswer(question(asked))
+                case .working: break
+                }
+            }
         }
     }
 

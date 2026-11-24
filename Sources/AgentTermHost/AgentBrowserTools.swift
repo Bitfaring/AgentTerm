@@ -104,6 +104,14 @@ extension AgentShellsMCP {
     private static func number(_ description: String) -> [String: Any] { ["type": "number", "description": description] }
     private static func boolean(_ description: String) -> [String: Any] { ["type": "boolean", "description": description] }
 
+    /// What each number a browser tool takes may be.
+    static let numberRanges: [String: ClosedRange<Double>] = [
+        "x": -100_000...100_000, "y": -100_000...100_000, "seconds": 0...600,
+        "width": 1...10_000, "height": 1...10_000, "latitude": -90...90, "longitude": -180...180,
+    ]
+
+    private static func words(_ number: Double) -> String { number == number.rounded() ? String(Int(number)) : String(number) }
+
     /// The request a browser tool's call makes, or why it cannot be made.
     static func browserRequest(_ name: String, _ arguments: [String: Any]) -> Result<BrowserRequest, BrowserToolError> {
         func text(_ key: String) -> String? { (arguments[key] as? String).flatMap { $0.isEmpty ? nil : $0 } }
@@ -113,6 +121,13 @@ extension AgentShellsMCP {
         let tab = text("tab") ?? (arguments["tab"] as? NSNumber).map { $0.stringValue }
         func needs(_ key: String) -> BrowserToolError { BrowserToolError(text: "Give \(key == "tab" ? "the tab's id" : "`\(key)`") as `\(key)`.") }
         if !["browser_open", "browser_tabs", "browser_profiles"].contains(name), tab == nil { return .failure(needs("tab")) }
+        // A number out of what the browser takes, or no number ("inf",
+        // "nan", which JSON cannot carry), is refused at once (#249).
+        for (key, range) in Self.numberRanges where arguments[key] != nil {
+            guard let number = value(key), number.isFinite, range.contains(number) else {
+                return .failure(BrowserToolError(text: "`\(key)` is a number from \(Self.words(range.lowerBound)) to \(Self.words(range.upperBound))."))
+            }
+        }
         let id = tab ?? ""
         func withRef(_ make: (String) -> BrowserRequest) -> Result<BrowserRequest, BrowserToolError> {
             guard let ref = text("ref") else { return .failure(needs("ref")) }

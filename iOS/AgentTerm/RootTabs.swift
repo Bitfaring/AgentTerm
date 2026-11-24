@@ -9,6 +9,16 @@ struct RootTabs: View {
     @EnvironmentObject private var model: PhoneModel
 
     var body: some View {
+        // Above every tab and every screen of one, as the Mac shows them
+        // above every place, in room of their own (#328).
+        VStack(spacing: 0) {
+            TopBanners()
+            tabs
+        }
+        .background(Palette.canvas.ignoresSafeArea())
+    }
+
+    private var tabs: some View {
         TabView(selection: $model.tab) {
             SessionsView()
                 .tabItem { Label("Sessions", systemImage: "terminal") }
@@ -32,25 +42,6 @@ struct RootTabs: View {
                 .readableWidth()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag("settings")
-        }
-        // An agent of another session finished, or needs you: over every
-        // tab, as the Mac shows it over every place.
-        .overlay(alignment: .top) {
-            VStack(spacing: 8) {
-                // The agents on the Mac cannot open shells, although that
-                // is on (#58): over every tab too, as on the Mac.
-                ForEach(model.shownShellsFaults) { fault in
-                    AgentShellsFaultBanner(fault: fault)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-                // What stopped, until it is dismissed on some device: over
-                // every tab, as the Mac shows it over every place (#66).
-                ForEach(model.failures) { failure in
-                    FailureBanner(failure: failure)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-            }
-            .padding(.horizontal, 12)
         }
         // On the tabs, not on one of them: what the Mac answers to
         // something asked in History or Settings has to be shown there too,
@@ -317,6 +308,31 @@ private struct AgentShellsFaultBanner: View {
     }
 }
 
+/// What the Mac says has stopped or cannot be done, above every tab as the
+/// Mac shows it above every place, in room of its own: nothing of a tab is
+/// hidden under it (#328), as it was when it floated over them.
+private struct TopBanners: View {
+    @EnvironmentObject private var model: PhoneModel
+
+    var body: some View {
+        VStack(spacing: 8) {
+            // The agents on the Mac cannot open shells, although that is on
+            // (#58).
+            ForEach(model.shownShellsFaults) { fault in
+                AgentShellsFaultBanner(fault: fault)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            // What stopped, until it is dismissed on some device (#66).
+            ForEach(model.failures) { failure in
+                FailureBanner(failure: failure)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, model.failures.isEmpty && model.shownShellsFaults.isEmpty ? 0 : 8)
+    }
+}
+
 /// A part of AgentTerm on the Mac that stopped (#66: a top banner on both
 /// apps, principle 3): what and why, in the words the Mac uses, until it
 /// is dismissed on some device.
@@ -330,6 +346,9 @@ private struct FailureBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(failure.headline(on: model.pairing?.name ?? "the Mac"))
                     .font(.subheadline.weight(.semibold))
+                    // Squeezed by other cards, the details give way first:
+                    // the headline says what and where (#274).
+                    .layoutPriority(1)
                 Text(failure.details)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -553,6 +572,8 @@ private struct ScheduleForm: View {
     @Environment(\.dismiss) private var dismiss
     @State var schedule: Schedule
     let isNew: Bool
+    /// Deleting it waits to be confirmed (#308), as on the Mac.
+    @State private var askingDelete = false
     @State private var kind = 1
     @State private var time = Date()
     @State private var weekdays: Set<Int> = [2, 3, 4, 5, 6]
@@ -677,10 +698,16 @@ private struct ScheduleForm: View {
                         model.duplicate(schedule)
                         dismiss()
                     }
-                    Button("Delete Schedule", role: .destructive) {
-                        model.removeSchedule(schedule.id)
-                        dismiss()
-                    }
+                    Button(DeleteWords.deleteSchedule + "…", role: .destructive) { askingDelete = true }
+                        .confirmationDialog(DeleteWords.scheduleTitle(schedule.name), isPresented: $askingDelete, titleVisibility: .visible) {
+                            Button(DeleteWords.deleteSchedule, role: .destructive) {
+                                model.removeSchedule(schedule.id)
+                                dismiss()
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text(DeleteWords.scheduleMessage)
+                        }
                 } footer: {
                     Text("Run Now and Duplicate use the schedule as it was last saved.")
                 }
@@ -754,7 +781,7 @@ private struct ScheduleForm: View {
             warning = true
             return
         }
-        model.save(schedule)
-        dismiss()
+        // Not sent, it stays open, and why is said (#286).
+        if model.save(schedule) { dismiss() }
     }
 }

@@ -40,6 +40,11 @@ public final class HostServer {
         public var foldersFile: URL?
         /// Where paired devices are saved. `nil` keeps them in memory only.
         public var devicesFile: URL?
+        /// Where what each agent is told is kept: the user's own words
+        /// (`agent-prompts.json`) and the file each agent's MCP server reads
+        /// (`prompts/<agent>.md`). Nil reads and writes neither (#269): a
+        /// host a test starts never touches a build's.
+        public var promptsDirectory: URL?
         /// Home folder whose agent files hold the conversation history.
         public var home: String
         /// Path of `agenttermd`, which Claude Code sessions run as their status
@@ -73,11 +78,21 @@ public final class HostServer {
         /// How often sessions are named and measured, in seconds. Tests
         /// shorten it.
         public var refreshInterval: TimeInterval = 6
+        /// How often the Tailscale address is looked for and listened on.
+        public var tailscaleInterval: TimeInterval = 15
+        /// The Tailscale address, for a test: nil asks Tailscale.
+        public var tailscaleAddress: (() -> String?)?
+        /// How the host stops itself when it can no longer be reached
+        /// (#274): it ends, and whoever started it starts it again.
+        public var stopItself: () -> Void = { exit(EXIT_FAILURE) }
         /// How often schedules are looked at, in seconds (#11). Tests shorten it.
         public var scheduleInterval: TimeInterval = 20
         /// How long an agent's hooks and MCP server have to be heard from
         /// before its session says they are missing (#129). Tests shorten it.
         public var linkGrace: TimeInterval = 20
+        /// How long an agent's notice waits before it is a notification
+        /// (`Notice.alertDelay`, #322). Tests shorten it.
+        public var alertDelay: TimeInterval = Notice.alertDelay
         /// How long the Live Activity is kept, updated, with nothing
         /// working or waiting (`LiveActivityRule.keptIdle`). Tests shorten it.
         public var activityKeptIdle: TimeInterval = LiveActivityRule.keptIdle
@@ -167,6 +182,8 @@ public final class HostServer {
         /// What it called itself when it said hello: "Mac" for the Mac's own
         /// app, a device's name for a device.
         var name = ""
+        /// It was refused and is being let go: nothing more of it is read.
+        var refused = false
         /// What the device said it is (#157); nil when it did not.
         var kind: DeviceKind?
         var identity: DeviceRegistry.Identity?
@@ -192,6 +209,16 @@ public final class HostServer {
         var away: Bool { inBackground || superseded }
         /// Numbers the large messages sent in pieces.
         var nextMessage: UInt32 = 0
+        /// Joins a large message the client sends in pieces (#289).
+        var joiner = MessageParts.Joiner()
+        /// A message of the client's refused as too large: its pieces left.
+        var refusedMessage: UInt32?
+        /// Bytes handed to the connection and not yet sent (#270).
+        var unsent = 0
+        /// The sessions whose output it is not sent while it does not read,
+        /// with how far into each it has all (#270): it is caught up from
+        /// there once it reads again.
+        var behind: [SessionID: Int] = [:]
         /// The searches for text this client has going (#45), by its number.
         var searches: [Int: SearchFlag] = [:]
         /// Its searches of the history (#46), by their number, with whether
@@ -239,6 +266,8 @@ public final class HostServer {
         /// every session's output goes through must not wait for (#21).
         let mirror: ScreenMirror
         let mirrorQueue: DispatchQueue
+        /// Bytes of output handed to the mirror and not yet fed to it.
+        var mirrorBacklog = 0
         /// The last of the raw output, for a client that was here before.
         var scrollback = Data()
         /// Where the end of `scrollback` is in all the session ever wrote.
@@ -390,12 +419,16 @@ public final class HostServer {
     public init(configuration: Configuration) {
         self.configuration = configuration
         registry = DeviceRegistry(localToken: configuration.token, file: configuration.devicesFile)
-        push = PushCenter(relay: configuration.pushRelay, file: configuration.pushesFile, transport: configuration.pushTransport)
+        push = PushCenter(relay: configuration.pushRelay, file: configuration.pushesFile, transport: configuration.pushTransport, queue: queue)
         notices = NoticeCenter(file: configuration.noticesFile)
         if let file = configuration.foldersFile, let data = try? Data(contentsOf: file),
             let saved = try? JSONDecoder().decode([String].self, from: data)
         {
             folders = saved
+        }
+        if let file = settingsFile, let data = try? Data(contentsOf: file), MessageCoding.decode(Settings.self, from: data) == nil {
+            // Not written over at the next change (#273).
+            if let aside = StateFile.setAside(file) { setAsideAtStart.append(("settings", aside)) }
         }
         if let file = settingsFile, let data = try? Data(contentsOf: file),
             let saved = MessageCoding.decode(Settings.self, from: data)
@@ -605,6 +638,9 @@ public final class HostServer {
     @discardableResult
     public func start() throws -> UInt16 {
         let port = try listen(on: "127.0.0.1", port: configuration.port)
+        // The login shell is asked once, here off every queue, so that what
+        // needs its PATH or the agents' folders (#264) does not wait for it.
+        DispatchQueue.global(qos: .utility).async { _ = LoginShellPath.shared.value() }
         let deaths = queue.sync {
             boundPort = port
             // Only once the port is this host's: a host that cannot listen
@@ -644,6 +680,14 @@ public final class HostServer {
             // What AgentTerm tells each agent, for its MCP server to give.
             writePromptsForServers()
             loadSchedules()
+            if let aside = registry.setAside { setAsideAtStart.append(("paired devices", aside)) }
+            for (what, aside) in setAsideAtStart {
+                report(
+                    PartFailure(
+                        part: .savedState, name: what, at: configuration.now(), restarted: false,
+                        reason: "What it held is kept as \(aside.path), to be put back by hand."))
+            }
+            setAsideAtStart = []
             startAtLoginByDefault()
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + min(1, configuration.scheduleInterval), repeating: configuration.scheduleInterval)
@@ -663,8 +707,15 @@ public final class HostServer {
         guard configuration.listenOnTailscale else { return port }
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: 15)
-        timer.setEventHandler { [weak self] in self?.syncTailscaleListener() }
+        timer.schedule(deadline: .now(), repeating: configuration.tailscaleInterval)
+        // Tailscale is asked which address is its own off the queue, as its
+        // command takes a moment (#268).
+        timer.setEventHandler { [weak self] in
+            DispatchQueue.global().async {
+                let own = Tailscale.ownAddresses()
+                self?.queue.async { self?.syncTailscaleListener(own: own) }
+            }
+        }
         queue.sync { tailscaleTimer = timer }
         timer.resume()
         return port
@@ -733,7 +784,9 @@ public final class HostServer {
             // was started again: by the app, or by launchd with the app
             // closed. Then this one does not run.
             let broken = deaths.count >= HostMarker.deathsThatBreak
-            failures.append(PartFailure(part: .host, at: found.aliveAt, ended: found.marker.sessions, restarted: !broken, broken: broken))
+            failures.append(
+                PartFailure(
+                    part: .host, at: found.aliveAt, ended: found.marker.sessions, restarted: !broken, broken: broken, reason: found.marker.stopReason))
             failures = Array(failures.suffix(FailureLog.limit))
             FailureLog.write(failures, in: directory)
             if broken {
@@ -794,12 +847,12 @@ public final class HostServer {
     /// of it when it has ended.
     private var runStops: [SessionID: String] = [:]
 
-    private func runKey(_ schedule: String, _ at: Date) -> String { "\(schedule)@\(Int(at.timeIntervalSince1970))" }
+    private func runKey(_ schedule: String, _ at: Date) -> String { "\(schedule)@\(Int(saturating: at.timeIntervalSince1970))" }
 
     /// Where what a run printed is kept.
     private func runOutputFile(_ schedule: String, _ at: Date) -> URL? {
         configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("runs", isDirectory: true)
-            .appendingPathComponent("\(schedule)-\(Int(at.timeIntervalSince1970)).txt")
+            .appendingPathComponent("\(schedule)-\(Int(saturating: at.timeIntervalSince1970)).txt")
     }
     /// When each run's session was first seen done, to close it a day later.
     private var runDoneAt: [SessionID: Date] = [:]
@@ -827,12 +880,18 @@ public final class HostServer {
 
     /// Whether this host read its schedules, and so may save them.
     private var schedulesLoaded = false
+    /// What the host could not read as it started, and where it was put:
+    /// said once it runs (#273).
+    private var setAsideAtStart: [(what: String, at: URL)] = []
 
     private func loadSchedules() {
         schedulesLoaded = true
-        guard let file = schedulesFile, let data = FileManager.default.contents(atPath: file.path),
-            let saved = MessageCoding.decode(SchedulesFile.self, from: data)
-        else { return }
+        guard let file = schedulesFile, let data = FileManager.default.contents(atPath: file.path) else { return }
+        guard let saved = MessageCoding.decode(SchedulesFile.self, from: data) else {
+            // Not written over by the next look at the schedules (#273).
+            if let aside = StateFile.setAside(file) { setAsideAtStart.append(("schedules", aside)) }
+            return
+        }
         schedules = saved.schedules
         schedulesChecked = saved.checked
         resetsRun = saved.resetsRun ?? [:]
@@ -883,6 +942,7 @@ public final class HostServer {
             return "A schedule that skips permissions cannot be saved before its warning was shown and accepted."
         }
         guard !schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Write what the agent is to do." }
+        if let refusal = schedule.when.refusal { return refusal }
         // Asked once now, while the user is here, rather than at 3 a.m.
         do { try ScheduleRunner.trustFolder(of: schedule, home: configuration.home) } catch {
             return "The folder could not be trusted for \(schedule.agent): \(error.localizedDescription)"
@@ -1783,7 +1843,13 @@ public final class HostServer {
             listener.cancel()
             throw StartError.listenerFailed("\(host):\(port): \(failure)")
         }
-        listener.stateUpdateHandler = nil
+        // The loopback listener is the only way the app reaches the host:
+        // one that fails stops the host, so that the app starts it again,
+        // and the next host says why (#274).
+        listener.stateUpdateHandler = { [weak self] state in
+            guard case .failed(let error) = state, let self else { return }
+            self.stopItself(because: "Its listener on \(host):\(port) failed: \(error.localizedDescription).")
+        }
         queue.sync { listeners[host] = listener }
         return listener.port?.rawValue ?? port
     }
@@ -1798,22 +1864,71 @@ public final class HostServer {
 
     /// Keeps a listener on the current Tailscale address, following the
     /// interface as it comes up, goes away or changes address.
-    private func syncTailscaleListener() {
-        let address = Tailscale.ipv4Address()
+    private func syncTailscaleListener(own: Set<String>?) {
+        let address = configuration.tailscaleAddress.map { $0() } ?? Tailscale.ipv4Address(own: own)
         for (host, listener) in listeners where host != "127.0.0.1" && host != address {
             listener.cancel()
             listeners[host] = nil
         }
-        guard let address, listeners[address] == nil,
-            let listener = try? makeListener(host: address, port: boundPort)
-        else { return }
+        // No Tailscale address: nothing to listen on, which is not a fault
+        // of the host's (Tailscale's state is said where it is shown).
+        guard let address else { return listenerListens() }
+        guard listeners[address] == nil else { return }
+        let listener: NWListener
+        do {
+            listener = try makeListener(host: address, port: boundPort)
+        } catch {
+            return listenerFailed(on: address, String(describing: error))
+        }
         listeners[address] = listener
         listener.stateUpdateHandler = { [weak self, weak listener] state in
-            guard case .failed = state, let self, let listener else { return }
-            listener.cancel()
-            if self.listeners[address] === listener { self.listeners[address] = nil }
+            guard let self, let listener else { return }
+            switch state {
+            case .ready:
+                self.listenerListens()
+            case .failed(let error), .waiting(let error):
+                // Tried again at the next look; said once meanwhile (#274).
+                listener.cancel()
+                if self.listeners[address] === listener { self.listeners[address] = nil }
+                self.listenerFailed(on: address, error.localizedDescription)
+            default:
+                break
+            }
         }
         listener.start(queue: queue)
+    }
+
+    /// Stops the host, its marker saying why for the host that follows.
+    private func stopItself(because reason: String) {
+        if var marker, let file = markerFile {
+            marker.stopReason = reason
+            marker.write(to: file)
+            self.marker = marker
+        }
+        NSLog("agenttermd: \(reason) Stopping, to be started again.")
+        configuration.stopItself()
+    }
+
+    /// The failure told of the Tailscale listener, until it listens.
+    private var listenerFailure: String?
+
+    /// Said to every client once, not at every try (#274).
+    private func listenerFailed(on address: String, _ reason: String) {
+        guard listenerFailure == nil else { return }
+        let failure = PartFailure(part: .listener, name: address, at: configuration.now(), restarted: false, reason: "\(reason).")
+        listenerFailure = failure.id
+        report(failure)
+    }
+
+    /// It listens, or has nothing to listen on: what was told is taken back.
+    private func listenerListens() {
+        guard let id = listenerFailure else { return }
+        listenerFailure = nil
+        guard let index = failures.firstIndex(where: { $0.id == id }) else { return }
+        failures.remove(at: index)
+        saveFailures()
+        broadcastFailures()
+        handleNotices(notices.handle(failure: id, now: configuration.now()))
     }
 
     // MARK: Connections
@@ -1845,7 +1960,9 @@ public final class HostServer {
     private static func logUnread(_ data: Data?, from client: String) {
         let key = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?.keys.first ?? ""
         let name = key.count <= 40 && !key.isEmpty && key.allSatisfy { $0.isLetter && $0.isASCII } ? key : "not a message"
-        FileHandle.standardError.write(Data("agenttermd: a message from \(client.isEmpty ? "a client" : client) could not be read: \(name)\n".utf8))
+        // The client's name as it gave it, on one line of the log (#266).
+        let who = String(client.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7F }.prefix(40).map(Character.init))
+        FileHandle.standardError.write(Data("agenttermd: a message from \(who.isEmpty ? "a client" : who) could not be read: \(name)\n".utf8))
     }
 
     private func receive(from client: Client) {
@@ -1863,6 +1980,10 @@ public final class HostServer {
                 // one of that release would not (#214).
                 if let data, let message = MessageCoding.decode(ClientMessage.self, from: data), message.isKnown(toHostAt: self.configuration.protocolVersion) {
                     self.handle(message, from: client)
+                } else if !client.authenticated {
+                    // A peer that has not signed in is let go at once, and
+                    // nothing of it is written in the log (#266).
+                    self.refuse(client, "malformed message")
                 } else {
                     Self.logUnread(data, from: client.name)
                     self.send(.error("malformed message"), to: client)
@@ -1913,15 +2034,58 @@ public final class HostServer {
             for frame in frames { send(frame, to: client) }
             return
         }
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
-        let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
-        client.connection.send(content: data, contentContext: context, completion: .idempotent)
+        transmit(data, opcode: .text, to: client)
     }
 
     private func send(_ frame: DataFrame, to client: Client) {
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
-        let context = NWConnection.ContentContext(identifier: "binary", metadata: [metadata])
-        client.connection.send(content: frame.encoded(), contentContext: context, completion: .idempotent)
+        transmit(frame.encoded(), opcode: .binary, to: client)
+    }
+
+    /// A client is no longer sent a session's output once this much is
+    /// waiting to go to it, and is caught up once less than `caughtUpBelow`
+    /// is (#270): a client that does not read, an iPhone suspended with its
+    /// connection open, made the host keep all of it, 460 MB in 10 seconds
+    /// of a program that prints, until the host was stopped.
+    /// Past this much output waiting for a session's mirror, the program's
+    /// output is no longer read until the mirror took half of it.
+    static let mirrorMostBehind = 4 * 1024 * 1024
+    static let mostUnsent = 8 * 1024 * 1024
+    static let caughtUpBelow = 1024 * 1024
+    /// The most ever waiting to go to one client, for the tests.
+    private(set) var largestUnsent = 0
+    /// The most output ever waiting for a session's mirror, for the tests.
+    private(set) var largestMirrorBacklog = 0
+
+    private func transmit(_ data: Data, opcode: NWProtocolWebSocket.Opcode, to client: Client) {
+        let metadata = NWProtocolWebSocket.Metadata(opcode: opcode)
+        let context = NWConnection.ContentContext(identifier: opcode == .text ? "text" : "binary", metadata: [metadata])
+        let count = data.count
+        client.unsent += count
+        largestUnsent = max(largestUnsent, client.unsent)
+        // Called on `queue`, which the connection runs on.
+        client.connection.send(
+            content: data, contentContext: context,
+            completion: .contentProcessed { [weak self, weak client] _ in
+                guard let self, let client else { return }
+                client.unsent -= count
+                if client.unsent < Self.caughtUpBelow, !client.behind.isEmpty { self.catchUp(client) }
+            })
+    }
+
+    /// A client that reads again is sent what it missed of each session it
+    /// fell behind in, from where it has all: nothing twice, nothing lost.
+    /// What is no longer kept is sent as the screen, as on attaching.
+    private func catchUp(_ client: Client) {
+        let behind = client.behind
+        client.behind = [:]
+        for (id, have) in behind {
+            guard let session = sessions[id], client.attached.contains(id) else { continue }
+            if have >= 0, have <= session.written, session.written - have <= session.scrollback.count {
+                sendReplay(session.scrollback.suffix(session.written - have), of: session, from: have, above: nil, to: client)
+            } else {
+                sendScreen(of: session, history: nil, to: client)
+            }
+        }
     }
 
     private func broadcastSessions() {
@@ -2051,7 +2215,12 @@ public final class HostServer {
         for client in clients.values where client.authenticated && noticeKey(of: client) != nil {
             send(.notice(notice), to: client)
         }
-        if notice.alerts { alert(notice.id) }
+        guard notice.alerts else { return }
+        // An agent's waits, to see whether the user acts meanwhile (#322):
+        // one handled or read by then is not shown (`alert` asks).
+        guard notice.waitsToAlert, configuration.alertDelay > 0 else { return alert(notice.id) }
+        let id = notice.id
+        queue.asyncAfter(deadline: .now() + configuration.alertDelay) { [weak self] in self?.alert(id) }
     }
 
     /// A notification on every device, over the connection or, for a
@@ -2125,9 +2294,18 @@ public final class HostServer {
     /// a newer failure takes the place of an earlier one not seen yet.
     private func pushFailed(device: String, reason: String, forgotten: Bool) {
         let name = registry.devices().first { $0.id == device }?.name ?? "a device"
-        failures.removeAll { $0.part == .push && $0.name == name }
         let then = forgotten ? " It is no longer told through Apple until its app connects again." : ""
-        report(PartFailure(part: .push, name: name, at: configuration.now(), restarted: false, reason: "The relay said: \(reason).\(then)"))
+        let failure = PartFailure(part: .push, name: name, at: configuration.now(), restarted: false, reason: "The relay said: \(reason).\(then)")
+        // One for the device, the newest, in the banner; and one item in the
+        // Inbox while that one is not dismissed, not one per notification
+        // the relay did not take (#272).
+        let said = failures.contains { $0.part == .push && $0.name == name }
+        failures.removeAll { $0.part == .push && $0.name == name }
+        guard said else { return report(failure) }
+        failures.append(failure)
+        failures = Array(failures.suffix(FailureLog.limit))
+        saveFailures()
+        broadcastFailures()
     }
 
     private func sendPushState(_ state: PushState, toDevice device: String) {
@@ -2328,6 +2506,7 @@ public final class HostServer {
             attach(client, to: session, size: size, have: have, history: history)
         case .detach(let id):
             client.attached.remove(id)
+            client.behind[id] = nil
             if let session = sessions[id], session.arbiter.remove(client.id) { applySize(of: session) }
         case .resize(let id, let size):
             guard let session = sessions[id], client.attached.contains(id) else { return }
@@ -2545,7 +2724,7 @@ public final class HostServer {
         case .gitLastCommit(let path):
             work(for: client, { GitActions.lastCommit(in: path) }) { server, client, last in server.send(.gitLastCommit(path: path, last: last), to: client) }
         case .gitAmend(let path, let message):
-            git(for: client, in: path, sync: true) { GitActions.amend(message: message, in: path) }
+            git(for: client, in: path, sync: true, commit: true) { GitActions.amend(message: message, in: path) }
         case .gitUndoCommit(let path):
             git(for: client, in: path, sync: true) { GitActions.undoLastCommit(in: path) }
         case .gitStashes(let path):
@@ -2585,7 +2764,7 @@ public final class HostServer {
         case .gitDeleteBranch(let path, let name, let force):
             git(for: client, in: path, branches: true) { GitActions.deleteBranch(name, force: force, in: path) }
         case .gitCommit(let path, let message):
-            git(for: client, in: path) { GitActions.commit(message: message, in: path) }
+            git(for: client, in: path, commit: true) { GitActions.commit(message: message, in: path) }
         case .gitPush(let path, let force, let lease):
             git(for: client, in: path, sync: true) { GitActions.push(in: path, force: force ?? false, lease: lease) }
         case .gitPull(let path, let mode):
@@ -2754,7 +2933,8 @@ public final class HostServer {
     /// before the changes, whose branch may be another now.
     /// One to the stash (`stashes`) likewise.
     private func git(
-        for client: Client, in path: String, sync: Bool = false, branches: Bool = false, stashes: Bool = false, _ action: @escaping () -> String?
+        for client: Client, in path: String, sync: Bool = false, commit: Bool = false, branches: Bool = false, stashes: Bool = false,
+        _ action: @escaping () -> String?
     ) {
         work(
             for: client,
@@ -2777,6 +2957,7 @@ public final class HostServer {
             if let list = result.3 { server.send(.gitStashes(path: path, stashes: list), to: client) }
             server.send(.diff(path: path, snapshot: result.1.withoutPatches), to: client)
             if sync { server.send(.gitSynced(path: path), to: client) }
+            if commit { server.send(.gitCommitted(path: path, problem: result.0), to: client) }
         }
     }
 
@@ -3165,6 +3346,8 @@ public final class HostServer {
 
     /// Tells the client why, then closes once the message had time to arrive.
     private func refuse(_ client: Client, _ reason: String) {
+        guard !client.refused else { return }
+        client.refused = true
         send(.error(reason), to: client)
         queue.asyncAfter(deadline: .now() + 0.2) { [weak self, weak client] in
             if let self, let client { self.close(client) }
@@ -3253,7 +3436,38 @@ public final class HostServer {
         }
     }
 
+    /// A piece of a large message of a client's (#289), joined up to
+    /// `MessageParts.largestFromAClient`; one larger is refused in words, and
+    /// its other pieces are left. Only a client that signed in sends them.
+    private func joinPiece(_ frame: DataFrame, from client: Client) {
+        guard client.authenticated else { return refuse(client, "malformed message") }
+        if client.refusedMessage == frame.session {
+            if frame.kind == .messageEnd { client.refusedMessage = nil }
+            return
+        }
+        guard let whole = client.joiner.add(frame) else {
+            if client.joiner.joined > MessageParts.largestFromAClient {
+                client.joiner.reset()
+                if frame.kind == .messagePart { client.refusedMessage = frame.session }
+                send(.error(HostErrorWords.tooLargeMessage), to: client)
+            }
+            return
+        }
+        if whole.count > MessageParts.largestFromAClient {
+            return send(.error(HostErrorWords.tooLargeMessage), to: client)
+        }
+        if let message = MessageCoding.decode(ClientMessage.self, from: whole), message.isKnown(toHostAt: configuration.protocolVersion) {
+            handle(message, from: client)
+        } else {
+            Self.logUnread(whole, from: client.name)
+            send(.error("malformed message"), to: client)
+        }
+    }
+
     private func handle(_ frame: DataFrame, from client: Client) {
+        if frame.kind == .messagePart || frame.kind == .messageEnd {
+            return joinPiece(frame, from: client)
+        }
         guard client.authenticated, frame.kind == .input,
             client.attached.contains(frame.session), let session = sessions[frame.session]
         else { return }
@@ -3712,11 +3926,11 @@ public final class HostServer {
     /// What the user wrote for each agent in Settings, by agent; one that
     /// is not here is told the default.
     private lazy var agentPrompts: [String: String] = {
-        guard let data = FileManager.default.contents(atPath: Self.agentPromptsFile.path) else { return [:] }
+        guard let file = agentPromptsFile, let data = FileManager.default.contents(atPath: file.path) else { return [:] }
         return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
     }()
 
-    public static var agentPromptsFile: URL { HostEnvironment.supportDirectory.appendingPathComponent("agent-prompts.json") }
+    private var agentPromptsFile: URL? { configuration.promptsDirectory?.appendingPathComponent("agent-prompts.json") }
 
     /// What AgentTerm tells an agent by default, when it gives it the MCP
     /// server: to run its commands in the shells the user sees, and to use
@@ -3733,8 +3947,8 @@ public final class HostServer {
 
     /// Where the agent's MCP server finds its instructions: the same words,
     /// which it gives as its own. Codex reads only those.
-    public static func promptFile(for agent: String) -> URL {
-        HostEnvironment.supportDirectory.appendingPathComponent("prompts", isDirectory: true).appendingPathComponent(agent + ".md")
+    public static func promptFile(for agent: String, in directory: URL = HostEnvironment.supportDirectory) -> URL {
+        directory.appendingPathComponent("prompts", isDirectory: true).appendingPathComponent(agent + ".md")
     }
 
     /// Writes what each agent is told where its MCP server finds it: at the
@@ -3745,7 +3959,8 @@ public final class HostServer {
     }
 
     private func writePromptForServer(_ prompt: String?, agent: String) {
-        let file = Self.promptFile(for: agent)
+        guard let directory = configuration.promptsDirectory else { return }
+        let file = Self.promptFile(for: agent, in: directory)
         guard let prompt else {
             try? FileManager.default.removeItem(at: file)
             return
@@ -3757,9 +3972,9 @@ public final class HostServer {
     /// The user's words for an agent, or none to go back to the default.
     private func setAgentPrompt(_ agent: String, _ text: String?) {
         if let text { agentPrompts[agent] = text } else { agentPrompts[agent] = nil }
-        if let data = try? JSONEncoder().encode(agentPrompts) {
-            try? FileManager.default.createDirectory(at: Self.agentPromptsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: Self.agentPromptsFile, options: .atomic)
+        if let file = agentPromptsFile, let data = try? JSONEncoder().encode(agentPrompts) {
+            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: file, options: .atomic)
         }
         writePromptForServer(agentPrompt(for: agent), agent: agent)
         broadcastAgentPrompts()
@@ -3917,6 +4132,7 @@ public final class HostServer {
     /// the session, for its creator (#189).
     private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil, history: Int? = nil, request: Int? = nil) {
         client.attached.insert(session.info.id)
+        client.behind[session.info.id] = nil
         // Watching is not using: this only sets the size if nobody else is attached.
         let changed = session.arbiter.update(client.id, size: size)
         if changed {
@@ -3927,7 +4143,9 @@ public final class HostServer {
         }
         send(.attached(session.info, request: request), to: client)
         let id = session.info.id
-        if let have, have <= session.written, session.written - have <= session.scrollback.count {
+        // A count out of range is no count (#271): `written - have` would
+        // stop the host.
+        if let have, have >= 0, have <= session.written, session.written - have <= session.scrollback.count {
             // A client that was here before, a phone after its network
             // changed: its terminal has all up to `have`, so only what came
             // since is sent, not a screen it would only draw again.
@@ -3935,11 +4153,16 @@ public final class HostServer {
             sendReplay(session.scrollback.suffix(session.written - have), of: session, from: have, above: nil, to: client)
             return
         }
-        // Anyone else gets the screen as it is now, with the lines above it,
-        // written out for the size the session has, on the session's own
-        // queue. To the client it is output like any other, and it counts on
-        // from the end of it as it would after the session's own; what the
-        // session writes meanwhile follows it.
+        sendScreen(of: session, history: history, to: client)
+    }
+
+    /// The screen as it is now, with the lines above it, written out for the
+    /// size the session has, on the session's own queue. To the client it is
+    /// output like any other, and it counts on from the end of it as it
+    /// would after the session's own; what the session writes meanwhile
+    /// follows it.
+    private func sendScreen(of session: Session, history: Int?, to client: Client) {
+        let id = session.info.id
         attachments += 1
         let attachment = attachments
         client.awaitingScreen[id] = (attachment, [])
@@ -4001,7 +4224,21 @@ public final class HostServer {
             queue.asyncAfter(deadline: .now() + typedAfter) { [weak session] in session?.process.write(Data(text.utf8)) }
         }
         let mirror = session.mirror
-        session.mirrorQueue.async { mirror.feed(data) }
+        let count = data.count
+        session.mirrorBacklog += count
+        largestMirrorBacklog = max(largestMirrorBacklog, session.mirrorBacklog)
+        // The emulator is slower than a program that prints without end:
+        // past the bound the program waits for it, as a terminal that cannot
+        // keep up makes it wait, rather than the host keeping all (#327).
+        if session.mirrorBacklog > Self.mirrorMostBehind { session.process.pauseReading() }
+        session.mirrorQueue.async { [weak self, weak session] in
+            mirror.feed(data)
+            self?.queue.async {
+                guard let session else { return }
+                session.mirrorBacklog -= count
+                if session.mirrorBacklog <= Self.mirrorMostBehind / 2 { session.process.resumeReading() }
+            }
+        }
         session.scrollback.append(data)
         session.written += data.count
         if session.info.schedule != nil { session.lastOutputAt = configuration.now() }
@@ -4015,6 +4252,13 @@ public final class HostServer {
         let frame = DataFrame(kind: .output, session: session.info.id, payload: data)
         for id in session.arbiter.clients {
             guard let client = clients[id] else { continue }
+            // A client that does not read is not sent more of it, and is
+            // caught up from here once it reads again (#270).
+            if client.behind[session.info.id] != nil { continue }
+            if client.unsent > Self.mostUnsent, client.awaitingScreen[session.info.id] == nil {
+                client.behind[session.info.id] = session.written - data.count
+                continue
+            }
             // After its screen, which is still being written out.
             if client.awaitingScreen[session.info.id] != nil {
                 client.awaitingScreen[session.info.id]?.output.append(frame)

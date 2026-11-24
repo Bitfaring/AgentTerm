@@ -374,6 +374,51 @@ public struct CommitGraphRow: Equatable, Sendable {
 /// The numbers of the Git side panel with what they count beside them
 /// (#50), the same on the Mac and the iPhone: a number alone said nothing
 /// to the owner.
+/// The list of commits a page at a time (#36), as both apps take it.
+public enum CommitPages {
+    public enum Taken: Equatable {
+        /// What is listed now, the page after what was.
+        case listed([CommitInfo])
+        /// The page repeats a commit already listed: commits were made
+        /// since the first page, which `--skip` counts from the top. The
+        /// list is read again from its first page (#300).
+        case stale
+        /// A page that does not follow what is listed: another list's.
+        case other
+    }
+
+    public static func add(_ page: [CommitInfo], skip: Int, to listed: [CommitInfo]) -> Taken {
+        guard skip == listed.count else { return .other }
+        let known = Set(listed.map(\.hash))
+        if page.contains(where: { known.contains($0.hash) }) { return .stale }
+        return .listed(listed + page)
+    }
+}
+
+/// What both apps say when another Mac cannot be asked, or closed the
+/// connection before it answered (#281, principle 3).
+public enum NotConnectedWords {
+    public static func notCommitted(_ mac: String) -> String { "\(mac) is not connected, so nothing was committed." }
+    public static func notSaved(_ mac: String) -> String {
+        "\(mac) is not connected, so the file was not saved. Its changes are kept: save again once it is back."
+    }
+    /// Anything else asked of a Mac that is not connected (#286).
+    public static func notDone(_ mac: String) -> String { "\(mac) is not connected, so nothing was done. Do it again once it is back." }
+    public static func notAnswered(_ mac: String) -> String {
+        "The connection to \(mac) closed before it answered what was asked: it may or may not have been done. Look again once it is back."
+    }
+}
+
+/// What both apps say about the git actions they ask about first.
+public enum GitQuestionWords {
+    /// A question about discarding, reverting, dropping a stash, deleting a
+    /// branch, aborting or rewriting a commit, closed because the folder on
+    /// show changed while it was open (#297): it is never answered in
+    /// another folder.
+    public static let closedForAnotherFolder =
+        "The question was closed and nothing was done: another folder is on show now. Ask again in the folder you meant."
+}
+
 public enum CountWords {
     /// "1 file", "3 files": the files of a list of changes.
     public static func files(_ count: Int) -> String { "\(count) \(count == 1 ? "file" : "files")" }

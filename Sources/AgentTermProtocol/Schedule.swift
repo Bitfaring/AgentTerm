@@ -190,21 +190,28 @@ public enum ScheduleTime: Codable, Equatable, Hashable, Sendable {
         case .daily(let hour, let minute):
             return calendar.nextDate(after: date, matching: DateComponents(hour: hour, minute: minute), matchingPolicy: .nextTime)
         case .weekly(let weekdays, let hour, let minute):
-            return weekdays.compactMap {
+            return weekdays.filter(Self.weekdays.contains).compactMap {
                 calendar.nextDate(after: date, matching: DateComponents(hour: hour, minute: minute, weekday: $0), matchingPolicy: .nextTime)
             }.min()
         case .limitReset:
             return nil
         case .every(let minutes, let from, let until):
             let step = max(minutes, 1)
-            let first = min(max(from ?? 0, 0), 24 * 60 - 1)
-            let last = min(max(until ?? 24 * 60 - 1, first), 24 * 60 - 1)
-            // Today's and then tomorrow's: the day after has one for sure.
-            for offset in 0...2 {
-                guard let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: date)) else { continue }
+            let day = 24 * 60
+            let first = min(max(from ?? 0, 0), day - 1)
+            var last = min(max(until ?? day - 1, 0), day - 1)
+            // A window that ends before it starts goes on past midnight, to
+            // that time of the next day, as its label says (#290).
+            if last < first { last += day }
+            // Yesterday's, whose end may be this morning, today's, then
+            // tomorrow's: the day after has one for sure.
+            for offset in -1...2 {
+                guard let start = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: date)) else { continue }
                 var minute = first
                 while minute <= last {
-                    if let moment = calendar.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: day), moment > date { return moment }
+                    let of = minute < day ? start : calendar.date(byAdding: .day, value: 1, to: start)
+                    let time = minute % day
+                    if let of, let moment = calendar.date(bySettingHour: time / 60, minute: time % 60, second: 0, of: of), moment > date { return moment }
                     minute += step
                 }
             }
@@ -220,6 +227,19 @@ public enum ScheduleTime: Codable, Equatable, Hashable, Sendable {
         return minutes == 1 ? "minute" : "\(minutes) minutes"
     }
 
+    /// The days of the week, 1 Sunday to 7 Saturday, as `weekly` names them.
+    public static let weekdays = 1...7
+
+    /// Why the host refuses a weekly schedule with no day, or with a day
+    /// out of `weekdays` (#291).
+    public static let daysRefusal = "Pick the days of the week it runs on, from Sunday to Saturday."
+
+    /// Why this time cannot be saved, nil when it can.
+    public var refusal: String? {
+        if case .weekly(let weekdays, _, _) = self, weekdays.isEmpty || !weekdays.allSatisfy(Self.weekdays.contains) { return Self.daysRefusal }
+        return nil
+    }
+
     /// In words: "Every day at 09:00", "Mon, Wed at 18:30".
     public func label(calendar: Calendar = .current) -> String {
         func time(_ hour: Int, _ minute: Int) -> String { String(format: "%02d:%02d", hour, minute) }
@@ -227,7 +247,8 @@ public enum ScheduleTime: Codable, Equatable, Hashable, Sendable {
         case .once(let moment): return "Once, \(moment.formatted(date: .abbreviated, time: .shortened))"
         case .daily(let hour, let minute): return "Every day at \(time(hour, minute))"
         case .weekly(let weekdays, let hour, let minute):
-            let names = weekdays.sorted().map { calendar.shortWeekdaySymbols[($0 - 1 + 7) % 7] }
+            // Only days that are days: one out of 1...7 is refused (#291).
+            let names = weekdays.filter(Self.weekdays.contains).sorted().map { calendar.shortWeekdaySymbols[$0 - 1] }
             return "\(names.joined(separator: ", ")) at \(time(hour, minute))"
         case .limitReset: return "When the account's limit starts over"
         case .every(let minutes, let from, let until):
@@ -366,7 +387,7 @@ public struct ScheduleOverview: Sendable {
         /// To the millisecond: a moment written into a message as seconds
         /// since 1970 and read again can come out a fraction of a
         /// microsecond off, and is still the same run.
-        public static func id(schedule: String, at: Date) -> String { schedule + "@" + String(Int((at.timeIntervalSince1970 * 1000).rounded())) }
+        public static func id(schedule: String, at: Date) -> String { schedule + "@" + String(Int(saturating: (at.timeIntervalSince1970 * 1000).rounded())) }
     }
 
     public let running: [Run]

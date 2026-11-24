@@ -1,3 +1,4 @@
+import AgentTermClient
 import AgentTermProtocol
 import XCTest
 
@@ -72,6 +73,32 @@ final class MoreWindowTests: MacUITestCase {
             // Each says what it is, whether it is allowed, and what it is for.
             app.wait(for: .containing(permission + ", "))
         }
+    }
+
+    /// PAIR-11 (#308): a paired device is removed only once that is
+    /// confirmed: Cancel keeps it; Remove takes it away.
+    func testRemovingADeviceAsksFirst() throws {
+        let link = pairingLink(state: state, port: port, name: "This Mac")
+        let info = try XCTUnwrap(URL(string: link).flatMap(PairingInfo.init(url:)), "not a pairing link: \(link.isEmpty ? "nothing" : "a link")")
+        let phone = AgentTermConnection(host: "127.0.0.1", port: port, credential: .pairingCode(info.code), clientName: "Test iPhone", kind: .iphone)
+        var paired = false
+        phone.onMessage = { if case .paired = $0 { paired = true } }
+        phone.connect()
+        clients.append(phone)
+        wait("the phone to pair") { paired }
+
+        app.press(.button("Pair Device"))
+        app.wait(for: .text("Test iPhone"), timeout: 10)
+        app.press(.button("Remove…"))
+        app.wait(for: .containing(DeleteWords.deviceTitle("Test iPhone")), timeout: 5)
+        shot("remove-asked")
+        app.press(.button("Cancel"))
+        app.waitGone(.containing(DeleteWords.deviceTitle("Test iPhone")), timeout: 5)
+        XCTAssertTrue(app.exists(.text("Test iPhone")), "the device was removed without being confirmed")
+
+        app.press(.button("Remove…"))
+        app.press(.button(DeleteWords.removeDevice), timeout: 5)
+        app.waitGone(.text("Test iPhone"), timeout: 10)
     }
 
     func testThePairingWindowShowsACodeOrWhatIsMissing() throws {

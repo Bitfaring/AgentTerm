@@ -40,6 +40,9 @@ enum NoticeContent {
     /// none of its own. `digest` names the whole state when `notice` holds a
     /// shortened one (from a push): a reply then waits until the Mac says
     /// the agent is still in it. `title` and `body` stand for a failure's.
+    /// Where a notification keeps what its buttons say, by their ids.
+    static let choicesKey = "choices"
+
     static func content(
         of notice: AgentNotice?, id: UInt64, mac: String, macName: String, digest: String? = nil, title: String? = nil, body: String? = nil
     ) -> UNMutableNotificationContent {
@@ -61,6 +64,10 @@ enum NoticeContent {
             content.body = notice.words ?? ""
             content.categoryIdentifier = notice.takesAReply ? replyCategory : openCategory
             info["session"] = Int(notice.session)
+            // What each button says, with the notification itself: the app,
+            // launched by a press, finds it there whatever categories iOS
+            // keeps by then (#277).
+            if !notice.buttons.isEmpty { info[choicesKey] = Dictionary(notice.buttons.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first }) }
             info["stateDigest"] = digest ?? PushNotice.digest(notice.state)
             if digest == nil { info["state"] = String(decoding: MessageCoding.encode(notice.state), as: UTF8.self) }
         } else {

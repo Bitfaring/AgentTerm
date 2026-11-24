@@ -113,7 +113,7 @@ public enum AccountUsageFetcher {
 
     private static func claude(_ environment: Environment) -> AccountUsage {
         // The keychain on a Mac; the file where Claude Code has no keychain.
-        let directory = environment.variables["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 } ?? environment.home + "/.claude"
+        let directory = AgentFolders.of(home: environment.home, own: environment.variables).claude
         let stored = environment.keychain("Claude Code-credentials", nil).map { Data($0.utf8) } ?? environment.file(directory + "/.credentials.json")
         guard let login = object(stored)?["claudeAiOauth"] as? [String: Any], let token = login["accessToken"] as? String, !token.isEmpty else {
             return failed("claude", "Claude Code is not signed in with a claude.ai account on this Mac.", environment, showsRemaining: false)
@@ -211,7 +211,7 @@ public enum AccountUsageFetcher {
     // MARK: Codex
 
     private static func codex(_ environment: Environment) -> AccountUsage {
-        let directory = environment.variables["CODEX_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? environment.home + "/.codex"
+        let directory = AgentFolders.of(home: environment.home, own: environment.variables).codex
         guard let tokens = object(environment.file(directory + "/auth.json"))?["tokens"] as? [String: Any],
             let token = tokens["access_token"] as? String, !token.isEmpty
         else { return failed("codex", "Codex is not signed in with a ChatGPT account on this Mac.", environment) }

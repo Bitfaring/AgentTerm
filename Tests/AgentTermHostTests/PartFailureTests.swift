@@ -86,6 +86,33 @@ final class PartFailureTests: XCTestCase {
     // MARK: - A session's program
 
     /// SES-23: a program that is killed is reported; its session ends.
+    /// HOST-16 (#273): schedules and paired devices the host cannot read
+    /// are put aside, not written over, and every client is told, in both
+    /// apps' banner and Inbox.
+    func testWhatTheHostCouldNotReadIsPutAsideAndSaid() throws {
+        let folder = root.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let schedules = folder.appendingPathComponent("schedules.json")
+        let devices = folder.appendingPathComponent("devices.json")
+        try Data(#"{"schedules":[{"of a later build":true}]}"#.utf8).write(to: schedules)
+        try Data(#"[{"of a later build":true}]"#.utf8).write(to: devices)
+        var configuration = HostServer.Configuration(
+            port: 0, token: token, listenOnTailscale: false, detectAgents: { [] }, foldersFile: folder.appendingPathComponent("folders.json"),
+            devicesFile: devices)
+        configuration.scheduleInterval = 0.2
+        let other = HostServer(configuration: configuration)
+        let port = try other.start()
+        defer { other.stop() }
+        let seen = Client(port: port, token: token)
+        waitUntil("told") { seen.failures.filter { $0.part == .savedState }.count == 2 }
+        XCTAssertEqual(Set(seen.failures.filter { $0.part == .savedState }.compactMap(\.name)), ["schedules", "paired devices"])
+        let headline = seen.failures.first { $0.name == "schedules" }?.headline() ?? ""
+        XCTAssertTrue(headline.hasPrefix("The host could not read its schedules at ") && headline.hasSuffix(", and started without them."), headline)
+        for file in [schedules, devices] {
+            XCTAssertEqual(try Data(contentsOf: file.appendingPathExtension("unreadable")).isEmpty, false, "\(file.lastPathComponent) was not kept aside")
+        }
+    }
+
     func testAProgramThatWasKilledIsReported() throws {
         let seconds = startWaitingSession(title: "build")
         for pid in pids(of: seconds) { kill(pid, SIGKILL) }

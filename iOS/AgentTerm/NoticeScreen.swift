@@ -103,11 +103,17 @@ struct NoticeScreen: View {
                 }
             }
         }
-        if let question = Self.question(of: notice.state), !question.choices.isEmpty {
-            part(Inbox.choices) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(question.choices.enumerated()), id: \.offset) { index, choice in
-                        Text("\(index + 1). \(choice)").textSelection(.enabled)
+        if let question = Self.question(of: notice.state) {
+            // Still asked: answered here, a choice or words of one's own,
+            // which the host types where the agent takes them (#320).
+            if let session = notice.session, let state = notice.state, notice.handled == nil, model.session(session)?.state == state {
+                NoticeAnswer(session: session, state: state, choices: question.choices)
+            } else if !question.choices.isEmpty {
+                part(Inbox.choices) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(question.choices.enumerated()), id: \.offset) { index, choice in
+                            Text("\(index + 1). \(choice)").textSelection(.enabled)
+                        }
                     }
                 }
             }
@@ -133,6 +139,42 @@ struct NoticeScreen: View {
             content()
                 .font(.subheadline)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// The answer to what an agent still asks, from the Inbox (#320): its
+/// choices, and a field for an answer of one's own, as the agent's own list
+/// offers one after them ("Type something.").
+private struct NoticeAnswer: View {
+    @EnvironmentObject private var model: PhoneModel
+    let session: SessionID
+    let state: AgentState
+    let choices: [String]
+    @State private var text = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !choices.isEmpty {
+                Text(Inbox.choices).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in
+                    Button("\(index + 1). \(choice)") { model.answer(session: session, to: state, text: choice) }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("notice-choice-\(index)")
+                }
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField(ComposeWords.answerField, text: $text, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...5)
+                    .accessibilityIdentifier("notice-answer")
+                Button(TurnResult.send) {
+                    model.answer(session: session, to: state, text: text)
+                    text = ""
+                }
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("notice-answer-send")
+            }
         }
     }
 }

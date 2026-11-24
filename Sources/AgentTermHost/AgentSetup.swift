@@ -53,6 +53,19 @@ public final class AgentSetup: @unchecked Sendable {
     /// The user's home, whose agents' configuration is written.
     let home: String
     let environment: [String: String]
+    /// Where the agents keep their configuration (#264): asked of the login
+    /// shell when first needed, never while the host starts, which must not
+    /// wait for the user's shell.
+    var folders: AgentFolders {
+        foldersLock.lock()
+        defer { foldersLock.unlock() }
+        if let known = knownFolders { return known }
+        let found = AgentFolders.of(home: home, own: environment)
+        knownFolders = found
+        return found
+    }
+    private var knownFolders: AgentFolders?
+    private let foldersLock = NSLock()
     private let run: Run
     private let locate: () -> [AgentInfo]
     private let prompt: (String) -> String?
@@ -69,13 +82,14 @@ public final class AgentSetup: @unchecked Sendable {
     public init(
         directory: URL, tool: String, home: String = HostEnvironment.homeDirectory, name: String = AppChannel.current.mcpServerName,
         environment: [String: String] = ProcessInfo.processInfo.environment, locate: @escaping () -> [AgentInfo] = AgentDetector.detect,
-        prompt: @escaping (String) -> String? = AgentSetup.savedPrompt, run: Run? = nil
+        prompt: @escaping (String) -> String? = AgentSetup.savedPrompt, run: Run? = nil, folders: AgentFolders? = nil
     ) {
         self.directory = directory
         self.tool = tool
         self.home = home
         self.name = name
         self.environment = environment
+        self.knownFolders = folders
         self.locate = locate
         self.prompt = prompt
         self.run = run ?? { AgentSetup.throughLoginShell($0, home: home) }
@@ -473,8 +487,7 @@ public final class AgentSetup: @unchecked Sendable {
     // MARK: Claude Code's status line
 
     private var claudeSettings: URL {
-        let configuration = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.claude"
-        return URL(fileURLWithPath: configuration).appendingPathComponent("settings.json")
+        URL(fileURLWithPath: folders.claude).appendingPathComponent("settings.json")
     }
 
     /// The status line the user had before AgentTerm's, which AgentTerm's
@@ -494,14 +507,20 @@ public final class AgentSetup: @unchecked Sendable {
             let command = line["command"] as? String
         else { return false }
         if command == statusLineCommand { return true }
-        return command.hasSuffix(" statusline") && command.contains("agenttermd") ? nil : false
+        return StatusLineRelay.isAgentTerms(command) ? nil : false
     }
 
     func setClaudeStatusLine() throws {
         // Settings that are not plain JSON are not rewritten.
         var settings = try Self.readJSON(claudeSettings) ?? [:]
-        if let current = settings["statusLine"] as? [String: Any], (current["command"] as? String) != statusLineCommand {
-            try Self.write(current, to: Self.previousStatusLine(in: directory))
+        // What it takes the place of, to run after its own; another build's
+        // relay never over the user's own, kept before (#259): set up again
+        // after the other build, each would keep the other's.
+        if let current = settings["statusLine"] as? [String: Any], let command = current["command"] as? String, command != statusLineCommand {
+            let previous = Self.previousStatusLine(in: directory)
+            let kept = (try? Self.readJSON(previous))?["command"] as? String
+            let keepsTheUsers = kept.map { !$0.isEmpty && !StatusLineRelay.isAgentTerms($0) } ?? false
+            if !(StatusLineRelay.isAgentTerms(command) && keepsTheUsers) { try Self.write(current, to: previous) }
         }
         settings["statusLine"] = ["type": "command", "command": statusLineCommand]
         try Self.write(settings, to: claudeSettings)
@@ -520,8 +539,7 @@ public final class AgentSetup: @unchecked Sendable {
     // MARK: Codex's hooks
 
     var codexConfig: URL {
-        let codexHome = environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) } ?? URL(fileURLWithPath: home).appendingPathComponent(".codex")
-        return codexHome.appendingPathComponent("config.toml")
+        URL(fileURLWithPath: folders.codex).appendingPathComponent("config.toml")
     }
 
     /// How the comment over each hook of this build's begins: it names the
@@ -608,18 +626,32 @@ public final class AgentSetup: @unchecked Sendable {
         return rest
     }
 
+    /// A configuration file's text, nil when there is none; one that is
+    /// there but cannot be read as text is not taken for none (#265): it
+    /// would be written over.
+    static func readText(_ file: URL) throws -> String? {
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        guard let data = FileManager.default.contents(atPath: file.path) else {
+            throw Failure(text: "\(file.path) could not be read, so it was not changed.")
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw Failure(text: "\(file.path) is not UTF-8 text, so it was not changed.")
+        }
+        return text
+    }
+
     func addCodexHooks(path: String) throws {
         let file = codexConfig
-        let before = try? String(contentsOf: file, encoding: .utf8)
+        let before = try Self.readText(file)
         var text = withoutCodexHooks(before ?? "")
         let block = Self.events(of: "codex").flatMap(codexHook)
         if !text.isEmpty { text += text.hasSuffix("\n") ? "\n" : "\n\n" }
         text += block.joined(separator: "\n") + "\n"
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(text.utf8).write(to: file, options: .atomic)
+        try Data(text.utf8).writeKeepingLinks(to: file)
         // Read by Codex as it reads its own, or put back as it was.
         if let checked = run([path, "features", "list"]), checked.status != 0 {
-            if let before { try? Data(before.utf8).write(to: file, options: .atomic) } else { try? FileManager.default.removeItem(at: file) }
+            if let before { try? Data(before.utf8).writeKeepingLinks(to: file) } else { try? FileManager.default.removeItem(at: file) }
             throw Failure(text: "Codex could not read its configuration with AgentTerm's hooks in it, so it was left as it was: " + checked.output.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
@@ -629,7 +661,7 @@ public final class AgentSetup: @unchecked Sendable {
         guard let text = try? String(contentsOf: file, encoding: .utf8) else { return }
         let rest = withoutCodexHooks(text)
         guard rest != text else { return }
-        try Data(rest.utf8).write(to: file, options: .atomic)
+        try Data(rest.utf8).writeKeepingLinks(to: file)
     }
 
     // MARK: Codex's server and the session's variable
@@ -682,7 +714,7 @@ public final class AgentSetup: @unchecked Sendable {
         while index < lines.count, !lines[index].trimmingCharacters(in: .whitespaces).hasPrefix("[") {
             if lines[index] == ours {
                 lines.remove(at: index)
-                try Data(lines.joined(separator: "\n").utf8).write(to: file, options: .atomic)
+                try Data(lines.joined(separator: "\n").utf8).writeKeepingLinks(to: file)
                 return
             }
             index += 1
@@ -697,9 +729,9 @@ public final class AgentSetup: @unchecked Sendable {
     func nameCodexServerVariable(path: String) throws {
         let file = codexConfig
         guard let before = try? String(contentsOf: file, encoding: .utf8), let text = withCodexServerVariable(before), text != before else { return }
-        try Data(text.utf8).write(to: file, options: .atomic)
+        try Data(text.utf8).writeKeepingLinks(to: file)
         guard codexServerVariable(path: path) == true else {
-            try? Data(before.utf8).write(to: file, options: .atomic)
+            try? Data(before.utf8).writeKeepingLinks(to: file)
             throw Failure(text: "Codex did not take the session's variable for AgentTerm's MCP server, so its configuration was left as it was.")
         }
     }
@@ -796,7 +828,7 @@ public final class AgentSetup: @unchecked Sendable {
     static func write(_ object: Any, to file: URL) throws {
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-        try (data + Data("\n".utf8)).write(to: file, options: .atomic)
+        try (data + Data("\n".utf8)).writeKeepingLinks(to: file)
     }
 
     /// What AgentTerm tells an agent, as the host wrote it for the servers.

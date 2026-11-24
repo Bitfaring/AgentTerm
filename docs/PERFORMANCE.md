@@ -171,6 +171,38 @@ large diff's or a large file's tab, 50 to 130 ms; and stalls of 20 to 35
 ms here and there. The figures are of a debug build; a release build was not
 measured, and neither was the iPhone app's main thread.
 
+### Open files following the disk (#304)
+
+While the Files tab is shown, the open files without edits are looked at
+every 5 seconds, to follow what an agent wrote meanwhile. Measured on
+2026-11-24 with a debug build, in the same run (`MEASURE=1
+scripts/test-mac.sh MainThreadMeasurements`): twelve text files of 2 MB
+open, left alone for 12 seconds, then each of them changed on the disk.
+"Before" is the same build with the look of 0.15.0 put back for the run:
+every open file read and compared on the main thread at each look.
+
+| What | Before | After |
+|---|---|---|
+| Twelve files of 2 MB open, the disk followed for 12 seconds | once, 18 ms | never |
+| Those twelve files changed on the disk | 3 times, the longest 78 ms, 120 ms in all | twice, the longest 74 ms, 90 ms in all |
+
+What was changed: a file is read only when its modification date or its
+size is another than when it was last looked at (`DiskStamp`), and the
+reading, the comparing and the look at the folders are off the main
+thread (`DiskFollow`); a pipe or a device is never read to follow it, and
+a look is not started while the last one is still on its way, so a volume
+that does not answer holds one look, not one more every 5 seconds. The
+files open when the app starts are read off the main thread too. What is
+left when files change is the editor taking the file's new text, on the
+main thread as any text it is given; the reading of it is not.
+
+On this Mac's own disk the reading of twelve unchanged files took little
+of the main thread (18 ms once in 12 seconds); what the change is for is a
+slow or stuck volume, where every look read every file and the window
+waited for it. Such a volume was not tried: a network volume that stops
+answering was not at hand, and a pipe, which never answers, is what the
+unit tests read instead (`DiskFollowTests`).
+
 ### Typing into a large file (#104)
 
 By 2026-11-16 every letter typed into the 5 MB file held the window up,
@@ -278,3 +310,21 @@ These need what a test on this Mac does not have, and are still to do for
   between Macs.
 - **Scrolling a list of thousands of changes**, and the main thread of the
   iPhone app; the Mac app's is above.
+
+## A program that prints without end (PERF-12, #270, #327)
+
+`AGENTTERM_MEASURE=1 swift test --filter testTheHostsMemoryWithAClientThatDoesNotRead`
+(`MEASURE_READS=1` for a client that reads): the real host, a session running
+`yes`, its footprint every 10 seconds for 30 s, then 30 s more with the
+program stopped. On 2026-11-23:
+
+| Build | Client | 0 s | 10 s | 30 s | stopped, 30 s after |
+|---|---|---|---|---|---|
+| before #270 | does not read | 115 MB | 579 MB | the host was gone | |
+| #270 only | reads | 42 MB | 158 MB | 391 MB | 276 MB |
+| #270 and #327 | reads | 24 MB | 25 MB | 26 MB | 25 MB |
+| #270 and #327 | does not read | 47 MB | 47 MB | 47 MB | 47 MB |
+
+The first growth was what waited for a client that does not read (#270);
+the second, what waited for the session's screen emulator, which is slower
+than such a program (#327): the program now waits for it.

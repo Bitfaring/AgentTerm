@@ -1,5 +1,6 @@
 import AgentTermClient
 import AgentTermProtocol
+import Network
 import XCTest
 
 @testable import AgentTermHost
@@ -269,6 +270,72 @@ final class PerformanceMeasurements: XCTestCase {
     private func resident(_ pid: Int32) -> Int {
         let result = Subprocess.run("/bin/ps", ["-o", "rss=", "-p", String(pid)], timeout: 5)
         return Int(String(decoding: result?.output ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    }
+
+    /// PERF-12 (#270): the real host, with a client that signed in, has a
+    /// session that prints without end, and does not read. Its footprint is
+    /// weighed every 10 seconds for a minute: what it keeps for that client.
+    func testTheHostsMemoryWithAClientThatDoesNotRead() throws {
+        let tool = Bundle(for: PerformanceMeasurements.self).bundleURL.deletingLastPathComponent().appendingPathComponent("agenttermd")
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: tool.path))
+        let state = root.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        let token = "measure-token-0123456789abcdef0123456789"
+        try token.write(to: state.appendingPathComponent("token"), atomically: true, encoding: .utf8)
+        let port = UInt16.random(in: 47_000..<48_000)
+        let host = Process()
+        host.executableURL = tool
+        host.arguments = ["--port", String(port), "--local-only", "--no-account-usage", "--home", root.path, "--agents", root.path]
+        var environment = OwnEnvironment.withoutAgentTerms
+        environment["AGENTTERM_STATE_DIR"] = state.path
+        environment["HOME"] = root.path
+        environment["ZDOTDIR"] = root.path
+        environment["CFFIXED_USER_HOME"] = root.path
+        host.environment = environment
+        host.standardOutput = FileHandle.nullDevice
+        host.standardError = FileHandle.nullDevice
+        try host.run()
+        defer { host.terminate() }
+        Thread.sleep(forTimeInterval: 2)
+
+        // A client that says hello, starts a session that prints, and then
+        // never reads: a WebSocket of its own, with no receive.
+        let webSocket = NWProtocolWebSocket.Options()
+        let parameters = NWParameters.tcp
+        parameters.defaultProtocolStack.applicationProtocols.insert(webSocket, at: 0)
+        // A URL: the handshake needs its host header and path.
+        let connection = NWConnection(to: .url(URL(string: "ws://127.0.0.1:\(port)/")!), using: parameters)
+        let ready = DispatchSemaphore(value: 0)
+        connection.stateUpdateHandler = { if case .ready = $0 { ready.signal() } }
+        connection.start(queue: DispatchQueue(label: "measure.sleeper"))
+        XCTAssertEqual(ready.wait(timeout: .now() + 5), .success)
+        defer { connection.cancel() }
+        func send(_ message: ClientMessage) {
+            let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+            connection.send(content: MessageCoding.encode(message), contentContext: .init(identifier: "m", metadata: [metadata]), completion: .idempotent)
+        }
+        send(.hello(token: token, client: "sleeper"))
+        send(.create(CreateRequest(command: "exec yes 'a line a program prints, again and again, without end'", cwd: root.path)))
+        // MEASURE_READS: a client that reads, to tell the two apart.
+        if ProcessInfo.processInfo.environment["MEASURE_READS"] != nil {
+            func receive() { connection.receiveMessage { _, _, _, error in if error == nil { receive() } } }
+            receive()
+        }
+        Thread.sleep(forTimeInterval: 2)
+        let start = footprint(host.processIdentifier)
+        report("the host, a client that does not read, at 0 s", "\(start / 1024) MB its own")
+        for seconds in stride(from: 10, through: 30, by: 10) {
+            Thread.sleep(forTimeInterval: 10)
+            report("the host, a client that does not read, at \(seconds) s", "\(footprint(host.processIdentifier) / 1024) MB its own")
+        }
+        // The program stopped (SIGSTOP to every yes of the test's home):
+        // what the host holds then is what it has not worked through yet.
+        _ = Subprocess.run("/usr/bin/pkill", ["-STOP", "-f", "a line a program prints"], timeout: 5)
+        defer { _ = Subprocess.run("/usr/bin/pkill", ["-KILL", "-f", "a line a program prints"], timeout: 5) }
+        for seconds in stride(from: 10, through: 30, by: 10) {
+            Thread.sleep(forTimeInterval: 10)
+            report("the host, its program stopped, \(seconds) s after", "\(footprint(host.processIdentifier) / 1024) MB its own")
+        }
     }
 
     /// The real host, on a state folder and port of its own: its memory at

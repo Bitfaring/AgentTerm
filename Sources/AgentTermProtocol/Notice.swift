@@ -62,8 +62,11 @@ public struct Notice: Codable, Equatable, Sendable, Identifiable {
     /// How long the host keeps them, and a device's Inbox too.
     public static let kept: TimeInterval = 30 * 24 * 3600
 
-    /// Handled in a way that means it was looked at: read too.
-    public static func reads(_ how: Handled.How) -> Bool { how != .movedOn }
+    /// Whether being handled so makes it read: every way does (#321, the
+    /// owner's decision of 2026-11-23), moving on too. An agent that
+    /// waits goes on only once someone answered it, often in its session;
+    /// one that asks something else has a notice of its own for that.
+    public static func reads(_ how: Handled.How) -> Bool { true }
 
     /// What a notice about an agent says and offers: the words of #22.
     public var agentNotice: AgentNotice? {
@@ -78,6 +81,19 @@ public struct Notice: Codable, Equatable, Sendable, Identifiable {
 
     /// Whether it is a notification too, or a banner and an Inbox item
     /// only: every agent's, and a failure that stopped work.
+    /// How long an agent's notice waits before it is a notification, on
+    /// the iPhone and the Mac (#322, the owner's decision of 2026-11-23):
+    /// one the user acted on meanwhile is handled, and none is shown.
+    public static let alertDelay: TimeInterval = 10
+
+    /// Whether its notification waits `alertDelay`: an agent's does; a
+    /// failure that stopped work, which nothing the user does takes away,
+    /// is shown at once.
+    public var waitsToAlert: Bool {
+        if case .agent = kind { return true }
+        return false
+    }
+
     public var alerts: Bool {
         switch kind {
         case .agent: return true
@@ -174,11 +190,20 @@ public enum NoticeWords {
 /// sentences for the user; these few are codes.
 public enum HostErrorWords {
     public static let olderHost = "The AgentTerm on the Mac is from an older release and cannot do this. Update it, and restart its host."
+    /// What a client says, once a connection, when the host sent something
+    /// it could not read (#292); it goes on with what it can.
+    public static let unreadableMessage = "unreadable message"
+    public static let unreadable = "Something the Mac sent could not be read, so what it said is not shown. Restart the host if something looks wrong."
+    /// The host's answer to a message larger than it joins (#289).
+    public static let tooLargeMessage = "message too large"
+    public static let tooLarge = "What was sent to the Mac was larger than 64 MB, so it was not done. Send less at once: a smaller file or picture."
 
     public static func words(for text: String) -> String {
         switch text {
         case "malformed message": return olderHost
         case "not allowed": return "Only the Mac's own app can do this."
+        case unreadableMessage: return unreadable
+        case tooLargeMessage: return tooLarge
         default: return text
         }
     }

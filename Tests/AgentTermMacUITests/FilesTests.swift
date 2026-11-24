@@ -1,4 +1,5 @@
 import AgentTermProtocol
+import AppKit
 import XCTest
 
 /// The Files tab of the Mac app and the files open in the middle pane.
@@ -81,6 +82,40 @@ final class FilesTests: MacUITestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         XCTAssertEqual(app.value(of: editor), saved + "mine\n", "the edits went with the disk's change")
         XCTAssertTrue(app.exists(.button("Save")))
+    }
+
+    /// Asks the app to quit as ⌘Q and the Dock's Quit do: through the
+    /// system, so that it may answer.
+    private func askToQuit() {
+        guard let pid = app.process?.processIdentifier else { return XCTFail("no app") }
+        XCTAssertTrue(NSRunningApplication(processIdentifier: pid)?.terminate() == true, "the app was not asked to quit")
+    }
+
+    /// FILE-15 (#298): quitting with unsaved changes asks first; Cancel
+    /// keeps the app and the edits, Quit Without Saving quits.
+    func testQuittingWithUnsavedChangesAsksFirst() throws {
+        app.press(.button("Files"))
+        app.press(.button("notes.txt"), timeout: 15)
+        let editor = MacDriver.Query.role(kAXTextAreaRole as String)
+        let saved = "first line\nsecond line\n"
+        wait("the file's text in the editor") { self.app.value(of: editor) == saved }
+        app.write(saved + "not saved\n", into: editor)
+        app.wait(for: .button("Save"))
+
+        askToQuit()
+        app.wait(for: .containing("Quit without saving notes.txt?"), timeout: 5)
+        // The alert grows in from a point: drawn whole after a moment.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        shot("asked", topmost: true)
+        app.press(.button("Cancel"))
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(app.process?.isRunning == true, "the app quit with unsaved changes")
+        XCTAssertEqual(app.value(of: editor), saved + "not saved\n", "the edits were lost")
+
+        askToQuit()
+        app.press(.button("Quit Without Saving"), timeout: 5)
+        wait("the app to quit", timeout: 10) { self.app.process?.isRunning != true }
+        XCTAssertEqual(read("notes.txt"), saved, "nothing was saved")
     }
 
     /// FIND-9 (#45): Go to File finds a file by part of its name and opens

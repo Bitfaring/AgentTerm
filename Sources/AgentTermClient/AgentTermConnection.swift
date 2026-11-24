@@ -36,6 +36,8 @@ public final class AgentTermConnection: @unchecked Sendable {
     private let queue = DispatchQueue(label: "agentterm.client")
     /// Touched on the main queue only.
     private var closed = false
+    /// It was said on this connection that a message could not be read.
+    private var saidUnreadable = false
     /// Joins a large message sent in pieces (`MessageParts`).
     private var joiner = MessageParts.Joiner()
 
@@ -45,6 +47,8 @@ public final class AgentTermConnection: @unchecked Sendable {
     /// these wait, and follow the greeting in the order they were sent.
     private var waiting: [(data: Data, opcode: NWProtocolWebSocket.Opcode)]? = []
     private let waitingLock = NSLock()
+    /// Numbers the large messages sent in pieces; under `waitingLock`.
+    private var nextMessage: UInt32 = 0
     /// The protocol the host said it is at, in its welcome; nil until then.
     /// Under `waitingLock`.
     private var hostProtocol: Int?
@@ -148,7 +152,19 @@ public final class AgentTermConnection: @unchecked Sendable {
         let host = hostProtocol
         waitingLock.unlock()
         if let host, !message.isKnown(toHostAt: host) { return }
-        send(MessageCoding.encode(message), opcode: .text)
+        let data = MessageCoding.encode(message)
+        // Larger than a frame may be: in pieces, one after the other, as
+        // the host sends its own (#289); a frame over the host's 4 MB
+        // closed the connection without a word.
+        waitingLock.lock()
+        let id = nextMessage
+        nextMessage &+= 1
+        waitingLock.unlock()
+        if let frames = MessageParts.frames(for: data, id: id) {
+            for frame in frames { send(frame.encoded(), opcode: .binary) }
+            return
+        }
+        send(data, opcode: .text)
     }
 
     public func sendInput(_ data: Data, to session: SessionID) {
@@ -220,6 +236,15 @@ public final class AgentTermConnection: @unchecked Sendable {
     }
 
     /// Anything from the host is a sign of life, also a part of a message.
+    /// A message from the host that could not be read is said, once a
+    /// connection, as an error both apps show in their banner (#292):
+    /// before, it was dropped and nothing said so.
+    private func couldNotRead() {
+        guard !saidUnreadable else { return }
+        saidUnreadable = true
+        deliver { if !self.closed { self.onMessage?(.error(HostErrorWords.unreadableMessage)) } }
+    }
+
     private func heard() {
         lastHeard = .now()
         pingSentAt = nil
@@ -259,14 +284,20 @@ public final class AgentTermConnection: @unchecked Sendable {
                 if let data, let message = MessageCoding.decode(ServerMessage.self, from: data) {
                     self.noteProtocol(of: message)
                     self.deliver { if !self.closed { self.onMessage?(message) } }
+                } else {
+                    self.couldNotRead()
                 }
             case .binary:
                 guard let data, let frame = DataFrame(decoding: data) else { break }
                 if frame.kind == .output {
                     self.deliver { if !self.closed { self.onOutput?(frame.session, frame.payload) } }
-                } else if let whole = self.joiner.add(frame), let message = MessageCoding.decode(ServerMessage.self, from: whole) {
+                } else if let whole = self.joiner.add(frame) {
                     // A large message, sent in pieces.
-                    self.deliver { if !self.closed { self.onMessage?(message) } }
+                    if let message = MessageCoding.decode(ServerMessage.self, from: whole) {
+                        self.deliver { if !self.closed { self.onMessage?(message) } }
+                    } else {
+                        self.couldNotRead()
+                    }
                 }
             case .close:
                 self.finish(reason: nil)

@@ -303,6 +303,11 @@ while let argument = arguments.popFirst() {
 // only, as the tests' own hosts do (`--local-only`): the app is given
 // this, and its host has the app's environment (#179).
 if ProcessInfo.processInfo.environment["AGENTTERM_LOCAL_ONLY"] == "1" { listenOnTailscale = false }
+// For the tests of the apps: an address taken for Tailscale's, listened on
+// as it would be. One this Mac does not have (127.0.0.2) cannot be listened
+// on, for the banner that says so to be seen (#274). Not in the help.
+let tailscaleStandIn = ProcessInfo.processInfo.environment["AGENTTERM_TAILSCALE_ADDRESS"].flatMap { $0.isEmpty ? nil : $0 }
+if tailscaleStandIn != nil { listenOnTailscale = true }
 
 let server: HostServer
 do {
@@ -311,9 +316,11 @@ do {
         port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home,
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
+    if let tailscaleStandIn { configuration.tailscaleAddress = { tailscaleStandIn } }
     configuration.release = release
     configuration.revision = revision
     configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)
+    configuration.promptsDirectory = HostEnvironment.supportDirectory
     // Notices through Apple for the devices that are away (#66): the
     // released host's relay, none for a development build. A test names a
     // stand-in of its own. Not in the help.
@@ -322,6 +329,8 @@ do {
     configuration.noticesFile = HostEnvironment.noticesFile
     // For the tests of the apps, which do not wait the whole grace. Not in the help.
     if let grace = ProcessInfo.processInfo.environment["AGENTTERM_LINK_GRACE"].flatMap(TimeInterval.init) { configuration.linkGrace = grace }
+    // How long a notice waits to be a notification (#322), for the tests of the apps. Not in the help.
+    if let delay = ProcessInfo.processInfo.environment["AGENTTERM_ALERT_DELAY"].flatMap(TimeInterval.init) { configuration.alertDelay = delay }
     // Gives the agents' sessions the MCP server, and takes out what earlier
     // builds put in the agents' own configuration, for this Mac's host
     // only: not for one with a state folder of its own (a test, a trial

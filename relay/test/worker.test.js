@@ -223,3 +223,21 @@ test("RELAY-11 registrations are limited by the caller's address", async () => {
   assert.match((await third.json()).reason, /too many registrations/);
   assert.equal((await call("/v1/register", { token: TOKEN }, "203.0.113.9")).status, 200, "another address is not held back");
 });
+
+test("RELAY-12 pushes are limited by the caller's address too, whatever the tokens (#312)", async () => {
+  const counts = {};
+  env.CALLER_LIMIT = { limit: async ({ key }) => ({ success: (counts[key] = (counts[key] ?? 0) + 1) <= 2 }) };
+  const payload = "QUJD";
+  // Tickets for three made-up tokens, pushed from one address.
+  const tokens = ["b", "c", "d"].map((letter) => letter.repeat(64));
+  const tickets = [];
+  for (const token of tokens) tickets.push(await ticket(token));
+  const answers = [];
+  for (const [index, token] of tokens.entries()) {
+    const { ticket: t, expires } = tickets[index];
+    answers.push((await call("/v1/push", { token, ticket: t, expires, payload }, "198.51.100.8")).status);
+  }
+  assert.deepEqual(answers, [200, 200, 429], "a caller pushed to as many devices as it had tickets for");
+  const { ticket: t, expires } = tickets[0];
+  assert.equal((await call("/v1/push", { token: tokens[0], ticket: t, expires, payload }, "203.0.113.10")).status, 200, "another address is not held back");
+});

@@ -90,7 +90,7 @@ public struct ConversationDetails: Codable, Equatable, Sendable {
 
     /// "2 h 5 min", "12 min", "40 s".
     public static func words(for duration: TimeInterval) -> String {
-        let seconds = Int(duration.rounded())
+        let seconds = Int(saturating: duration.rounded())
         if seconds < 60 { return "\(seconds) s" }
         let minutes = seconds / 60
         if minutes < 60 { return "\(minutes) min" }
@@ -254,7 +254,7 @@ public struct HistoryFilter: Equatable, Sendable {
                 byDay[day, default: []].append(conversation)
             }
             for day in order {
-                groups.append(Group(id: "day:\(Int(day.timeIntervalSince1970))", title: Self.title(of: day, now: now, calendar: calendar), conversations: byDay[day] ?? []))
+                groups.append(Group(id: "day:\(Int(saturating: day.timeIntervalSince1970))", title: Self.title(of: day, now: now, calendar: calendar), conversations: byDay[day] ?? []))
             }
         }
         return groups

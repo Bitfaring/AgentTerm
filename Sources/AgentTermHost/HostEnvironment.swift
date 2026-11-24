@@ -427,21 +427,47 @@ enum Subprocess {
         return signal == 0 ? .exited((status >> 8) & 0xff) : .signalled(signal)
     }
 
-    /// - Parameter mergeErrors: also capture what the command writes to standard error.
+    /// How long a command that reached its time limit, and everything it
+    /// started, is given to end at SIGTERM before it is killed, and its
+    /// output is read no more (#261).
+    static let graceAfterTimeout: TimeInterval = 1
+
+    /// - Parameters:
+    ///   - mergeErrors: also capture what the command writes to standard error.
+    ///   - input: what it reads, instead of nothing.
+    ///   - forTheHost: whether it is one of the host's own commands, given
+    ///     `forTheHostsOwnCommands`, or the user's, given `environment` as
+    ///     it is.
     ///
     /// Started with `posix_spawn` and waited for with `waitpid`: Foundation's
     /// `Process` took some 70 ms to start a command and to see it end, which
     /// a git action or a look at the changes runs several of (#21).
+    ///
+    /// The time limit holds (#261): the command runs in a session and a
+    /// process group of its own, with no terminal, and at its limit the
+    /// whole group is asked to end, then killed a moment later; its output
+    /// is read no longer than that, also while a program it left behind
+    /// in another group keeps it open.
     static func run(
         _ executable: String, _ arguments: [String], cwd: String? = nil, timeout: TimeInterval = 10, mergeErrors: Bool = false,
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil, input: Data? = nil, forTheHost: Bool = true
     ) -> Result? {
         var pipe: [Int32] = [0, 0]
         guard Darwin.pipe(&pipe) == 0 else { return nil }
+        var stdin: [Int32] = [-1, -1]
+        if input != nil, Darwin.pipe(&stdin) != 0 {
+            close(pipe[0])
+            close(pipe[1])
+            return nil
+        }
         var actions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
-        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        if input != nil {
+            posix_spawn_file_actions_adddup2(&actions, stdin[0], STDIN_FILENO)
+        } else {
+            posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        }
         posix_spawn_file_actions_adddup2(&actions, pipe[1], STDOUT_FILENO)
         if mergeErrors {
             posix_spawn_file_actions_adddup2(&actions, pipe[1], STDERR_FILENO)
@@ -452,12 +478,13 @@ enum Subprocess {
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
-        // Nothing of this process's but the three is passed on.
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+        // Nothing of this process's but the three is passed on; a session
+        // of its own, whose group can be ended as one.
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSID))
 
         let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
         var given = environment ?? ProcessInfo.processInfo.environment
-        HostEnvironment.forTheHostsOwnCommands(&given)
+        if forTheHost { HostEnvironment.forTheHostsOwnCommands(&given) }
         let envp: [UnsafeMutablePointer<CChar>?] = given.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {
             argv.forEach { free($0) }
@@ -466,29 +493,61 @@ enum Subprocess {
         var pid: pid_t = 0
         let spawned = posix_spawn(&pid, executable, &actions, &attributes, argv, envp)
         close(pipe[1])
+        if input != nil { close(stdin[0]) }
         guard spawned == 0 else {
             close(pipe[0])
+            if input != nil { close(stdin[1]) }
             return nil
         }
+        if let input {
+            let writing = stdin[1]
+            // Set off on its own: a command that does not read it all must
+            // not stop its output from being read.
+            // A command that ends without reading it all is no signal here.
+            _ = fcntl(writing, F_SETNOSIGPIPE, 1)
+            DispatchQueue.global().async {
+                input.withUnsafeBytes { buffer in
+                    var offset = 0
+                    while offset < buffer.count {
+                        let n = Darwin.write(writing, buffer.baseAddress! + offset, buffer.count - offset)
+                        if n > 0 { offset += n } else if n < 0 && errno == EINTR { continue } else { break }
+                    }
+                }
+                close(writing)
+            }
+        }
 
-        // Stopped when it takes too long; never once it was waited for, when
-        // its number may be another program's.
+        // Stopped when it takes too long, with its group; never once it was
+        // reaped, when its number may be another program's.
         let lock = NSLock()
-        var ended = false
+        var reaped = false
         var stopped = false
         let timer = DispatchWorkItem {
             lock.lock()
             defer { lock.unlock() }
-            if !ended {
-                stopped = true
-                Subprocess.end(pid)
+            guard !reaped else { return }
+            stopped = true
+            kill(-pid, SIGTERM)
+            kill(-pid, SIGCONT)
+            DispatchQueue.global().asyncAfter(deadline: .now() + graceAfterTimeout) {
+                lock.lock()
+                defer { lock.unlock() }
+                if !reaped { kill(-pid, SIGKILL) }
             }
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
-        // Read before waiting so a full pipe cannot stall the child.
+        // Read before waiting so a full pipe cannot stall the child; no
+        // longer than the limit and the grace after it.
+        let lastRead = Date().addingTimeInterval(timeout + graceAfterTimeout + 0.5)
         var output = Data()
         var buffer = [UInt8](repeating: 0, count: 65536)
         while true {
+            let left = lastRead.timeIntervalSinceNow
+            guard left > 0 else { break }
+            var ready = pollfd(fd: pipe[0], events: Int16(POLLIN), revents: 0)
+            let polled = poll(&ready, 1, Int32(min(left * 1000, Double(Int32.max)).rounded(.up)))
+            if polled < 0 && errno == EINTR { continue }
+            if polled <= 0 { break }
             let count = read(pipe[0], &buffer, buffer.count)
             if count > 0 {
                 output.append(buffer, count: count)
@@ -500,11 +559,11 @@ enum Subprocess {
         }
         close(pipe[0])
         // Seen to end but not reaped, so that its number is still its own
-        // while the timer may yet signal it; reaped once the timer cannot.
+        // while the timer may yet signal its group; reaped once it cannot.
         var info = siginfo_t()
         while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) < 0 && errno == EINTR {}
         lock.lock()
-        ended = true
+        reaped = true
         let timedOut = stopped
         lock.unlock()
         timer.cancel()

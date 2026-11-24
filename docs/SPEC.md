@@ -190,7 +190,9 @@ says names the device it runs on.
   account limit starts over. On or off without being deleted. Made
   and changed in the Mac's Schedules, a place of the window, and the
   iPhone's Schedules tab; the host keeps them and runs them, with
-  the app closed too.
+  the app closed too. Deleting one asks first, on both (from its row's
+  menu or its editor on the Mac, from its editor on the iPhone): its runs
+  go with it, on every device.
 - **Schedules** shows them in three groups, the same on both: **Running**,
   the runs whose session still runs, each opening its session; **Scheduled**,
   every schedule, the next to run first, then those waiting for a limit,
@@ -274,7 +276,10 @@ happened; the Live Activity shows the host's state now (below).
   told again, one that keeps waiting is not); and a failure that stopped
   work: the host or a session's program stopped, a schedule's run did not
   start or was stopped. Other failures (a push that could not be sent, the
-  Mac not kept awake, usage not saved) are banners and Inbox items only.
+  Mac not kept awake, usage not saved, the host not listening on its
+  Tailscale address, #274) are banners and Inbox items only. The last is
+  also said on the Mac's pairing sheet, and goes by itself once the host
+  listens again.
 - **Who is told: every device, and every one sounds**: the Mac and each
   paired iPhone or iPad, whether someone is at the Mac or not. The host
   makes each notice once for all of them. The session on an iPhone's or
@@ -282,19 +287,20 @@ happened; the Live Activity shows the host's state now (below).
   is left out, the one in front included (#180): being in front does not
   make it seen, something the user does there does (choosing it, typing
   into it, the notification).
-- **When it is a notification** (#180; the wait taken away by the owner
-  on 2026-11-22, #234): every notice is in each device's Inbox, and floats
-  over the Mac's window, at once; it is a notification on the Mac and on
-  every iPhone or iPad **at once and at the same moment**, which the host
-  says: through Apple to each one that is away, whether someone is at the
-  Mac or not, an agent that is done as much as one that asks. Nothing
-  waits to see whether it is handled or read first; what is handled or
-  read afterwards on one device is taken back from the others. A host
-  that starts again shows nothing twice.
+- **When it is a notification** (#180; #234; the wait put back by the
+  owner on 2026-11-23, #322): every notice is in each device's Inbox, and
+  floats over the Mac's window, at once. An agent's notice (it asks, or is
+  done) is a notification on the Mac and on every iPhone or iPad **10
+  seconds later and at the same moment**, which the host says: through
+  Apple to each one that is away, whether someone is at the Mac or not;
+  one the user acted on meanwhile (answered it, opened its session, its
+  agent went on) is never a notification. A failure that stopped work is
+  one at once. What is handled or read afterwards on one device is taken
+  back from the others. A host that starts again shows nothing twice.
 - **How they sound** (#233, decided by the owner on 2026-11-22): every
   notification is of something that needs the user (an agent asks or is
-  done, a part failed and stopped work), so each comes at once, with
-  sound, and is **time-sensitive** on the iPhone: shown during a Focus,
+  done, a part failed and stopped work), so each comes with sound
+  (an agent's after its 10 seconds, #322), and is **time-sensitive** on the iPhone: shown during a Focus,
   as iOS lets the user allow for the app. An agent that stops asking
   brings no new notification: the earlier one is taken back.
 - **Handled on one, gone from all**: answered, opened or dismissed (from
@@ -302,7 +308,9 @@ happened; the Live Activity shows the host's state now (below).
   on, and the notification goes from every other device.
 - **Read on one, read on all** (#180, replacing what #66 decided): a
   notice read on one device (picked in the Inbox, its session opened, its
-  notification tapped, answered or dismissed) is read on every device, and
+  notification tapped, answered or dismissed), or whose agent moved on
+  (#321: answered in its session, asked something else, its session ended),
+  is read on every device, and
   its notification goes from all of them. What is read while a device is
   not connected is said to the host once it is.
 - **On the iPhone and the iPad**, iOS's own notification banner, also
@@ -426,6 +434,12 @@ happened; the Live Activity shows the host's state now (below).
   of the two was chosen is kept for the next item, on that device, apart
   from History's. What an agent asks and what a failure says stay as
   written.
+- **What an agent asks is answered in the Inbox too** (#320), on the Mac
+  and the iPhone, while it still asks: each of its choices is a button,
+  and a field takes an answer in words of one's own, as the agent's own
+  list offers one after its choices (Claude Code's "Type something."); the
+  host types it there. Once the agent no longer asks, the choices are
+  listed as text only.
 - **What a turn came to** (#71): an agent that is done shows, in the
   Inbox, what it was asked, what it answered, the commands it ran with
   their exit codes, and the files of its folder that changed while it
@@ -1582,6 +1596,18 @@ has dismissed it on one device:
   (`StateWords.notStarted`, #202); nothing waits to start later. A Shells
   tab's part is not on screen then, since the window shows why it is not
   connected in place of the tabs.
+- On the iPhone, what would change a Mac that is not connected (a schedule
+  saved, run, stopped, duplicated or deleted; a file staged, discarded,
+  made, renamed or put in the Trash; a stash, a branch, a commit, a save)
+  is not sent: it says at once that nothing was done
+  (`NotConnectedWords`), and what was being written stays (#286, #281).
+- On the iPhone, Send in a terminal while its Mac is not connected keeps
+  the message in the field and says under it why it was not sent
+  (`ComposeWords.notConnected`). Keys typed then, in the terminal or on the
+  key bar, are dropped, not kept to reach the agent later and out of turn,
+  and that is said once each time the connection is lost
+  (`ComposeWords.keysNotSent`); the Mac app does the same for a terminal of
+  another Mac, or of its own host, while it is not connected (#280).
 
 A stop that was asked for (Restart Host, replacing another copy's host,
 logging out) is not reported.
@@ -1632,7 +1658,10 @@ and touch up what an agent wrote without leaving the app.
   picking a session brings the terminal back to the front.
 - Text opens in an editor with syntax coloring for the common languages. It
   saves with ⌘S, and a dot on the tab marks unsaved changes. Closing a tab
-  with unsaved changes asks first.
+  with unsaved changes asks first. A file with unsaved changes, or a
+  folder holding one, is not put in the Trash: the app says to save or
+  discard them first. On another Mac an open file moves with a rename only
+  once that Mac took the new name.
 - Markdown opens as a rendered preview, with a switch to the source, laid
   out as GitHub shows it, tables included, on the Mac and the iPhone
   (#126). Code blocks in it are colored, and blocks marked `mermaid` are
@@ -1686,7 +1715,8 @@ edits here is not merged; saving overwrites it.
   or after the screen closed is worth nothing.
 - Pairing gives the iPhone a token of its own, kept in its Keychain. The Mac
   lists the paired devices, with when each last connected, and can remove
-  one. A removed device is disconnected at once and has to pair again.
+  one, asked first; the iPhone removes none. A removed device is
+  disconnected at once and has to pair again.
 - All remote traffic between the devices goes through Tailscale, and
   AgentTerm does not open a port on the local network. The one relay is that
   of the iPhone's notifications through Apple, which passes on what it

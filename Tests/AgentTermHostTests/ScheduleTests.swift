@@ -282,6 +282,25 @@ final class SchedulerHostTests: XCTestCase {
         XCTAssertEqual(((settings["projects"] as? [String: Any])?[project.path] as? [String: Any])?["hasTrustDialogAccepted"] as? Bool, true)
     }
 
+    /// SCHED-37 (#291): a weekly schedule with no day, or a day of the week
+    /// out of Sunday (1) to Saturday (7), is refused in words, and nothing
+    /// is kept: before the fix a day of -7 was kept and sent to every device,
+    /// whose lists stopped the app while showing it, and the host stopped on
+    /// its next change.
+    func testAWeeklyScheduleWithADayThatIsNoneIsRefused() throws {
+        for days in [[-7], [0], [8], []] {
+            var schedule = morning()
+            schedule.id = "weekly-\(days)"
+            schedule.when = .weekly(weekdays: days, hour: 9, minute: 0)
+            let before = client.errors.count
+            client.connection.send(.saveSchedule(schedule))
+            waitUntil("refused: \(days)") { self.client.errors.count > before }
+            XCTAssertEqual(client.errors.last, ScheduleTime.daysRefusal, "\(days)")
+        }
+        pause()
+        XCTAssertEqual(client.schedules, [])
+    }
+
     /// SCHED-5: at its time, a session of its agent starts in its folder,
     /// with its prompt and the switch of its mode, named after it, once.
     func testAScheduleRunsAtItsTimeOnce() throws {

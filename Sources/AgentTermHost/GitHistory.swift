@@ -47,8 +47,8 @@ extension GitActions {
         guard
             let result = Subprocess.run(
                 "/usr/bin/git",
-                [
-                    "-C", directory, "show", "--first-parent", "-m", "--format=" + commitFormat + "%x00%b%x01", "--patch", "--no-color", "--no-ext-diff",
+                ["-C", directory] + GitDiff.defaultPrefixes + [
+                    "show", "--first-parent", "-m", "--format=" + commitFormat + "%x00%b%x01", "--patch", "--no-color", "--no-ext-diff",
                     "--end-of-options", hash, "--",
                 ],
                 timeout: 30),

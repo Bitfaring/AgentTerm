@@ -253,16 +253,10 @@ struct InboxDetail: View {
                 ContinueField(item: item)
             case .waitingForPermission(let question)?, .waitingForAnswer(let question)?:
                 section(Inbox.asks, text: question.text, or: "")
-                if !question.choices.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        heading(Inbox.choices)
-                        ForEach(Array(question.choices.enumerated()), id: \.offset) { index, choice in
-                            Text("\(index + 1). \(choice)")
-                                .font(.system(size: 13))
-                                .textSelection(.enabled)
-                        }
-                    }
-                }
+                // Answered here, as from the session: a choice, or words of
+                // one's own, which the host types where the agent takes
+                // them (#320).
+                AnswerField(item: item, choices: question.choices)
             default:
                 EmptyView()
             }
@@ -445,6 +439,43 @@ private struct TurnChanges: View {
 }
 
 /// The next instruction for a done agent, sent from the Inbox (#71).
+/// The answer to what an agent asks, from the Inbox (#320): its choices,
+/// and a field for an answer of one's own, as the agent's own list offers
+/// one after them ("Type something.").
+private struct AnswerField: View {
+    @EnvironmentObject private var model: AppModel
+    let item: InboxItem
+    let choices: [String]
+    @State private var text = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !choices.isEmpty {
+                InboxHeading(text: Inbox.choices)
+                ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in
+                    Button("\(index + 1). \(choice)") { model.continueTurn(of: item, with: choice) }
+                        .accessibilityIdentifier("inbox-choice-\(index)")
+                }
+            }
+            HStack(spacing: 8) {
+                TextField("", text: $text, prompt: Text(ComposeWords.answerField), axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...6)
+                    .onSubmit(send)
+                    .accessibilityIdentifier("inbox-answer")
+                Button(TurnResult.send, action: send)
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("inbox-answer-send")
+            }
+        }
+    }
+
+    private func send() {
+        model.continueTurn(of: item, with: text)
+        text = ""
+    }
+}
+
 private struct ContinueField: View {
     @EnvironmentObject private var model: AppModel
     let item: InboxItem

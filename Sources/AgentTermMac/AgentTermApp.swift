@@ -679,6 +679,29 @@ struct SettingsCard<Content: View>: View {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// The window's model, for what quitting has to ask.
+    @MainActor weak static var model: AppModel?
+
+    /// Quitting, by ⌘Q or by closing the window, with unsaved changes in
+    /// the open files asks first (#298): they would be lost. Closing a file,
+    /// switching Mac and forgetting one ask the same way.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated {
+            let unsaved = Self.model?.files.documents.filter(\.isDirty).map { ($0.path as NSString).lastPathComponent } ?? []
+            guard !unsaved.isEmpty else { return .terminateNow }
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = unsaved.count == 1 ? "Quit without saving \(unsaved[0])?" : "Quit without saving \(unsaved.count) files?"
+            alert.informativeText =
+                (unsaved.count == 1 ? "Its changes are lost." : "Their changes are lost: \(unsaved.joined(separator: ", ")).")
+                + " Cancel, then save them from the Files tab."
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Quit Without Saving")
+            alert.buttons[1].hasDestructiveAction = true
+            return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Needed when started with `swift run` instead of from an app bundle.
         NSApp.setActivationPolicy(.regular)

@@ -52,6 +52,34 @@ final class WorktreeUITests: MacUITestCase {
         shot("worktree")
     }
 
+    /// SES-32 (#299): after a launch the host refused, the next session
+    /// someone else starts (here a device) does not come in front, nor
+    /// take the keyboard: the session that was in front stays.
+    func testASessionStartedAfterARefusedLaunchDoesNotComeInFront() throws {
+        let phone = try device()
+        app.wait(for: .text("project, folder"), timeout: 15)
+        phone.send(.create(CreateRequest(command: "exec sleep 600", cwd: project.path, title: "in front")))
+        wait("the session", timeout: 20) { phone.sessions.contains { $0.title == "in front" } }
+        let inFront = try XCTUnwrap(phone.sessions.first { $0.title == "in front" })
+        app.press(.id("session-\(inFront.id)"), timeout: 15)
+        app.wait("it in front") { self.app.selectedRows() == ["session-\(inFront.id)"] }
+
+        // A worktree on the branch the folder has checked out: git refuses it.
+        app.press(.button("Git"))
+        app.press(.id("worktree-picker"), timeout: 15)
+        app.press(.id("worktree-add"))
+        app.write("main", into: .id("worktree-branch"))
+        app.press(.id("worktree-create"))
+        app.wait(for: .containing("The worktree could not be made"), timeout: 20)
+
+        phone.send(.create(CreateRequest(command: "exec sleep 600", cwd: project.path, title: "from the phone")))
+        wait("the phone's session", timeout: 20) { phone.sessions.contains { $0.title == "from the phone" } }
+        let later = try XCTUnwrap(phone.sessions.first { $0.title == "from the phone" })
+        app.wait(for: .id("session-\(later.id)"), timeout: 15)
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(app.selectedRows(), ["session-\(inFront.id)"], "the session the device started came in front")
+    }
+
     /// WT-17 (#43, #217): the worktrees' button is there for a folder with
     /// no worktree but its own; New Worktree, in its popup, suggests a
     /// branch named after the agent and starts it in a new worktree; the
