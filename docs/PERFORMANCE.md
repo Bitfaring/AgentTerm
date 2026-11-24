@@ -171,6 +171,38 @@ large diff's or a large file's tab, 50 to 130 ms; and stalls of 20 to 35
 ms here and there. The figures are of a debug build; a release build was not
 measured, and neither was the iPhone app's main thread.
 
+### Open files following the disk (#304)
+
+While the Files tab is shown, the open files without edits are looked at
+every 5 seconds, to follow what an agent wrote meanwhile. Measured on
+2026-11-24 with a debug build, in the same run (`MEASURE=1
+scripts/test-mac.sh MainThreadMeasurements`): twelve text files of 2 MB
+open, left alone for 12 seconds, then each of them changed on the disk.
+"Before" is the same build with the look of 0.15.0 put back for the run:
+every open file read and compared on the main thread at each look.
+
+| What | Before | After |
+|---|---|---|
+| Twelve files of 2 MB open, the disk followed for 12 seconds | once, 18 ms | never |
+| Those twelve files changed on the disk | 3 times, the longest 78 ms, 120 ms in all | twice, the longest 74 ms, 90 ms in all |
+
+What was changed: a file is read only when its modification date or its
+size is another than when it was last looked at (`DiskStamp`), and the
+reading, the comparing and the look at the folders are off the main
+thread (`DiskFollow`); a pipe or a device is never read to follow it, and
+a look is not started while the last one is still on its way, so a volume
+that does not answer holds one look, not one more every 5 seconds. The
+files open when the app starts are read off the main thread too. What is
+left when files change is the editor taking the file's new text, on the
+main thread as any text it is given; the reading of it is not.
+
+On this Mac's own disk the reading of twelve unchanged files took little
+of the main thread (18 ms once in 12 seconds); what the change is for is a
+slow or stuck volume, where every look read every file and the window
+waited for it. Such a volume was not tried: a network volume that stops
+answering was not at hand, and a pipe, which never answers, is what the
+unit tests read instead (`DiskFollowTests`).
+
 ### Typing into a large file (#104)
 
 By 2026-11-16 every letter typed into the 5 MB file held the window up,

@@ -1595,6 +1595,13 @@ has dismissed it on one device:
   made, renamed or put in the Trash; a stash, a branch, a commit, a save)
   is not sent: it says at once that nothing was done
   (`NotConnectedWords`), and what was being written stays (#286, #281).
+- On the iPhone, Send in a terminal while its Mac is not connected keeps
+  the message in the field and says under it why it was not sent
+  (`ComposeWords.notConnected`). Keys typed then, in the terminal or on the
+  key bar, are dropped, not kept to reach the agent later and out of turn,
+  and that is said once each time the connection is lost
+  (`ComposeWords.keysNotSent`); the Mac app does the same for a terminal of
+  another Mac, or of its own host, while it is not connected (#280).
 
 A stop that was asked for (Restart Host, replacing another copy's host,
 logging out) is not reported.

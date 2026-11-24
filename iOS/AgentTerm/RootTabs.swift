@@ -346,6 +346,9 @@ private struct FailureBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(failure.headline(on: model.pairing?.name ?? "the Mac"))
                     .font(.subheadline.weight(.semibold))
+                    // Squeezed by other cards, the details give way first:
+                    // the headline says what and where (#274).
+                    .layoutPriority(1)
                 Text(failure.details)
                     .font(.footnote)
                     .foregroundStyle(.secondary)

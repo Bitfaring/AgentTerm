@@ -127,11 +127,30 @@ final class FilesModel: ObservableObject {
     }
 
     /// The files that were open last time come back as tabs, behind the terminal.
+    /// Read off the main thread (#304): a file on a volume that does not
+    /// answer would otherwise stop the app as it starts.
     private func restoreOpenFiles() {
-        for path in UserDefaults.standard.stringArray(forKey: Self.openFilesKey) ?? [] where FileManager.default.fileExists(atPath: path) {
-            documents.append(Self.load(path))
+        let paths = UserDefaults.standard.stringArray(forKey: Self.openFilesKey) ?? []
+        guard !paths.isEmpty else { return }
+        let started = generation
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let loaded = paths.filter { FileManager.default.fileExists(atPath: $0) }.map { Self.load($0) }
+            DispatchQueue.main.async {
+                guard let self, self.generation == started, !self.isRemote else { return }
+                let opened = self.documents
+                self.documents = loaded.filter { document in !opened.contains { $0.path == document.path } } + opened
+                self.rememberOpenFiles()
+            }
         }
     }
+
+    /// Goes up at every `reset`: what was read for the Mac that was left is
+    /// not taken.
+    private var generation = 0
+    /// A pass of `refresh` is on its way: another is not started, or a
+    /// volume that does not answer would gather one stuck pass every few
+    /// seconds.
+    private var refreshing = false
 
     /// Whether a file has changes that are not saved.
     var hasUnsavedChanges: Bool { documents.contains(where: \.isDirty) }
@@ -140,6 +159,8 @@ final class FilesModel: ObservableObject {
     /// that were open belong to the Mac that is left.
     func reset(remote: ((ClientMessage) -> Void)?) {
         self.remote = remote
+        generation += 1
+        refreshing = false
         root = nil
         children = [:]
         expanded = []
@@ -300,42 +321,38 @@ final class FilesModel: ObservableObject {
             }
             return
         }
-        if let root {
-            for directory in [root] + expanded.sorted() {
-                if FileManager.default.fileExists(atPath: directory) {
-                    load(directory)
-                } else {
-                    expanded.remove(directory)
-                    children[directory] = nil
-                }
-            }
-        }
         // Only files without edits of our own follow the disk. One with
-        // unsaved changes keeps them; saving then overwrites the disk. Read
-        // off the main thread, and only a file whose date or size changed
-        // since it was last looked at (#304): every few seconds, a dozen
-        // large files, or one on a slow volume, held the window up.
-        let looked = documents.filter { $0.isText && !$0.isDirty }.map { (path: $0.path, saved: $0.savedText) }
-        guard !looked.isEmpty else { return }
+        // unsaved changes keeps them; saving then overwrites the disk. All
+        // that touches the disk is off the main thread, and only a file
+        // whose date or size changed since it was last looked at is read
+        // (#304): every few seconds, a dozen large files, or one on a slow
+        // volume, held the window up.
+        guard !refreshing else { return }
+        let directories = root.map { [$0] + expanded.sorted() } ?? []
+        let looked = documents.filter { $0.isText && !$0.isDirty }.map { DiskFollow.Looked(path: $0.path, saved: $0.savedText) }
+        guard !directories.isEmpty || !looked.isEmpty else { return }
+        refreshing = true
         let known = diskStamps
+        let started = generation
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            var stamps: [String: DiskStamp] = [:]
-            var changed: [(path: String, text: String, saved: String)] = []
-            for document in looked {
-                let stamp = DiskStamp(of: document.path)
-                stamps[document.path] = stamp
-                guard stamp == nil || stamp != known[document.path] else { continue }
-                if case .text(let onDisk) = FileBrowser.read(document.path), !OpenDocument.same(onDisk, document.saved) {
-                    changed.append((document.path, onDisk, document.saved))
-                }
-            }
+            let gone = Set(directories.filter { !FileManager.default.fileExists(atPath: $0) })
+            let (stamps, changed) = DiskFollow.look(at: looked, known: known)
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, self.generation == started else { return }
+                self.refreshing = false
+                for directory in directories {
+                    if gone.contains(directory) {
+                        self.expanded.remove(directory)
+                        self.children[directory] = nil
+                    } else {
+                        self.load(directory)
+                    }
+                }
                 for (path, stamp) in stamps { self.diskStamps[path] = stamp }
                 for found in changed {
                     // Not if it was edited, saved or closed meanwhile.
-                    guard let index = self.documents.firstIndex(where: { $0.path == found.path }), !self.documents[index].isDirty,
-                        self.documents[index].savedText == found.saved
+                    guard let index = self.documents.firstIndex(where: { $0.path == found.path }),
+                        DiskFollow.takes(found, now: (self.documents[index].isDirty, self.documents[index].savedText))
                     else { continue }
                     self.documents[index] = OpenDocument(path: found.path, content: .text(found.text), text: found.text, savedText: found.text)
                 }
@@ -343,22 +360,8 @@ final class FilesModel: ObservableObject {
         }
     }
 
-    /// When each open file was last seen to change, and its size: read again
-    /// only when either is another.
+    /// Each open file's `DiskStamp` when it was last looked at.
     private var diskStamps: [String: DiskStamp] = [:]
-
-    struct DiskStamp: Equatable {
-        let modified: Date
-        let size: Int
-
-        init?(of path: String) {
-            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path), let modified = attributes[.modificationDate] as? Date,
-                let size = attributes[.size] as? Int
-            else { return nil }
-            self.modified = modified
-            self.size = size
-        }
-    }
 
     private func load(_ directory: String) {
         if let remote {
@@ -376,7 +379,7 @@ final class FilesModel: ObservableObject {
 
     // MARK: Documents
 
-    private static func load(_ path: String, anyway: Bool = false) -> OpenDocument {
+    nonisolated private static func load(_ path: String, anyway: Bool = false) -> OpenDocument {
         let content = FileBrowser.read(path, anyway: anyway)
         var text = ""
         if case .text(let loaded) = content { text = loaded }

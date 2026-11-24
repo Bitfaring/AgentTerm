@@ -303,6 +303,11 @@ while let argument = arguments.popFirst() {
 // only, as the tests' own hosts do (`--local-only`): the app is given
 // this, and its host has the app's environment (#179).
 if ProcessInfo.processInfo.environment["AGENTTERM_LOCAL_ONLY"] == "1" { listenOnTailscale = false }
+// For the tests of the apps: an address taken for Tailscale's, listened on
+// as it would be. One this Mac does not have (127.0.0.2) cannot be listened
+// on, for the banner that says so to be seen (#274). Not in the help.
+let tailscaleStandIn = ProcessInfo.processInfo.environment["AGENTTERM_TAILSCALE_ADDRESS"].flatMap { $0.isEmpty ? nil : $0 }
+if tailscaleStandIn != nil { listenOnTailscale = true }
 
 let server: HostServer
 do {
@@ -311,6 +316,7 @@ do {
         port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home,
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
+    if let tailscaleStandIn { configuration.tailscaleAddress = { tailscaleStandIn } }
     configuration.release = release
     configuration.revision = revision
     configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)

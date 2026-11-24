@@ -532,6 +532,9 @@ class MacUITestCase: XCTestCase {
 
     // MARK: The host and the app
 
+    /// What a test adds to its hosts' environment.
+    var hostEnvironment: [String: String] = [:]
+
     @discardableResult
     func startHost(state: URL, home: URL, port: UInt16, extra: [String] = []) throws -> Process {
         let process = Process()
@@ -543,6 +546,7 @@ class MacUITestCase: XCTestCase {
         // An agent's hooks and MCP server are said missing after 3 seconds,
         // not 20 (#129), unless the test asks for longer.
         environment["AGENTTERM_LINK_GRACE"] = linkGrace
+        environment.merge(hostEnvironment) { _, own in own }
         // What it throws away stays in the test's folder, also when its
         // home is the user's.
         if home != self.home { environment["AGENTTERM_TRASH_DIR"] = root.appendingPathComponent("trash").path }

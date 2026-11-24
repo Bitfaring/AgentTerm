@@ -130,6 +130,27 @@ final class DiffPlaceTests: MacUITestCase {
 
 /// HOST-16 (#273) on the screen: a schedules file the host cannot read is
 /// put aside, and the banner says so, with its name.
+/// REMOTE-36 (#274), the pictures: a host that cannot listen on its
+/// Tailscale address (a stand-in, 127.0.0.2, which this Mac does not have)
+/// says so in the window's banner and on the pairing sheet.
+final class ListenerFailureBannerTests: MacUITestCase {
+    override func setUpWithError() throws {
+        hostEnvironment["AGENTTERM_TAILSCALE_ADDRESS"] = "127.0.0.2"
+        try super.setUpWithError()
+    }
+
+    func testAnAddressTheHostCannotListenOnIsSaid() throws {
+        app.wait(for: .containing("could not listen on its Tailscale address 127.0.0.2"), timeout: 20)
+        shot("listener-failed")
+        app.press(.button("Pair Device"))
+        app.wait(for: .text("Pair a Device"))
+        app.wait(for: .id("pairing-listener-failure"), timeout: 10)
+        // Said whole on the sheet as in the banner behind it.
+        app.wait("the sheet's warning, whole", timeout: 5) { self.app.all(.containing("Quit what else uses the port there")).count >= 2 }
+        shot("listener-failed-pairing")
+    }
+}
+
 final class UnreadableStateTests: MacUITestCase {
     override func makeFixtures() throws {
         try super.makeFixtures()

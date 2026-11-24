@@ -11,6 +11,7 @@ final class SharedWordsTests: XCTestCase {
         XCTAssertTrue(NotConnectedWords.notSaved("Studio").contains("Its changes are kept"))
         XCTAssertTrue(NotConnectedWords.notAnswered("Studio").hasPrefix("The connection to Studio closed before it answered"))
         XCTAssertTrue(ComposeWords.notConnected("Studio").contains("Your message is kept"))
+        XCTAssertTrue(ComposeWords.keysNotSent("Studio").contains("dropped, not sent later"))
     }
 
     func testTheQuestionsBeforeDeleting() {

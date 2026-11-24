@@ -40,6 +40,37 @@ final class FlowTests: XCTestCase {
         }
     }
 
+    /// IOS-18 (#280): with the Mac gone, Send keeps the message and says
+    /// why, and a key of the key bar is dropped and said once, not kept to
+    /// be sent later. Before the fix the field emptied, and the keys went
+    /// nowhere without a word.
+    private func typeWhileTheMacGoes(_ app: XCUIApplication, compose: XCUIElement, mark: String) {
+        compose.tap()
+        // The script stops the host once this file is there.
+        compose.typeText("touch '\(mark)'")
+        app.buttons["Send"].tap()
+        let lost = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Reconnecting")).firstMatch
+        XCTAssertTrue(lost.waitForExistence(timeout: 20), "the phone does not say the Mac went")
+        compose.tap()
+        compose.typeText("echo kept")
+        app.buttons["Send"].tap()
+        let held = app.staticTexts["compose-held"]
+        XCTAssertTrue(held.waitForExistence(timeout: 5), "Send with the Mac gone said nothing")
+        XCTAssertTrue(held.label.contains("is not connected"), held.label)
+        XCTAssertEqual(compose.value as? String, "echo kept", "Send with the Mac gone threw the message away")
+        capture("send-not-connected")
+        if app.buttons["hide-keyboard"].firstMatch.exists { app.buttons["hide-keyboard"].firstMatch.tap() }
+        app.buttons["key-Escape"].tap()
+        let dropped = app.alerts.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "keys typed in its terminals are dropped")).firstMatch
+        XCTAssertTrue(dropped.waitForExistence(timeout: 5), "a key typed with the Mac gone was dropped without a word")
+        capture("keys-not-connected")
+        app.alerts.buttons["OK"].tap()
+        // Said once, not for every key.
+        app.buttons["key-Tab"].tap()
+        XCTAssertFalse(app.alerts.firstMatch.waitForExistence(timeout: 2), "the dropped keys were said again")
+        XCTAssertEqual(compose.value as? String, "echo kept")
+    }
+
     private func measureScrolling(_ app: XCUIApplication, compose: XCUIElement) {
         compose.tap()
         compose.typeText("seq 1 5000")
@@ -443,6 +474,10 @@ final class FlowTests: XCTestCase {
             landscape(app, compose: compose)
             return
         }
+        if let gone = environment["AGENTTERM_GONE_MARK"], environment["AGENTTERM_ONLY_OFFLINE"] != nil {
+            typeWhileTheMacGoes(app, compose: compose, mark: gone)
+            return
+        }
         if environment["AGENTTERM_ONLY_SCROLL"] != nil {
             measureScrolling(app, compose: compose)
             return
@@ -510,6 +545,11 @@ final class FlowTests: XCTestCase {
             let card = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "could not read its schedules")).firstMatch
             XCTAssertTrue(card.waitForExistence(timeout: 15), "the phone does not say the host could not read its schedules")
             capture("unreadable-state")
+            // REMOTE-36 (#274): the stand-in Tailscale address it cannot
+            // listen on, said in a banner of its own.
+            let listener = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "could not listen on its Tailscale address")).firstMatch
+            XCTAssertTrue(listener.waitForExistence(timeout: 15), "the phone does not say the host cannot listen on its Tailscale address")
+            capture("listener-failed")
             // IOS-24 (#328): the banners take room of their own: the list
             // starts under the last of them, not under the screen's top.
             let cards = app.descendants(matching: .any).matching(identifier: "failure-card").allElementsBoundByIndex

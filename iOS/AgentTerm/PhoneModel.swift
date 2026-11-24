@@ -692,6 +692,22 @@ final class PhoneModel: ObservableObject {
 
     /// Sends what changes the Mac, or says at once that it is not connected
     /// and nothing was done (#286, principle 3).
+    /// Keys typed in a terminal go only into a connection that is up: one
+    /// still connecting would keep them and send them later, out of turn.
+    /// They are dropped, and that is said once until it is up again (#280).
+    private func type(_ data: Data, to id: SessionID) {
+        guard status == .connected, let connection else {
+            if !saidKeysDropped {
+                saidKeysDropped = true
+                message = ComposeWords.keysNotSent(pairing?.name ?? "The Mac")
+            }
+            return
+        }
+        saidKeysDropped = false
+        connection.sendInput(data, to: id)
+    }
+    private var saidKeysDropped = false
+
     @discardableResult private func sendOrSay(_ message: ClientMessage) -> Bool {
         guard status == .connected, let connection else {
             self.message = NotConnectedWords.notDone(pairing?.name ?? "The Mac")
@@ -2303,7 +2319,7 @@ final class PhoneModel: ObservableObject {
 
     private func makeController(for id: SessionID) -> TerminalController {
         let controller = TerminalController(session: id, fontSize: fontSize)
-        controller.onInput = { [weak self] data in self?.connection?.sendInput(data, to: id) }
+        controller.onInput = { [weak self] data in self?.type(data, to: id) }
         controller.onResize = { [weak self] size in self?.connection?.send(.resize(session: id, size: size)) }
         controller.onClaim = { [weak self] size in self?.connection?.send(.takeControl(session: id, size: size)) }
         // A few hundred lines above the screen to start with; more as it is

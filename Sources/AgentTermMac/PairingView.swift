@@ -40,6 +40,8 @@ struct PairingView: View {
                 Label(failure.headline() + " " + failure.details, systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 12))
                     .foregroundStyle(.orange)
+                    // Whole: the reason and what to do are its point.
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("pairing-listener-failure")
             }

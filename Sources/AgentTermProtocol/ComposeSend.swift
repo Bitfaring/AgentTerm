@@ -61,6 +61,12 @@ public enum ComposeWords {
     /// A message or a key not sent while the Mac is not reached (#280): it
     /// is kept, to be sent once it is.
     public static func notConnected(_ mac: String) -> String { "Not sent: \(mac) is not connected. Your message is kept, to send once it is." }
+    /// Keys typed in a terminal while the Mac is not reached (#280): they
+    /// are not kept, or they would reach the agent later and out of turn.
+    /// Said once each time the connection is lost.
+    public static func keysNotSent(_ mac: String) -> String {
+        "Not sent: \(mac) is not connected, and keys typed in its terminals are dropped, not sent later. Type them again once it is back."
+    }
     /// The button over the message field while the agent asks.
     public static let answerButton = "Answer the Agent"
     /// The button that goes back from the answer to the prompt.

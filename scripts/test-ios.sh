@@ -77,7 +77,10 @@ git init -q -b main "$PROJECT/web"
 printf 'web\n' >> "$PROJECT/.git/info/exclude"
 printf '["%s"]' "$PROJECT" > "$STATE/folders.json"
 # BADSTATE=only: a schedules file of a shape this build does not know.
-if [ "${BADSTATE:-}" = only ]; then printf '{"paused":false,"schedules":[{"id":"x"}]}' > "$STATE/schedules.json"; fi
+# It also listens on a stand-in Tailscale address this Mac does not have, for
+# the banner that says it cannot (REMOTE-36, #274).
+TAILSCALE_STANDIN=""
+if [ "${BADSTATE:-}" = only ]; then printf '{"paused":false,"schedules":[{"id":"x"}]}' > "$STATE/schedules.json"; TAILSCALE_STANDIN=127.0.0.2; fi
 # MARKDOWN=only: the documents the Mac's PERF-15 opens, for the phone's
 # preview to be measured the same way (#126).
 if [ "${MARKDOWN:-}" = only ]; then
@@ -123,7 +126,7 @@ fi
 # enough for the test to write a prompt first (IOS-12, #232).
 ASK_AFTER=""
 if [ "${ASK:-}" = only ]; then ASK_AFTER=15; fi
-HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_CLOSING="$DEMO_CLOSING" AGENTTERM_DEMO_ASK_AFTER="$ASK_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" "$AGENTTERMD" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_CLOSING="$DEMO_CLOSING" AGENTTERM_DEMO_ASK_AFTER="$ASK_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" AGENTTERM_TAILSCALE_ADDRESS="$TAILSCALE_STANDIN" "$AGENTTERMD" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
 # Neither asks the agents' services, nor runs in the home of the person
@@ -222,6 +225,15 @@ if [ "${UNANSWERED:-}" = only ]; then
     UNANSWERED_WATCH=$!
     export TEST_RUNNER_AGENTTERM_ONLY_UNANSWERED=1
 fi
+# OFFLINE=only opens a shell, has it touch a file at which the host is
+# stopped, and then sends a message and types keys with the Mac gone (IOS-18,
+# #280), and nothing else.
+if [ "${OFFLINE:-}" = only ]; then
+    ( while [ ! -f "$STATE/gone" ]; do sleep 0.2; done; kill "$DAEMON" ) &
+    UNANSWERED_WATCH=$!
+    export TEST_RUNNER_AGENTTERM_GONE_MARK="$STATE/gone"
+    export TEST_RUNNER_AGENTTERM_ONLY_OFFLINE=1
+fi
 # BADLINK=only opens a pairing link whose code the first host refuses, with
 # the first Mac on screen (PAIR-12, #279), and nothing else.
 if [ "${BADLINK:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_BADLINK=1; fi
@@ -294,6 +306,7 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${COMMITWAIT:-}" = only ]; then echo "iOS UI test passed (a commit while its folder changes only)."; rm -f "$LOG"; exit 0; fi
     if [ "${DELETE:-}" = only ]; then echo "iOS UI test passed (a schedule deleted only)."; rm -f "$LOG"; exit 0; fi
     if [ "${UNANSWERED:-}" = only ]; then echo "iOS UI test passed (a commit the Mac did not answer only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${OFFLINE:-}" = only ]; then echo "iOS UI test passed (typing while the Mac is gone only)."; rm -f "$LOG"; exit 0; fi
     if [ "${ASK:-}" = only ]; then
         # IOS-12: the answer went in while the stand-in asked, as the keys of
         # its second choice; the prompt only after the question was over.

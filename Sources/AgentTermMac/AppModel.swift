@@ -2162,10 +2162,26 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Keys typed in a terminal go only into a connection that is up: one
+    /// still connecting would keep them and send them later, out of turn.
+    /// They are dropped, and that is said once until it is up again (#280).
+    private func type(_ data: Data, to id: SessionID) {
+        guard status == .connected, let connection else {
+            if !saidKeysDropped {
+                saidKeysDropped = true
+                notice = ComposeWords.keysNotSent(remote?.name ?? "The host")
+            }
+            return
+        }
+        saidKeysDropped = false
+        connection.sendInput(data, to: id)
+    }
+    private var saidKeysDropped = false
+
     private func makeController(for id: SessionID) -> TerminalController {
         let controller = TerminalController(session: id, fontSize: terminalFontSize)
         controller.setLooks(cursor: terminalCursor, blinks: cursorBlinks, scrollback: scrollbackLines)
-        controller.onInput = { [weak self] data in self?.connection?.sendInput(data, to: id) }
+        controller.onInput = { [weak self] data in self?.type(data, to: id) }
         controller.onResize = { [weak self] size in self?.connection?.send(.resize(session: id, size: size)) }
         controller.onClaim = { [weak self] size in self?.connection?.send(.takeControl(session: id, size: size)) }
         // Files dropped or pasted on it, a picture's ⌘V sent as Control V
