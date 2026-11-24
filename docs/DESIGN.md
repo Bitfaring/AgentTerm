@@ -322,7 +322,8 @@ message's name, never its content. `--protocol-version`, which tests give a
 host to have it stand for an earlier one, also has it refuse what came
 after that number.
 
-The protocol version is 43. 43 added `gitCommitted` from the host, the end
+The protocol version is 44. 44 added `profileQuestions` both ways and
+`BrowserRequest.answerProfile` (#251); 43 added `gitCommitted` from the host, the end
 of a commit or an amend (#285, #302); 42 the reason a host stopped itself
 (#274); 41 messages from a client in parts (#289). 40 added `worktreesInProgress` from the host:
 the worktrees being made for sessions, handoffs and schedules' runs, each with its folder, its agent,
@@ -1862,7 +1863,21 @@ one profile share it. An agent's profile is the one it names, then the
 one it was given (`BrowserModel.agentProfiles`), then the only one; with
 several and none named, `browser_open` is refused at once with their
 names (`BrowserWords.whichProfile`), for the agent to ask the user in its
-conversation. A private tab's profile is `private-user` or
+conversation. A profile is used by an agent's session only once the user
+allowed it (#251): until then `browser_open` is refused at once with
+`BrowserWords.askingForProfile`, and the app adds a `ProfileQuestion`
+(session, profile) to its list, which it sends to its host
+(`profileQuestions`); the host keeps the last list and tells every
+client, a client that connects later too, and none once that app stops
+showing the browser. The answer is the app's own, or a device's
+`browserAsk(.answerProfile)`, which the host passes to the app; one from
+an agent's server (the client named `MCP`) is refused. Allowed, the
+profile is the session's in `agentProfiles`; not allowed, the pair is
+kept in `profilesNotAllowed` and refused at once. Both are forgotten
+when the session ends, and Take Back Profile removes the first and
+closes the session's tabs in it. This keeps an agent that follows its
+tools from choosing the user's sign-ins; a program of the user's on the
+Mac can read the host's token, as it always could. A private tab's profile is `private-user` or
 `private-agent-<session>`, a request context with no `cache_path`, which
 Chromium keeps in memory; `atc_forget_profile` lets it go when the last
 of its tabs closes, and the next private tab gets a new one. A popup is

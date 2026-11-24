@@ -59,3 +59,15 @@ final class MCPServerProcess {
 
     func stop() { process.terminate() }
 }
+
+extension MacDriver {
+    /// `browser_open`, as the user would have it: when the app asks whether
+    /// the agent's session may use a profile with sign-ins (#251), the user
+    /// allows it, and the agent calls it again, as it is told to.
+    func browserOpen(_ server: MCPServerProcess, _ arguments: [String: Any] = [:], file: StaticString = #filePath, line: UInt = #line) -> (text: String, failed: Bool) {
+        let first = server.text("browser_open", arguments)
+        guard first.failed, first.text.hasPrefix("Nothing was opened: AgentTerm is asking the user") else { return first }
+        press(.id("profile-allow"), timeout: 15, file: file, line: line)
+        return server.text("browser_open", arguments)
+    }
+}

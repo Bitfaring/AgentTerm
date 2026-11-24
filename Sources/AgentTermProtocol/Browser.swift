@@ -5,6 +5,32 @@ import Foundation
 /// the agents; the host passes what an agent asks of it to that app, and the
 /// iPhone sees its tabs through the host.
 
+/// An agent's session asks to open tabs in a profile that holds the user's
+/// sign-ins (#251): the app asks the user, on the Mac and on every device,
+/// and the agent's tab is opened only once they allowed it.
+public struct ProfileQuestion: Codable, Equatable, Hashable, Identifiable, Sendable {
+    public let agent: SessionID
+    /// The session's title, as its row shows it.
+    public let agentName: String
+    /// The profile's id, and its name.
+    public let profile: String
+    public let profileName: String
+    public var id: String { "\(agent) \(profile)" }
+
+    public init(agent: SessionID, agentName: String, profile: String, profileName: String) {
+        self.agent = agent
+        self.agentName = agentName
+        self.profile = profile
+        self.profileName = profileName
+    }
+
+    /// The question, the same on both apps (principle 9).
+    public var title: String { "\(agentName) wants to open tabs in the browser profile “\(profileName)”, with the sign-ins it holds." }
+    public static let explanation = "Allowed, its tabs use that profile until the session ends; not allowed, it can still open private tabs, which hold no sign-ins."
+    public static let allow = "Allow for This Session"
+    public static let deny = "Don’t Allow"
+}
+
 /// A tab of the browser, as every device sees it.
 public struct BrowserTabInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
     public var id: String
@@ -402,11 +428,15 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     /// The text selected in the page, for ⌘C on a Mac showing another
     /// Mac's page (#147): answered with `text`.
     case copy(tab: String)
+    /// The user's answer to an agent's session asking to open tabs in a
+    /// profile that holds their sign-ins (#251), from a device or the Mac:
+    /// for that session only, until it ends. The user's, never an agent's.
+    case answerProfile(agent: SessionID, profile: String, allow: Bool)
 
     /// The tab it is about, when it is about one.
     public var tab: String? {
         switch self {
-        case .open, .tabs, .newTab, .profiles, .profile: return nil
+        case .open, .tabs, .newTab, .profiles, .profile, .answerProfile: return nil
         case .navigate(let tab, _), .history(let tab, _), .snapshot(let tab, _), .screenshot(let tab, _, _), .click(let tab, _, _), .hover(let tab, _),
             .type(let tab, _, _, _, _), .select(let tab, _, _), .upload(let tab, _, _), .press(let tab, _), .scroll(let tab, _, _, _), .wait(let tab, _, _, _),
             .evaluate(let tab, _), .console(let tab, _), .network(let tab, _), .emulate(let tab, _), .close(let tab), .picture(let tab),
@@ -445,7 +475,7 @@ public enum BrowserRequest: Codable, Equatable, Sendable {
     public var isTheDevices: Bool {
         switch self {
         case .picture, .takeOver, .giveBack, .watch, .tap, .text, .press, .scroll, .history, .navigate, .stop, .newTab, .emulate, .close, .profiles, .profile,
-            .pointer, .contextAt, .copy:
+            .pointer, .contextAt, .copy, .answerProfile:
             return true
         default: return false
         }
@@ -549,6 +579,22 @@ public enum BrowserWords {
             + " Or private: true, for a private tab of your own that keeps nothing and has none of the user's sign-ins."
     }
     /// An agent's first tab, with several profiles and none named.
+    /// An agent's tab not opened while the user is asked whether that
+    /// session may use a profile with sign-ins (#251).
+    public static func askingForProfile(_ profile: String) -> String {
+        "Nothing was opened: AgentTerm is asking the user whether you may open tabs in the browser profile “\(profile)”, which holds their sign-ins. Call browser_open again once they have answered; or open a private tab with private: true, which needs no answer."
+    }
+    /// The user did not let this session use the profile.
+    public static func profileNotAllowed(_ profile: String) -> String {
+        "The user did not allow this session to use the browser profile “\(profile)”. Open a private tab with private: true, or ask the user in your conversation."
+    }
+    /// Over an agent's tab in a profile the user allowed: what was given,
+    /// to be taken back.
+    public static func profileAllowed(_ profile: String) -> String { "In “\(profile)”, as you allowed" }
+    public static let takeBackProfile = "Take Back Profile"
+    /// An answer for a question that is no longer asked.
+    public static let profileNotAsked = "That is no longer asked: the session ended, or it was answered on another device."
+
     public static func whichProfile(_ names: [String]) -> String {
         "There are several browser profiles: \(names.joined(separator: ", ")) (the first is the user's default). Ask the user which one to use, then call browser_open again with profile set to its name; or open a private tab with private: true."
     }

@@ -89,6 +89,9 @@ final class PhoneModel: ObservableObject {
     /// does not browse: it looks at a tab, and takes it from its agent or
     /// gives it back.
     @Published private(set) var browserTabs: [BrowserTabInfo] = []
+    /// Agents' sessions asking to use a profile with the user's sign-ins
+    /// (#251), answered here as on the Mac.
+    @Published private(set) var profileQuestions: [ProfileQuestion] = []
     /// What the Mac answered about a tab: a picture of it, or why there is none.
     @Published private(set) var browserPictures: [String: Data] = [:]
     @Published private(set) var browserProblems: [String: String] = [:]
@@ -100,6 +103,15 @@ final class PhoneModel: ObservableObject {
         guard let connection else { return done(.refused(BrowserWords.otherMacClosed(connectedMacName))) }
         let id = browserAsks.add(done)
         connection.send(.browserAsk(id: id, request: request))
+    }
+
+    /// The user's answer to a session asking for a profile (#251). What
+    /// the Mac refuses (asked no more) is said.
+    func answer(_ question: ProfileQuestion, allow: Bool) {
+        profileQuestions.removeAll { $0 == question }
+        askBrowser(.answerProfile(agent: question.agent, profile: question.profile, allow: allow)) { [weak self] result in
+            DispatchQueue.main.async { if case .refused(let why) = result { self?.message = why } }
+        }
     }
 
     func browserAnswered(id: Int, result: BrowserResult) {
@@ -1677,6 +1689,7 @@ final class PhoneModel: ObservableObject {
         pendingOpen = nil
         diffAnswersDue = [:]
         browserTabs = []
+        profileQuestions = []
         browserFrames = [:]
         watchedPages = [:]
         stashes = [:]
@@ -1974,6 +1987,8 @@ final class PhoneModel: ObservableObject {
         case .browserTabs(let tabs):
             // The browser's tabs, on the Mac (#76).
             browserTabs = tabs
+        case .profileQuestions(let list):
+            profileQuestions = list
         case .browserAnswer(let id, let result):
             browserAnswered(id: id, result: result)
         case .macInUse(let inUse):

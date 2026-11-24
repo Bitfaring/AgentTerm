@@ -37,6 +37,19 @@ final class CrossTests: XCTestCase {
         _ = app.descendants(matching: .any)["system-cpu"].firstMatch.waitForExistence(timeout: 10)
         capture("1-sessions")
 
+        // BROWSER-67 (#251): the Mac's agent asked to use "Profile 2", and
+        // the question is answered here, as on the Mac.
+        let question = app.descendants(matching: .any)["profile-question"].firstMatch
+        if !question.waitForExistence(timeout: 15) {
+            // Seen once in four runs (#329): what was on screen instead.
+            capture("profile-question-missing")
+            XCTFail("the agent's question about a profile is not shown. On screen:\n\(app.debugDescription)")
+        }
+        XCTAssertTrue(question.label.contains("Profile 2"), question.label)
+        capture("profile-question")
+        app.buttons["profile-allow"].firstMatch.tap()
+        XCTAssertTrue(question.waitForNonExistence(timeout: 10), "the answered question stayed")
+
         // AWAKE-2: switched on on the Mac, it is on here; an option switched on here is for the Mac to show.
         app.tab("Settings").tap()
         let keepAwake = app.switches["keep-awake"]
@@ -179,6 +192,10 @@ final class CrossTests: XCTestCase {
         let open = app.buttons["Open a Page"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 10))
         open.tap()
+        // Two profiles since the agent asked for a second (#251): a menu,
+        // and the default profile picked.
+        let inDefault = app.buttons["Default (default)"].firstMatch
+        if inDefault.waitForExistence(timeout: 3) { inDefault.tap() }
         let address = app.textFields["browser-address"]
         XCTAssertTrue(address.waitForExistence(timeout: 20), "no page was opened")
         address.tap()

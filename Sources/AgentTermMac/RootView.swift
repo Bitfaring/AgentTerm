@@ -935,6 +935,46 @@ private struct Banners: View {
         ForEach(model.shownShellsFaults) { fault in
             AgentShellsFaultBanner(fault: fault)
         }
+        // A session asks to use a profile with the user's sign-ins (#251).
+        ForEach(model.isRemote ? model.remoteProfileQuestions : model.profileQuestions) { question in
+            ProfileQuestionBanner(question: question)
+        }
+    }
+}
+
+/// An agent's session asks to open tabs in a browser profile that holds
+/// the user's sign-ins (#251): the user answers here or on a device, and
+/// nothing is opened in it before they allowed it.
+private struct ProfileQuestionBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let question: ProfileQuestion
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "person.badge.key.fill").foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(question.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(ProfileQuestion.explanation)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button(ProfileQuestion.deny) { model.answer(question, allow: false) }
+                .controlSize(.small)
+                .accessibilityIdentifier("profile-deny")
+            Button(ProfileQuestion.allow) { model.answer(question, allow: true) }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("profile-allow")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("profile-question")
     }
 }
 

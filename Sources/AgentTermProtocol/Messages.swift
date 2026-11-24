@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 43
+public let agenttermProtocolVersion = 44
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -457,6 +457,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case browserReply(id: Int, result: BrowserResult)
     /// The browser's tabs, from the app that shows them: the host keeps
     /// them and tells every device.
+    /// The profiles agents' sessions ask to use (#251), from the app that
+    /// shows the browser: the host keeps them and tells every client.
+    case profileQuestions([ProfileQuestion])
     case browserTabs([BrowserTabInfo])
     /// A device's request of the browser (#76): the iPhone's picture of a
     /// tab, taking it over and giving it back. Answered with `browserAnswer`.
@@ -707,6 +710,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case browserCall(id: Int, agent: SessionID?, request: BrowserRequest)
     /// The browser's tabs, as the app that shows them last said; none when
     /// no app does.
+    /// The profiles agents' sessions ask to use (#251), for the user to
+    /// answer on any device; none when nothing is asked.
+    case profileQuestions([ProfileQuestion])
     case browserTabs([BrowserTabInfo])
     /// What a device's `browserAsk` came to.
     case browserAnswer(id: Int, result: BrowserResult)

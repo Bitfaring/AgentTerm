@@ -401,6 +401,9 @@ public final class HostServer {
     private var browserProvider: ClientID?
     /// Its tabs, as it last said.
     private var browserTabsList: [BrowserTabInfo] = []
+    /// What agents' sessions ask of the user's profiles (#251), as the app
+    /// that shows the browser last said.
+    private var profileQuestionsList: [ProfileQuestion] = []
     /// What waits for the app's answer, by the number it was asked with:
     /// who asked, under which number of theirs, and whether an agent did.
     private var browserCalls: [Int: (client: ClientID, id: Int, agent: Bool)] = [:]
@@ -2406,6 +2409,10 @@ public final class HostServer {
             guard browserProvider == client.id else { return }
             browserTabsList = list
             for other in clients.values where other.authenticated { send(.browserTabs(list), to: other) }
+        case .profileQuestions(let list):
+            guard browserProvider == client.id else { return }
+            profileQuestionsList = list
+            for other in clients.values where other.authenticated { send(.profileQuestions(list), to: other) }
         case .browserAsk(let id, let request):
             handleBrowserAsk(id: id, request: request, from: client)
         case .setAgentPrompt(let agent, let text):
@@ -3395,6 +3402,7 @@ public final class HostServer {
         send(.schedules(schedules), to: client)
         send(.schedulesPaused(schedulesPaused), to: client)
         send(.browserTabs(browserTabsList), to: client)
+        send(.profileQuestions(profileQuestionsList), to: client)
         send(agentPromptsMessage, to: client)
         send(shellSettingsMessage, to: client)
         send(.commitWriter(commitWriter), to: client)
@@ -4007,7 +4015,11 @@ public final class HostServer {
         browserProvider = nil
         browserTabsList = []
         browserWatchers = [:]
-        for other in clients.values where other.authenticated && other !== client { send(.browserTabs([]), to: other) }
+        profileQuestionsList = []
+        for other in clients.values where other.authenticated && other !== client {
+            send(.browserTabs([]), to: other)
+            send(.profileQuestions([]), to: other)
+        }
         // Whoever waits for the app is answered now, with why.
         for (call, waiting) in browserCalls {
             browserCalls[call] = nil
@@ -4077,7 +4089,7 @@ public final class HostServer {
             return answerBrowser(waiting, .refused("This is not the session of an agent AgentTerm started, or that session has ended."))
         }
         switch request {
-        case .picture, .takeOver, .giveBack, .profile:
+        case .picture, .takeOver, .giveBack, .profile, .answerProfile:
             // The user's, from a device.
             return answerBrowser(waiting, .refused("That is for the user, not for an agent."))
         default:
@@ -4099,6 +4111,11 @@ public final class HostServer {
             guard browserProvider != nil else { return answerBrowser(waiting, .refused(BrowserWords.noApp)) }
             setWatching(tab, client.id, on, width: width)
             answerBrowser(waiting, .text(on ? "Watching tab \(tab)." : "No longer watching tab \(tab)."))
+        case .answerProfile, .profile:
+            // The user's: not an agent's server, which signs in as this
+            // Mac does (#251).
+            guard client.name != Self.agentShellsClient else { return answerBrowser(waiting, .refused("That is for the user, not for an agent.")) }
+            callBrowser(request, agent: nil, for: waiting)
         default:
             guard request.isTheDevices else {
                 return answerBrowser(waiting, .refused("A device can look at a tab of the browser and use its page, not drive it as an agent does."))

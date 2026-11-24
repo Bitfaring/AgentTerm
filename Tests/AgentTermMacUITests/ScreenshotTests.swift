@@ -122,11 +122,11 @@ final class ScreenshotTests: XCTestCase {
         // says nothing of the Mac taking the pictures. Refused until the Mac
         // app, which shows the browser, is up: asked again until it is.
         let page = try XCTUnwrap(environment["AGENTTERM_SHOTS_PAGE"])
-        var shown = server.text("browser_open", ["url": page])
+        var shown = app.browserOpen(server, ["url": page])
         let deadline = Date().addingTimeInterval(60)
         while shown.failed && Date() < deadline {
             pause(1)
-            shown = server.text("browser_open", ["url": page])
+            shown = app.browserOpen(server, ["url": page])
         }
         XCTAssertFalse(shown.failed, shown.text)
         // Kept for the agent to show the page as a device (part 4).

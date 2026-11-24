@@ -128,7 +128,7 @@ final class BrowserUITests: MacUITestCase {
         let (server, agent) = try startAgent()
         defer { server.stop() }
 
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         XCTAssertFalse(opened.failed, opened.text)
         XCTAssertTrue(opened.text.contains("“Test page”"), opened.text)
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) })
@@ -189,7 +189,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         continueAfterFailure = true
@@ -241,7 +241,7 @@ final class BrowserUITests: MacUITestCase {
         defer { server.stop() }
         let page = root.appendingPathComponent("page.html")
         try "<!doctype html><title>One</title><input autofocus aria-label=Name><a href=page.html?2>Again</a>".write(to: page, atomically: true, encoding: .utf8)
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         XCTAssertFalse(opened.failed, opened.text)
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
@@ -271,7 +271,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("browser-control"), timeout: 20)
         app.press(.id("browser-control"))
@@ -293,7 +293,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let first = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.press(.id("agent-new-page"))
@@ -326,7 +326,7 @@ final class BrowserUITests: MacUITestCase {
         let (server, agent) = try startAgent()
         defer { server.stop() }
         let phone = try device()
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         XCTAssertFalse(opened.failed, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.press(.id("agent-new-shell"))
@@ -456,7 +456,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, agent) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         // A port nothing listens on.
         let closed = "http://127.0.0.1:\(port + 400)/"
@@ -557,7 +557,7 @@ final class BrowserUITests: MacUITestCase {
         }
 
         // One profile: used.
-        let first = server.text("browser_open", ["url": page.absoluteString])
+        let first = app.browserOpen(server, ["url": page.absoluteString])
         XCTAssertFalse(first.failed, first.text)
         XCTAssertFalse(server.text("browser_close", ["tab": try tabID(first.text)]).failed)
 
@@ -569,18 +569,18 @@ final class BrowserUITests: MacUITestCase {
         app.press(.id("place-sessions"))
         let (other, _) = try startAgent()
         defer { other.stop() }
-        let unnamed = other.text("browser_open", ["url": page.absoluteString])
+        let unnamed = app.browserOpen(other, ["url": page.absoluteString])
         XCTAssertTrue(unnamed.failed, unnamed.text)
         XCTAssertEqual(unnamed.text, BrowserWords.whichProfile(["Default", "Profile 2"]))
         XCTAssertEqual(other.text("browser_profiles").text, BrowserWords.profiles(["Default", "Profile 2"], uses: nil))
-        let wrong = other.text("browser_open", ["url": page.absoluteString, "profile": "Work"])
+        let wrong = app.browserOpen(other, ["url": page.absoluteString, "profile": "Work"])
         XCTAssertEqual(wrong.text, BrowserWords.noProfile("Work", ["Default", "Profile 2"]))
-        let named = other.text("browser_open", ["url": page.absoluteString, "profile": "profile 2"])
+        let named = app.browserOpen(other, ["url": page.absoluteString, "profile": "profile 2"])
         XCTAssertFalse(named.failed, named.text)
         app.wait(for: .id("browser-profile"), timeout: 20)
         app.wait("its tab in Profile 2, not \(profileShown())") { profileShown() == "Profile 2" }
         // Its next tab: the same, without naming it.
-        let again = other.text("browser_open", ["url": page.absoluteString])
+        let again = app.browserOpen(other, ["url": page.absoluteString])
         XCTAssertFalse(again.failed, again.text)
         XCTAssertEqual(other.text("browser_profiles").text, BrowserWords.profiles(["Default", "Profile 2"], uses: "Profile 2"))
         shot("agent-in-profile-2")
@@ -603,6 +603,60 @@ final class BrowserUITests: MacUITestCase {
         shot("user-private-tab")
     }
 
+    /// BROWSER-67 (#251): a profile holds the user's sign-ins, so an agent's
+    /// session opens nothing in it before the user allowed it, even with
+    /// one profile only: its `browser_open` is answered at once that the
+    /// user is asked, and the window asks. Not allowed, it is refused again
+    /// at once; another session is asked of its own; allowed, its tabs open
+    /// there, which their bar says, until it is taken back. A private tab
+    /// asks nothing.
+    func testAnAgentsSessionUsesAProfileOnlyOnceTheUserAllowedIt() throws {
+        let page = try makeSite()
+        let (server, _) = try startAgent()
+        defer { server.stop() }
+        let asking = BrowserWords.askingForProfile("Default")
+
+        let first = server.text("browser_open", ["url": page.absoluteString])
+        XCTAssertTrue(first.failed, first.text)
+        XCTAssertEqual(first.text, asking)
+        XCTAssertFalse(app.exists(.id("agent-browser")), "a tab was opened before the user answered")
+        app.wait(for: .id("profile-question"), timeout: 10)
+        app.wait(for: .containing("wants to open tabs in the browser profile “Default”"))
+        shot("profile-question")
+        // Asked once, not once more for each call.
+        XCTAssertEqual(server.text("browser_open", ["url": page.absoluteString]).text, asking)
+        XCTAssertEqual(app.all(.id("profile-question")).count, 1)
+        // Private: nothing to ask.
+        let hidden = server.text("browser_open", ["url": page.absoluteString, "private": true])
+        XCTAssertFalse(hidden.failed, hidden.text)
+        XCTAssertFalse(server.text("browser_close", ["tab": try XCTUnwrap(hidden.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(hidden.text[$0].dropFirst(4)) })]).failed)
+
+        // Not allowed: refused at once from now on, in this session.
+        app.press(.id("profile-deny"))
+        app.waitGone(.id("profile-question"))
+        XCTAssertEqual(server.text("browser_open", ["url": page.absoluteString]).text, BrowserWords.profileNotAllowed("Default"))
+        XCTAssertFalse(app.exists(.id("profile-question")), "asked again after the user said no")
+
+        // Another session is asked of its own; allowed, its tab opens.
+        let (other, _) = try startAgent()
+        defer { other.stop() }
+        XCTAssertEqual(other.text("browser_open", ["url": page.absoluteString]).text, asking)
+        app.press(.id("profile-allow"), timeout: 10)
+        let opened = other.text("browser_open", ["url": page.absoluteString])
+        XCTAssertFalse(opened.failed, opened.text)
+        app.wait(for: .id("agent-browser"), timeout: 20)
+        app.wait(for: .containing(BrowserWords.profileAllowed("Default")), timeout: 10)
+        shot("profile-allowed")
+        // The first session still may not.
+        XCTAssertEqual(server.text("browser_open", ["url": page.absoluteString]).text, BrowserWords.profileNotAllowed("Default"))
+
+        // Taken back: its tab in the profile closes, and it is asked again.
+        app.press(.id("profile-take-back"))
+        wait("the session's tab closed") { !self.app.exists(.id("profile-take-back")) }
+        XCTAssertEqual(other.text("browser_open", ["url": page.absoluteString]).text, asking)
+        app.wait(for: .id("profile-question"), timeout: 10)
+    }
+
     /// BROWSER-22: an agent's private tabs share a profile of their own in
     /// memory: what one keeps the other has, a tab in the default profile
     /// has none of it, another agent's private tab neither, and once its
@@ -612,7 +666,7 @@ final class BrowserUITests: MacUITestCase {
         let (server, _) = try startAgent()
         defer { server.stop() }
         func open(_ arguments: [String: Any], on server: Server) throws -> String {
-            let opened = server.text("browser_open", ["url": page.absoluteString].merging(arguments) { $1 })
+            let opened = app.browserOpen(server, ["url": page.absoluteString].merging(arguments) { $1 })
             XCTAssertFalse(opened.failed, opened.text)
             return try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         }
@@ -673,7 +727,7 @@ final class BrowserUITests: MacUITestCase {
         // Two origins: a page that was allowed is not asked again.
         for (answer, host) in [("Allow", "127.0.0.1"), ("Don't Allow", "localhost")] {
             let address = "http://\(host):\(serverPort)/"
-            let opened = server.text("browser_open", ["url": address])
+            let opened = app.browserOpen(server, ["url": address])
             let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
             let snapshot = server.text("browser_snapshot", ["tab": tab]).text
             let button = try XCTUnwrap(ref(in: snapshot, "button \"Where am I\""), snapshot)
@@ -717,7 +771,7 @@ final class BrowserUITests: MacUITestCase {
         let (server, _) = try startAgent()
         defer { server.stop() }
         let address = "http://127.0.0.1:\(serverPort)/"
-        let opened = server.text("browser_open", ["url": address])
+        let opened = app.browserOpen(server, ["url": address])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         var snapshot = server.text("browser_snapshot", ["tab": tab]).text
         XCTAssertFalse(server.text("browser_click", ["tab": tab, "ref": try XCTUnwrap(ref(in: snapshot, "button \"Ask Two\""), snapshot)]).failed)
@@ -759,7 +813,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         let phone = try device()
         var asked = 1000
@@ -830,7 +884,7 @@ final class BrowserUITests: MacUITestCase {
         """.write(to: page, atomically: true, encoding: .utf8)
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         let mac = try device()
         var asked = 2000
@@ -904,7 +958,7 @@ final class BrowserUITests: MacUITestCase {
         """.write(to: page, atomically: true, encoding: .utf8)
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         let mac = try device()
         var asked = 3000
@@ -980,7 +1034,7 @@ final class BrowserUITests: MacUITestCase {
         """.write(to: page, atomically: true, encoding: .utf8)
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         let mac = try device()
         var asked = 4000
@@ -1053,7 +1107,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
@@ -1112,7 +1166,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
@@ -1212,7 +1266,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
@@ -1352,11 +1406,11 @@ final class BrowserUITests: MacUITestCase {
         let before = Set(renderers().keys)
         var tabs: [String] = []
         for url in ["http://127.0.0.1:\(port)/\(page.lastPathComponent)", "http://localhost:\(port)/\(page.lastPathComponent)", page.absoluteString] {
-            var opened = agent.text("browser_open", ["url": url])
+            var opened = app.browserOpen(agent, ["url": url])
             // The little server may still be starting.
             for _ in 0..<10 where opened.failed || opened.text.contains("could not") {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-                opened = agent.text("browser_open", ["url": url])
+                opened = app.browserOpen(agent, ["url": url])
             }
             XCTAssertFalse(opened.failed, opened.text)
             tabs.append(try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text))
@@ -1448,7 +1502,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, agent) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
@@ -1499,7 +1553,7 @@ final class BrowserUITests: MacUITestCase {
         """.write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
         let (server, agent) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": folder.appendingPathComponent("index.html").absoluteString])
+        let opened = app.browserOpen(server, ["url": folder.appendingPathComponent("index.html").absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Marks" }
@@ -1537,7 +1591,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, agent) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
@@ -1596,7 +1650,7 @@ final class BrowserUITests: MacUITestCase {
         """.write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": folder.appendingPathComponent("index.html").absoluteString])
+        let opened = app.browserOpen(server, ["url": folder.appendingPathComponent("index.html").absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Live page" }
@@ -1646,7 +1700,7 @@ final class BrowserUITests: MacUITestCase {
         """.write(to: folder.appendingPathComponent("signin-popup.html"), atomically: true, encoding: .utf8)
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": folder.appendingPathComponent("signin.html").absoluteString])
+        let opened = app.browserOpen(server, ["url": folder.appendingPathComponent("signin.html").absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         let snapshot = server.text("browser_snapshot", ["tab": tab])
         let button = try XCTUnwrap(ref(in: snapshot.text, "button \"Sign in with Popup\""), snapshot.text)
@@ -1675,7 +1729,7 @@ final class BrowserUITests: MacUITestCase {
             to: folder.appendingPathComponent("second.html"), atomically: true, encoding: .utf8)
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": folder.appendingPathComponent("opener.html").absoluteString])
+        let opened = app.browserOpen(server, ["url": folder.appendingPathComponent("opener.html").absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         let snapshot = server.text("browser_snapshot", ["tab": tab])
         let button = try XCTUnwrap(ref(in: snapshot.text, "button \"Open Later\""), snapshot.text)
@@ -1720,7 +1774,7 @@ final class BrowserUITests: MacUITestCase {
         }
         guard case .profiles(let added)? = ask(.profile(.add(name: "Work"))) else { return XCTFail("no profiles answered") }
         let work = try XCTUnwrap(added.first { $0.name == "Work" })
-        let opened = server.text("browser_open", ["url": page.absoluteString, "profile": "Work"])
+        let opened = app.browserOpen(server, ["url": page.absoluteString, "profile": "Work"])
         XCTAssertFalse(opened.failed, opened.text)
         XCTAssertEqual(server.text("browser_profiles").text, BrowserWords.profiles(["Default", "Work"], uses: "Work"))
 
@@ -1738,7 +1792,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         // Chromium's own address that ends the page's process.
         _ = server.text("browser_navigate", ["tab": tab, "url": "chrome://crash"], timeout: 20)
@@ -1759,7 +1813,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         XCTAssertFalse(opened.failed, opened.text)
         app.wait(for: .id("browser-page"), timeout: 20)
         let with = ProcessInfo.processInfo.environment["QUIT_WITH"] ?? "devtools"
@@ -1829,7 +1883,7 @@ final class BrowserUITests: MacUITestCase {
         """.write(to: page, atomically: true, encoding: .utf8)
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         let snapshot = server.text("browser_snapshot", ["tab": tab])
         let box = try XCTUnwrap(ref(in: snapshot.text, "textbox \"Post text\""), snapshot.text)
@@ -1903,7 +1957,7 @@ final class BrowserUITests: MacUITestCase {
         defer { firstServer.stop() }
         let (server, agent) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
@@ -1935,7 +1989,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         let phone = try device()
         var asked = 1000
@@ -1977,7 +2031,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         let phone = try device()
@@ -2058,7 +2112,7 @@ final class BrowserUITests: MacUITestCase {
         defer { server.stop() }
         let page = root.appendingPathComponent("page.html")
         try "<!doctype html><title>One</title><p>A page</p>".write(to: page, atomically: true, encoding: .utf8)
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         let shellOpened = server.text("shell_open")
         XCTAssertFalse(shellOpened.failed, shellOpened.text)
@@ -2122,7 +2176,7 @@ final class BrowserUITests: MacUITestCase {
         defer { server.stop() }
         let page = root.appendingPathComponent("page.html")
         try "<!doctype html><title>One</title><p>A page</p>".write(to: page, atomically: true, encoding: .utf8)
-        _ = server.text("browser_open", ["url": page.absoluteString])
+        _ = app.browserOpen(server, ["url": page.absoluteString])
         XCTAssertFalse(server.text("shell_open").failed)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait(for: .id("agent-shells"), timeout: 20)
@@ -2169,7 +2223,7 @@ final class BrowserUITests: MacUITestCase {
         defer { server.stop() }
         let page = root.appendingPathComponent("page.html")
         try "<!doctype html><title>Its page</title><p>A page</p>".write(to: page, atomically: true, encoding: .utf8)
-        let tab = try tabID(server.text("browser_open", ["url": page.absoluteString]))
+        let tab = try tabID(app.browserOpen(server, ["url": page.absoluteString]))
         let shellOpened = server.text("shell_open")
         XCTAssertFalse(shellOpened.failed, shellOpened.text)
         let phone = try device()
@@ -2209,7 +2263,7 @@ final class BrowserUITests: MacUITestCase {
         <button>Send</button>
         """.write(to: page, atomically: true, encoding: .utf8)
         try "hello".write(to: URL(fileURLWithPath: agent.cwd).appendingPathComponent("report.txt"), atomically: true, encoding: .utf8)
-        let tab = try tabID(server.text("browser_open", ["url": page.absoluteString]))
+        let tab = try tabID(app.browserOpen(server, ["url": page.absoluteString]))
         let snapshot = server.text("browser_snapshot", ["tab": tab]).text
         let field = try XCTUnwrap(ref(in: snapshot, "\"Report\""), snapshot)
         let button = try XCTUnwrap(ref(in: snapshot, "button \"Send\""), snapshot)
@@ -2252,13 +2306,13 @@ final class BrowserUITests: MacUITestCase {
         let (server, _) = try startAgent()
         defer { server.stop() }
         func title(_ tab: String) -> String { server.text("browser_evaluate", ["tab": tab, "script": "document.title"]).text }
-        let signing = try tabID(server.text("browser_open", ["url": site]))
+        let signing = try tabID(app.browserOpen(server, ["url": site]))
         let button = try XCTUnwrap(ref(in: server.text("browser_snapshot", ["tab": signing]).text, "button \"Sign in\""))
         XCTAssertFalse(server.text("browser_click", ["tab": signing, "ref": button]).failed)
         wait("signed in") { title(signing) == "\"In\"" }
         continueAfterFailure = true
-        XCTAssertEqual(title(try tabID(server.text("browser_open", ["url": site + "who.html"]))), "\"Signed in\"", "the profile's second tab")
-        XCTAssertEqual(title(try tabID(server.text("browser_open", ["url": site + "who.html", "private": true]))), "\"Signed out\"", "a private tab")
+        XCTAssertEqual(title(try tabID(app.browserOpen(server, ["url": site + "who.html"]))), "\"Signed in\"", "the profile's second tab")
+        XCTAssertEqual(title(try tabID(app.browserOpen(server, ["url": site + "who.html", "private": true]))), "\"Signed out\"", "a private tab")
 
         // Another profile, which another agent names.
         app.press(.id("place-settings"))
@@ -2268,7 +2322,7 @@ final class BrowserUITests: MacUITestCase {
         app.press(.id("place-sessions"))
         let (other, _) = try startAgent()
         defer { other.stop() }
-        let elsewhere = try tabID(other.text("browser_open", ["url": site + "who.html", "profile": "Profile 2"]))
+        let elsewhere = try tabID(app.browserOpen(other, ["url": site + "who.html", "profile": "Profile 2"]))
         XCTAssertEqual(other.text("browser_evaluate", ["tab": elsewhere, "script": "document.title"]).text, "\"Signed out\"", "another profile's tab")
     }
 
@@ -2283,7 +2337,7 @@ final class BrowserUITests: MacUITestCase {
             .write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let tab = try tabID(server.text("browser_open", ["url": folder.appendingPathComponent("index.html").absoluteString]))
+        let tab = try tabID(app.browserOpen(server, ["url": folder.appendingPathComponent("index.html").absoluteString]))
         let inner = folder.appendingPathComponent("inner.html").absoluteString
         let snapshot = server.text("browser_snapshot", ["tab": tab]).text
         XCTAssertTrue(snapshot.contains(BrowserWords.frames([inner, inner + "?2"])), snapshot)
@@ -2300,7 +2354,7 @@ final class BrowserUITests: MacUITestCase {
         let page = try makeSite()
         let (server, _) = try startAgent()
         defer { server.stop() }
-        let tab = try tabID(server.text("browser_open", ["url": page.absoluteString]))
+        let tab = try tabID(app.browserOpen(server, ["url": page.absoluteString]))
         let snapshot = server.text("browser_snapshot", ["tab": tab]).text
         let link = try XCTUnwrap(ref(in: snapshot, "link \"Next page\""), snapshot)
         let field = try XCTUnwrap(ref(in: snapshot, "textbox \"Name\""), snapshot)
@@ -2332,7 +2386,7 @@ final class BrowserUITests: MacUITestCase {
             return nodes[(index + 1)...].prefix { $0.depth > nodes[index].depth }.first { $0.identifier == "terminal-view" }?.value
         }
         defer { server.stop() }
-        let opened = server.text("browser_open", ["url": page.absoluteString])
+        let opened = app.browserOpen(server, ["url": page.absoluteString])
         XCTAssertFalse(opened.failed, opened.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         app.wait("the page shown") { self.app.value(of: .id("browser-page")) == "Test page" }
@@ -2660,7 +2714,7 @@ final class BrowserUITests: MacUITestCase {
         defer { server.stop() }
         // The agent is in front, started just now.
         app.wait(for: .id("tab-1"), timeout: 10)
-        let opened = server.text("browser_open", ["url": try page("Agents").absoluteString])
+        let opened = app.browserOpen(server, ["url": try page("Agents").absoluteString])
         XCTAssertFalse(opened.failed, opened.text)
         app.wait("the agent's page in its row, not \(pages())", timeout: 20) { pages() == ["Agents"] }
         XCTAssertEqual(server.text("browser_tabs").text.split(separator: "\n").count, 1, "the agent lists a page that is not its own")
@@ -2672,7 +2726,7 @@ final class BrowserUITests: MacUITestCase {
         app.wait("the user's second page") { self.app.value(of: .id("browser-page")) == "Mine too" }
         XCTAssertEqual(pages(), ["Mine", "Mine too"], "the user's Browser tab")
         // And one more of the agent's.
-        XCTAssertFalse(server.text("browser_open", ["url": try page("Agents too").absoluteString]).failed)
+        XCTAssertFalse(app.browserOpen(server, ["url": try page("Agents too").absoluteString]).failed)
         wait("the agent to list its two") { server.text("browser_tabs").text.split(separator: "\n").count == 2 }
         let listed = server.text("browser_tabs").text
         XCTAssertFalse(listed.contains("Mine"), "the agent lists the user's page: \(listed)")
