@@ -265,8 +265,8 @@ final class AgentShellsHostTests: XCTestCase {
         let connection: AgentTermConnection
         var messages: [ServerMessage] = []
 
-        init(port: UInt16, token: String, name: String = "mac") {
-            connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: name)
+        init(port: UInt16, token: String) {
+            connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "mac")
             connection.onMessage = { [weak self] in self?.messages.append($0) }
             connection.connect()
         }
@@ -1149,48 +1149,6 @@ extension AgentShellsHostTests {
         waitUntil("the device told there are no tabs") {
             device.messages.contains { if case .browserTabs(let list) = $0 { return list.isEmpty } else { return false } }
         }
-    }
-
-    /// BROWSER-67 (#251): what agents' sessions ask of the user's profiles
-    /// is told by the app that shows the browser and passed to every
-    /// client, also one that connects later, and none once that app goes.
-    /// An answer comes from a device to the app; an agent's own server is
-    /// refused it.
-    func testAProfileQuestionReachesEveryDeviceAndIsTheUsersToAnswer() throws {
-        let mac = Client(port: port, token: token)
-        waitUntil("connected") { !mac.messages.isEmpty }
-        var calls: [BrowserRequest] = []
-        mac.connection.onMessage = { [weak mac] message in
-            mac?.messages.append(message)
-            guard case .browserCall(let id, _, let request) = message else { return }
-            calls.append(request)
-            mac?.connection.send(.browserReply(id: id, result: .text("Answered.")))
-        }
-        mac.connection.send(.browserProvider(true))
-        let (_, agentID) = try startAgent("claude", title: "first", client: mac)
-        let question = ProfileQuestion(agent: agentID, agentName: "first", profile: "default", profileName: "Default")
-        let device = Client(port: port, token: token)
-        waitUntil("the device connected") { !device.messages.isEmpty }
-        mac.connection.send(.profileQuestions([question]))
-        func told(_ client: Client) -> [ProfileQuestion]? {
-            client.messages.compactMap { if case .profileQuestions(let list) = $0 { return list } else { return nil } }.last
-        }
-        waitUntil("the device told") { told(device) == [question] }
-        let later = Client(port: port, token: token)
-        waitUntil("one that connects later told") { told(later) == [question] }
-
-        // From a device: to the app.
-        device.connection.send(.browserAsk(id: 1, request: .answerProfile(agent: agentID, profile: "default", allow: true)))
-        waitUntil("the app asked") { calls.contains(.answerProfile(agent: agentID, profile: "default", allow: true)) }
-        // From an agent's server: refused, never passed on.
-        let server = Client(port: port, token: token, name: HostServer.agentShellsClient)
-        waitUntil("the server connected") { !server.messages.isEmpty }
-        server.connection.send(.browserAsk(id: 2, request: .answerProfile(agent: agentID, profile: "default", allow: true)))
-        waitUntil("the server refused") { server.messages.contains { if case .browserAnswer(2, .refused) = $0 { return true } else { return false } } }
-        XCTAssertEqual(calls.count, 1, "an agent's server answered for the user")
-
-        mac.connection.send(.browserProvider(false))
-        waitUntil("no question once the app went") { told(device) == [] }
     }
 
     /// MCP-32 (#145): ending an agent's session ends the shells it opened

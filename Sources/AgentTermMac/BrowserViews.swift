@@ -257,18 +257,8 @@ private struct AgentBar: View {
                     if let action = tab.agentAction, !tab.userHasIt {
                         Text(action).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                     }
-                    // What the user allowed it, to be taken back (#251).
-                    if let profile = model.allowedProfile(of: tab) {
-                        Text(BrowserWords.profileAllowed(profile)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                    }
                 }
                 Spacer()
-                if model.allowedProfile(of: tab) != nil, let owner = tab.owner {
-                    Button(BrowserWords.takeBackProfile) { model.takeBackProfile(of: owner) }
-                        .controlSize(.small)
-                        .help("This session's tabs in that profile close, and it asks again the next time")
-                        .accessibilityIdentifier("profile-take-back")
-                }
                 Button(tab.userHasIt ? BrowserWords.giveBack(agents) : BrowserWords.takeOver) { model.setUserHas(tab, !tab.userHasIt) }
                     .controlSize(.small)
                     .accessibilityIdentifier("browser-control")

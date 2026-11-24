@@ -357,15 +357,6 @@ final class AppModel: ObservableObject {
     /// waiting for its browser's answer, and a page it opened for this app
     /// to show once it is listed.
     var remoteTabs: [BrowserTabInfo] = []
-    /// What agents' sessions on this Mac ask of the user's profiles (#251),
-    /// for the user to answer.
-    @Published var profileQuestions: [ProfileQuestion] = [] {
-        didSet { if profileQuestions != oldValue, !isRemote { connection?.send(.profileQuestions(profileQuestions)) } }
-    }
-    /// The same, of the other Mac on show, as its host says them.
-    @Published var remoteProfileQuestions: [ProfileQuestion] = []
-    /// The profiles the user did not let a session use, as "session profile".
-    var profilesNotAllowed: Set<String> = []
     var remoteBrowserAsks: [Int: (BrowserResult) -> Void] = [:]
     var nextRemoteBrowserAsk = 1
     /// Those of them the app sent by itself, with what each asks: their
@@ -1592,7 +1583,6 @@ final class AppModel: ObservableObject {
         // on show (#76).
         browsers.closeAll()
         remoteTabs = []
-        remoteProfileQuestions = []
         pendingRemotePage = nil
         browserInFront = nil
         folders = []
@@ -1872,7 +1862,7 @@ final class AppModel: ObservableObject {
             sessions = list
             turnResults = turnResults.filter { id, _ in list.contains { $0.id == id } }
             browsers.sessionsChanged(list)
-            if isRemote { browsers.mirror(remoteTabs, sessions: list) } else { forgetProfileAnswers(keeping: list) }
+            if isRemote { browsers.mirror(remoteTabs, sessions: list) }
             changeNotices { $0.keep { shown in list.contains { $0.id == shown.session && $0.state == shown.state } } }
             // Pick up sessions that were already running before this window opened.
             for info in list where controllers[info.id] == nil {
@@ -1936,10 +1926,6 @@ final class AppModel: ObservableObject {
         case .browserCall(let id, let agent, let request):
             // An agent, or a device, asks the browser this app shows (#76).
             answerBrowser(id: id, agent: agent, request: request)
-        case .profileQuestions(let list):
-            // This Mac's own are this app's; another Mac's are answered from
-            // here as from its own window (#251).
-            if isRemote { remoteProfileQuestions = list }
         case .browserTabs(let list):
             // This Mac's own are this app's, which said them; another Mac's
             // are shown here as its host lists them (#147).

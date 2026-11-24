@@ -92,6 +92,39 @@ final class SessionTests: MacUITestCase {
     }
 
     /// NOTE-4: an agent of a session that is not in front that comes to
+    /// INBOX-14 (#320): what an agent asks is answered from the Inbox: one
+    /// of its choices, or words of one's own, which reach the agent as the
+    /// host types an answer. Before the fix the Inbox listed the choices as
+    /// text, with no way to answer.
+    func testAnAgentsQuestionIsAnsweredFromTheInbox() throws {
+        let phone = try device()
+        let folder = root.appendingPathComponent("asker")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let received = folder.appendingPathComponent("received")
+        let script = folder.appendingPathComponent("claude")
+        let event =
+            #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which parser first?","header":"Parser","options":[{"label":"CSV"},{"label":"JSON"}],"multiSelect":false}]}}"#
+        try "#!/bin/sh\nsleep 1\nprintf '%s' '\(event)' | '\(hostExecutable.path)' hook claude PreToolUse\nexec cat > '\(received.path)'\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "asker")))
+        wait("the agent asking", timeout: 20) {
+            if case .waitingForAnswer? = phone.sessions.first(where: { $0.title == "asker" })?.state { return true }
+            return false
+        }
+        app.press(.id("place-inbox"))
+        app.wait(for: .containing("Which parser first?"), timeout: 15)
+        if let row = app.first(.containing("asker")), !app.exists(.id("inbox-answer")) { AXUIElementPerformAction(row.element, kAXPressAction as CFString) }
+        app.wait(for: .id("inbox-answer"), timeout: 10)
+        XCTAssertTrue(app.exists(.id("inbox-choice-1")), "the choices are not offered")
+        app.write("a parser of my own", into: .id("inbox-answer"))
+        shot("inbox-answer")
+        app.press(.id("inbox-answer-send"))
+        wait("the words to reach the agent", timeout: 15) {
+            ((try? String(contentsOf: received, encoding: .utf8)) ?? "").contains("a parser of my own")
+        }
+    }
+
     /// wait is told in a banner, which opens it.
     func testAnAgentThatWaitsInAnotherSessionIsToldInABanner() throws {
         let phone = try device()

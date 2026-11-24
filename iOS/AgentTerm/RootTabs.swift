@@ -327,53 +327,9 @@ private struct TopBanners: View {
                 FailureBanner(failure: failure)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            // A session asks to use a profile with the user's sign-ins (#251).
-            ForEach(model.profileQuestions) { question in
-                ProfileQuestionCard(question: question)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
         }
         .padding(.horizontal, 12)
-        .padding(.bottom, model.failures.isEmpty && model.shownShellsFaults.isEmpty && model.profileQuestions.isEmpty ? 0 : 8)
-    }
-}
-
-/// An agent's session asks to open tabs in a browser profile that holds
-/// the user's sign-ins (#251): answered here as on the Mac.
-private struct ProfileQuestionCard: View {
-    @EnvironmentObject private var model: PhoneModel
-    let question: ProfileQuestion
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "person.badge.key.fill").foregroundStyle(Color.accentColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(question.title)
-                        .font(.subheadline.weight(.semibold))
-                        .layoutPriority(1)
-                    Text(ProfileQuestion.explanation)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("profile-question")
-            }
-            HStack {
-                Spacer()
-                Button(ProfileQuestion.deny) { model.answer(question, allow: false) }
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("profile-deny")
-                Button(ProfileQuestion.allow) { model.answer(question, allow: true) }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("profile-allow")
-            }
-            .font(.footnote.weight(.semibold))
-            .controlSize(.small)
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.thinMaterial))
+        .padding(.bottom, model.failures.isEmpty && model.shownShellsFaults.isEmpty ? 0 : 8)
     }
 }
 

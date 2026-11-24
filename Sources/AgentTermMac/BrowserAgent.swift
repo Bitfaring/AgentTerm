@@ -140,7 +140,6 @@ extension AppModel {
         guard !isRemote else { return }
         connection?.send(.browserProvider(true))
         connection?.send(.browserTabs(browsers.infos))
-        connection?.send(.profileQuestions(profileQuestions))
     }
 
     // MARK: The user's
@@ -336,84 +335,27 @@ extension AppModel {
     /// The profile an agent's tab opens in: private, in one of its own in
     /// memory; the one it names; the one its tabs use; or the only one
     /// there is. With several and none named yet, the agent is told which
-    /// there are, to ask the user in its conversation (#76). A profile that
-    /// is not private holds the user's sign-ins: the app itself asks the
-    /// user, the first time a session would use it, and the agent is told
-    /// so at once; nothing is opened until they allowed it (#251).
+    /// there are, to ask the user in its conversation (#76).
     private func profile(for agent: SessionInfo, named name: String?, isPrivate: Bool) -> Result<String, ProfileRefusal> {
         if isPrivate { return .success(BrowserProfiles.privateID(for: agent.id)) }
         let names = profiles.infos.map(\.name)
-        let wanted: BrowserProfile
         if let name {
             guard let named = profiles.profile(named: name) else { return .failure(ProfileRefusal(text: BrowserWords.noProfile(name, names))) }
-            wanted = named
-        } else if let given = browsers.agentProfiles[agent.id].flatMap({ profiles.profile($0) }) {
-            wanted = given
-        } else if profiles.list.count == 1, let only = profiles.profile(profiles.defaultID) {
-            wanted = only
-        } else {
-            return .failure(ProfileRefusal(text: BrowserWords.whichProfile(names)))
+            browsers.agentProfiles[agent.id] = named.id
+            return .success(named.id)
         }
-        if browsers.agentProfiles[agent.id] == wanted.id { return .success(wanted.id) }
-        if profilesNotAllowed.contains("\(agent.id) \(wanted.id)") { return .failure(ProfileRefusal(text: BrowserWords.profileNotAllowed(wanted.name))) }
-        let question = ProfileQuestion(agent: agent.id, agentName: agent.title, profile: wanted.id, profileName: wanted.name)
-        if !profileQuestions.contains(question) { profileQuestions.append(question) }
-        return .failure(ProfileRefusal(text: BrowserWords.askingForProfile(wanted.name)))
-    }
-
-    /// The user's answer to a session asking for a profile (#251): on this
-    /// Mac, or on the other one on show, through its host.
-    func answer(_ question: ProfileQuestion, allow: Bool) {
-        if isRemote {
-            askRemoteBrowser(.answerProfile(agent: question.agent, profile: question.profile, allow: allow))
-            remoteProfileQuestions.removeAll { $0 == question }
-            return
+        if let chosen = browsers.agentProfiles[agent.id], profiles.profile(chosen) != nil { return .success(chosen) }
+        guard profiles.list.count > 1 else {
+            browsers.agentProfiles[agent.id] = profiles.defaultID
+            return .success(profiles.defaultID)
         }
-        _ = answerProfile(agent: question.agent, profile: question.profile, allow: allow)
-    }
-
-    /// Kept for the session alone: a profile allowed is the one its tabs
-    /// use; one not allowed is refused at once when it asks again.
-    @discardableResult
-    func answerProfile(agent: SessionID, profile: String, allow: Bool) -> Bool {
-        guard let index = profileQuestions.firstIndex(where: { $0.agent == agent && $0.profile == profile }) else { return false }
-        profileQuestions.remove(at: index)
-        if allow {
-            browsers.agentProfiles[agent] = profile
-            profilesNotAllowed.remove("\(agent) \(profile)")
-        } else {
-            profilesNotAllowed.insert("\(agent) \(profile)")
-        }
-        return true
-    }
-
-    /// The profile a session was allowed, taken back: its tabs in it close,
-    /// and it is asked again the next time (#251).
-    func takeBackProfile(of agent: SessionID) {
-        guard let profile = browsers.agentProfiles.removeValue(forKey: agent) else { return }
-        for tab in browsers.tabs where tab.owner == agent && tab.profile == profile { closeBrowserTab(tab) }
-    }
-
-    /// The profile a tab's agent was allowed, when the tab is in it.
-    func allowedProfile(of tab: BrowserTab) -> String? {
-        guard let owner = tab.owner, let given = browsers.agentProfiles[owner], given == tab.profile else { return nil }
-        return profiles.profile(given)?.name
-    }
-
-    /// What was answered lasts no longer than the session (#251).
-    func forgetProfileAnswers(keeping sessions: [SessionInfo]) {
-        let running = Set(sessions.map(\.id))
-        browsers.agentProfiles = browsers.agentProfiles.filter { running.contains($0.key) }
-        profilesNotAllowed = profilesNotAllowed.filter { key in running.contains { key.hasPrefix("\($0) ") } }
-        let asked = profileQuestions.filter { running.contains($0.agent) }
-        if asked != profileQuestions { profileQuestions = asked }
+        return .failure(ProfileRefusal(text: BrowserWords.whichProfile(names)))
     }
 
     /// Deletes a profile, closing its tabs first.
     func deleteProfile(_ id: String) {
         for tab in browsers.tabs where tab.profile == id { closeBrowserTab(tab) }
         browsers.agentProfiles = browsers.agentProfiles.filter { $0.value != id }
-        profileQuestions.removeAll { $0.profile == id }
         profiles.delete(id)
     }
 
@@ -701,7 +643,7 @@ extension AppModel {
             try await tab.emulate(device)
             done(device.map { "Shows the page as \($0.name)" } ?? "Shows the page as itself")
             return .text(device.map { "Tab \(tab.id) is shown as \($0.name)" + ($0.width > 0 ? ", \($0.width) × \($0.height)" : "") + "." } ?? "Tab \(tab.id) is shown as itself again.")
-        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles, .profile, .pointer, .contextAt, .copy, .answerProfile:
+        case .open, .tabs, .close, .picture, .takeOver, .giveBack, .watch, .tap, .text, .newTab, .stop, .profiles, .profile, .pointer, .contextAt, .copy:
             return .refused("That is not for this tab.")
         }
     }
@@ -723,10 +665,6 @@ extension AppModel {
             return await turn.value
         }
         if case .profiles = request { return .profiles(profiles.infos) }
-        // The user's answer, from a device (#251).
-        if case .answerProfile(let agent, let profile, let allow) = request {
-            return answerProfile(agent: agent, profile: profile, allow: allow) ? .text("Answered.") : .refused(BrowserWords.profileNotAsked)
-        }
         // The profiles changed from a device, as from Settings > Browser (#155).
         if case .profile(let change) = request {
             switch change {

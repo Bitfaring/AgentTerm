@@ -434,6 +434,12 @@ happened; the Live Activity shows the host's state now (below).
   of the two was chosen is kept for the next item, on that device, apart
   from History's. What an agent asks and what a failure says stay as
   written.
+- **What an agent asks is answered in the Inbox too** (#320), on the Mac
+  and the iPhone, while it still asks: each of its choices is a button,
+  and a field takes an answer in words of one's own, as the agent's own
+  list offers one after its choices (Claude Code's "Type something."); the
+  host types it there. Once the agent no longer asks, the choices are
+  listed as text only.
 - **What a turn came to** (#71): an agent that is done shows, in the
   Inbox, what it was asked, what it answered, the commands it ran with
   their exit codes, and the files of its folder that changed while it
@@ -755,18 +761,7 @@ user sees.
   conversation**: its first `browser_open` that names no profile is
   answered at once with the profiles' names and asks it to ask the user;
   the one it then names is its own, and its next tabs use it without
-  naming it (`browser_profiles` lists them). **A profile holds the user's
-  sign-ins, so the app itself asks the user** before an agent's session
-  opens anything in one, with one profile as with several (#251): the
-  agent's `browser_open` is answered at once that the user is being
-  asked, and nothing is opened; a banner at the window's top, and a card
-  over the iPhone's screens, says which session wants which profile, with
-  Don't Allow and Allow for This Session, answered on either. Allowed, the
-  session's tabs open there, and their bar says so with Take Back Profile,
-  which closes them and asks again the next time; not allowed, its
-  `browser_open` in that profile is refused at once for the rest of the
-  session. What was answered lasts no longer than the session. A private
-  tab asks nothing. A **private tab** (Browser >
+  naming it (`browser_profiles` lists them). A **private tab** (Browser >
   New Private Tab, ⇧⌥⌘T; Private in the Browser button's menu, or its
   own menu with a single profile; `private: true` for an agent, which is
   not asked) has a profile of its own in memory: it keeps nothing on

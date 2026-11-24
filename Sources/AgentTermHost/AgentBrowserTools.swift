@@ -9,7 +9,7 @@ extension AgentShellsMCP {
     static let browserTools: [[String: Any]] = [
         browserTool(
             "browser_open",
-            "Opens a tab of your own in AgentTerm's browser (Chromium), beside you where the user sees it, at a URL or empty, and returns its id. It uses a profile, with that profile's sign-ins and cookies: the one named, the one your tabs already use, or the only one there is. With several profiles and none named yet, it says which there are: ask the user which one to use. The first time your session would use a profile, AgentTerm asks the user whether you may, and nothing is opened: call it again once they have answered. A private tab has a profile of its own in memory, shared by your private tabs only, with none of the user's sign-ins, and is gone with your last private tab.",
+            "Opens a tab of your own in AgentTerm's browser (Chromium), beside you where the user sees it, at a URL or empty, and returns its id. It uses a profile, with that profile's sign-ins and cookies: the one named, the one your tabs already use, or the only one there is. With several profiles and none named yet, it says which there are: ask the user which one to use. A private tab has a profile of its own in memory, shared by your private tabs only, with none of the user's sign-ins, and is gone with your last private tab.",
             [
                 "url": string("The address to load"), "profile": string("A profile by its name, from browser_profiles"),
                 "private": boolean("A private tab, which keeps nothing and needs no profile"),

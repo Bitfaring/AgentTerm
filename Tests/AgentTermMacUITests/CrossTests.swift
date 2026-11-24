@@ -95,20 +95,10 @@ final class CrossTests: XCTestCase {
         defer { fromShell.stop() }
         let opened = fromShell.text("shell_open", ["title": "from-a-shell"])
         XCTAssertFalse(opened.failed, opened.text)
-        let page = app.browserOpen(server, ["url": try XCTUnwrap(environment["AGENTTERM_CROSS_PAGE"])])
+        let page = server.text("browser_open", ["url": try XCTUnwrap(environment["AGENTTERM_CROSS_PAGE"])])
         XCTAssertFalse(page.failed, page.text)
         app.wait(for: .id("agent-browser"), timeout: 20)
         wait("the page shown beside the agent") { self.app.value(of: .id("browser-page")) == "Cross page" }
-
-        // BROWSER-67 (#251): it asks for a second profile, and the question
-        // is left for the phone to answer.
-        openSettings("Browser")
-        app.press(.id("profile-new"))
-        app.wait(for: .id("profile-name-Profile 2"))
-        app.press(.id("place-sessions"))
-        let asked = server.text("browser_open", ["url": try XCTUnwrap(environment["AGENTTERM_CROSS_PAGE"]), "profile": "Profile 2"])
-        XCTAssertEqual(asked.text, BrowserWords.askingForProfile("Profile 2"))
-        app.wait(for: .id("profile-question"), timeout: 10)
     }
 
     /// After the iPhone app ran: what it did, shown by the Mac.
@@ -135,17 +125,6 @@ final class CrossTests: XCTestCase {
         // BROWSER-12: the phone gave the agent's page back, after typing in
         // it; the page it opened of its own it closed.
         wait("the page the phone typed in") { self.app.exists(.containing("typed hi")) }
-
-        // BROWSER-67 (#251): the phone allowed the agent "Profile 2": the
-        // question is gone here too, and the agent's tab opens in it.
-        app.waitGone(.id("profile-question"), timeout: 10)
-        let told = URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_CROSS_AGENT_VARIABLE"]))
-        let server = try MCPServerProcess(
-            tool: URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_CROSS_TOOL"])), variable: try String(contentsOf: told, encoding: .utf8),
-            state: URL(fileURLWithPath: try XCTUnwrap(environment["AGENTTERM_CROSS_STATE"])))
-        defer { server.stop() }
-        let opened = server.text("browser_open", ["url": try XCTUnwrap(environment["AGENTTERM_CROSS_PAGE"]), "profile": "Profile 2"])
-        XCTAssertFalse(opened.failed, opened.text)
 
         // Who is using a session is checked with the Mac app alone
         // (SessionTests): the iPhone app is closed when its test ends, and

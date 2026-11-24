@@ -508,6 +508,11 @@ final class FlowTests: XCTestCase {
             useTheInbox(app, compose: compose)
             return
         }
+        if environment["AGENTTERM_ONLY_INBOXASK"] != nil {
+            app.navigationBars.buttons.firstMatch.tap()
+            answerFromTheInbox(app, compose: compose)
+            return
+        }
         if environment["AGENTTERM_ONLY_ASK"] != nil {
             app.navigationBars.buttons.firstMatch.tap()
             answerWhileWritingAPrompt(app, compose: compose)
@@ -1477,6 +1482,32 @@ final class FlowTests: XCTestCase {
     /// said; touched, it shows what its turn came to; Open shows its
     /// terminal. Read, it leaves the top of the list and stays in the whole
     /// Inbox, kept after it is read.
+    /// IOS-26 (#320): what an agent asks, opened from the Inbox, is
+    /// answered there in words of one's own, as Claude Code's list offers
+    /// after its choices ("Type something."). Where the answer went is what
+    /// the stand-in received, which scripts/test-ios.sh checks. Before the
+    /// fix the Inbox listed the choices as text, with no way to answer.
+    private func answerFromTheInbox(_ app: XCUIApplication, compose: XCUIElement) {
+        let claude = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Start Claude Code")).firstMatch
+        XCTAssertTrue(claude.waitForExistence(timeout: 10), "no Claude Code to start")
+        claude.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10), "the Claude Code session did not open")
+        app.navigationBars.buttons.firstMatch.tap()
+        let items = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES %@", "inbox-[0-9]+"))
+        let item = items.firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 40), "the agent's question is not in the Inbox")
+        item.tap()
+        let answer = app.descendants(matching: .any)["notice-answer"].firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 10), "no field to answer the agent in words of one's own")
+        XCTAssertTrue(app.buttons["notice-choice-1"].exists, "the question's choices are not offered")
+        answer.tap()
+        answer.typeText("a parser of my own")
+        capture("25-inbox-answer")
+        app.buttons["notice-answer-send"].tap()
+        XCTAssertTrue(answer.waitForNonExistence(timeout: 15), "the answered question still offers to answer")
+        capture("26-inbox-answered")
+    }
+
     private func useTheInbox(_ app: XCUIApplication, compose: XCUIElement) {
         // The stand-in Claude Code says it is done a few seconds after it
         // starts (scripts/test-ios.sh): by then the list is on screen.

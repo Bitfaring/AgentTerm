@@ -125,7 +125,7 @@ fi
 # ASK=only has it ask a question with choices a while after it starts, time
 # enough for the test to write a prompt first (IOS-12, #232).
 ASK_AFTER=""
-if [ "${ASK:-}" = only ]; then ASK_AFTER=15; fi
+if [ "${ASK:-}" = only ] || [ "${INBOXASK:-}" = only ]; then ASK_AFTER=15; fi
 HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_DEMO_DONE_AFTER="$INBOX_DONE_AFTER" AGENTTERM_DEMO_CLOSING="$DEMO_CLOSING" AGENTTERM_DEMO_ASK_AFTER="$ASK_AFTER" AGENTTERM_DEMO_TOOL="$AGENTTERMD" AGENTTERM_TAILSCALE_ADDRESS="$TAILSCALE_STANDIN" "$AGENTTERMD" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
@@ -205,6 +205,10 @@ if [ "${INBOX:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_INBOX=1; fi
 # question it asks meanwhile from the place to answer, then sends the prompt
 # (IOS-12), and nothing else. What the stand-in received is checked after.
 if [ "${ASK:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_ASK=1; fi
+# INBOXASK=only answers the stand-in's question from the Inbox in words of
+# one's own (IOS-26, #320), and nothing else. What the stand-in received is
+# checked after.
+if [ "${INBOXASK:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_INBOXASK=1; fi
 # NOTE=only reads a stand-in agent's note on its row (IOS-9), and nothing else.
 if [ "${NOTE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_NOTE=1; fi
 # WORKTREE=only makes a worktree of the test project from the list and
@@ -307,6 +311,16 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${DELETE:-}" = only ]; then echo "iOS UI test passed (a schedule deleted only)."; rm -f "$LOG"; exit 0; fi
     if [ "${UNANSWERED:-}" = only ]; then echo "iOS UI test passed (a commit the Mac did not answer only)."; rm -f "$LOG"; exit 0; fi
     if [ "${OFFLINE:-}" = only ]; then echo "iOS UI test passed (typing while the Mac is gone only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${INBOXASK:-}" = only ]; then
+        # IOS-26: the words went in while the stand-in asked.
+        INPUT="$FAKE_HOME/.demo-agent/claude-input"
+        if ! grep -q "a parser of my own" "$INPUT" 2>/dev/null || ! grep -q ANSWERED "$INPUT" 2>/dev/null; then
+            echo "test-ios.sh: the answer of one's own did not reach the stand-in; it received:" >&2
+            cat "$INPUT" >&2 2>/dev/null || echo "(nothing)" >&2
+            exit 1
+        fi
+        echo "iOS UI test passed (an answer from the Inbox only)."; rm -f "$LOG"; exit 0
+    fi
     if [ "${ASK:-}" = only ]; then
         # IOS-12: the answer went in while the stand-in asked, as the keys of
         # its second choice; the prompt only after the question was over.
