@@ -153,6 +153,15 @@ public final class PTYProcess {
         return ProcessNames.command(of: group)
     }
 
+    /// Whether a program other than the one it started is in front of the
+    /// terminal: a command run at the shell's prompt. False at the prompt,
+    /// and once the program has ended.
+    public var runsAnotherProgram: Bool {
+        guard !finished else { return false }
+        let group = tcgetpgrp(master)
+        return group > 0 && group != pid
+    }
+
     public func resize(_ size: TermSize) {
         guard !finished else { return }
         Self.setSize(size, on: master)

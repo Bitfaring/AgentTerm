@@ -274,16 +274,26 @@ extension AppModel {
 
     // MARK: Closing a tab of the strip, all it holds (#145)
 
-    /// Closes a tab of the strip and everything in it. One of the user's
-    /// own is asked first as `CloseWords.asks` says; an agent's is ending
-    /// the agent, which is always asked, and the host ends its shells and
-    /// closes its pages with it.
+    /// Closes a tab of the strip and everything in it. Shells are asked
+    /// about first only when one of them runs a command; pages, diffs and
+    /// files close at once, a file with unsaved changes asking to be saved.
+    /// An agent's tab is ending the agent, asked while it is at work, and
+    /// the host ends its shells and closes its pages with it.
     func requestCloseGroup(_ group: String) {
-        if let holder = TabID.holder(of: group) {
-            if CloseWords.asks(holder.kind, count: members(of: group).count) { pendingGroupClose = group } else { closeGroup(group) }
+        if TabID.holder(of: group) != nil {
+            if asksToClose(group) { pendingGroupClose = group } else { closeGroup(group) }
         } else if let agent = session(forTab: group) {
             requestEnd(agent.id)
         }
+    }
+
+    /// Whether closing a tab of the strip is asked first: its agent, or
+    /// one of its shells, is at work (`SessionInfo.isBusy`).
+    func asksToClose(_ group: String) -> Bool {
+        if let holder = TabID.holder(of: group) {
+            return holder.kind == .shells && userShells(in: holder.project).contains(where: \.isBusy)
+        }
+        return session(forTab: group)?.isBusy ?? false
     }
 
     /// Closes a tab of the user's own, once asked. A file with unsaved

@@ -2347,14 +2347,15 @@ final class AppModel: ObservableObject {
         connection?.send(.kill(session: session))
     }
 
-    /// A session the user asked to end, until that is confirmed. Ending
-    /// one stops what runs in it, an agent in the middle of its work for
-    /// one, and ⌘W is pressed out of habit: it asks first, as closing many
-    /// tabs does and as the iPhone does.
+    /// A session the user asked to end, until that is confirmed. Only one
+    /// at work is asked about (`SessionInfo.isBusy`): ending it stops an
+    /// agent in the middle of its turn, or a command; a shell at its prompt
+    /// or a done agent ends at once.
     @Published var pendingEnd: SessionInfo?
 
     func requestEnd(_ session: SessionID) {
-        pendingEnd = sessions.first { $0.id == session }
+        guard let info = sessions.first(where: { $0.id == session }) else { return }
+        if info.isBusy { pendingEnd = info } else { close(session) }
     }
 
     func takeControl() {
@@ -2535,10 +2536,16 @@ final class AppModel: ObservableObject {
         sessions.filter { closes(stripTab(of: TabID.session($0)), by: request) }
     }
 
-    /// Closes every tab but the one the request keeps. Sessions are running
-    /// programs, so ending any is asked about first.
+    /// Closes every tab but the one the request keeps. Ending a session at
+    /// work is asked about first; shells at their prompt and done agents
+    /// end with the tabs.
     func closeTabs(_ request: CloseRequest = CloseRequest()) {
-        if sessionsEnded(by: request).isEmpty { closeTabsConfirmed(request) } else { pendingCloseRequest = request }
+        if asksToClose(request) { pendingCloseRequest = request } else { closeTabsConfirmed(request) }
+    }
+
+    /// Whether a request is asked about first: a session it ends is at work.
+    func asksToClose(_ request: CloseRequest) -> Bool {
+        sessionsEnded(by: request).contains(where: \.isBusy)
     }
 
     func closeTabsConfirmed(_ request: CloseRequest) {

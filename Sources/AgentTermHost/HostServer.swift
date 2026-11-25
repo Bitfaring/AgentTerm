@@ -287,9 +287,13 @@ public final class HostServer {
         /// in it was found (#129). Its hooks and MCP server have until a
         /// grace after it to be heard from.
         var agentSince: Date?
+        var firstPromptInput = FirstPromptInput()
+        var firstPromptAt: Date?
         /// Whether AgentTerm had instructions for its agent when it started
         /// (#172): what the session was given, whatever is saved later.
         var promptGiven = true
+        /// The Copilot instructions in the launched shell's environment. Nil when disabled.
+        var copilotInstructionsPrepared: Bool?
         /// A call of one of AgentTerm's own tools that its agent said it is
         /// about to make, and when: until the call comes to its server, or
         /// the agent says anything else (#141).
@@ -317,6 +321,8 @@ public final class HostServer {
         /// What Settings > Shell has run first in it, typed with Return
         /// once it shows its prompt, as a person would.
         var pendingStartup: String?
+        /// It was started as a shell, not with a command of its own.
+        var isShell = true
 
         init(info: SessionInfo, process: PTYProcess, screenLines: Int) {
             self.info = info
@@ -2885,7 +2891,7 @@ public final class HostServer {
                 case .success(let made):
                     if let problem = made.problem { server.send(.error(problem), to: client) }
                     let request = CreateRequest(command: made.prepared.command, cwd: made.prepared.directory, title: Handoff.name(of: target), size: size)
-                    if let created = server.create(request, for: client), let branch = made.branch {
+                    if let created = server.create(request, for: client, startsWithPrompt: true), let branch = made.branch {
                         server.sessions[created]?.info.branch = branch
                         server.broadcastSessions()
                     }
@@ -3481,6 +3487,11 @@ public final class HostServer {
         // Typing takes control of the session's size.
         if session.arbiter.activity(client.id) { applySize(of: session) }
         used(by: client)
+        if session.info.link != nil, session.info.link?.hooks == nil, session.firstPromptAt == nil,
+            session.firstPromptInput.submitted(frame.payload)
+        {
+            session.firstPromptAt = configuration.now()
+        }
         session.process.write(frame.payload)
         // It may have stopped the turn, and not every agent says so: nor
         // does Antigravity when its question for leave is cancelled (#141).
@@ -3521,7 +3532,7 @@ public final class HostServer {
     @discardableResult
     private func create(
         _ request: CreateRequest, for client: Client?, conversationID: String? = nil, openedBy: SessionID? = nil, run: Schedule? = nil,
-        environment more: [String: String] = [:]
+        environment more: [String: String] = [:], startsWithPrompt: Bool = false
     ) -> SessionID? {
         // The host's home: the user's, or a test's own, never the home of
         // the person running the tests.
@@ -3551,10 +3562,14 @@ public final class HostServer {
         }
         // Copilot CLI does not take an MCP server's instructions: it reads
         // what it is told from a folder its environment names.
+        let copilotPrompt = agentPrompt(for: "copilot")
+        let instructionsVariable = AgentHooks.copilotInstructionsVariable
+        var copilotDirectory: URL?
         if let told = try? AgentHooks.instructionsEnvironment(
-            agent: "copilot", directory: configuration.hooksDirectory, prompt: agentPrompt(for: "copilot"), current: environment)
+            agent: "copilot", directory: configuration.hooksDirectory, prompt: copilotPrompt, current: environment)
         {
             environment.merge(told) { _, new in new }
+            if told[instructionsVariable] != nil { copilotDirectory = configuration.hooksDirectory.map(AgentHooks.copilotInstructionsFolder) }
         }
         // A schedule's run of Antigravity trusts the schedule's folder, as
         // the user asked by scheduling it there; for that run only.
@@ -3624,13 +3639,20 @@ public final class HostServer {
         )
         let session = Session(info: info, process: process, screenLines: configuration.screenLines)
         session.agentKey = agentKey
+        if copilotPrompt != nil {
+            let directories = environment[instructionsVariable]?.components(separatedBy: ",") ?? []
+            session.copilotInstructionsPrepared = copilotDirectory.map { directories.contains($0.path) } ?? false
+        }
         if let agentID = info.agent {
             session.info.link = AgentLink()
             session.agentSince = configuration.now()
+            if run != nil || startsWithPrompt { session.firstPromptAt = session.agentSince }
             session.promptGiven = agentPrompt(for: agentID) != nil
             refreshPrompt(session)
         }
         session.marksPrepared = marksPrepared
+        session.isShell = isShell
+        if info.agent == nil { session.info.running = !isShell }
         session.info.openedBy = openedBy
         session.pendingTyped = request.typed.flatMap { $0.isEmpty ? nil : $0 }
         session.pendingStartup = startup
@@ -3817,10 +3839,12 @@ public final class HostServer {
     /// while it runs, what was heard before it included.
     private func typedAgentFound(_ agent: String, in session: Session) {
         session.info.typedAgent = agent
+        session.firstPromptAt = nil
+        session.firstPromptInput = FirstPromptInput()
         session.agentSince = configuration.now()
         let early = heardEarly.removeValue(forKey: session.info.id) ?? []
         session.info.link = AgentLink(hooks: early.contains(.hooks) ? true : nil, mcp: early.contains(.mcp) ? true : nil)
-        session.promptGiven = agentPrompt(for: agent) != nil
+        session.promptGiven = agent == "copilot" ? session.copilotInstructionsPrepared != nil : agentPrompt(for: agent) != nil
         refreshPrompt(session)
     }
 
@@ -3828,7 +3852,7 @@ public final class HostServer {
     /// they reach its agent and what its MCP server did.
     private func refreshPrompt(_ session: Session) {
         guard let agent = session.info.agent ?? session.info.typedAgent, var link = session.info.link else { return }
-        link.prompt = AgentLink.prompt(agent: agent, given: session.promptGiven, mcp: link.mcp)
+        link.prompt = AgentLink.prompt(agent: agent, given: session.promptGiven, mcp: link.mcp, copilotPrepared: session.copilotInstructionsPrepared)
         session.info.link = link
     }
 
@@ -3840,6 +3864,14 @@ public final class HostServer {
         var changed = false
         let now = configuration.now()
         for session in sessions.values {
+            // Whether closing it stops a program at work, asked first then.
+            if session.info.agent == nil {
+                let running = !session.isShell || session.process.runsAnotherProgram
+                if running != session.info.running {
+                    session.info.running = running
+                    changed = true
+                }
+            }
             if session.info.agent == nil, let front = session.process.foregroundCommand {
                 let typed = SessionSummaries.agent(forCommand: front)
                 if let typed, typed != session.info.typedAgent {
@@ -3858,10 +3890,13 @@ public final class HostServer {
                 }
             }
             guard var link = session.info.link, let since = session.agentSince, now.timeIntervalSince(since) >= configuration.linkGrace else { continue }
-            if link.hooks == nil { link.hooks = false }
+            let agent = session.info.agent ?? session.info.typedAgent
+            if link.hooks == nil, let submitted = session.firstPromptAt, now.timeIntervalSince(submitted) >= configuration.linkGrace {
+                link.hooks = false
+            }
             if link.mcp == nil { link.mcp = false }
-            if let agent = session.info.agent ?? session.info.typedAgent {
-                link.prompt = AgentLink.prompt(agent: agent, given: session.promptGiven, mcp: link.mcp)
+            if let agent {
+                link.prompt = AgentLink.prompt(agent: agent, given: session.promptGiven, mcp: link.mcp, copilotPrepared: session.copilotInstructionsPrepared)
             }
             if link != session.info.link {
                 session.info.link = link

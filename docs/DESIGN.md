@@ -1595,14 +1595,18 @@ of 0.6, and is the released build's. While the agent is told anything
 
 **Whether a session was told** (#172). `AgentLink.prompt` says what
 AgentTerm's instructions came to in one session: given, missing, disabled
-or unverified, from how they reach its agent (`AgentLink.prompt(agent:given:mcp:)`):
+or unverified, from how they reach its agent (`AgentLink.prompt`):
 through the MCP server for Claude Code and Codex, so given once the server
 is heard and missing when it is not; through the environment for Copilot
-CLI, so given; through a rule of its plugin for Antigravity, which the host
+CLI, shown as “File provided” once the file is written and its directory is
+present in the launch environment, or “Not given” if preparation fails.
+Copilot does not acknowledge reading the file. Instructions come through a rule of its plugin for Antigravity, which the host
 cannot see for one session. Whether there were instructions is taken when
 the agent starts (`Session.promptGiven`): a change in Settings later is the
 next session's. The mark's popover has a row each for Hooks, MCP and System
-Prompt.
+Prompt. The hook check waits for the first submitted message. If no hook
+arrives within 20 seconds of submission, the session reports that no hook
+responded. A later event changes its status to Heard.
 
 **What an agent is told.** The host works out one text for each agent:
 what the user saved for it in Settings > Agents (`setAgentPrompt`, kept in

@@ -271,7 +271,7 @@ struct SessionUsageBar: View {
                 // Whether its hooks and AgentTerm's MCP server talk to the host.
                 if let link = session.link {
                     Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 24)
-                    AgentLinkMark(link: link, typed: session.agent == nil ? name : nil)
+                    AgentLinkMark(link: link, agent: agent, typed: session.agent == nil ? name : nil)
                 }
             }
             .frame(height: 46)

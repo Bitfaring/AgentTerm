@@ -813,9 +813,9 @@ private struct TabCommands: View {
         Button("Close All Files") { model.closeFileTabs(pane: pane) }
             .keyboardShortcut("w", modifiers: [.command, .shift])
             .disabled(files.documents.isEmpty && model.diffTabFile == nil)
-        Button("Close Other Tabs…") { model.closeTabs(.init(keepGroup: model.frontStripTab, pane: pane)) }
+        Button(model.asksToClose(.init(keepGroup: model.frontStripTab, pane: pane)) ? "Close Other Tabs…" : "Close Other Tabs") { model.closeTabs(.init(keepGroup: model.frontStripTab, pane: pane)) }
             .disabled(model.tabCount < 2)
-        Button(model.sessions.isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs(.init(pane: pane)) }
+        Button(model.asksToClose(.init(pane: pane)) ? "Close All Tabs…" : "Close All Tabs") { model.closeTabs(.init(pane: pane)) }
             .disabled(model.tabCount == 0)
     }
 }

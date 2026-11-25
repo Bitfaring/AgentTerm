@@ -57,16 +57,22 @@ public enum AgentHooks {
         return " --settings " + Handoff.shellQuote(String(decoding: settings, as: UTF8.self))
     }
 
+    static func copilotInstructionsFolder(in directory: URL) -> URL {
+        directory.appendingPathComponent("copilot-instructions", isDirectory: true)
+    }
+
+    static let copilotInstructionsVariable = "COPILOT_CUSTOM_INSTRUCTIONS_DIRS"
+
     /// What an agent's environment is given besides: for Copilot CLI, the
     /// folder of instructions it is told to run its commands in shells the
     /// user sees, next to any its own environment names (MCP-13).
     public static func instructionsEnvironment(agent: String, directory: URL?, prompt: String?, current: [String: String]) throws -> [String: String] {
         guard agent == "copilot", let prompt, let directory else { return [:] }
-        let folder = directory.appendingPathComponent("copilot-instructions", isDirectory: true)
+        let folder = copilotInstructionsFolder(in: directory)
         let file = folder.appendingPathComponent("instructions/agentterm.instructions.md")
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try writeText("---\napplyTo: \"**\"\n---\n" + prompt + "\n", to: file)
-        let name = "COPILOT_CUSTOM_INSTRUCTIONS_DIRS"
+        let name = copilotInstructionsVariable
         let theirs = current[name].flatMap { $0.isEmpty ? nil : $0 }
         return [name: [theirs, folder.path].compactMap { $0 }.joined(separator: ",")]
     }
