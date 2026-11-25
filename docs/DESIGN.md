@@ -1162,9 +1162,9 @@ answers `error` and types nothing. A reply given while the connection was
 gone waits for it. Notifications hide their text where iOS hides previews.
 A question's choices are actions of its notification (#55): iOS takes a
 notification's actions from its category, so a question with choices gets
-a category of its own, named after the session, with an action for each of
-the first nine choices (`AgentNotice.buttons`) and the text reply last, ten
-being the most iOS shows. The body is the question alone
+a category of its own, named after the request. The text reply comes first
+so it stays available when iOS shows fewer actions. The first nine choices
+(`AgentNotice.buttons`) follow in their original order. The body is the question alone
 (`AgentNotice.words`). A choice is sent as a reply is, `answer` with the
 choice's words as its text.
 

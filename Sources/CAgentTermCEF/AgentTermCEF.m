@@ -222,6 +222,7 @@ static NSMutableDictionary<NSNumber *, NSValue *> *g_prompts;
 static NSMutableDictionary<NSNumber *, NSNumber *> *g_prompt_kinds;
 static NSMutableDictionary<NSNumber *, NSNumber *> *g_prompt_asked;
 static NSMutableDictionary<NSNumber *, NSNumber *> *g_prompt_ids;
+static NSMutableDictionary<NSNumber *, NSNumber *> *g_prompt_browsers;
 static int g_next_prompt = 1;
 /// What a download can be cancelled with, by its id.
 static NSMutableDictionary<NSNumber *, NSValue *> *g_downloads_running;
@@ -494,6 +495,12 @@ static int CEF_CALLBACK do_close(cef_life_span_handler_t *self, cef_browser_t *b
 static void CEF_CALLBACK on_before_close(cef_life_span_handler_t *self, cef_browser_t *browser) {
     (void)self;
     int identifier = atc_id(browser);
+    // An app-closed tab no longer receives events in Swift. Release its
+    // outstanding media callbacks here, including any still queued for delivery.
+    for (NSNumber *number in g_prompt_browsers.allKeys) {
+        if (g_prompt_browsers[number].intValue == identifier && g_prompt_kinds[number].intValue == 1)
+            atc_answer_permission(number.intValue, 0);
+    }
     ATCBrowser *open = g_browsers[@(identifier)];
     if (open) {
         ATC_RELEASE(open.devtools);
@@ -620,19 +627,20 @@ static void CEF_CALLBACK on_download_updated(cef_download_handler_t *self, cef_b
 }
 
 /// Keeps what a prompt waits on, and returns the number it is told by.
-static int atc_keep_prompt(void *callback, int kind, uint32_t asked, uint64_t prompt_id) {
+static int atc_keep_prompt(cef_browser_t *browser, void *callback, int kind, uint32_t asked, uint64_t prompt_id) {
     int number = g_next_prompt++;
     g_prompts[@(number)] = [NSValue valueWithPointer:callback];
     g_prompt_kinds[@(number)] = @(kind);
     g_prompt_asked[@(number)] = @(asked);
     g_prompt_ids[@(number)] = @(prompt_id);
+    g_prompt_browsers[@(number)] = @(atc_id(browser));
     return number;
 }
 
 static int CEF_CALLBACK on_show_permission_prompt(cef_permission_handler_t *self, cef_browser_t *browser, uint64_t prompt_id,
                                                   const cef_string_t *origin, uint32_t permissions, cef_permission_prompt_callback_t *callback) {
     (void)self;
-    int number = atc_keep_prompt(callback, 0, permissions, prompt_id);
+    int number = atc_keep_prompt(browser, callback, 0, permissions, prompt_id);
     atc_emit_text(ATC_EVENT_PERMISSION, browser, atc_text(origin), nil, number, (int)permissions, 0);
     ATC_RELEASE(browser);
     return 1;
@@ -642,10 +650,12 @@ static void CEF_CALLBACK on_dismiss_permission_prompt(cef_permission_handler_t *
                                                       cef_permission_request_result_t result) {
     (void)self, (void)result;
     for (NSNumber *number in g_prompt_ids.allKeys) {
-        if (g_prompt_ids[number].unsignedLongLongValue == prompt_id && g_prompt_kinds[number].intValue == 0) {
+        if (g_prompt_ids[number].unsignedLongLongValue == prompt_id && g_prompt_kinds[number].intValue == 0 &&
+            g_prompt_browsers[number].intValue == atc_id(browser)) {
             ATC_RELEASE((cef_permission_prompt_callback_t *)g_prompts[number].pointerValue);
             [g_prompts removeObjectForKey:number];
             [g_prompt_ids removeObjectForKey:number];
+            [g_prompt_browsers removeObjectForKey:number];
             [g_prompt_kinds removeObjectForKey:number];
             [g_prompt_asked removeObjectForKey:number];
             atc_emit_text(ATC_EVENT_PERMISSION, browser, nil, nil, number.intValue, -1, 0);
@@ -657,7 +667,7 @@ static void CEF_CALLBACK on_dismiss_permission_prompt(cef_permission_handler_t *
 static int CEF_CALLBACK on_request_media_access_permission(cef_permission_handler_t *self, cef_browser_t *browser, cef_frame_t *frame,
                                                            const cef_string_t *origin, uint32_t permissions, cef_media_access_callback_t *callback) {
     (void)self;
-    int number = atc_keep_prompt(callback, 1, permissions, 0);
+    int number = atc_keep_prompt(browser, callback, 1, permissions, 0);
     // Media is told apart by the high bit.
     atc_emit_text(ATC_EVENT_PERMISSION, browser, atc_text(origin), nil, number, (int)(permissions | 0x40000000u), 0);
     ATC_RELEASE(frame);
@@ -928,6 +938,7 @@ int atc_start(const atc_paths *paths, atc_event_fn events, void *context, char *
     g_prompt_kinds = [NSMutableDictionary new];
     g_prompt_asked = [NSMutableDictionary new];
     g_prompt_ids = [NSMutableDictionary new];
+    g_prompt_browsers = [NSMutableDictionary new];
     g_downloads_running = [NSMutableDictionary new];
     atc_make_handlers();
     atc_adopt_application();
@@ -1258,6 +1269,7 @@ void atc_answer_permission(int prompt, int allow) {
     [g_prompt_kinds removeObjectForKey:key];
     [g_prompt_asked removeObjectForKey:key];
     [g_prompt_ids removeObjectForKey:key];
+    [g_prompt_browsers removeObjectForKey:key];
     if (kind == 1) {
         cef_media_access_callback_t *callback = kept.pointerValue;
         if (allow) callback->cont(callback, asked);
