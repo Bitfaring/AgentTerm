@@ -19,7 +19,7 @@ name: Release
 #                                 base64 of each app's GoogleService-Info.plist; without one
 #                                 that app is built with no reporting service
 #   DISCORD_WEBHOOK_URL           a Discord channel's webhook; without it the release is not announced
-#   HOMEBREW_TAP_TOKEN            token with contents write access to manhpham90vn/homebrew-tap;
+#   HOMEBREW_TAP_TOKEN            token with contents write access to Bitfaring/homebrew-tap;
 #                                 without it the cask is not updated
 
 on:
@@ -150,7 +150,7 @@ jobs:
             dist/AgentTerm-${{ steps.version.outputs.value }}.dmg
             dist/AgentTerm-${{ steps.version.outputs.value }}.sha256
 
-      # So "brew install --cask manhpham90vn/tap/agentterm" gets this version.
+      # So "brew install --cask bitfaring/tap/agentterm" gets this version.
       - name: Update the Homebrew tap
         if: env.HOMEBREW_TAP_TOKEN != ''
         env:

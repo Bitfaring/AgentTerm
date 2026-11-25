@@ -31,7 +31,7 @@ PAIRING AND PRIVACY
 • Open source, under the MIT license.
 
 REQUIREMENTS
-• AgentTerm for macOS 14 or later on the computer, free at github.com/manhpham90vn/AgentTerm.
+• AgentTerm for macOS 14 or later on the computer, free at github.com/Bitfaring/AgentTerm.
 • Tailscale on both devices to connect from outside your home network.
 • At least one agent CLI installed on the computer. AgentTerm does not include the agents or an account for them.
 

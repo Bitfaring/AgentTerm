@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 
 VERSION=${1:?usage: announce-discord.sh VERSION (without the v prefix)}
 VERSION=${VERSION#v}
-REPO="https://github.com/manhpham90vn/AgentTerm"
+REPO="https://github.com/Bitfaring/AgentTerm"
 NOTES=$(scripts/check-release-notes.sh "$VERSION")
 
 # Discord allows 4096 characters in an embed's description.

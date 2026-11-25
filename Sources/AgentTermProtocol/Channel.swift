@@ -103,5 +103,5 @@ public enum ProjectLinks {
     /// The project's page: what it does, downloads, support.
     public static let page = URL(string: "https://manhdev.click/projects/agentterm")!
     /// The source code.
-    public static let source = URL(string: "https://github.com/manhpham90vn/AgentTerm")!
+    public static let source = URL(string: "https://github.com/Bitfaring/AgentTerm")!
 }

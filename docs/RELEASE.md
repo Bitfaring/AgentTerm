@@ -177,12 +177,12 @@ switched off: `gh workflow run release.yml -f version=<version> -f mac=false -f 
 The Mac app also installs with
 
 ```sh
-brew tap manhpham90vn/tap
-brew trust manhpham90vn/tap     # Homebrew 7 and later: a tap outside Homebrew's own has to be trusted first
+brew tap bitfaring/tap
+brew trust bitfaring/tap     # Homebrew 7 and later: a tap outside Homebrew's own has to be trusted first
 brew install --cask agentterm
 ```
 
-The cask lives in the tap repository, `manhpham90vn/homebrew-tap`, and is
+The cask lives in the tap repository, `Bitfaring/homebrew-tap`, and is
 written from the template `packaging/homebrew/agentterm.rb`.
 `scripts/publish-homebrew.sh <version>` fills in the version and the checksum
 published with that version's GitHub release (`AgentTerm-<version>.sha256`),
