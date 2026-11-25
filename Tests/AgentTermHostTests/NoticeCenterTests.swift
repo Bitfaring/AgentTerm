@@ -109,8 +109,8 @@ final class NoticeCenterTests: XCTestCase {
     }
 
     /// NOTICE-5 (#180): read on one device is read in the log, once, and
-    /// no longer to be shown; handled by being answered, opened or
-    /// dismissed is read too, by moving on is not.
+    /// no longer to be shown; handled by being answered, opened,
+    /// dismissed or moved on is read too (#321).
     func testReadOnOneDeviceIsReadForAll() throws {
         let center = NoticeCenter(file: file)
         let first = try XCTUnwrap(center.update(sessions: [session(1, asked)], now: now).new.first)
