@@ -14,7 +14,7 @@ You need Xcode 16 or later (Swift 5.10+), and
 [XcodeGen](https://github.com/yonaskolb/XcodeGen) for the iPhone app.
 
 ```sh
-git clone https://github.com/manhpham90vn/AgentTerm.git
+git clone https://github.com/Bitfaring/AgentTerm.git
 cd AgentTerm
 ./scripts/run-mac.sh              # build and open the Mac app
 ```
@@ -97,7 +97,7 @@ paired there has to pair again.
 | `Sources/AgentTermMac` | The macOS app (SwiftUI) |
 | `iOS/` | The iPhone app (SwiftUI) and its UI test; the Xcode project is generated from `project.yml` |
 | `scripts/` | Build, run, test and release scripts |
-| `packaging/homebrew/` | The Homebrew cask, published to [manhpham90vn/homebrew-tap](https://github.com/manhpham90vn/homebrew-tap) by each release |
+| `packaging/homebrew/` | The Homebrew cask, published to [Bitfaring/homebrew-tap](https://github.com/Bitfaring/homebrew-tap) by each release |
 
 ## Contributing
 

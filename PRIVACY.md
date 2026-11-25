@@ -14,7 +14,7 @@ The Software is developed and published by an individual developer:
 
 - **Developer:** Manh Pham
 - **Contact:** manhpv151090@gmail.com
-- **Project page:** https://github.com/manhpham90vn/AgentTerm
+- **Project page:** https://github.com/Bitfaring/AgentTerm
 
 ## 2. The short version
 

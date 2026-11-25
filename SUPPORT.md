@@ -1,7 +1,7 @@
 # AgentTerm Support
 
 Need help? Email [manhpv151090@gmail.com](mailto:manhpv151090@gmail.com?subject=AgentTerm%20Support),
-or open an issue at [github.com/manhpham90vn/AgentTerm](https://github.com/manhpham90vn/AgentTerm/issues).
+or open an issue at [github.com/Bitfaring/AgentTerm](https://github.com/Bitfaring/AgentTerm/issues).
 Please include your macOS and iOS versions, the AgentTerm version, which agent you were using and the
 steps that led to the problem.
 

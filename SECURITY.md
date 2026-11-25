@@ -4,7 +4,7 @@
 
 Please do not open a public issue for a security problem. Report it privately
 with **Report a vulnerability** on the repository's
-[Security tab](https://github.com/manhpham90vn/AgentTerm/security), or by
+[Security tab](https://github.com/Bitfaring/AgentTerm/security), or by
 email to the address in [SUPPORT.md](SUPPORT.md). Say which version of
 AgentTerm, on which macOS and iOS, and how to reproduce it.
 

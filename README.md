@@ -7,8 +7,8 @@
 Run Claude Code, Codex, Antigravity and GitHub Copilot CLI on your Mac.
 Give them shells and a browser you can watch, and steer the same sessions from your iPhone.
 
-[![CI](https://github.com/manhpham90vn/AgentTerm/actions/workflows/ci.yml/badge.svg)](https://github.com/manhpham90vn/AgentTerm/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/manhpham90vn/AgentTerm?include_prereleases&label=release)](https://github.com/manhpham90vn/AgentTerm/releases)
+[![CI](https://github.com/Bitfaring/AgentTerm/actions/workflows/ci.yml/badge.svg)](https://github.com/Bitfaring/AgentTerm/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Bitfaring/AgentTerm?include_prereleases&label=release)](https://github.com/Bitfaring/AgentTerm/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%2014%2B%20%7C%20iOS%2017%2B-lightgrey)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/Ksagmsd6j)
@@ -96,15 +96,15 @@ made for prompts. The agents keep running on the Mac.
 **Mac, with [Homebrew](https://brew.sh):**
 
 ```sh
-brew tap manhpham90vn/tap
-brew trust manhpham90vn/tap     # Homebrew 7 and later: a tap outside Homebrew's own has to be trusted first
+brew tap bitfaring/tap
+brew trust bitfaring/tap     # Homebrew 7 and later: a tap outside Homebrew's own has to be trusted first
 brew install --cask agentterm
 ```
 
 `brew upgrade --cask agentterm` gets a newer version later.
 
 **Mac, by hand:** download the latest `AgentTerm-<version>.dmg` from
-[Releases](https://github.com/manhpham90vn/AgentTerm/releases), open it and
+[Releases](https://github.com/Bitfaring/AgentTerm/releases), open it and
 drag AgentTerm to Applications.
 
 Either way the app is signed and notarized. It is built for Apple silicon.
@@ -175,7 +175,7 @@ file names or folders. A build from source sends nothing. Details in
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): build from source, tests, code layout, contributing
 - [docs/TESTING.md](docs/TESTING.md): how it is tested
 - [docs/RELEASE.md](docs/RELEASE.md): how releases are made
-- [Issues](https://github.com/manhpham90vn/AgentTerm/issues) and [milestones](https://github.com/manhpham90vn/AgentTerm/milestones): planned work and known bugs
+- [Issues](https://github.com/Bitfaring/AgentTerm/issues) and [milestones](https://github.com/Bitfaring/AgentTerm/milestones): planned work and known bugs
 - [SUPPORT.md](SUPPORT.md): getting help
 - [Discord](https://discord.gg/Ksagmsd6j): questions, ideas and news
 

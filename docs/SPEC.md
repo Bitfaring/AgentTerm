@@ -1846,4 +1846,4 @@ button at the top right of Sessions goes back to the list of Macs.
 ## Planned work
 
 What is planned is kept in the
-[issues](https://github.com/manhpham90vn/AgentTerm/issues), not in this file.
+[issues](https://github.com/Bitfaring/AgentTerm/issues), not in this file.

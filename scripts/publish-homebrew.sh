@@ -14,13 +14,13 @@ cd "$(dirname "$0")/.."
 
 VERSION=${1:?usage: publish-homebrew.sh VERSION (without the v prefix)}
 VERSION=${VERSION#v}
-TAP_REPO=${TAP_REPO:-manhpham90vn/homebrew-tap}
+TAP_REPO=${TAP_REPO:-Bitfaring/homebrew-tap}
 TAP_BRANCH=${TAP_BRANCH:-main}
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/agentterm-homebrew.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
-gh release download "v$VERSION" --repo manhpham90vn/AgentTerm --pattern "AgentTerm-$VERSION.sha256" --dir "$WORK"
+gh release download "v$VERSION" --repo Bitfaring/AgentTerm --pattern "AgentTerm-$VERSION.sha256" --dir "$WORK"
 SHA256=$(cut -d' ' -f1 "$WORK/AgentTerm-$VERSION.sha256")
 if ! printf '%s' "$SHA256" | grep -Eqx '[0-9a-f]{64}'; then
     echo "publish-homebrew.sh: the release's AgentTerm-$VERSION.sha256 holds no checksum" >&2
