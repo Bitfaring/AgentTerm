@@ -47,11 +47,12 @@ final class AgentLinkTests: XCTestCase {
 
     /// With `shells`, the host gives the agents AgentTerm's MCP server and
     /// its instructions, kept in the test's own state folder.
-    private func start(grace: TimeInterval, shells: Bool = false) throws {
+    private func start(grace: TimeInterval, shells: Bool = false, hooksDirectory: URL? = nil) throws {
         let agents = root.appendingPathComponent("agents").path
         var configuration = HostServer.Configuration(
             port: 0, token: token, listenOnTailscale: false, detectAgents: { AgentDetector.detect(in: agents) }, home: root.path,
             usageDirectory: root.appendingPathComponent("usage"))
+        configuration.hooksDirectory = hooksDirectory
         configuration.agentsDirectory = agents
         configuration.foldersFile = root.appendingPathComponent("folders.json")
         configuration.linkGrace = grace
@@ -104,6 +105,40 @@ final class AgentLinkTests: XCTestCase {
         wait("its server heard") { sessions.first?.link == AgentLink(hooks: true, mcp: true, prompt: .disabled) }
     }
 
+    func testOnlySubmittedTextStartsTheHookCheck() {
+        var input = FirstPromptInput()
+        for keys in [
+            "\r", "\u{1b}[A", "\r", "x", "\u{7f}", "\r", "discard", "\u{15}", "\r",
+            "\u{1b}[20", "0~first line\r", "second line", "\u{1b}[201~",
+        ] {
+            XCTAssertFalse(input.submitted(Data(keys.utf8)))
+        }
+        XCTAssertTrue(input.submitted(Data("\r".utf8)))
+    }
+
+    func testAgentsWithDelayedHooksWaitForTheFirstEventAfterTheGracePeriod() throws {
+        let agents = ["agy", "copilot", "codex", "claude"]
+        let trigger = root.appendingPathComponent("first-turn")
+        for agent in agents {
+            let stop = event(agent, agent == "copilot" ? "agentStop" : "Stop")
+            try standIn(agent, "while [ ! -f '\(trigger.path)' ]; do sleep 0.1; done\n\(stop)\nexec sleep 600")
+        }
+        try start(grace: 0.5)
+        for agent in agents { client.send(.create(CreateRequest(command: agent, cwd: root.path))) }
+        wait("all sessions past the grace period") { sessions.count == agents.count && sessions.allSatisfy { $0.link?.mcp == false } }
+        XCTAssertTrue(sessions.allSatisfy { $0.link?.hooks == nil })
+        for session in sessions {
+            client.send(.attach(session: session.id, size: .default))
+            client.connection(send: session.id, "hello")
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(sessions.allSatisfy { $0.link?.hooks == nil }, "typing alone is not a submission")
+        for session in sessions { client.connection(send: session.id, "\r") }
+        wait("no hook response after submitting") { sessions.allSatisfy { $0.link?.hooks == false } }
+        try Data().write(to: trigger)
+        wait("the first event from each agent") { sessions.allSatisfy { $0.link?.hooks == true } }
+    }
+
     /// LINK-3: what an agent's session has not heard from within the grace
     /// of its start is said missing.
     func testWhatIsNotHeardIsSaidMissing() throws {
@@ -111,6 +146,9 @@ final class AgentLinkTests: XCTestCase {
         try start(grace: 1)
         client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
         wait("the session") { sessions.count == 1 }
+        let id = try XCTUnwrap(sessions.first?.id)
+        client.send(.attach(session: id, size: .default))
+        client.connection(send: id, "hello\r")
         wait("both said missing") { sessions.first?.link == AgentLink(hooks: false, mcp: false, prompt: .disabled) }
     }
 
@@ -134,7 +172,28 @@ final class AgentLinkTests: XCTestCase {
         try standIn("claude", "exec sleep 600")
         try start(grace: 1, shells: true)
         client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
-        wait("not given") { sessions.first?.link == AgentLink(hooks: false, mcp: false, prompt: .missing) }
+        wait("not given") { sessions.first?.link == AgentLink(mcp: false, prompt: .missing) }
+    }
+
+    func testCopilotCannotBeGivenInstructionsInAnUnwritableLocation() throws {
+        let file = root.appendingPathComponent("regular-file")
+        try Data().write(to: file)
+        try standIn("copilot", "exec sleep 600")
+        try start(grace: 1, shells: true, hooksDirectory: file)
+        client.send(.create(CreateRequest(command: "copilot", cwd: root.path)))
+        wait("the link check") { sessions.first?.link?.mcp == false }
+        XCTAssertEqual(sessions.first?.link?.prompt, .missing)
+    }
+
+    func testCopilotIsGivenThePreparedDirectory() throws {
+        let file = root.appendingPathComponent("instructions-path")
+        try standIn("copilot", #"printf '%s' "$COPILOT_CUSTOM_INSTRUCTIONS_DIRS" > '\#(file.path)'; exec sleep 600"#)
+        try start(grace: 1, shells: true, hooksDirectory: root)
+        client.send(.create(CreateRequest(command: "copilot", cwd: root.path)))
+        wait("the link check") { sessions.first?.link?.mcp == false }
+        let directories = try String(contentsOf: file, encoding: .utf8).split(separator: ",")
+        XCTAssertEqual(directories.last.map(String.init), root.appendingPathComponent("copilot-instructions").path)
+        XCTAssertEqual(sessions.first?.link?.prompt, .given)
     }
 
     /// LINK-4: an agent typed by hand in a shell is found from the program
@@ -161,6 +220,28 @@ final class AgentLinkTests: XCTestCase {
         wait("the agent gone") { sessions.first?.typedAgent == nil }
         XCTAssertNil(sessions.first?.link)
         XCTAssertNil(sessions.first?.state)
+    }
+
+    /// TABS-7: a shell says it runs a program while a command it was typed
+    /// is in front, and not at its prompt; a session started with a command
+    /// runs one from its start.
+    func testAShellSaysWhileItRunsACommand() throws {
+        try start(grace: 60)
+        client.send(.create(CreateRequest(cwd: root.path)))
+        wait("the shell") { sessions.count == 1 }
+        let shell = try XCTUnwrap(sessions.first)
+        client.send(.attach(session: shell.id, size: .default))
+        wait("at its prompt") { sessions.first?.running == false }
+        XCTAssertFalse(try XCTUnwrap(sessions.first).isBusy)
+        client.connection(send: shell.id, "sleep 600\r")
+        wait("running a command") { sessions.first?.running == true }
+        XCTAssertTrue(try XCTUnwrap(sessions.first).isBusy)
+        client.connection(send: shell.id, "\u{03}")
+        wait("at its prompt again") { sessions.first?.running == false }
+
+        client.send(.create(CreateRequest(command: "sleep 600", cwd: root.path, title: "build")))
+        wait("the command's session") { sessions.contains { $0.title == "build" } }
+        XCTAssertEqual(sessions.first { $0.title == "build" }?.running, true)
     }
 
     /// A program is named as it was started, not by its file: a link named

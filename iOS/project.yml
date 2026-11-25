@@ -189,8 +189,11 @@ targets:
     platform: iOS
     sources:
       - AgentTermUITests
+      - NotificationShared/NoticeContent.swift
     dependencies:
       - target: AgentTerm
+      - package: AgentTerm
+        product: AgentTermProtocol
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm.uitests

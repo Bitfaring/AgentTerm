@@ -239,6 +239,10 @@ final class HooksAndMCPUITests: MacUITestCase {
         }
         app.press(.button("Claude Code"))
         app.wait(for: .id("agent-link"), timeout: 20)
+        wait("the agent session") { phone.sessions.contains { $0.agent == "claude" } }
+        let agent = try XCTUnwrap(phone.sessions.first { $0.agent == "claude" })
+        phone.send(.attach(session: agent.id, size: .default))
+        phone.connection.sendInput(Data("hello\r".utf8), to: agent.id)
         app.wait("said missing", timeout: 15) { self.label("agent-link") == AgentLinkWords.summary(AgentLink(hooks: false, mcp: false)) }
         let value = app.first(.id("agent-link"))?.value ?? ""
         XCTAssertTrue(value.contains(AgentLinkWords.fix), value)

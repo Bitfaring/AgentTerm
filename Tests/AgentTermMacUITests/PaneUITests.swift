@@ -54,14 +54,21 @@ final class PaneUITests: MacUITestCase {
         app.wait("the shell picked again") { self.app.isSelected(.id("session-\(shell.id)")) }
         XCTAssertFalse(app.isSelected(.id("sidebar-shells")))
         XCTAssertFalse(app.isSelected(.id(folder)))
+        app.perform("Remove from List", on: .id(folder))
+        app.waitGone(.id(folder))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: project.path))
+        XCTAssertTrue(phone.sessions.contains { $0.id == shell.id })
     }
 
     /// TABS-3 (#145): the Shells tab's × ends every shell it holds, asked
-    /// first; cancelled, they all run on.
+    /// first while one of them runs a command; cancelled, they all run on.
+    /// TABS-7: shells at their prompt end at once, nothing asked.
     func testClosingTheShellsTabEndsAllItsShells() throws {
         let phone = try device()
         try newShell(phone, count: 1)
-        try newShell(phone, count: 2)
+        let second = try newShell(phone, count: 2)
+        phone.connection.sendInput(Data("sleep 600\n".utf8), to: second.id)
+        wait("the command running") { phone.sessions.first { $0.id == second.id }?.running == true }
         app.perform(CloseWords.groupAction(.shells), on: .id("strip-shells"))
         app.wait(for: .text(CloseWords.groupQuestion(.shells, count: 2)))
         app.press(.button("Cancel"))
@@ -70,6 +77,14 @@ final class PaneUITests: MacUITestCase {
         app.press(.button(CloseWords.groupButton(.shells, count: 2)))
         wait("both shells ended") { phone.sessions.isEmpty }
         app.wait("the Shells tab gone") { !self.app.exists(.id("strip-shells")) }
+
+        // At their prompt: no question.
+        try newShell(phone, count: 1)
+        try newShell(phone, count: 2)
+        wait("both at their prompt") { phone.sessions.count == 2 && phone.sessions.allSatisfy { $0.running == false } }
+        app.perform(CloseWords.groupAction(.shells), on: .id("strip-shells"))
+        wait("both shells ended without a question") { phone.sessions.isEmpty }
+        XCTAssertFalse(app.exists(.text(CloseWords.groupQuestion(.shells, count: 2))), "it asked about idle shells")
     }
 
     /// PANE-9: the user does not split the window: no button in the strip,

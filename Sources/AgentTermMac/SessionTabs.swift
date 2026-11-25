@@ -165,8 +165,8 @@ private struct SessionTab: View {
 /// The tab of one of a project's groups of the user's own (#127): its
 /// shells, its pages, its diffs or its files, with how many it holds. The
 /// row under the strip has them, each with its own ×. The tab's × closes
-/// all it holds, asked first as `CloseWords.asks` says (#145), as Chrome's
-/// window closes its tabs.
+/// all it holds, as Chrome's window closes its tabs (#145): asked first
+/// only when a shell in it runs a command (`AppModel.asksToClose`).
 private struct HolderTabLabel: View {
     /// What is in front, which it shows (#178).
     @EnvironmentObject private var front: FrontState
@@ -189,7 +189,7 @@ private struct HolderTabLabel: View {
     private func close() { model.requestCloseGroup(id) }
 
     /// What its × and its menu say: "End Shells", "Close Browser…".
-    private func closing(_ count: Int) -> String { CloseWords.groupAction(kind) + (CloseWords.asks(kind, count: count) ? "…" : "") }
+    private func closing(_ count: Int) -> String { CloseWords.groupAction(kind) + (model.asksToClose(id) ? "…" : "") }
 
     var body: some View {
         let members = model.members(of: id)
@@ -254,7 +254,7 @@ struct TabStripMenu: View {
         Button("Close All Files") { model.closeFileTabs(pane: paneID) }
             .disabled(files.documents.isEmpty && model.diffTabFile == nil)
             .help("Close every file and diff of this pane. The terminals stay.")
-        Button(model.sessionsEnded(by: .init(pane: paneID)).isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs(.init(pane: paneID)) }
+        Button(model.asksToClose(.init(pane: paneID)) ? "Close All Tabs…" : "Close All Tabs") { model.closeTabs(.init(pane: paneID)) }
             .disabled(count == 0)
             .help("Close every tab of this pane, ending its sessions. Pinned tabs stay.")
     }
@@ -268,8 +268,8 @@ struct CloseOthersButton: View {
     private var count: Int { request.pane.flatMap { model.paneLayout.pane($0)?.tabs.count } ?? model.tabCount }
 
     var body: some View {
-        // The dots say a question follows, which it does when sessions would end.
-        Button(model.sessionsEnded(by: request).isEmpty ? "Close Other Tabs" : "Close Other Tabs…") { model.closeTabs(request) }
+        // The dots say a question follows, which it does when a session at work would end.
+        Button(model.asksToClose(request) ? "Close Other Tabs…" : "Close Other Tabs") { model.closeTabs(request) }
             .disabled(count < 2)
             .help("Close every other tab of this pane, ending the other sessions. Pinned tabs stay.")
     }

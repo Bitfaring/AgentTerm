@@ -84,6 +84,10 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     /// AgentTerm: its hooks and AgentTerm's MCP server (#129). Nil for a
     /// session with no agent.
     public var link: AgentLink?
+    /// Whether ending this session stops a program at work: a command run
+    /// in a shell, or the command a session was started with. False for a
+    /// shell at its prompt; nil for an agent's session, whose `state` says.
+    public var running: Bool?
 
     public init(
         id: SessionID, title: String, cwd: String, size: TermSize, createdAt: Date,
@@ -107,6 +111,18 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     /// What to call the session in a list: its summary, or its title until
     /// there is one.
     public var displayName: String { summary ?? title }
+
+    /// Whether ending it stops work in progress, which is asked first: an
+    /// agent, started or typed, that is not done with its turn (one whose
+    /// state is not known is taken to be at work), or a program running in
+    /// a shell. A shell at its prompt and a done agent end at once.
+    public var isBusy: Bool {
+        if agent != nil || typedAgent != nil {
+            if case .done? = state { return false }
+            return true
+        }
+        return running == true
+    }
 }
 
 public struct CreateRequest: Codable, Equatable, Sendable {

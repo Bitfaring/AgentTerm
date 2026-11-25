@@ -195,7 +195,7 @@ private struct HolderListRow: View {
     }
 
     /// Closing it from its menu, as from its tab of the strip (#145).
-    private var closing: String { CloseWords.groupAction(kind) + (CloseWords.asks(kind, count: count) ? "…" : "") }
+    private var closing: String { CloseWords.groupAction(kind) + (model.asksToClose(id) ? "…" : "") }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -207,6 +207,9 @@ private struct HolderListRow: View {
                 .font(.system(size: 12.5))
                 .lineLimit(1)
             Spacer(minLength: 0)
+            if hovering {
+                CloseButton(help: closing) { model.requestCloseGroup(id) }
+            }
         }
         .padding(.leading, loose ? 8 : 24)
         .padding(.trailing, 8)
@@ -253,6 +256,9 @@ private struct ItemListRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
+            if hovering {
+                CloseButton(help: closing) { close() }
+            }
         }
         .padding(.leading, leading)
         .padding(.trailing, 8)
@@ -526,6 +532,9 @@ struct FolderRow: View {
                     .foregroundStyle(.orange)
                     .help(waiting == 1 ? "A session waits for you" : "\(waiting) sessions wait for you")
             }
+            if hovering {
+                CloseButton(help: "Remove from List") { model.remove(folder) }
+            }
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 6)
@@ -539,6 +548,7 @@ struct FolderRow: View {
         .accessibilityIdentifier("folder-" + folder.path)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { select() }
+        .accessibilityAction(named: "Remove from List") { model.remove(folder) }
         .help(folder.path)
         .contextMenu {
             // A folder of another Mac is not in this Mac's Finder.

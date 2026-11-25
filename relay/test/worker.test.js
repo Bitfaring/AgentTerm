@@ -100,7 +100,9 @@ test("RELAY-2 a push with its ticket reaches APNs as it was encrypted, signed wi
 
 test("RELAY-3 no push without the relay's ticket for that token, or with an expired one", async () => {
   const { ticket: t, expires } = await ticket();
-  const forged = await call("/v1/push", { token: TOKEN, ticket: "x" + t.slice(1), expires, payload: "AAAA" });
+  const altered = (t.startsWith("x") ? "y" : "x") + t.slice(1);
+  assert.notEqual(altered, t);
+  const forged = await call("/v1/push", { token: TOKEN, ticket: altered, expires, payload: "AAAA" });
   assert.equal(forged.status, 401);
   const other = await call("/v1/push", { token: "b".repeat(64), ticket: t, expires, payload: "AAAA" });
   assert.equal(other.status, 401);

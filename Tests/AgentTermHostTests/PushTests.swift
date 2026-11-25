@@ -741,4 +741,101 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(phone.log?.first { $0.id == id }?.read, true)
         XCTAssertEqual(phone.alerts, [], "read: not shown again")
     }
+
+    /// A stand-in whose agent asks, is answered, asks twice more, the second
+    /// question in place of the first, and is done: one step for each line.
+    private func askingStandIn() throws -> URL {
+        let script = root.appendingPathComponent("claude")
+        let hook = Handoff.shellQuote(tool.path) + " hook claude"
+        func permission(_ command: String) -> String {
+            "printf '%s' '{\"hook_event_name\":\"PermissionRequest\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\(command)\"}}' | \(hook) PermissionRequest"
+        }
+        try """
+        #!/bin/sh
+        read line; printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"go"}' | \(hook) UserPromptSubmit
+        read line; \(permission("make test"))
+        read line; printf '%s' '{"hook_event_name":"PostToolUse","tool_name":"Bash"}' | \(hook) PostToolUse
+        read line; \(permission("make lint"))
+        read line; \(permission("make deploy"))
+        read line; printf '%s' '{"hook_event_name":"Stop","last_assistant_message":"Deployed."}' | \(hook) Stop
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    /// A device's Inbox as its app keeps it, from what the host told it, in
+    /// the order it was told.
+    private func inbox(of client: Client) -> InboxBook {
+        var book = InboxBook()
+        for message in client.messages {
+            switch message {
+            case .noticeLog(let list): book.take(list, log: true)
+            case .notice(let notice): book.take([notice])
+            case .noticeHandled(let id, let handled): book.handled(id, handled)
+            case .noticesRead(let ids): book.markRead(ids: ids)
+            default: break
+            }
+        }
+        return book
+    }
+
+    /// NOTICE-7b (#321): through the host, with the Mac and the iPhone
+    /// connected. A question answered by what is typed into its session from
+    /// the iPhone, a question asked in place of another, and a task whose
+    /// session ends: each notice is handled as moved on and is read in both
+    /// Inboxes, which have nothing unread left. Nobody read, opened or
+    /// answered any of them through a notice.
+    func testANoticeWhoseAgentMovedOnIsReadOnEveryDevice() throws {
+        let mac = Client(port: port, credential: .token(token), name: "mac", kind: .mac)
+        let phoneToken = try pair(mac)
+        let phone = Client(port: port, credential: .token(phoneToken), name: "iPhone")
+        waitUntil("the phone's log") { phone.log != nil }
+        mac.connection.send(.create(CreateRequest(command: try askingStandIn().path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { mac.sessions.count == 1 }
+        let agent = try XCTUnwrap(mac.sessions.first).id
+        mac.connection.send(.attach(session: agent, size: TermSize(cols: 80, rows: 24)))
+        phone.connection.send(.attach(session: agent, size: TermSize(cols: 80, rows: 24)))
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("working") { mac.sessions.first?.state?.isWorking == true }
+
+        func waiting(_ command: String) -> AgentState { .waitingForPermission(AgentQuestion(text: command)) }
+        func notice(_ state: AgentState) -> Notice? { mac.notices.first { $0.state == state } }
+        func handled(_ client: Client, _ id: UInt64) -> Notice.Handled? {
+            client.messages.lazy.compactMap { if case .noticeHandled(id, let handled) = $0 { return handled } else { return nil } }.first
+        }
+
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("the first question") { notice(waiting("make test")) != nil && phone.notices.count == 1 }
+        // Answered in the terminal, from the iPhone.
+        phone.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("working again") { mac.sessions.first?.state?.isWorking == true }
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("the second question") { notice(waiting("make lint")) != nil }
+        // Something else asked in its place.
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("the third question") { notice(waiting("make deploy")) != nil }
+        mac.connection.sendInput(Data("\n".utf8), to: agent)
+        waitUntil("done") { notice(.done(said: "Deployed.")) != nil }
+        // Its session ends.
+        mac.connection.send(.kill(session: agent))
+        waitUntil("the session gone") { mac.sessions.isEmpty }
+
+        let ids = try [waiting("make test"), waiting("make lint"), waiting("make deploy"), .done(said: "Deployed.")]
+            .map { try XCTUnwrap(notice($0), "\($0)").id }
+        for (client, name) in [(mac, "the Mac"), (phone, "the iPhone")] {
+            for id in ids {
+                waitUntil("\(name) told \(id) was handled") { handled(client, id) != nil }
+                XCTAssertEqual(handled(client, id)?.how, .movedOn, "\(name), notice \(id)")
+            }
+            let book = inbox(of: client)
+            XCTAssertEqual(Set(book.entries.map(\.id)), Set(ids), name)
+            XCTAssertEqual(book.unread, 0, "\(name): nothing unread, \(book.entries.filter { !$0.read }.map(\.notice.state))")
+        }
+        // A device that comes later finds them read in the host's log.
+        let later = Client(port: port, credential: .token(phoneToken), name: "iPhone again")
+        waitUntil("the log") { later.log != nil }
+        XCTAssertEqual(later.log?.filter { ids.contains($0.id) && $0.read != true }.map(\.id), [], "read in the host's log")
+        XCTAssertEqual(inbox(of: later).unread, 0)
+    }
 }

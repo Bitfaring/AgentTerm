@@ -24,8 +24,8 @@ enum NoticeContent {
         ]
     }
 
-    /// The category of a question with choices: a button for each, then
-    /// the text reply. Nil for anything else.
+    /// Put the text reply first so it remains available when iOS displays
+    /// only the first few actions. Keep the choices in the agent’s order.
     static func choiceCategory(of notice: AgentNotice, request: String) -> UNNotificationCategory? {
         let buttons = notice.buttons
         guard !buttons.isEmpty else { return nil }
@@ -33,7 +33,7 @@ enum NoticeContent {
         // is unlocked first.
         let actions = buttons.map { UNNotificationAction(identifier: $0.id, title: $0.title, options: [.authenticationRequired]) }
         return UNNotificationCategory(
-            identifier: "agent-choices-\(request)", actions: actions + [reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle, .customDismissAction])
+            identifier: "agent-choices-\(request)", actions: [reply] + actions, intentIdentifiers: [], options: [.hiddenPreviewsShowTitle, .customDismissAction])
     }
 
     /// The content of a notice, with its category for a notice that has

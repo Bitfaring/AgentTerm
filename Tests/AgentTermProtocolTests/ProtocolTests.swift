@@ -531,11 +531,11 @@ final class ProtocolTests: XCTestCase {
     func testAnAgentsLinkInWordsAndOnTheWire() throws {
         XCTAssertEqual(AgentLinkWords.summary(AgentLink()), "Connecting…")
         XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: true, mcp: true)), "Hooks and MCP connected")
-        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: false, mcp: true)), "No hooks")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: false, mcp: true)), "No hook response")
         XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: true, mcp: false)), "No MCP")
-        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: false, mcp: false)), "No hooks, no MCP")
+        XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: false, mcp: false)), "No hook response, no MCP")
         XCTAssertEqual(AgentLinkWords.summary(AgentLink(hooks: true)), "Connecting…")
-        XCTAssertTrue(AgentLinkWords.hooks(false).contains("does not come to the Inbox"))
+        XCTAssertTrue(AgentLinkWords.hooks(false).contains("after the first message"))
         XCTAssertTrue(AgentLinkWords.mcp(false).contains("cannot open shells and pages"))
         XCTAssertTrue(AgentLink(hooks: false).isMissing)
         XCTAssertFalse(AgentLink(hooks: true).isMissing)
@@ -578,14 +578,32 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(CloseWords.groupQuestion(.files, count: 1), "Close 1 file?")
         XCTAssertEqual(CloseWords.groupButton(.browser, count: 2), "Close 2 Pages")
         XCTAssertEqual(CloseWords.groupButton(.diffs, count: 1), "Close Diff")
-        // A shell is a running program: ending even one is asked, as ending
-        // any session is. One page, diff or file is closed at once.
-        XCTAssertTrue(CloseWords.asks(.shells, count: 1))
-        for kind in [HolderKind.browser, .diffs, .files] {
-            XCTAssertFalse(CloseWords.asks(kind, count: 1), kind.title)
-            XCTAssertTrue(CloseWords.asks(kind, count: 2), kind.title)
-        }
         XCTAssertNotEqual(CloseWords.groupAction(.files), "Close All Files", "the pane's own item")
+    }
+
+    /// TABS-7: ending a session is asked first only while it is at work.
+    func testASessionIsBusyOnlyWhileAtWork() {
+        var shell = SessionInfo(id: 1, title: "zsh", cwd: "/", size: .default, createdAt: Date())
+        XCTAssertFalse(shell.isBusy, "a shell not heard from yet")
+        shell.running = false
+        XCTAssertFalse(shell.isBusy, "a shell at its prompt")
+        shell.running = true
+        XCTAssertTrue(shell.isBusy, "a shell running a command")
+
+        var agent = SessionInfo(id: 2, title: "Claude Code", cwd: "/", size: .default, createdAt: Date(), agent: "claude")
+        XCTAssertTrue(agent.isBusy, "an agent whose state is not known")
+        agent.state = .working(since: Date())
+        XCTAssertTrue(agent.isBusy, "an agent at work")
+        agent.state = .waitingForPermission(AgentQuestion(text: "Run ls?"))
+        XCTAssertTrue(agent.isBusy, "an agent in the middle of its turn")
+        agent.state = .done(said: nil)
+        XCTAssertFalse(agent.isBusy, "a done agent")
+
+        var typed = SessionInfo(id: 3, title: "zsh", cwd: "/", size: .default, createdAt: Date())
+        typed.running = true
+        typed.typedAgent = "codex"
+        typed.state = .done(said: nil)
+        XCTAssertFalse(typed.isBusy, "an agent typed in a shell, done")
     }
 
     /// MCP-36: what is wrong with the agents' server, in words, and a cause

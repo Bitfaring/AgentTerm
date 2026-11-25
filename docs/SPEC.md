@@ -439,7 +439,8 @@ happened; the Live Activity shows the host's state now (below).
   and a field takes an answer in words of one's own, as the agent's own
   list offers one after its choices (Claude Code's "Type something."); the
   host types it there. Once the agent no longer asks, the choices are
-  listed as text only.
+  listed as text only. An iPhone notification offers Reply first, followed
+  by the choices in the order the agent gave them.
 - **What a turn came to** (#71): an agent that is done shows, in the
   Inbox, what it was asked, what it answered, the commands it ran with
   their exit codes, and the files of its folder that changed while it

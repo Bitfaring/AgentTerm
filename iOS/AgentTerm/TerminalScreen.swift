@@ -323,7 +323,7 @@ struct TerminalScreen: View {
                             // Whether its hooks and AgentTerm's MCP server talk to the Mac.
                             if let link = info.link {
                                 Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 22)
-                                AgentLinkMark(link: link, typed: info.agent == nil ? model.agentName(agent) : nil, compact: true)
+                                AgentLinkMark(link: link, agent: agent, typed: info.agent == nil ? model.agentName(agent) : nil, compact: true)
                             }
                         }
                         .frame(height: 38)

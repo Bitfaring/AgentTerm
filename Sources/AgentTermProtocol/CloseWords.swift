@@ -19,13 +19,6 @@ public enum CloseWords {
 
     public static let endButton = "End Session"
 
-    /// Whether closing a tab of the user's own that holds `count` is asked
-    /// first: ending a shell always is, as ending any session; closing pages,
-    /// diffs or files when there are several.
-    public static func asks(_ kind: HolderKind, count: Int) -> Bool {
-        kind == .shells ? count > 0 : count > 1
-    }
-
     /// The question before a tab of the user's own is closed: "End 3 shells?".
     public static func groupQuestion(_ kind: HolderKind, count: Int) -> String {
         switch kind {

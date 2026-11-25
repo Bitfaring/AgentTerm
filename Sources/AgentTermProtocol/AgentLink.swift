@@ -23,8 +23,8 @@ public struct AgentLink: Codable, Equatable, Sendable {
         /// said it started (Claude Code, Codex), or through the session's
         /// environment (Copilot CLI).
         case given
-        /// Not given: they reach this agent through its MCP server, which
-        /// did not start.
+        /// The expected instructions folder could not be provided, or the
+        /// MCP server delivering the instructions did not start.
         case missing
         /// The user's text for this agent was empty when it started.
         case disabled
@@ -41,7 +41,7 @@ public struct AgentLink: Codable, Equatable, Sendable {
 
     /// What the instructions came to, from how they are given to `agent`
     /// and whether there were any (`given`) when it started.
-    public static func prompt(agent: String, given: Bool, mcp: Bool?) -> Prompt? {
+    public static func prompt(agent: String, given: Bool, mcp: Bool?, copilotPrepared: Bool? = nil) -> Prompt? {
         guard given else { return .disabled }
         switch agent {
         case "claude", "codex":
@@ -50,7 +50,7 @@ public struct AgentLink: Codable, Equatable, Sendable {
             case false?: return .missing
             case nil: return nil
             }
-        case "copilot": return .given
+        case "copilot": return copilotPrepared.map { $0 ? .given : .missing } ?? .unverified
         default: return .unverified
         }
     }
@@ -73,8 +73,9 @@ public enum AgentLinkWords {
         if link.isWhole { return "Hooks and MCP connected" }
         if link.hooks == nil && link.mcp == nil { return "Connecting…" }
         switch (link.hooks, link.mcp) {
-        case (false, false): return "No hooks, no MCP"
-        case (false, _): return "No hooks"
+        case (nil, true): return "Waiting for the first hook"
+        case (false, false): return "No hook response, no MCP"
+        case (false, _): return "No hook response"
         case (_, false): return "No MCP"
         default: return "Connecting…"
         }
@@ -84,7 +85,7 @@ public enum AgentLinkWords {
     public static func hooks(_ heard: Bool?) -> String {
         switch heard {
         case true?: return "Hooks: heard. Its state, the Inbox and notifications work."
-        case false?: return "Hooks: not heard. Its state is not shown, it does not come to the Inbox, and no notification is made."
+        case false?: return "No hook event received after the first message. Check Hooks & MCP in Settings if the agent has responded."
         case nil: return "Hooks: not heard yet."
         }
     }
@@ -120,9 +121,9 @@ public enum AgentLinkWords {
         }
     }
 
-    public static func promptStatus(_ prompt: AgentLink.Prompt?) -> String {
+    public static func promptStatus(_ prompt: AgentLink.Prompt?, agent: String? = nil) -> String {
         switch prompt {
-        case .given?: return "Given"
+        case .given?: return agent == "copilot" ? "File provided" : "Given"
         case .missing?: return "Not given"
         case .disabled?: return "Disabled"
         case .unverified?: return "Unverified"
@@ -131,7 +132,13 @@ public enum AgentLinkWords {
     }
 
     /// Why, under the row.
-    public static func promptDetail(_ prompt: AgentLink.Prompt?) -> String {
+    public static func promptDetail(_ prompt: AgentLink.Prompt?, agent: String? = nil) -> String {
+        switch (agent, prompt) {
+        case ("copilot", .given): return "AgentTerm prepared the instructions file and passed its folder to this session. Copilot does not confirm reading it."
+        case ("copilot", .missing): return "AgentTerm could not provide its instructions folder to this session."
+        case ("agy", .unverified): return "Antigravity uses a plugin rule. AgentTerm cannot confirm whether this session loaded it."
+        default: break
+        }
         switch prompt {
         case .given?: return "AgentTerm's instructions reached this session."
         case .missing?: return "They come through the MCP server, which did not start."

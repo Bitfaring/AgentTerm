@@ -693,8 +693,8 @@ final class BrowserUITests: MacUITestCase {
     /// BROWSER-68 (#255): a page asks for the microphone, whose question
     /// Chromium does not take back itself; the page goes to another, and the
     /// question leaves the bar, refused, so that Allow never answers for a
-    /// page no longer shown. macOS asks first whether the test build may use
-    /// the microphone: the user's to answer, so the test waits for it.
+    /// page no longer shown. Closing another tab with a pending request
+    /// must also leave this tab free of that request.
     func testAMicrophoneQuestionOfAPageThatGoesLeavesTheBar() throws {
         let folder = root.appendingPathComponent("mic-site")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -722,7 +722,6 @@ final class BrowserUITests: MacUITestCase {
         let tab = try XCTUnwrap(opened.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(opened.text[$0].dropFirst(4)) }, opened.text)
         let snapshot = server.text("browser_snapshot", ["tab": tab]).text
         XCTAssertFalse(server.text("browser_click", ["tab": tab, "ref": try XCTUnwrap(ref(in: snapshot, "button \"Ask Mic\""), snapshot)]).failed)
-        // The first time, macOS asks the user about the test build first.
         app.wait(for: .containing("wants your microphone"), timeout: 180)
         shot("microphone-question")
 
@@ -730,6 +729,17 @@ final class BrowserUITests: MacUITestCase {
         app.waitGone(.id("browser-permission"), timeout: 10)
         shot("microphone-question-gone")
         // The page shown is the next one, which asked nothing.
+        XCTAssertTrue(server.text("browser_snapshot", ["tab": tab]).text.contains("Next page"))
+
+        let another = server.text("browser_open", ["url": address])
+        let closing = try XCTUnwrap(another.text.range(of: #"tab \d+"#, options: .regularExpression).map { String(another.text[$0].dropFirst(4)) }, another.text)
+        app.press(.id("browser-row-\(closing)"))
+        let page = server.text("browser_snapshot", ["tab": closing]).text
+        let ask = try XCTUnwrap(ref(in: page, "button \"Ask Mic\""), page)
+        XCTAssertFalse(server.text("browser_click", ["tab": closing, "ref": ask]).failed)
+        app.wait(for: .containing("wants your microphone"), timeout: 15)
+        XCTAssertFalse(server.text("browser_close", ["tab": closing]).failed)
+        app.waitGone(.id("browser-permission"), timeout: 10)
         XCTAssertTrue(server.text("browser_snapshot", ["tab": tab]).text.contains("Next page"))
     }
 

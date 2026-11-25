@@ -7,14 +7,16 @@ import SwiftUI
 /// to do; the same on the Mac and the iPhone (principle 9).
 public struct AgentLinkMark: View {
     let link: AgentLink
+    let agent: String?
     /// The agent typed by hand in a shell, by name, when it is one.
     let typed: String?
     /// Smaller, for a phone.
     let compact: Bool
     @State private var shown = false
 
-    public init(link: AgentLink, typed: String? = nil, compact: Bool = false) {
+    public init(link: AgentLink, agent: String? = nil, typed: String? = nil, compact: Bool = false) {
         self.link = link
+        self.agent = agent
         self.typed = typed
         self.compact = compact
     }
@@ -73,8 +75,8 @@ public struct AgentLinkMark: View {
                 id: "mcp", name: AgentLinkWords.mcpRow, status: AgentLinkWords.mcpStatus(link.mcp),
                 detail: link.mcp == false ? AgentLinkWords.mcp(false) : nil, look: Self.look(link.mcp)),
             Row(
-                id: "prompt", name: AgentLinkWords.promptRow, status: AgentLinkWords.promptStatus(link.prompt),
-                detail: AgentLinkWords.promptDetail(link.prompt), look: prompt),
+                id: "prompt", name: AgentLinkWords.promptRow, status: AgentLinkWords.promptStatus(link.prompt, agent: agent),
+                detail: AgentLinkWords.promptDetail(link.prompt, agent: agent), look: prompt),
         ]
     }
 
