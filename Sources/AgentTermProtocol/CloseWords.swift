@@ -19,7 +19,6 @@ public enum CloseWords {
 
     public static let endButton = "End Session"
 
-
     /// The question before a tab of the user's own is closed: "End 3 shells?".
     public static func groupQuestion(_ kind: HolderKind, count: Int) -> String {
         switch kind {
