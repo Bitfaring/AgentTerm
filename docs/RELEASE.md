@@ -145,8 +145,8 @@ silicon Mac). There is no universal build yet.
 
 ## Usage statistics and crash reports
 
-Released builds report through Firebase, within what the user allows (see
-`PRIVACY.md`). There is one Firebase project for each app, because both have
+Released builds report through Firebase, within what the user allows (see the
+privacy policy, https://bitfaring.com/products/agentterm/privacy/). There is one Firebase project for each app, because both have
 the same bundle identifier. Their config files are in the dotfiles repo, at
 `projects/agentterm/firebase/{mac,ios}/GoogleService-Info.plist`:
 

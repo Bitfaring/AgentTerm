@@ -166,7 +166,7 @@ turns that off). The released apps can send crash reports and counts of which
 features are used through Firebase, each with a switch asked at the first
 launch, and nothing before it is answered; never terminal content, prompts,
 file names or folders. A build from source sends nothing. Details in
-[SECURITY.md](SECURITY.md) and [PRIVACY.md](PRIVACY.md).
+[SECURITY.md](SECURITY.md) and the [privacy policy](https://bitfaring.com/products/agentterm/privacy/).
 
 ## Documentation
 
@@ -176,7 +176,7 @@ file names or folders. A build from source sends nothing. Details in
 - [docs/TESTING.md](docs/TESTING.md): how it is tested
 - [docs/RELEASE.md](docs/RELEASE.md): how releases are made
 - [Issues](https://github.com/Bitfaring/AgentTerm/issues) and [milestones](https://github.com/Bitfaring/AgentTerm/milestones): planned work and known bugs
-- [SUPPORT.md](SUPPORT.md): getting help
+- [Support](https://bitfaring.com/products/agentterm/support/): getting help
 - [Discord](https://discord.gg/Ksagmsd6j): questions, ideas and news
 
 ## License

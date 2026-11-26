@@ -5,7 +5,7 @@
 Please do not open a public issue for a security problem. Report it privately
 with **Report a vulnerability** on the repository's
 [Security tab](https://github.com/Bitfaring/AgentTerm/security), or by
-email to the address in [SUPPORT.md](SUPPORT.md). Say which version of
+email to the address on the [support page](https://bitfaring.com/products/agentterm/support/). Say which version of
 AgentTerm, on which macOS and iOS, and how to reproduce it.
 
 Fixes go into the newest release. Older versions are not patched.
@@ -25,7 +25,7 @@ forward its port to the internet or to a network you do not control.**
 | Pairing an iPhone | The Mac shows a code that works once, for five minutes, and only while the pairing screen is open. The phone trades it for a token of its own. |
 | Taking a device off | Each paired device has its own token, which the Mac can revoke under **Pair iPhone**. |
 | The Mac's own token | It is kept in a file only you can read (mode 0600) and is accepted only on connections that arrive on the loopback interface, so it is no use from another machine. |
-| Your data | What your terminals show, your prompts, files and folders never leave your devices. The released apps can send crash reports (if you agree) and counts of which features are used (can be switched off) through Firebase; a build from source sends nothing. AgentTerm has no account; its one server is the small relay the released apps send notifications through to Apple, which sees no content and keeps nothing. See [PRIVACY.md](PRIVACY.md). |
+| Your data | What your terminals show, your prompts, files and folders never leave your devices. The released apps can send crash reports (if you agree) and counts of which features are used (can be switched off) through Firebase; a build from source sends nothing. AgentTerm has no account; its one server is the small relay the released apps send notifications through to Apple, which sees no content and keeps nothing. See [PRIVACY.md](https://bitfaring.com/products/agentterm/privacy/). |
 | Files you preview | A Markdown preview runs nothing from the file: HTML in it is turned into Markdown, and scripts and styles are not interpreted. |
 
 ## What it does not protect against

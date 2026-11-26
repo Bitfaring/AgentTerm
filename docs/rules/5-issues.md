@@ -10,7 +10,7 @@ Every issue, a bug or not, has two versions in its body, kept in step (the list 
    - what has to be decided or found out first, and by whom (the owner's choice, a real agent tried at its version);
    - for a bug, a test that fails because of it and is seen failing, then passes and stays; the root cause found and taken away; or principle 8's way, 5 tries not reproduced and said so;
    - what the change must do and must never do, both apps where principle 1 asks it, the words in `AgentTermProtocol` (principle 9), the protocol's number raised for a changed message (principle 6);
-   - which docs say it (`docs/SPEC.md`, `docs/DESIGN.md`, `docs/TESTING.md`, `PRIVACY.md`, `docs/PERFORMANCE.md`), and the case a test names;
+   - which docs say it (`docs/SPEC.md`, `docs/DESIGN.md`, `docs/TESTING.md`, the privacy policy at https://bitfaring.com/products/agentterm/privacy/, `docs/PERFORMANCE.md`), and the case a test names;
    - which layers of rule 2's table are run, and which pictures are looked at;
    - `make format` and `make lint`, committed on the milestone's branch and pushed, CI on the branch green.
 4. After a horizontal rule, **`# Tiếng Việt`**: the same content in Vietnamese, opened by a line that says it is the translation of the English above (and, where there are boxes, that they are in the English only); boxes become plain bullets. Code, paths, commands and names stay as they are.

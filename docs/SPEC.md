@@ -1461,7 +1461,7 @@ Mac and under Privacy in the iPhone's Settings tab, in the same words. A
 build from source and AgentTerm Dev have no service to send to: they show
 no screen and send nothing, and on both apps the two switches show off
 and dimmed, whatever they were set to, with a line that says why (#212);
-what they were set to is kept. `PRIVACY.md` says
+what they were set to is kept. The privacy policy says
 all of what is sent.
 
 ### Keeping the Mac awake
@@ -1495,7 +1495,7 @@ the window again, lists the running sessions (picking one opens it), starts
 an agent, a shell or an SSH session, switches Keep Mac Awake, opens pairing
 and Settings, and quits. Quit is there and ⌘Q.
 
-Settings > General also links to the project's page on manhdev.click and to
+Settings > General also links to the project's page on bitfaring.com and to
 the source on GitHub; the iPhone has the same two links in its Settings tab.
 
 The iPhone's Settings tab has, for the Mac it shows (#155), what the Mac's
