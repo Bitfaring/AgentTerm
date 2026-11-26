@@ -1461,7 +1461,7 @@ Mac and under Privacy in the iPhone's Settings tab, in the same words. A
 build from source and AgentTerm Dev have no service to send to: they show
 no screen and send nothing, and on both apps the two switches show off
 and dimmed, whatever they were set to, with a line that says why (#212);
-what they were set to is kept. `PRIVACY.md` says
+what they were set to is kept. The privacy policy says
 all of what is sent.
 
 ### Keeping the Mac awake
