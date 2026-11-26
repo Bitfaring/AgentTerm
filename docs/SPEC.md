@@ -1495,7 +1495,7 @@ the window again, lists the running sessions (picking one opens it), starts
 an agent, a shell or an SSH session, switches Keep Mac Awake, opens pairing
 and Settings, and quits. Quit is there and ⌘Q.
 
-Settings > General also links to the project's page on manhdev.click and to
+Settings > General also links to the project's page on bitfaring.com and to
 the source on GitHub; the iPhone has the same two links in its Settings tab.
 
 The iPhone's Settings tab has, for the Mac it shows (#155), what the Mac's

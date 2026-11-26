@@ -101,7 +101,7 @@ public enum AppVersion {
 /// Where AgentTerm lives on the web, for the apps to link to.
 public enum ProjectLinks {
     /// The project's page: what it does, downloads, support.
-    public static let page = URL(string: "https://manhdev.click/projects/agentterm")!
+    public static let page = URL(string: "https://bitfaring.com/products/agentterm/")!
     /// The source code.
     public static let source = URL(string: "https://github.com/Bitfaring/AgentTerm")!
 }
