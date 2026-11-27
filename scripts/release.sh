@@ -11,12 +11,12 @@
 # Anything after the lane goes to fastlane, e.g. `ios build create:true`
 # to let match make the provisioning profile the first time.
 #
-#   DOTFILES   the dotfiles repo (default: ../dotfiles next to this repo)
+#   DOTFILES   the dotfiles repo (default: ../../dotfiles, i.e. ~/Project/dotfiles)
 #   VERSION    version to build (default: the one in the VERSION file)
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-DOTFILES=${DOTFILES:-$ROOT/../dotfiles}
+DOTFILES=${DOTFILES:-$ROOT/../../dotfiles}
 PROJECT_ENV=$DOTFILES/projects/agentterm/release.env
 
 fail() { echo "release.sh: $*" >&2; exit 1; }
